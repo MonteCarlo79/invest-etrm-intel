@@ -1,0 +1,60 @@
+services:
+
+  postgres:
+    image: postgres:18
+    container_name: bess-postgres
+    ports:
+      - "5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: marketdata
+    networks:
+      - default
+    volumes:
+      - pgdata:/var/lib/postgresql
+
+  uploader:
+    build: ./apps/uploader
+    container_name: bess-uploader
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data
+      - ./services/bess_map:/models
+      - ./config/.env:/app/.env
+    environment:
+      DB_DSN: postgresql://postgres:postgres@postgres:5432/marketdata
+      UPLOAD_DIR: /data/uploads
+      PYTHONPATH: /models
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    depends_on:
+      - postgres
+
+  bess_map:
+    build: ./services/bess_map
+    container_name: bess-map
+    ports:
+      - "8503:8503"
+    volumes:
+      - ./config/.env:/app/.env
+    env_file:
+      - ./services/bess_map/.env
+    command: streamlit run streamlit_bess_profit_dashboard_v14.1_consistent_full2.py --server.port 8503 --server.address 0.0.0.0 -- --env /app/.env --schema marketdata
+    depends_on:
+      - postgres
+
+networks:
+  default:
+    driver: bridge
+
+
+volumes:
+  pgdata:

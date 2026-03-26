@@ -1,0 +1,14 @@
+project_name: bess_map
+
+tables:
+  dispatch_hourly: marketdata.bess_dispatch_hourly
+  capture_daily: marketdata.bess_capture_daily
+  spot_prices: marketdata.spot_prices_hourly
+
+excel_mapping:
+  province: province
+  ts: ts
+  dispatch_batt_mw: dispatch_batt_mw
+  dispatch_grid_mw: dispatch_grid_mw
+  soc_mwh: soc_mwh
+  source_file: source_file

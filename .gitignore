@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.backup
+
+# Secrets
+.env
+*.tfvars
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+pgdata/
+docker/data/
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+
+# Backup / archived
+backup/
+archived/
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets / temp
+pass.txt
+
+tmp/
+*.csv
+
+data/raw/
+data/extracted_settlement/
+pass.txt
+*.zip
+*.tar
+*.gz
+*.7z
+*.dump
+*.tfplan
+
+# Data files (CRITICAL)
+data/
+*.xlsx
+*.csv
+
+# Terraform plan
+*.tfplan

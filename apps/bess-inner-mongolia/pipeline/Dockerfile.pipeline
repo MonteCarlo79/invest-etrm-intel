@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY apps/bess-inner-mongolia/pipeline/requirements.txt ./requirements.txt
+
+RUN pip install --no-cache-dir --default-timeout=300 -r requirements.txt
+
+COPY apps/bess-inner-mongolia/pipeline/ ./pipeline/
+COPY apps/bess-inner-mongolia/shared/ ./shared/
+
+WORKDIR /app/pipeline
+
+CMD ["python","inner_pipeline.py"]

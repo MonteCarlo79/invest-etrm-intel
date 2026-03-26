@@ -1,0 +1,8 @@
+gym
+numpy
+pandas
+sqlalchemy
+psycopg2-binary
+stable-baselines3
+boto3
+torch

@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+node_modules
+*.xlsx
+*.csv
+*.parquet
+*.log
+.dump
+*.dump

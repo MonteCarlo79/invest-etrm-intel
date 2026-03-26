@@ -1,0 +1,12 @@
+provider: mengxi
+country: cn
+province: inner_mongolia
+
+datasets:
+  - rt_nodal_price
+  - da_cleared_energy
+  - id_cleared_energy
+  - settlement_price
+
+api:
+  base_url: https://app-portal-cn-ft.enos-iot.com
