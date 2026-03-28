@@ -55,6 +55,8 @@ def ensure_report_tables(engine: Engine) -> None:
         discharge_mwh numeric,
         charge_mwh numeric,
         avg_daily_cycles numeric,
+        compensation_blocked boolean,
+        compensation_block_reason text,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (trade_date, asset_code, scenario_name)
@@ -97,6 +99,14 @@ def ensure_report_tables(engine: Engine) -> None:
             sql = stmt.strip()
             if sql:
                 con.execute(text(sql))
+        con.execute(text("""
+            ALTER TABLE reports.bess_asset_daily_scenario_pnl
+            ADD COLUMN IF NOT EXISTS compensation_blocked boolean
+        """))
+        con.execute(text("""
+            ALTER TABLE reports.bess_asset_daily_scenario_pnl
+            ADD COLUMN IF NOT EXISTS compensation_block_reason text
+        """))
 
 def fetch_asset_monthly_compensation(engine: Engine) -> pd.DataFrame:
     sql = text("""
@@ -134,6 +144,49 @@ def fetch_scenario_availability(engine: Engine) -> pd.DataFrame:
         rows = []
         from apps.trading.bess.mengxi.pnl_attribution.calc import scenario_availability_df
         return scenario_availability_df()
+
+
+def fetch_compensation_coverage(engine: Engine) -> pd.DataFrame:
+    """
+    Coverage helper:
+    - discharge_known=True if settlement extraction exists for asset/month
+    - compensation_known=True if compensation extraction exists for asset/month
+    """
+    sql = text("""
+        WITH settlement AS (
+            SELECT asset_code, settlement_month::date AS effective_month
+            FROM staging.mengxi_settlement_extracted
+            WHERE asset_code IS NOT NULL
+              AND settlement_month IS NOT NULL
+              AND discharge_mwh IS NOT NULL
+              AND parse_confidence != 'pending'
+            GROUP BY asset_code, settlement_month
+        ),
+        compensation AS (
+            SELECT asset_code, settlement_month::date AS effective_month
+            FROM staging.mengxi_compensation_extracted
+            WHERE asset_code IS NOT NULL
+              AND settlement_month IS NOT NULL
+              AND compensation_yuan IS NOT NULL
+              AND parse_confidence != 'pending'
+            GROUP BY asset_code, settlement_month
+        )
+        SELECT
+            COALESCE(s.asset_code, c.asset_code) AS asset_code,
+            COALESCE(s.effective_month, c.effective_month) AS effective_month,
+            (s.asset_code IS NOT NULL) AS discharge_known,
+            (c.asset_code IS NOT NULL) AS compensation_known
+        FROM settlement s
+        FULL OUTER JOIN compensation c
+          ON s.asset_code = c.asset_code
+         AND s.effective_month = c.effective_month
+    """)
+    try:
+        return pd.read_sql(sql, engine)
+    except Exception:
+        return pd.DataFrame(
+            columns=["asset_code", "effective_month", "discharge_known", "compensation_known"]
+        )
 
 
 def fetch_trade_dates(engine: Engine, lookback_days: int) -> list[date]:
@@ -228,6 +281,7 @@ def main() -> None:
     availability_df = fetch_scenario_availability(ENGINE)
     dates = fetch_trade_dates(ENGINE, REFRESH_LOOKBACK_DAYS)
     compensation_df = fetch_asset_monthly_compensation(ENGINE)
+    compensation_coverage_df = fetch_compensation_coverage(ENGINE)
     scenario_rows_all = []
     attribution_rows_all = []
 
@@ -257,6 +311,7 @@ def main() -> None:
                 scenario_dispatch_map=scenario_dispatch_map,
                 availability_map=availability_map,
                 compensation_df=compensation_df,
+                compensation_coverage_df=compensation_coverage_df,
                 default_compensation_yuan_per_mwh=DEFAULT_COMPENSATION_YUAN_PER_MWH,
             )
             attribution_row = build_daily_attribution_row(scenario_rows)
