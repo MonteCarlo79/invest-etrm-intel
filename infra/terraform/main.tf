@@ -1232,7 +1232,7 @@ resource "aws_ecs_task_definition" "pnl_attribution" {
       command = [
         "streamlit",
         "run",
-        "apps/trading/bess/mengxi/pnl_attribution/app.py",
+        "app.py",
         "--server.port=${var.pnl_attribution_container_port}",
         "--server.address=0.0.0.0",
         "--server.baseUrlPath=${local.pnl_attribution_base_path}",
@@ -1282,6 +1282,17 @@ resource "aws_ecr_repository" "inner_mongolia" {
   }
 
   image_tag_mutability = "MUTABLE"
+}
+
+resource "aws_ecr_repository" "pnl_attribution" {
+  name                 = "bess-pnl-attribution"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+
+  tags = local.tags
 }
 
 data "aws_iam_policy_document" "eventbridge_assume" {
