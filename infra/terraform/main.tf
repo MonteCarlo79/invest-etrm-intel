@@ -1232,7 +1232,7 @@ resource "aws_ecs_task_definition" "pnl_attribution" {
       command = [
         "streamlit",
         "run",
-        "app.py",
+        "apps/trading/bess/mengxi/pnl_attribution/app.py",
         "--server.port=${var.pnl_attribution_container_port}",
         "--server.address=0.0.0.0",
         "--server.baseUrlPath=${local.pnl_attribution_base_path}",
