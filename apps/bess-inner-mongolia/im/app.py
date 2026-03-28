@@ -55,6 +55,36 @@ def get_engine():
 # ==========================================================
 ecs = boto3.client("ecs", region_name=os.getenv("AWS_REGION", "ap-southeast-1"))
 
+def resolve_pipeline_task_definition() -> str:
+    """
+    Resolve to the latest ACTIVE task definition in the same family.
+    This prevents stale env vars from pinning the launcher to an old revision.
+    """
+    configured = os.environ["PIPELINE_TASK_DEF"]
+
+    try:
+        described = ecs.describe_task_definition(taskDefinition=configured)
+        task_def_arn = described["taskDefinition"]["taskDefinitionArn"]
+        family = described["taskDefinition"]["family"]
+        logger = logging.getLogger(__name__)
+        logger.info("Configured pipeline task definition=%s (family=%s)", task_def_arn, family)
+
+        listed = ecs.list_task_definitions(
+            familyPrefix=family,
+            status="ACTIVE",
+            sort="DESC",
+            maxResults=1,
+        )
+        latest = (listed.get("taskDefinitionArns") or [task_def_arn])[0]
+        if latest != task_def_arn:
+            logger.warning("Using latest ACTIVE task definition instead of stale configured revision: %s", latest)
+        return latest
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to resolve latest pipeline task definition; falling back to configured value"
+        )
+        return configured
+
 def start_pipeline_task(start_date: str, end_date: str, config: dict) -> str:
     """
     Start the ECS task that runs inner_pipeline.py.
@@ -73,9 +103,11 @@ def start_pipeline_task(start_date: str, end_date: str, config: dict) -> str:
         {"name": "LIFE_YEARS", "value": str(config["life_years"])},
     ]
 
+    task_definition = resolve_pipeline_task_definition()
+
     resp = ecs.run_task(
         cluster=os.environ["ECS_CLUSTER"],
-        taskDefinition=os.environ["PIPELINE_TASK_DEF"],
+        taskDefinition=task_definition,
         launchType="FARGATE",
         networkConfiguration={
             "awsvpcConfiguration": {
