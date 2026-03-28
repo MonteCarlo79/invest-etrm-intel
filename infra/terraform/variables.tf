@@ -309,3 +309,55 @@ variable "cognito_callback_urls" {
 variable "cognito_default_redirect_uri" {
   type = string
 }
+
+# -------------------------
+# Mengxi P&L Attribution Streamlit service
+# -------------------------
+variable "enable_pnl_attribution_service" {
+  description = "Enable ECS service + ALB routing for Mengxi P&L attribution app"
+  type        = bool
+  default     = false
+}
+
+variable "pnl_attribution_image" {
+  description = "Docker image for Mengxi P&L attribution Streamlit app"
+  type        = string
+  default     = ""
+}
+
+variable "pnl_attribution_container_port" {
+  description = "Container port for Mengxi P&L attribution Streamlit app"
+  type        = number
+  default     = 8502
+}
+
+variable "pnl_attribution_path" {
+  description = "ALB base path for Mengxi P&L attribution app"
+  type        = string
+  default     = "/pnl-attribution"
+}
+
+variable "pnl_attribution_cpu" {
+  description = "Fargate task CPU units for Mengxi P&L attribution app"
+  type        = number
+  default     = 512
+}
+
+variable "pnl_attribution_memory" {
+  description = "Fargate task memory (MiB) for Mengxi P&L attribution app"
+  type        = number
+  default     = 1024
+}
+
+variable "pnl_attribution_desired_count" {
+  description = "Desired ECS task count for Mengxi P&L attribution app"
+  type        = number
+  default     = 1
+}
+
+variable "pnl_attribution_pgurl" {
+  description = "PGURL passed directly to Mengxi P&L attribution ECS task environment"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
