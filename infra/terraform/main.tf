@@ -1065,6 +1065,8 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
       }
     }
   ])
+
+  tags = {}
 }
 
 resource "aws_ecs_task_definition" "inner_pipeline" {
