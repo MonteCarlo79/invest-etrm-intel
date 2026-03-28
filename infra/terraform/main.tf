@@ -128,7 +128,7 @@ resource "aws_security_group" "rds" {
 
   # Preserve legacy producer security-group access to avoid unintended drift.
   ingress {
-    description     = "Postgres from legacy producer sg-024c9057983f9e0de"
+    description     = "Keep legacy SG 1"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
@@ -136,7 +136,7 @@ resource "aws_security_group" "rds" {
   }
 
   ingress {
-    description     = "Postgres from legacy producer sg-0a2794c39be902973"
+    description     = "Keep legacy SG 2"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
@@ -985,8 +985,8 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   family                   = "${var.name}-inner-mongolia"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 2048
-  memory                   = 8192
+  cpu                      = 512
+  memory                   = 1024
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
