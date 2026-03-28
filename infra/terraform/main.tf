@@ -126,6 +126,23 @@ resource "aws_security_group" "rds" {
     security_groups = [aws_security_group.ecs_tasks.id]
   }
 
+  # Preserve legacy producer security-group access to avoid unintended drift.
+  ingress {
+    description     = "Postgres from legacy producer sg-024c9057983f9e0de"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = ["sg-024c9057983f9e0de"]
+  }
+
+  ingress {
+    description     = "Postgres from legacy producer sg-0a2794c39be902973"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = ["sg-0a2794c39be902973"]
+  }
+
   egress {
     description = "All outbound"
     from_port   = 0
@@ -547,6 +564,11 @@ resource "aws_lb_target_group" "portal" {
 # -------------------------
 resource "aws_ecs_cluster" "this" {
   name = "${var.name}-cluster"
+  configuration {
+    execute_command_configuration {
+      logging = "DEFAULT"
+    }
+  }
   setting {
     name  = "containerInsights"
     value = "enabled"
@@ -963,8 +985,8 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   family                   = "${var.name}-inner-mongolia"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 2048
+  memory                   = 8192
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -1049,8 +1071,8 @@ resource "aws_ecs_task_definition" "inner_pipeline" {
   family                   = "${var.name}-inner-pipeline"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = 4096
+  memory                   = 16384
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
