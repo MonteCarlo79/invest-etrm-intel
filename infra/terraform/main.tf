@@ -1067,6 +1067,11 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   ])
 
   tags = {}
+
+  lifecycle {
+    # Keep existing Terraform-managed task revision stable for shared Inner Mongolia service.
+    ignore_changes = [container_definitions, tags]
+  }
 }
 
 resource "aws_ecs_task_definition" "inner_pipeline" {
