@@ -948,7 +948,7 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
         },
         {
           name  = "PIPELINE_TASK_DEF"
-          value = aws_ecs_task_definition.inner_pipeline.arn
+          value = aws_ecs_task_definition.inner_pipeline.family
         },
         {
           name  = "PRIVATE_SUBNETS"

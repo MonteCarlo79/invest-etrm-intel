@@ -1,13 +1,33 @@
 # -*- coding: utf-8 -*-
 
-import pandas as pd
-import numpy as np
-from sqlalchemy import create_engine, text
-from datetime import datetime
+import hashlib
+import logging
 import os
+import resource
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+from sqlalchemy import create_engine, text
+
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+
+def _log_mem(tag: str) -> None:
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    logger.info("[MEM] %s: RSS=%.1f MB", tag, rss)
+
+
+def _log_df(name: str, df: pd.DataFrame) -> None:
+    mb = df.memory_usage(deep=True).sum() / 1024 / 1024
+    logger.info("[DF] %s: shape=%s, mem=%.1f MB", name, df.shape, mb)
 
 def build_master(df_id, conversion_factor):
-    # Define your master build logic here
+    _log_df("build_master.df_id", df_id)
+    _log_mem("build_master.start")
+
     asset_meta = (
         df_id.groupby("plant_name")["dispatch_unit_name"]
         .first()
@@ -31,67 +51,79 @@ def build_master(df_id, conversion_factor):
     )
 
     clusters["inferred_mw"] = clusters["inferred_mw"].round(0)
-
+    _log_df("build_master.clusters", clusters)
+    _log_mem("build_master.done")
     return clusters
 
-def build_peer_tables(station_df, clusters):
-    # Map each BESS plant -> cluster_id
-    
+def build_peer_tables(station_df, clusters, include_mapping: bool = True):
+    """
+    Build peer summary with a memory-safe path that avoids constructing the
+    full BESS×peer cross-product unless explicitly requested.
+    """
+    station_df = station_df.copy()
+    station_df["plant_name"] = station_df["plant_name"].astype(str).str.strip()
+    station_df = station_df.drop_duplicates(subset=["plant_name"])
+
+    clusters = clusters.copy()
+    clusters["plant_name"] = clusters["plant_name"].astype(str).str.strip()
+    clusters = clusters.drop_duplicates(subset=["plant_name"])
+
     bess_map = station_df[["plant_name"]].merge(
         clusters[["plant_name", "cluster_id"]],
         on="plant_name",
-        how="left"
+        how="left",
+        validate="one_to_one",
     ).rename(columns={"plant_name": "bess_plant"})
 
-    # All peers in same cluster (long form)
+    cluster_totals = (
+        clusters.groupby(["cluster_id", "asset_type"], as_index=False)
+        .agg(peer_count=("plant_name", "nunique"), peer_mw=("inferred_mw", "sum"))
+    )
+    _log_df("build_peer_tables.cluster_totals", cluster_totals)
+
+    bess_clusters = bess_map.merge(
+        clusters[["plant_name", "cluster_id", "asset_type", "inferred_mw"]],
+        left_on="bess_plant",
+        right_on="plant_name",
+        how="left",
+        validate="one_to_one",
+    ).rename(columns={"asset_type": "self_asset_type", "inferred_mw": "self_inferred_mw"})
+
+    rows = []
+    for row in bess_clusters.itertuples(index=False):
+        rec = {"bess_plant": row.bess_plant}
+        if pd.isna(row.cluster_id):
+            rows.append(rec)
+            continue
+        sub = cluster_totals[cluster_totals["cluster_id"] == row.cluster_id]
+        for _, srow in sub.iterrows():
+            asset_type = srow["asset_type"]
+            count_val = int(srow["peer_count"])
+            mw_val = float(srow["peer_mw"])
+            if asset_type == row.self_asset_type:
+                count_val = max(0, count_val - 1)
+                mw_val = max(0.0, mw_val - float(row.self_inferred_mw or 0.0))
+            rec[f"peer_count_{asset_type}"] = count_val
+            rec[f"peer_MW_{asset_type}"] = mw_val
+        rows.append(rec)
+
+    peer_summary = pd.DataFrame(rows)
+    _log_df("build_peer_tables.peer_summary", peer_summary)
+    _log_mem("build_peer_tables.done")
+
+    if not include_mapping:
+        nodal_mapping = pd.DataFrame(columns=["bess_plant", "cluster_id", "peer_plant", "asset_type"])
+        return bess_map, nodal_mapping, peer_summary
+
+    # Only build full mapping when needed by UI/detail view.
     peers_long = bess_map.merge(
         clusters[["plant_name", "cluster_id", "asset_type"]],
         on="cluster_id",
-        how="left"
+        how="left",
+        validate="many_to_many",
     ).rename(columns={"plant_name": "peer_plant"})
-
-    # Exclude self from peer stats
-    peers_excl_self = peers_long[peers_long["peer_plant"] != peers_long["bess_plant"]].copy()
-
-    # Counts by type (always available)
-    peer_type_counts = (
-        peers_excl_self
-        .groupby(["bess_plant", "asset_type"])["peer_plant"]
-        .nunique()
-        .unstack(fill_value=0)
-        .add_prefix("peer_count_")
-        .reset_index()
-    )
-
-    # "Known MW" by type (only where we have MW for that peer from uploaded file)
-    # print("station_df columns:", station_df.columns)
-    station_df_local = station_df.copy()
-    station_df_local.columns = station_df_local.columns.str.lower()
-    
-
-    # print("station_df columns:", station_df.columns)
-    # MW by type (using inferred full-history capacity)
-    peer_type_mw = (
-        peers_excl_self
-        .merge(
-            clusters[["plant_name", "inferred_mw"]],
-            left_on="peer_plant",
-            right_on="plant_name",
-            how="left"
-        )
-        .groupby(["bess_plant", "asset_type"])["inferred_mw"]
-        .sum()
-        .unstack(fill_value=0)
-        .add_prefix("peer_MW_")
-        .reset_index()
-    )
-
-    # Combine
-    peer_summary = peer_type_counts.merge(peer_type_mw, on="bess_plant", how="left")
-
-    # Also return mapping table for Tab1
     nodal_mapping = peers_long[["bess_plant", "cluster_id", "peer_plant", "asset_type"]].copy()
-
+    _log_df("build_peer_tables.nodal_mapping", nodal_mapping)
     return bess_map, nodal_mapping, peer_summary
 
 # ==========================================================
@@ -188,19 +220,23 @@ def infer_capacity_from_history(conversion_factor):
     return df_cap
 
 def nodal_clustering(df_id):
-    # Cluster logic
-    pivot = df_id.pivot_table(
-        index="datetime",
-        columns="plant_name",
-        values="cleared_price",
-        aggfunc="mean"
-    ).sort_index()
+    # Avoid wide pivot tables that can spike memory.
+    tmp = df_id[["plant_name", "datetime", "cleared_price"]].copy()
+    tmp["plant_name"] = tmp["plant_name"].astype(str).str.strip()
+    tmp["datetime"] = pd.to_datetime(tmp["datetime"], errors="coerce")
+    tmp["cleared_price"] = pd.to_numeric(tmp["cleared_price"], errors="coerce")
+    tmp = tmp[tmp["datetime"].notna() & tmp["plant_name"].notna()]
+    tmp["px2"] = tmp["cleared_price"].round(2)
+    tmp = tmp.sort_values(["plant_name", "datetime"])
 
     signatures = {}
-    for plant in pivot.columns:
-        s = pivot[plant].round(2)
-        h = pd.util.hash_pandas_object(s, index=True).sum()
-        signatures[plant] = h
+    for plant, g in tmp.groupby("plant_name", sort=False):
+        h = hashlib.sha1()
+        for ts, px in g[["datetime", "px2"]].itertuples(index=False):
+            if pd.isna(px):
+                continue
+            h.update(f"{ts.isoformat()}|{px:.2f};".encode("utf-8"))
+        signatures[plant] = h.hexdigest()
 
     cluster_df = pd.DataFrame({
         "plant_name": list(signatures.keys()),
