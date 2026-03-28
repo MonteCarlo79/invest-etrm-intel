@@ -323,6 +323,11 @@ variable "pnl_attribution_image" {
   description = "Docker image for Mengxi P&L attribution Streamlit app"
   type        = string
   default     = ""
+
+  validation {
+    condition     = !var.enable_pnl_attribution_service || length(trimspace(var.pnl_attribution_image)) > 0
+    error_message = "pnl_attribution_image must be non-empty when enable_pnl_attribution_service is true."
+  }
 }
 
 variable "pnl_attribution_container_port" {
@@ -360,4 +365,9 @@ variable "pnl_attribution_pgurl" {
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = !var.enable_pnl_attribution_service || length(trimspace(var.pnl_attribution_pgurl)) > 0
+    error_message = "pnl_attribution_pgurl must be non-empty when enable_pnl_attribution_service is true."
+  }
 }
