@@ -120,6 +120,22 @@ resource "aws_security_group" "rds" {
     security_groups = [aws_security_group.ecs_tasks.id]
   }
 
+ingress {
+    description     = "Keep legacy SG 1"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = ["sg-024c9057983f9e0de"]
+  }
+
+  ingress {
+    description     = "Keep legacy SG 2"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = ["sg-0a2794c39be902973"]
+  }
+
   egress {
     description = "All outbound"
     from_port   = 0
@@ -903,8 +919,8 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   family                   = "${var.name}-inner-mongolia"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 2048
+  memory                   = 8192
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn

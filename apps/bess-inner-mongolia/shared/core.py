@@ -62,7 +62,9 @@ def build_peer_tables(station_df, clusters, include_mapping: bool = True):
     """
     station_df = station_df.copy()
     station_df["plant_name"] = station_df["plant_name"].astype(str).str.strip()
-    station_df = station_df.drop_duplicates(subset=["plant_name"])
+    # station_df = station_df.drop_duplicates(subset=["plant_name"])
+    station_df.loc[station_df["plant_name"].isin(["", "nan", "None"]), "plant_name"] = pd.NA
+    station_df = station_df[station_df["plant_name"].notna()]
 
     clusters = clusters.copy()
     clusters["plant_name"] = clusters["plant_name"].astype(str).str.strip()

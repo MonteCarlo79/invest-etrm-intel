@@ -116,6 +116,8 @@ station_df = pd.read_sql(
     engine,
 )
 station_df["plant_name"] = station_df["plant_name"].astype(str).str.strip()
+# station_df = station_df[station_df["plant_name"].notna()]
+station_df.loc[station_df["plant_name"].isin(["", "nan", "None"]), "plant_name"] = pd.NA
 station_df = station_df[station_df["plant_name"].notna()]
 station_df = station_df.drop_duplicates(subset=["plant_name"])
 log_df("station_df", station_df)
