@@ -10,7 +10,6 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r /tmp/requirements
 COPY apps/bess-inner-mongolia/im /apps
 COPY auth /apps/auth
 COPY apps/bess-inner-mongolia/shared /apps/shared
-COPY apps/trading/bess/mengxi/pnl_attribution /apps/apps/trading/bess/mengxi/pnl_attribution
 COPY services/bess_inner_mongolia /apps/services/bess_inner_mongolia
 
 ENV PYTHONPATH=/apps
