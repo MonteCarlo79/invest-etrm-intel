@@ -47,7 +47,13 @@ if not DB_URL:
     st.error("Missing DB_DSN / PGURL")
     st.stop()
 
-ENGINE = create_engine(DB_URL, pool_pre_ping=True)
+@st.cache_resource
+def get_engine():
+    # Cache SQLAlchemy engine as a process-level resource (not per rerun).
+    return create_engine(DB_URL, pool_pre_ping=True)
+
+
+ENGINE = get_engine()
 ASSET_CODES = ["suyou", "wulate", "wuhai", "wulanchabu", "hetao", "hangjinqi", "siziwangqi", "gushanliang"]
 ASSET_DISPLAY = {
     "suyou": "苏右",
@@ -69,7 +75,8 @@ def _safe_read_sql(engine: Engine, sql: str, params: dict | None = None, cols: l
 
 
 @st.cache_data(ttl=300)
-def load_scenario_pnl(engine: Engine, start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
+def load_scenario_pnl(_engine: Engine, start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
+    # `_engine` is underscore-prefixed so Streamlit excludes it from cache hashing.
     sql = """
         SELECT
             trade_date,
@@ -92,7 +99,7 @@ def load_scenario_pnl(engine: Engine, start_date: dt.date, end_date: dt.date) ->
         ORDER BY trade_date, asset_code, scenario_name
     """
     df = _safe_read_sql(
-        engine,
+        _engine,
         sql,
         params={"start_date": start_date, "end_date": end_date, "asset_codes": ASSET_CODES},
         cols=[
@@ -112,7 +119,8 @@ def load_scenario_pnl(engine: Engine, start_date: dt.date, end_date: dt.date) ->
 
 
 @st.cache_data(ttl=300)
-def load_attribution(engine: Engine, start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
+def load_attribution(_engine: Engine, start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
+    # `_engine` is underscore-prefixed so Streamlit excludes it from cache hashing.
     sql = """
         SELECT
             trade_date,
@@ -136,7 +144,7 @@ def load_attribution(engine: Engine, start_date: dt.date, end_date: dt.date) -> 
           AND asset_code = ANY(:asset_codes)
         ORDER BY trade_date, asset_code
     """
-    df = _safe_read_sql(engine, sql, params={"start_date": start_date, "end_date": end_date, "asset_codes": ASSET_CODES})
+    df = _safe_read_sql(_engine, sql, params={"start_date": start_date, "end_date": end_date, "asset_codes": ASSET_CODES})
     if df.empty:
         return df
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
@@ -148,7 +156,8 @@ def load_attribution(engine: Engine, start_date: dt.date, end_date: dt.date) -> 
 
 
 @st.cache_data(ttl=300)
-def load_monthly_status(engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_monthly_status(_engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # `_engine` is underscore-prefixed so Streamlit excludes it from cache hashing.
     coverage_sql = """
         SELECT asset_code, effective_month, discharge_known, compensation_known, blocked_missing_compensation, notes
         FROM staging.mengxi_compensation_coverage_status
@@ -161,13 +170,13 @@ def load_monthly_status(engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame]:
           AND asset_code = ANY(:asset_codes)
     """
     coverage_df = _safe_read_sql(
-        engine,
+        _engine,
         coverage_sql,
         params={"asset_codes": ASSET_CODES},
         cols=["asset_code", "effective_month", "discharge_known", "compensation_known", "blocked_missing_compensation", "notes"],
     )
     rate_df = _safe_read_sql(
-        engine,
+        _engine,
         rate_sql,
         params={"asset_codes": ASSET_CODES},
         cols=["asset_code", "effective_month", "compensation_yuan_per_mwh", "source_system", "notes"],
@@ -193,6 +202,9 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
     start_date, end_date = date_range
 else:
     start_date, end_date = default_start, default_end
+if start_date > end_date:
+    st.warning("Invalid date range: start date is after end date.")
+    st.stop()
 
 asset_choice = st.sidebar.selectbox(
     "Asset drilldown",
