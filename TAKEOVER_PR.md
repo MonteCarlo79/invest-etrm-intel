@@ -4,7 +4,7 @@
 **Base**: `feature/mengxi-strategy-diagnostics` (commit `8e50248`)
 **PR target**: `main`
 **Operator**: OpenClaw (MiniMax Matrix Agent)
-**Date**: 2025-07-04
+**Date**: 2026-03-30
 
 ---
 
@@ -219,7 +219,7 @@ docker run --rm -p 8502:8502 \
 cd C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform
 
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-AWS_REGION=ap-northeast-1   # adjust to your region
+AWS_REGION=ap-southeast-1   # adjust to your region
 
 aws ecr get-login-password --region $AWS_REGION \
   | docker login --username AWS --password-stdin \
