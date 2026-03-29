@@ -23,36 +23,20 @@ def month_start(ts: pd.Timestamp) -> pd.Timestamp:
 
 def get_monthly_compensation_rate(
     compensation_df: pd.DataFrame,
-    coverage_df: pd.DataFrame | None,
     asset_code: str,
     trade_date: pd.Timestamp,
     default_rate: float = DEFAULT_COMPENSATION_YUAN_PER_MWH,
-) -> tuple[float, bool, str | None]:
+) -> float:
     """
     compensation_df expected columns:
     - asset_code
     - effective_month
     - compensation_yuan_per_mwh
     """
-    effective_month = month_start(trade_date)
-
-    blocked_reason = None
-    if coverage_df is not None and not coverage_df.empty:
-        cdf = coverage_df.copy()
-        cdf["effective_month"] = pd.to_datetime(cdf["effective_month"], errors="coerce").dt.normalize()
-        coverage_hit = cdf[
-            (cdf["asset_code"] == asset_code)
-            & (cdf["effective_month"] == effective_month)
-            & (cdf["discharge_known"] == True)
-            & (cdf["compensation_known"] == False)
-        ]
-        if not coverage_hit.empty:
-            blocked_reason = "discharge_known_compensation_missing"
-
     if compensation_df is None or compensation_df.empty:
-        if blocked_reason:
-            return np.nan, True, blocked_reason
-        return float(default_rate), False, None
+        return float(default_rate)
+
+    effective_month = month_start(trade_date)
 
     df = compensation_df.copy()
     df["effective_month"] = pd.to_datetime(df["effective_month"], errors="coerce").dt.normalize()
@@ -63,17 +47,13 @@ def get_monthly_compensation_rate(
     ]
 
     if hit.empty:
-        if blocked_reason:
-            return np.nan, True, blocked_reason
-        return float(default_rate), False, None
+        return float(default_rate)
 
     val = pd.to_numeric(hit["compensation_yuan_per_mwh"], errors="coerce").dropna()
     if val.empty:
-        if blocked_reason:
-            return np.nan, True, blocked_reason
-        return float(default_rate), False, None
+        return float(default_rate)
 
-    return float(val.iloc[0]), False, None
+    return float(val.iloc[0])
 
 SCENARIOS = [
     "perfect_foresight_unrestricted",
@@ -361,16 +341,14 @@ def build_daily_scenario_rows(
     scenario_dispatch_map: Dict[str, pd.DataFrame],
     availability_map: Dict[str, bool],
     compensation_df: pd.DataFrame | None = None,
-    compensation_coverage_df: pd.DataFrame | None = None,
     default_compensation_yuan_per_mwh: float = DEFAULT_COMPENSATION_YUAN_PER_MWH,
 ) -> pd.DataFrame:
-    comp_rate, compensation_blocked, block_reason = get_monthly_compensation_rate(
-        compensation_df=compensation_df,
-        coverage_df=compensation_coverage_df,
-        asset_code=asset_code,
-        trade_date=trade_date,
-        default_rate=default_compensation_yuan_per_mwh,
-    )
+    comp_rate = get_monthly_compensation_rate(
+    compensation_df=compensation_df,
+    asset_code=asset_code,
+    trade_date=trade_date,
+    default_rate=default_compensation_yuan_per_mwh,
+)
     rows = []
     for scenario_name in SCENARIOS:
         available = bool(availability_map.get(scenario_name, False))
@@ -388,8 +366,6 @@ def build_daily_scenario_rows(
                     "charge_mwh": np.nan,
                     "avg_daily_cycles": np.nan,
                     "compensation_yuan_per_mwh": comp_rate,
-                    "compensation_blocked": compensation_blocked,
-                    "compensation_block_reason": block_reason,
                 }
             )
             continue
@@ -408,9 +384,6 @@ def build_daily_scenario_rows(
                     "discharge_mwh": np.nan,
                     "charge_mwh": np.nan,
                     "avg_daily_cycles": np.nan,
-                    "compensation_yuan_per_mwh": comp_rate,
-                    "compensation_blocked": compensation_blocked,
-                    "compensation_block_reason": block_reason,
                 }
             )
             continue
@@ -426,8 +399,6 @@ def build_daily_scenario_rows(
                 "asset_code": asset_code,
                 "scenario_name": scenario_name,
                 "scenario_available": True,
-                "compensation_blocked": compensation_blocked,
-                "compensation_block_reason": block_reason,
                 **metrics,
             }
         )
