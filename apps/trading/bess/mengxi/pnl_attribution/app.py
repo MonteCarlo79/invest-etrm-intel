@@ -49,6 +49,7 @@ if not DB_URL:
 
 @st.cache_resource
 def get_engine():
+    # Cache SQLAlchemy engine as a process-level resource (not per rerun).
     return create_engine(DB_URL, pool_pre_ping=True)
 
 
@@ -75,6 +76,7 @@ def _safe_read_sql(engine: Engine, sql: str, params: dict | None = None, cols: l
 
 @st.cache_data(ttl=300)
 def load_scenario_pnl(_engine: Engine, start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
+    # `_engine` is underscore-prefixed so Streamlit excludes it from cache hashing.
     sql = """
         SELECT
             trade_date,
@@ -118,6 +120,7 @@ def load_scenario_pnl(_engine: Engine, start_date: dt.date, end_date: dt.date) -
 
 @st.cache_data(ttl=300)
 def load_attribution(_engine: Engine, start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
+    # `_engine` is underscore-prefixed so Streamlit excludes it from cache hashing.
     sql = """
         SELECT
             trade_date,
@@ -154,6 +157,7 @@ def load_attribution(_engine: Engine, start_date: dt.date, end_date: dt.date) ->
 
 @st.cache_data(ttl=300)
 def load_monthly_status(_engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # `_engine` is underscore-prefixed so Streamlit excludes it from cache hashing.
     coverage_sql = """
         SELECT asset_code, effective_month, discharge_known, compensation_known, blocked_missing_compensation, notes
         FROM staging.mengxi_compensation_coverage_status
@@ -198,6 +202,9 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
     start_date, end_date = date_range
 else:
     start_date, end_date = default_start, default_end
+if start_date > end_date:
+    st.warning("Invalid date range: start date is after end date.")
+    st.stop()
 
 asset_choice = st.sidebar.selectbox(
     "Asset drilldown",
