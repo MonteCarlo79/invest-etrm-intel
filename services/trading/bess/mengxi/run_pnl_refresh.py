@@ -20,7 +20,6 @@ from sqlalchemy.engine import Engine
 from apps.trading.bess.mengxi.pnl_attribution.calc import (
     ASSET_ALIAS_MAP,
     SCENARIOS,
-    SUBSIDY_PER_MWH_DEFAULT,
     build_daily_attribution_row,
     build_daily_scenario_rows,
 )
@@ -36,6 +35,240 @@ ENGINE = create_engine(DB_URL)
 DEFAULT_COMPENSATION_YUAN_PER_MWH = float(
     os.getenv("DEFAULT_COMPENSATION_YUAN_PER_MWH", "350"))
 REFRESH_LOOKBACK_DAYS = int(os.getenv("PNL_REFRESH_LOOKBACK_DAYS", "7"))
+ENABLE_CANON_COMPAT_VIEWS = os.getenv("PNL_ENABLE_CANON_COMPAT_VIEWS", "0").strip().lower() in ("1", "true", "yes", "on")
+PREFER_DIRECT_MD = os.getenv("PNL_PREFER_DIRECT_MD", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _normalize_time_column(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "time" not in df.columns:
+        return df
+    out = df.copy()
+    out["time"] = pd.to_datetime(out["time"], errors="coerce")
+    try:
+        if getattr(out["time"].dt, "tz", None) is not None:
+            out["time"] = out["time"].dt.tz_convert("Asia/Shanghai").dt.tz_localize(None)
+    except Exception:
+        try:
+            out["time"] = out["time"].dt.tz_localize(None)
+        except Exception:
+            pass
+    return out
+
+
+def _relation_exists(engine: Engine, schema_name: str, relation_name: str) -> bool:
+    sql = text(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = :schema_name
+              AND table_name = :relation_name
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM information_schema.views
+            WHERE table_schema = :schema_name
+              AND table_name = :relation_name
+        ) AS exists_flag
+        """
+    )
+    with engine.begin() as con:
+        val = con.execute(
+            sql,
+            {"schema_name": schema_name, "relation_name": relation_name},
+        ).scalar()
+    return bool(val)
+
+
+def _find_relation_schema(
+    engine: Engine,
+    relation_name: str,
+    candidate_schemas: tuple[str, ...],
+) -> str | None:
+    sql = text(
+        """
+        SELECT table_schema
+        FROM (
+            SELECT table_schema, table_name FROM information_schema.tables
+            UNION ALL
+            SELECT table_schema, table_name FROM information_schema.views
+        ) t
+        WHERE t.table_name = :relation_name
+          AND t.table_schema = ANY(:candidate_schemas)
+        ORDER BY array_position(:candidate_schemas, t.table_schema)
+        LIMIT 1
+        """
+    )
+    with engine.begin() as con:
+        row = con.execute(
+            sql,
+            {"relation_name": relation_name, "candidate_schemas": list(candidate_schemas)},
+        ).first()
+    return str(row[0]) if row else None
+
+
+def ensure_canonical_compat_views(engine: Engine) -> None:
+    """
+    Create additive compatibility views used by the P&L refresh job.
+
+    These are bridge views so the job can run against existing production tables
+    before full canonical pipelines are in place.
+    """
+    with engine.begin() as con:
+        con.execute(text("CREATE SCHEMA IF NOT EXISTS canon"))
+
+    price_sources = {
+        "suyou": "hist_mengxi_suyou_clear_15min",
+        "wulate": "hist_mengxi_wulate_clear_15min",
+        "wuhai": "hist_mengxi_wuhai_clear_15min",
+        "wulanchabu": "hist_mengxi_wulanchabu_clear_15min",
+    }
+    price_selects = []
+    for asset_code, table_name in price_sources.items():
+        source_schema = _find_relation_schema(
+            engine,
+            table_name,
+            candidate_schemas=("public", "marketdata"),
+        )
+        if source_schema:
+            price_selects.append(
+                f"""
+                SELECT
+                    time::timestamptz AS time,
+                    '{asset_code}'::text AS asset_code,
+                    price::numeric AS price
+                FROM {source_schema}."{table_name}"
+                WHERE time IS NOT NULL
+                """
+            )
+
+    alias_table_exists = _relation_exists(engine, "core", "asset_alias_map")
+    md_rt_schema = _find_relation_schema(
+        engine,
+        "md_rt_nodal_price",
+        candidate_schemas=("marketdata", "public"),
+    )
+    if (not price_selects) and md_rt_schema and alias_table_exists:
+        price_selects.append(
+            f"""
+            SELECT
+                p.datetime::timestamptz AS time,
+                a.asset_code::text AS asset_code,
+                AVG(p.node_price::numeric) AS price
+            FROM {md_rt_schema}.md_rt_nodal_price p
+            JOIN core.asset_alias_map a
+              ON a.active_flag = TRUE
+             AND LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(p.node_name, '')))
+            WHERE a.asset_code IN (
+                'suyou',
+                'wulate',
+                'wuhai',
+                'wulanchabu',
+                'hetao',
+                'hangjinqi',
+                'siziwangqi',
+                'gushanliang'
+            )
+              AND p.datetime IS NOT NULL
+              AND p.node_price IS NOT NULL
+            GROUP BY p.datetime, a.asset_code
+            """
+        )
+
+    if price_selects:
+        nodal_view_sql = f"""
+            CREATE OR REPLACE VIEW canon.nodal_rt_price_15min AS
+            {" UNION ALL ".join(price_selects)}
+        """
+    else:
+        nodal_view_sql = """
+            CREATE OR REPLACE VIEW canon.nodal_rt_price_15min AS
+            SELECT
+                NULL::timestamptz AS time,
+                NULL::text AS asset_code,
+                NULL::numeric AS price
+            WHERE FALSE
+        """
+
+    md_table_schema = _find_relation_schema(
+        engine,
+        "md_id_cleared_energy",
+        candidate_schemas=("marketdata", "public"),
+    )
+    md_table_exists = md_table_schema is not None
+    dispatch_view_sql = """
+        CREATE OR REPLACE VIEW canon.scenario_dispatch_15min AS
+        SELECT
+            NULL::timestamptz AS time,
+            NULL::text AS asset_code,
+            NULL::text AS scenario_name,
+            NULL::numeric AS dispatch_mw
+        WHERE FALSE
+    """
+    if md_table_exists and alias_table_exists:
+        dispatch_view_sql = f"""
+            CREATE OR REPLACE VIEW canon.scenario_dispatch_15min AS
+            WITH mapped AS (
+                SELECT
+                    m.datetime::timestamptz AS time,
+                    a.asset_code::text AS asset_code,
+                    MAX((m.cleared_energy_mwh::numeric) * 4.0) AS dispatch_mw
+                FROM {md_table_schema}.md_id_cleared_energy m
+                JOIN core.asset_alias_map a
+                  ON a.active_flag = TRUE
+                 AND (
+                    LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.plant_name, '')))
+                    OR LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.dispatch_unit_name, '')))
+                 )
+                WHERE a.asset_code IN (
+                    'suyou',
+                    'wulate',
+                    'wuhai',
+                    'wulanchabu',
+                    'hetao',
+                    'hangjinqi',
+                    'siziwangqi',
+                    'gushanliang'
+                )
+                  AND m.datetime IS NOT NULL
+                  AND m.cleared_energy_mwh IS NOT NULL
+                GROUP BY m.datetime, a.asset_code
+            )
+            SELECT
+                time,
+                asset_code,
+                'cleared_actual'::text AS scenario_name,
+                dispatch_mw
+            FROM mapped
+        """
+    elif md_table_exists:
+        dispatch_view_sql = f"""
+            CREATE OR REPLACE VIEW canon.scenario_dispatch_15min AS
+            SELECT
+                m.datetime::timestamptz AS time,
+                CASE
+                    WHEN LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%suyou%' THEN 'suyou'
+                    WHEN LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%wulate%' THEN 'wulate'
+                    WHEN LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%wuhai%' THEN 'wuhai'
+                    WHEN LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%wulanchabu%' THEN 'wulanchabu'
+                    ELSE NULL
+                END::text AS asset_code,
+                'cleared_actual'::text AS scenario_name,
+                (m.cleared_energy_mwh::numeric) * 4.0 AS dispatch_mw
+            FROM {md_table_schema}.md_id_cleared_energy m
+            WHERE m.datetime IS NOT NULL
+              AND m.cleared_energy_mwh IS NOT NULL
+              AND (
+                LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%suyou%'
+                OR LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%wulate%'
+                OR LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%wuhai%'
+                OR LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE '%wulanchabu%'
+              )
+        """
+
+    with engine.begin() as con:
+        con.execute(text(nodal_view_sql))
+        con.execute(text(dispatch_view_sql))
 
 
 def ensure_report_tables(engine: Engine) -> None:
@@ -55,6 +288,8 @@ def ensure_report_tables(engine: Engine) -> None:
         discharge_mwh numeric,
         charge_mwh numeric,
         avg_daily_cycles numeric,
+        compensation_blocked boolean,
+        compensation_block_reason text,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (trade_date, asset_code, scenario_name)
@@ -97,6 +332,18 @@ def ensure_report_tables(engine: Engine) -> None:
             sql = stmt.strip()
             if sql:
                 con.execute(text(sql))
+        con.execute(text("""
+            ALTER TABLE reports.bess_asset_daily_scenario_pnl
+            ADD COLUMN IF NOT EXISTS compensation_blocked boolean
+        """))
+        con.execute(text("""
+            ALTER TABLE reports.bess_asset_daily_scenario_pnl
+            ADD COLUMN IF NOT EXISTS compensation_block_reason text
+        """))
+        con.execute(text("""
+            ALTER TABLE reports.bess_asset_daily_scenario_pnl
+            ADD COLUMN IF NOT EXISTS interval_hours numeric
+        """))
 
 def fetch_asset_monthly_compensation(engine: Engine) -> pd.DataFrame:
     sql = text("""
@@ -136,6 +383,49 @@ def fetch_scenario_availability(engine: Engine) -> pd.DataFrame:
         return scenario_availability_df()
 
 
+def fetch_compensation_coverage(engine: Engine) -> pd.DataFrame:
+    """
+    Coverage helper:
+    - discharge_known=True if settlement extraction exists for asset/month
+    - compensation_known=True if compensation extraction exists for asset/month
+    """
+    sql = text("""
+        WITH settlement AS (
+            SELECT asset_code, settlement_month::date AS effective_month
+            FROM staging.mengxi_settlement_extracted
+            WHERE asset_code IS NOT NULL
+              AND settlement_month IS NOT NULL
+              AND discharge_mwh IS NOT NULL
+              AND parse_confidence != 'pending'
+            GROUP BY asset_code, settlement_month
+        ),
+        compensation AS (
+            SELECT asset_code, settlement_month::date AS effective_month
+            FROM staging.mengxi_compensation_extracted
+            WHERE asset_code IS NOT NULL
+              AND settlement_month IS NOT NULL
+              AND compensation_yuan IS NOT NULL
+              AND parse_confidence != 'pending'
+            GROUP BY asset_code, settlement_month
+        )
+        SELECT
+            COALESCE(s.asset_code, c.asset_code) AS asset_code,
+            COALESCE(s.effective_month, c.effective_month) AS effective_month,
+            (s.asset_code IS NOT NULL) AS discharge_known,
+            (c.asset_code IS NOT NULL) AS compensation_known
+        FROM settlement s
+        FULL OUTER JOIN compensation c
+          ON s.asset_code = c.asset_code
+         AND s.effective_month = c.effective_month
+    """)
+    try:
+        return pd.read_sql(sql, engine)
+    except Exception:
+        return pd.DataFrame(
+            columns=["asset_code", "effective_month", "discharge_known", "compensation_known"]
+        )
+
+
 def fetch_trade_dates(engine: Engine, lookback_days: int) -> list[date]:
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
@@ -147,6 +437,41 @@ def load_actual_price(engine: Engine, asset_code: str, trade_date: date) -> pd.D
     v1 assumption:
     - canonical view exists and resolves whichever source is authoritative.
     """
+    start_ts = pd.Timestamp(trade_date)
+    end_ts = start_ts + pd.Timedelta(days=1)
+
+    md_schema = _find_relation_schema(engine, "md_id_cleared_energy", ("marketdata", "public"))
+    if PREFER_DIRECT_MD and md_schema:
+        if _relation_exists(engine, "core", "asset_alias_map"):
+            fb_sql = text(
+                f"""
+                SELECT
+                    m.datetime AS time,
+                    AVG(m.cleared_price::numeric) AS price
+                FROM {md_schema}.md_id_cleared_energy m
+                JOIN core.asset_alias_map a
+                  ON a.active_flag = TRUE
+                 AND a.asset_code = :asset_code
+                 AND (
+                    LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.plant_name, '')))
+                    OR LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.dispatch_unit_name, '')))
+                 )
+                WHERE m.datetime >= :start_ts
+                  AND m.datetime < :end_ts
+                  AND m.cleared_price IS NOT NULL
+                GROUP BY m.datetime
+                ORDER BY m.datetime
+                """
+            )
+            alias_df = pd.read_sql(
+                fb_sql,
+                engine,
+                params={"asset_code": asset_code, "start_ts": start_ts, "end_ts": end_ts},
+            )
+            alias_df = _normalize_time_column(alias_df)
+            if not alias_df.empty:
+                return alias_df
+
     sql = text("""
         SELECT time, price
         FROM canon.nodal_rt_price_15min
@@ -155,12 +480,101 @@ def load_actual_price(engine: Engine, asset_code: str, trade_date: date) -> pd.D
           AND time < :end_ts
         ORDER BY time
     """)
-    start_ts = pd.Timestamp(trade_date)
-    end_ts = start_ts + pd.Timedelta(days=1)
-    return pd.read_sql(sql, engine, params={"asset_code": asset_code, "start_ts": start_ts, "end_ts": end_ts})
+    df = pd.read_sql(sql, engine, params={"asset_code": asset_code, "start_ts": start_ts, "end_ts": end_ts})
+    df = _normalize_time_column(df)
+    if not df.empty:
+        return df
+
+    if not md_schema:
+        return df
+
+    if _relation_exists(engine, "core", "asset_alias_map"):
+        fb_sql = text(
+            f"""
+            SELECT
+                m.datetime AS time,
+                AVG(m.cleared_price::numeric) AS price
+            FROM {md_schema}.md_id_cleared_energy m
+            JOIN core.asset_alias_map a
+              ON a.active_flag = TRUE
+             AND a.asset_code = :asset_code
+             AND (
+                LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.plant_name, '')))
+                OR LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.dispatch_unit_name, '')))
+             )
+            WHERE m.datetime >= :start_ts
+              AND m.datetime < :end_ts
+              AND m.cleared_price IS NOT NULL
+            GROUP BY m.datetime
+            ORDER BY m.datetime
+            """
+        )
+        alias_df = pd.read_sql(
+            fb_sql,
+            engine,
+            params={"asset_code": asset_code, "start_ts": start_ts, "end_ts": end_ts},
+        )
+        alias_df = _normalize_time_column(alias_df)
+        if not alias_df.empty:
+            return alias_df
+
+    fb_sql = text(
+        f"""
+        SELECT
+            m.datetime AS time,
+            AVG(m.cleared_price::numeric) AS price
+        FROM {md_schema}.md_id_cleared_energy m
+        WHERE m.datetime >= :start_ts
+          AND m.datetime < :end_ts
+          AND m.cleared_price IS NOT NULL
+          AND LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE :asset_like
+        GROUP BY m.datetime
+        ORDER BY m.datetime
+        """
+    )
+    fb_df = pd.read_sql(
+        fb_sql,
+        engine,
+        params={"start_ts": start_ts, "end_ts": end_ts, "asset_like": f"%{asset_code.lower()}%"},
+    )
+    return _normalize_time_column(fb_df)
 
 
 def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, trade_date: date) -> pd.DataFrame:
+    start_ts = pd.Timestamp(trade_date)
+    end_ts = start_ts + pd.Timedelta(days=1)
+    md_schema = _find_relation_schema(engine, "md_id_cleared_energy", ("marketdata", "public"))
+    if PREFER_DIRECT_MD and scenario_name == "cleared_actual" and md_schema:
+        if _relation_exists(engine, "core", "asset_alias_map"):
+            fb_sql = text(
+                f"""
+                SELECT
+                    m.datetime AS time,
+                    AVG((m.cleared_energy_mwh::numeric) * 4.0) AS dispatch_mw
+                FROM {md_schema}.md_id_cleared_energy m
+                JOIN core.asset_alias_map a
+                  ON a.active_flag = TRUE
+                 AND a.asset_code = :asset_code
+                 AND (
+                    LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.plant_name, '')))
+                    OR LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.dispatch_unit_name, '')))
+                 )
+                WHERE m.datetime >= :start_ts
+                  AND m.datetime < :end_ts
+                  AND m.cleared_energy_mwh IS NOT NULL
+                GROUP BY m.datetime
+                ORDER BY m.datetime
+                """
+            )
+            alias_df = pd.read_sql(
+                fb_sql,
+                engine,
+                params={"asset_code": asset_code, "start_ts": start_ts, "end_ts": end_ts},
+            )
+            alias_df = _normalize_time_column(alias_df)
+            if not alias_df.empty:
+                return alias_df
+
     sql = text("""
         SELECT time, dispatch_mw
         FROM canon.scenario_dispatch_15min
@@ -170,9 +584,7 @@ def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, 
           AND time < :end_ts
         ORDER BY time
     """)
-    start_ts = pd.Timestamp(trade_date)
-    end_ts = start_ts + pd.Timedelta(days=1)
-    return pd.read_sql(
+    df = pd.read_sql(
         sql,
         engine,
         params={
@@ -182,6 +594,63 @@ def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, 
             "end_ts": end_ts,
         },
     )
+    df = _normalize_time_column(df)
+    if not df.empty or scenario_name != "cleared_actual":
+        return df
+
+    if not md_schema:
+        return df
+
+    if _relation_exists(engine, "core", "asset_alias_map"):
+        fb_sql = text(
+            f"""
+            SELECT
+                m.datetime AS time,
+                AVG((m.cleared_energy_mwh::numeric) * 4.0) AS dispatch_mw
+            FROM {md_schema}.md_id_cleared_energy m
+            JOIN core.asset_alias_map a
+              ON a.active_flag = TRUE
+             AND a.asset_code = :asset_code
+             AND (
+                LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.plant_name, '')))
+                OR LOWER(TRIM(a.alias_value)) = LOWER(TRIM(COALESCE(m.dispatch_unit_name, '')))
+             )
+            WHERE m.datetime >= :start_ts
+              AND m.datetime < :end_ts
+              AND m.cleared_energy_mwh IS NOT NULL
+            GROUP BY m.datetime
+            ORDER BY m.datetime
+            """
+        )
+        alias_df = pd.read_sql(
+            fb_sql,
+            engine,
+            params={"asset_code": asset_code, "start_ts": start_ts, "end_ts": end_ts},
+        )
+        alias_df = _normalize_time_column(alias_df)
+        if not alias_df.empty:
+            return alias_df
+
+    fb_sql = text(
+        f"""
+        SELECT
+            m.datetime AS time,
+            AVG((m.cleared_energy_mwh::numeric) * 4.0) AS dispatch_mw
+        FROM {md_schema}.md_id_cleared_energy m
+        WHERE m.datetime >= :start_ts
+          AND m.datetime < :end_ts
+          AND m.cleared_energy_mwh IS NOT NULL
+          AND LOWER(COALESCE(m.plant_name, '') || ' ' || COALESCE(m.dispatch_unit_name, '')) LIKE :asset_like
+        GROUP BY m.datetime
+        ORDER BY m.datetime
+        """
+    )
+    fb_df = pd.read_sql(
+        fb_sql,
+        engine,
+        params={"start_ts": start_ts, "end_ts": end_ts, "asset_like": f"%{asset_code.lower()}%"},
+    )
+    return _normalize_time_column(fb_df)
 
 
 def build_availability_map(df: pd.DataFrame, asset_code: str) -> Dict[str, bool]:
@@ -196,7 +665,7 @@ def upsert_df(engine: Engine, table_name: str, df: pd.DataFrame, pk_cols: list[s
     if df.empty:
         return
 
-    stage_name = f"_tmp_{table_name.replace('.', '_')}_{int(pd.Timestamp.utcnow().timestamp())}"
+    stage_name = f"_tmp_{table_name.replace('.', '_')}_{int(pd.Timestamp.now('UTC').timestamp())}"
     schema_name, bare_name = table_name.split(".", 1)
 
     with engine.begin() as con:
@@ -224,10 +693,15 @@ def upsert_df(engine: Engine, table_name: str, df: pd.DataFrame, pk_cols: list[s
 def main() -> None:
     logger.info("Starting Mengxi P&L refresh")
     ensure_report_tables(ENGINE)
+    if ENABLE_CANON_COMPAT_VIEWS:
+        ensure_canonical_compat_views(ENGINE)
+    else:
+        logger.info("Skipping canon compatibility view refresh (PNL_ENABLE_CANON_COMPAT_VIEWS disabled)")
 
     availability_df = fetch_scenario_availability(ENGINE)
     dates = fetch_trade_dates(ENGINE, REFRESH_LOOKBACK_DAYS)
     compensation_df = fetch_asset_monthly_compensation(ENGINE)
+    compensation_coverage_df = fetch_compensation_coverage(ENGINE)
     scenario_rows_all = []
     attribution_rows_all = []
 
@@ -257,6 +731,7 @@ def main() -> None:
                 scenario_dispatch_map=scenario_dispatch_map,
                 availability_map=availability_map,
                 compensation_df=compensation_df,
+                compensation_coverage_df=compensation_coverage_df,
                 default_compensation_yuan_per_mwh=DEFAULT_COMPENSATION_YUAN_PER_MWH,
             )
             attribution_row = build_daily_attribution_row(scenario_rows)

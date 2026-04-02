@@ -1,0 +1,890 @@
+diff --git a/apps/bess-inner-mongolia/im/app.py b/apps/bess-inner-mongolia/im/app.py
+index 2e6ea80..533986b 100644
+--- a/apps/bess-inner-mongolia/im/app.py
++++ b/apps/bess-inner-mongolia/im/app.py
+@@ -55,6 +55,36 @@ def get_engine():
+ # ==========================================================
+ ecs = boto3.client("ecs", region_name=os.getenv("AWS_REGION", "ap-southeast-1"))
+ 
++def resolve_pipeline_task_definition() -> str:
++    """
++    Resolve to the latest ACTIVE task definition in the same family.
++    This prevents stale env vars from pinning the launcher to an old revision.
++    """
++    configured = os.environ["PIPELINE_TASK_DEF"]
++
++    try:
++        described = ecs.describe_task_definition(taskDefinition=configured)
++        task_def_arn = described["taskDefinition"]["taskDefinitionArn"]
++        family = described["taskDefinition"]["family"]
++        logger = logging.getLogger(__name__)
++        logger.info("Configured pipeline task definition=%s (family=%s)", task_def_arn, family)
++
++        listed = ecs.list_task_definitions(
++            familyPrefix=family,
++            status="ACTIVE",
++            sort="DESC",
++            maxResults=1,
++        )
++        latest = (listed.get("taskDefinitionArns") or [task_def_arn])[0]
++        if latest != task_def_arn:
++            logger.warning("Using latest ACTIVE task definition instead of stale configured revision: %s", latest)
++        return latest
++    except Exception:
++        logging.getLogger(__name__).exception(
++            "Failed to resolve latest pipeline task definition; falling back to configured value"
++        )
++        return configured
++
+ def start_pipeline_task(start_date: str, end_date: str, config: dict) -> str:
+     """
+     Start the ECS task that runs inner_pipeline.py.
+@@ -73,9 +103,11 @@ def start_pipeline_task(start_date: str, end_date: str, config: dict) -> str:
+         {"name": "LIFE_YEARS", "value": str(config["life_years"])},
+     ]
+ 
++    task_definition = resolve_pipeline_task_definition()
++
+     resp = ecs.run_task(
+         cluster=os.environ["ECS_CLUSTER"],
+-        taskDefinition=os.environ["PIPELINE_TASK_DEF"],
++        taskDefinition=task_definition,
+         launchType="FARGATE",
+         networkConfiguration={
+             "awsvpcConfiguration": {
+diff --git a/apps/bess-inner-mongolia/pipeline/inner_pipeline.py b/apps/bess-inner-mongolia/pipeline/inner_pipeline.py
+index 56d94d8..074a0dd 100644
+--- a/apps/bess-inner-mongolia/pipeline/inner_pipeline.py
++++ b/apps/bess-inner-mongolia/pipeline/inner_pipeline.py
+@@ -1,15 +1,74 @@
+ # -*- coding: utf-8 -*-
+ 
++import gc
++import hashlib
++import json
++import logging
++import math
+ import os
+-import pandas as pd
+-from sqlalchemy import create_engine
+-from shared.core import build_master, build_peer_tables
+-from shared.init_results_table import create_schema_and_table
++from collections import defaultdict
++
+ import numpy as np
+ import numpy_financial as npf
+-from sqlalchemy import text
+-import json
+-import math
++import pandas as pd
++import psutil
++from sqlalchemy import create_engine, text
++
++from shared.core import build_peer_tables, infer_asset_type, infer_capacity_from_history
++from shared.init_results_table import create_schema_and_table
++
++
++logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
++logger = logging.getLogger(__name__)
++
++
++# ==========================================================
++# LOGGING HELPERS
++# ==========================================================
++
++def log_mem(tag: str) -> None:
++    rss = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
++    logger.info("[MEM] %s: RSS=%.1f MB", tag, rss)
++
++
++def log_df(name: str, df: pd.DataFrame) -> None:
++    mb = df.memory_usage(deep=True).sum() / 1024 / 1024
++    logger.info("[DF] %s: shape=%s, mem=%.1f MB", name, df.shape, mb)
++
++
++def log_keys(df: pd.DataFrame, keys: list[str], name: str) -> None:
++    if not keys:
++        logger.info("[KEYS] %s: keys=[] (skip)", name)
++        return
++    distinct = df[keys].drop_duplicates().shape[0]
++    logger.info("[KEYS] %s: rows=%s, distinct_keys=%s, keys=%s", name, len(df), distinct, keys)
++
++
++def merge_with_logging(
++    left: pd.DataFrame,
++    right: pd.DataFrame,
++    *,
++    name: str,
++    on: list[str],
++    how: str = "left",
++    validate: str | None = None,
++) -> pd.DataFrame:
++    logger.info("[MERGE] %s begin", name)
++    logger.info("[MERGE] %s left_rows=%s", name, len(left))
++    logger.info("[MERGE] %s right_rows=%s", name, len(right))
++    log_keys(left, on, f"{name}-left")
++    log_keys(right, on, f"{name}-right")
++
++    merged = left.merge(right, on=on, how=how, validate=validate)
++
++    logger.info("[MERGE] %s merged_rows=%s", name, len(merged))
++    expansion = len(merged) / max(len(left), 1)
++    if expansion > 1.2:
++        logger.warning("[MERGE] %s row expansion ratio=%.2f", name, expansion)
++    log_df(f"merge:{name}", merged)
++    log_mem(f"merge:{name}")
++    return merged
++
+ 
+ # ==========================================================
+ # INIT
+@@ -23,6 +82,8 @@ PGURL = os.getenv("PGURL")
+ 
+ if not START or not END:
+     raise ValueError("START_DATE or END_DATE not provided")
++if not PGURL:
++    raise ValueError("PGURL not provided")
+ 
+ engine = create_engine(PGURL)
+ 
+@@ -33,151 +94,275 @@ capex = float(os.getenv("CAPEX_YUAN_PER_KWH", 600))
+ degradation = float(os.getenv("DEGRADATION_RATE", 0.04))
+ om_cost = float(os.getenv("OM_COST_PER_MW_PER_YEAR", 24000))
+ life_years = int(os.getenv("LIFE_YEARS", 10))
++read_chunk_rows = int(os.getenv("PIPELINE_READ_CHUNK_ROWS", "250000"))
++
++logger.info(
++    "Pipeline config: start=%s end=%s conversion_factor=%s duration=%s chunk_rows=%s",
++    START,
++    END,
++    conversion_factor,
++    duration,
++    read_chunk_rows,
++)
++log_mem("startup")
+ 
+ 
+ # ==========================================================
+-# LOAD INPUT DATA
++# LOAD STATION MASTER
+ # ==========================================================
+ 
+-
+ station_df = pd.read_sql(
+     'SELECT plant_name, mw AS "MW", owner FROM marketdata.station_master',
+-    engine
++    engine,
+ )
++station_df["plant_name"] = station_df["plant_name"].astype(str).str.strip()
++station_df = station_df[station_df["plant_name"].notna()]
++station_df = station_df.drop_duplicates(subset=["plant_name"])
++log_df("station_df", station_df)
++log_mem("after_station_load")
++
++station_set = set(station_df["plant_name"].tolist())
+ 
+-# station_df.columns = station_df.columns.str.lower()
+-# station_df = station_df.rename(columns={"mw": "MW"})
+ 
+-df_id = pd.read_sql(
++# ==========================================================
++# STREAM INPUT + AGGREGATE TO REDUCE PEAK MEMORY
++# ==========================================================
++
++query = text(
+     """
+     SELECT plant_name, dispatch_unit_name, datetime,
+            cleared_price, cleared_energy_mwh
+     FROM marketdata.md_id_cleared_energy
+-    WHERE datetime >= %(start)s AND datetime < %(end)s
+-    """,
+-    engine,
+-    params={"start": START, "end": END}
++    WHERE datetime >= :start AND datetime < :end
++    ORDER BY datetime, plant_name
++    """
+ )
+ 
+-df_id["datetime"] = pd.to_datetime(df_id["datetime"])
++hasher_by_plant: dict[str, hashlib._hashlib.HASH] = {}
++asset_type_by_plant: dict[str, str] = {}
++
++agg_by_plant: dict[str, dict[str, float]] = defaultdict(
++    lambda: {
++        "discharge_mwh": 0.0,
++        "charge_mwh": 0.0,
++        "energy_revenue": 0.0,
++        "charge_cost": 0.0,
++        "subsidy": 0.0,
++    }
++)
+ 
+-# normalize join keys (strong version)
+-for df in [df_id, station_df]:
+-    if "plant_name" in df.columns:
+-        df["plant_name"] = (
+-            df["plant_name"]
+-            .astype(str)
+-            .str.strip()
++chunk_idx = 0
++for chunk in pd.read_sql(query, engine, params={"start": START, "end": END}, chunksize=read_chunk_rows):
++    chunk_idx += 1
++    log_df(f"df_id_chunk_{chunk_idx}_raw", chunk)
++
++    chunk["datetime"] = pd.to_datetime(chunk["datetime"], errors="coerce")
++    chunk = chunk[chunk["datetime"].notna()]
++
++    chunk["plant_name"] = chunk["plant_name"].astype(str).str.strip()
++    chunk.loc[chunk["plant_name"].isin(["", "nan", "None"]), "plant_name"] = pd.NA
++    chunk = chunk[chunk["plant_name"].notna()]
++
++    chunk["dispatch_unit_name"] = chunk["dispatch_unit_name"].astype(str)
++
++    # shrink numeric dtypes safely
++    chunk["cleared_price"] = pd.to_numeric(chunk["cleared_price"], errors="coerce").astype("float32")
++    chunk["cleared_energy_mwh"] = pd.to_numeric(chunk["cleared_energy_mwh"], errors="coerce").astype("float32")
++
++    # capture asset type mapping (first seen dispatch unit)
++    meta = chunk[["plant_name", "dispatch_unit_name"]].drop_duplicates(subset=["plant_name"], keep="first")
++    for plant, dispatch in meta.itertuples(index=False):
++        if plant not in asset_type_by_plant:
++            asset_type_by_plant[plant] = infer_asset_type(dispatch)
++
++    # streaming nodal signature to avoid giant pivot table
++    chunk_hashable = chunk[["plant_name", "datetime", "cleared_price"]].copy()
++    chunk_hashable["price_r2"] = chunk_hashable["cleared_price"].round(2)
++
++    for plant, grp in chunk_hashable.groupby("plant_name", sort=False):
++        h = hasher_by_plant.setdefault(plant, hashlib.sha1())
++        for ts, px in grp[["datetime", "price_r2"]].itertuples(index=False):
++            h.update(f"{ts.isoformat()}|{px:.2f};".encode("utf-8"))
++
++    # aggregate only station plants for arbitrage metrics
++    chunk_bess = chunk[chunk["plant_name"].isin(station_set)][
++        ["plant_name", "cleared_energy_mwh", "cleared_price"]
++    ]
++
++    if not chunk_bess.empty:
++        chunk_bess["discharge_mwh_raw"] = chunk_bess["cleared_energy_mwh"].clip(lower=0)
++        chunk_bess["charge_mwh_raw"] = chunk_bess["cleared_energy_mwh"].clip(upper=0).abs()
++        chunk_bess["energy_revenue_raw"] = chunk_bess["discharge_mwh_raw"] * chunk_bess["cleared_price"]
++        chunk_bess["charge_cost_raw"] = chunk_bess["charge_mwh_raw"] * chunk_bess["cleared_price"]
++        chunk_bess["subsidy_raw"] = chunk_bess["discharge_mwh_raw"] * subsidy_per_mwh
++
++        grouped = chunk_bess.groupby("plant_name", as_index=False).agg(
++            discharge_mwh=("discharge_mwh_raw", "sum"),
++            charge_mwh=("charge_mwh_raw", "sum"),
++            energy_revenue=("energy_revenue_raw", "sum"),
++            charge_cost=("charge_cost_raw", "sum"),
++            subsidy=("subsidy_raw", "sum"),
+         )
+ 
+-        df.loc[df["plant_name"].isin(["", "nan", "None"]), "plant_name"] = None
++        for row in grouped.itertuples(index=False):
++            rec = agg_by_plant[row.plant_name]
++            rec["discharge_mwh"] += float(row.discharge_mwh)
++            rec["charge_mwh"] += float(row.charge_mwh)
++            rec["energy_revenue"] += float(row.energy_revenue)
++            rec["charge_cost"] += float(row.charge_cost)
++            rec["subsidy"] += float(row.subsidy)
+ 
+-df_id = df_id[df_id["plant_name"].notna()]
+-station_df = station_df[station_df["plant_name"].notna()]
+-# ==========================================================
+-# CLUSTERING
+-# ==========================================================
++    logger.info("Processed chunk %s", chunk_idx)
++    log_mem(f"after_chunk_{chunk_idx}")
+ 
++    del chunk
++    gc.collect()
+ 
+ 
+-clusters = build_master(df_id, conversion_factor)
++# ==========================================================
++# BUILD CLUSTERS + PEER SUMMARY (MEMORY-SAFE)
++# ==========================================================
+ 
+-bess_map, nodal_mapping, peer_summary = build_peer_tables(
+-    station_df,
+-    clusters
++cluster_df = pd.DataFrame(
++    {
++        "plant_name": list(hasher_by_plant.keys()),
++        "signature": [h.hexdigest() for h in hasher_by_plant.values()],
++    }
+ )
++cluster_df["cluster_id"] = cluster_df.groupby("signature", sort=False).ngroup() + 1
++cluster_df["cluster_size"] = cluster_df.groupby("cluster_id")["plant_name"].transform("count")
++cluster_df["asset_type"] = cluster_df["plant_name"].map(asset_type_by_plant).fillna("thermal")
++
++capacity_df = infer_capacity_from_history(conversion_factor)
++capacity_df = capacity_df[["plant_name", "inferred_mw"]].drop_duplicates(subset=["plant_name"])
++
++clusters = merge_with_logging(
++    cluster_df,
++    capacity_df,
++    name="clusters+capacity",
++    on=["plant_name"],
++    how="left",
++    validate="one_to_one",
++)
++clusters["inferred_mw"] = pd.to_numeric(clusters["inferred_mw"], errors="coerce").fillna(0).round(0)
++log_df("clusters", clusters)
++
++_, _, peer_summary = build_peer_tables(station_df, clusters, include_mapping=False)
++log_df("peer_summary", peer_summary)
++log_mem("after_peer_summary")
++
+ 
+ # ==========================================================
+-# ARBITRAGE LOGIC
++# ARBITRAGE LOGIC (from aggregated station metrics)
+ # ==========================================================
+ 
+-df_bess = df_id[df_id["plant_name"].isin(station_df["plant_name"])].copy()
+-df_bess = df_bess.merge(station_df, on="plant_name", how="left")
+-
+-df_bess["discharge_mwh_raw"] = df_bess["cleared_energy_mwh"].clip(lower=0)
+-df_bess["charge_mwh_raw"] = df_bess["cleared_energy_mwh"].clip(upper=0).abs()
++agg_df = pd.DataFrame(
++    [
++        {
++            "plant_name": plant,
++            **vals,
++        }
++        for plant, vals in agg_by_plant.items()
++    ]
++)
++if agg_df.empty:
++    agg_df = pd.DataFrame(
++        columns=[
++            "plant_name",
++            "discharge_mwh",
++            "charge_mwh",
++            "energy_revenue",
++            "charge_cost",
++            "subsidy",
++        ]
++    )
+ 
+-df_bess["energy_revenue_raw"] = df_bess["discharge_mwh_raw"] * df_bess["cleared_price"]
+-df_bess["charge_cost_raw"] = df_bess["charge_mwh_raw"] * df_bess["cleared_price"]
+-df_bess["subsidy_raw"] = df_bess["discharge_mwh_raw"] * subsidy_per_mwh
++result = merge_with_logging(
++    agg_df,
++    station_df[["plant_name", "MW", "owner"]],
++    name="agg+station",
++    on=["plant_name"],
++    how="left",
++    validate="one_to_one",
++)
+ 
+-result = df_bess.groupby(["plant_name", "MW", "owner"]).agg(
+-    discharge_mwh=("discharge_mwh_raw", "sum"),
+-    charge_mwh=("charge_mwh_raw", "sum"),
+-    energy_revenue=("energy_revenue_raw", "sum"),
+-    charge_cost=("charge_cost_raw", "sum"),
+-    subsidy=("subsidy_raw", "sum")
+-).reset_index()
++for col in ["discharge_mwh", "charge_mwh", "energy_revenue", "charge_cost", "subsidy"]:
++    result[col] = pd.to_numeric(result[col], errors="coerce").fillna(0)
+ 
+-result[["discharge_mwh","charge_mwh","energy_revenue","charge_cost","subsidy"]] /= conversion_factor
++result[["discharge_mwh", "charge_mwh", "energy_revenue", "charge_cost", "subsidy"]] /= conversion_factor
+ 
+ result["arbitrage_profit"] = result["energy_revenue"] - result["charge_cost"]
+ result["expected_total_profit"] = result["arbitrage_profit"] + result["subsidy"]
+ 
+ total_days = max((pd.to_datetime(END) - pd.to_datetime(START)).days, 1)
+-denom = result["MW"] * duration * total_days
++denom = pd.to_numeric(result["MW"], errors="coerce") * duration * total_days
+ 
+ result["unit_charging_cost"] = np.where(
+     result["charge_mwh"] > 0,
+     result["charge_cost"] / result["charge_mwh"],
+-    np.nan
++    np.nan,
+ )
+ 
+ result["unit_discharging_revenue"] = np.where(
+     result["discharge_mwh"] > 0,
+     result["energy_revenue"] / result["discharge_mwh"],
+-    np.nan
++    np.nan,
+ )
+ 
+ result["efficiency"] = np.where(
+     result["charge_mwh"] > 0,
+     result["discharge_mwh"] / result["charge_mwh"],
+-    np.nan
++    np.nan,
+ )
+ 
+ result["estimated_cycles_per_day"] = np.where(
+     denom > 0,
+     result["discharge_mwh"] / denom,
+-    np.nan
++    np.nan,
+ )
+ 
+ result["arbitrage_profit_per_discharge_mwh"] = np.where(
+     result["discharge_mwh"] > 0,
+     result["arbitrage_profit"] / result["discharge_mwh"],
+-    np.nan
++    np.nan,
+ )
+ 
+ result["total_profit_per_discharge_mwh"] = np.where(
+     result["discharge_mwh"] > 0,
+     result["expected_total_profit"] / result["discharge_mwh"],
+-    np.nan
++    np.nan,
+ )
+ 
+ result["arbitrage_per_installed_volume_per_day"] = np.where(
+     denom > 0,
+     result["arbitrage_profit"] / denom,
+-    np.nan
++    np.nan,
+ )
+ 
+ result["total_profit_per_installed_volume_per_day"] = np.where(
+     denom > 0,
+     result["expected_total_profit"] / denom,
+-    np.nan
++    np.nan,
+ )
+ 
+-clusters["plant_name"] = clusters["plant_name"].astype(str).str.strip()
+-
+-result = result.merge(
+-    clusters[["plant_name", "cluster_id"]].drop_duplicates(),
+-    
+-    on="plant_name",
+-    how="left"
++cluster_map = clusters[["plant_name", "cluster_id"]].drop_duplicates(subset=["plant_name"])
++result = merge_with_logging(
++    result,
++    cluster_map,
++    name="result+clusters",
++    on=["plant_name"],
++    how="left",
++    validate="one_to_one",
+ )
+ 
+-result = result.merge(
+-    peer_summary.rename(columns={"bess_plant": "plant_name"}),
+-    on="plant_name",
+-    how="left"
++peer_map = peer_summary.rename(columns={"bess_plant": "plant_name"}).drop_duplicates(subset=["plant_name"])
++result = merge_with_logging(
++    result,
++    peer_map,
++    name="result+peer_summary",
++    on=["plant_name"],
++    how="left",
++    validate="one_to_one",
+ )
+ 
+ for col in [
+@@ -193,6 +378,7 @@ for col in [
+     if col not in result.columns:
+         result[col] = 0
+ 
++
+ # ==========================================================
+ # IRR & PAYBACK
+ # ==========================================================
+@@ -226,8 +412,6 @@ for idx, row in result.iterrows():
+ 
+     result.at[idx, "payback_years"] = payback
+ 
+-
+-
+ result.replace([np.inf, -np.inf], np.nan, inplace=True)
+ 
+ result["rank_total_profit_per_installed_volume"] = (
+@@ -261,18 +445,19 @@ result["rank_efficiency"] = (
+ clusters["start_date"] = START
+ clusters["end_date"] = END
+ 
+-# Fix unsupported PostgreSQL types
+ for col in clusters.columns:
+     if str(clusters[col].dtype) == "uint64":
+         clusters[col] = clusters[col].astype("int64")
+ 
+ with engine.begin() as conn:
+     conn.execute(
+-        text("""
++        text(
++            """
+             DELETE FROM marketdata.inner_mongolia_nodal_clusters
+             WHERE start_date = :start AND end_date = :end
+-        """),
+-        {"start": START, "end": END}
++        """
++        ),
++        {"start": START, "end": END},
+     )
+ 
+     clusters.to_sql(
+@@ -280,8 +465,10 @@ with engine.begin() as conn:
+         conn,
+         schema="marketdata",
+         if_exists="append",
+-        index=False
++        index=False,
+     )
++
++
+ # ==========================================================
+ # FINAL FORMAT
+ # ==========================================================
+@@ -291,16 +478,20 @@ result[[
+     "charge_cost",
+     "energy_revenue",
+     "subsidy",
+-    "expected_total_profit"
++    "expected_total_profit",
+ ]] /= 10000
+ 
+-result.rename(columns={
+-    "arbitrage_profit": "arbitrage_profit_万元",
+-    "charge_cost": "charge_cost_万元",
+-    "energy_revenue": "energy_revenue_万元",
+-    "subsidy": "subsidy_万元",
+-    "expected_total_profit": "expected_total_profit_万元"
+-}, inplace=True)
++result.rename(
++    columns={
++        "arbitrage_profit": "arbitrage_profit_万元",
++        "charge_cost": "charge_cost_万元",
++        "energy_revenue": "energy_revenue_万元",
++        "subsidy": "subsidy_万元",
++        "expected_total_profit": "expected_total_profit_万元",
++    },
++    inplace=True,
++)
++
+ 
+ # ==========================================================
+ # SAVE TO DB
+@@ -308,23 +499,26 @@ result.rename(columns={
+ 
+ with engine.begin() as conn:
+     conn.execute(
+-        text("""
++        text(
++            """
+             DELETE FROM marketdata.inner_mongolia_bess_results
+             WHERE start_date = :start AND end_date = :end
+-        """),
+-        {"start": START, "end": END}
++        """
++        ),
++        {"start": START, "end": END},
+     )
++
+ result = result.replace({np.nan: None, np.inf: None, -np.inf: None})
+ 
++
+ def clean_json_value(v):
+     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+         return None
+     return v
+ 
+-records = []
+ 
++records = []
+ for _, row in result.iterrows():
+-
+     row_dict = row.to_dict()
+     row_dict = {k: clean_json_value(v) for k, v in row_dict.items()}
+ 
+@@ -332,20 +526,24 @@ for _, row in result.iterrows():
+     if owner is None or str(owner).strip().lower() == "nan":
+         owner = None
+ 
+-    records.append({
+-        "plant_name": row_dict["plant_name"],
+-        "owner": owner,
+-        "mw": row_dict.get("MW"),
+-        "irr": row_dict.get("irr"),
+-        "payback_years": row_dict.get("payback_years"),
+-        "start_date": START,
+-        "end_date": END,
+-        "result_json": json.dumps(row_dict, ensure_ascii=False)
+-    })
++    records.append(
++        {
++            "plant_name": row_dict["plant_name"],
++            "owner": owner,
++            "mw": row_dict.get("MW"),
++            "irr": row_dict.get("irr"),
++            "payback_years": row_dict.get("payback_years"),
++            "start_date": START,
++            "end_date": END,
++            "result_json": json.dumps(row_dict, ensure_ascii=False),
++        }
++    )
++
+ records_df = pd.DataFrame(records)
++log_df("records_df", records_df)
++log_mem("before_results_write")
+ 
+ with engine.begin() as conn:
+-
+     records_df.to_sql(
+         "inner_mongolia_bess_results",
+         conn,
+@@ -353,7 +551,8 @@ with engine.begin() as conn:
+         if_exists="append",
+         index=False,
+         method="multi",
+-        chunksize=1000
++        chunksize=1000,
+     )
+ 
+-print("✅ Pipeline finished successfully.")
+\ No newline at end of file
++log_mem("done")
++print("✅ Pipeline finished successfully.")
+diff --git a/apps/bess-inner-mongolia/pipeline/requirements.txt b/apps/bess-inner-mongolia/pipeline/requirements.txt
+index b5f3357..1c93a22 100644
+--- a/apps/bess-inner-mongolia/pipeline/requirements.txt
++++ b/apps/bess-inner-mongolia/pipeline/requirements.txt
+@@ -4,4 +4,5 @@ numpy-financial
+ sqlalchemy
+ psycopg2-binary
+ streamlit
+-plotly
+\ No newline at end of file
++plotly
++psutil
+diff --git a/apps/bess-inner-mongolia/shared/core.py b/apps/bess-inner-mongolia/shared/core.py
+index 25a9750..1bbd9dc 100644
+--- a/apps/bess-inner-mongolia/shared/core.py
++++ b/apps/bess-inner-mongolia/shared/core.py
+@@ -1,13 +1,33 @@
+ # -*- coding: utf-8 -*-
+ 
+-import pandas as pd
++import hashlib
++import logging
++import os
++import resource
++from datetime import datetime
++
+ import numpy as np
++import pandas as pd
+ from sqlalchemy import create_engine, text
+-from datetime import datetime
+-import os
++
++
++logger = logging.getLogger(__name__)
++logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
++
++
++def _log_mem(tag: str) -> None:
++    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
++    logger.info("[MEM] %s: RSS=%.1f MB", tag, rss)
++
++
++def _log_df(name: str, df: pd.DataFrame) -> None:
++    mb = df.memory_usage(deep=True).sum() / 1024 / 1024
++    logger.info("[DF] %s: shape=%s, mem=%.1f MB", name, df.shape, mb)
+ 
+ def build_master(df_id, conversion_factor):
+-    # Define your master build logic here
++    _log_df("build_master.df_id", df_id)
++    _log_mem("build_master.start")
++
+     asset_meta = (
+         df_id.groupby("plant_name")["dispatch_unit_name"]
+         .first()
+@@ -31,67 +51,79 @@ def build_master(df_id, conversion_factor):
+     )
+ 
+     clusters["inferred_mw"] = clusters["inferred_mw"].round(0)
+-
++    _log_df("build_master.clusters", clusters)
++    _log_mem("build_master.done")
+     return clusters
+ 
+-def build_peer_tables(station_df, clusters):
+-    # Map each BESS plant -> cluster_id
+-    
++def build_peer_tables(station_df, clusters, include_mapping: bool = True):
++    """
++    Build peer summary with a memory-safe path that avoids constructing the
++    full BESS×peer cross-product unless explicitly requested.
++    """
++    station_df = station_df.copy()
++    station_df["plant_name"] = station_df["plant_name"].astype(str).str.strip()
++    station_df = station_df.drop_duplicates(subset=["plant_name"])
++
++    clusters = clusters.copy()
++    clusters["plant_name"] = clusters["plant_name"].astype(str).str.strip()
++    clusters = clusters.drop_duplicates(subset=["plant_name"])
++
+     bess_map = station_df[["plant_name"]].merge(
+         clusters[["plant_name", "cluster_id"]],
+         on="plant_name",
+-        how="left"
++        how="left",
++        validate="one_to_one",
+     ).rename(columns={"plant_name": "bess_plant"})
+ 
+-    # All peers in same cluster (long form)
++    cluster_totals = (
++        clusters.groupby(["cluster_id", "asset_type"], as_index=False)
++        .agg(peer_count=("plant_name", "nunique"), peer_mw=("inferred_mw", "sum"))
++    )
++    _log_df("build_peer_tables.cluster_totals", cluster_totals)
++
++    bess_clusters = bess_map.merge(
++        clusters[["plant_name", "cluster_id", "asset_type", "inferred_mw"]],
++        left_on="bess_plant",
++        right_on="plant_name",
++        how="left",
++        validate="one_to_one",
++    ).rename(columns={"asset_type": "self_asset_type", "inferred_mw": "self_inferred_mw"})
++
++    rows = []
++    for row in bess_clusters.itertuples(index=False):
++        rec = {"bess_plant": row.bess_plant}
++        if pd.isna(row.cluster_id):
++            rows.append(rec)
++            continue
++        sub = cluster_totals[cluster_totals["cluster_id"] == row.cluster_id]
++        for _, srow in sub.iterrows():
++            asset_type = srow["asset_type"]
++            count_val = int(srow["peer_count"])
++            mw_val = float(srow["peer_mw"])
++            if asset_type == row.self_asset_type:
++                count_val = max(0, count_val - 1)
++                mw_val = max(0.0, mw_val - float(row.self_inferred_mw or 0.0))
++            rec[f"peer_count_{asset_type}"] = count_val
++            rec[f"peer_MW_{asset_type}"] = mw_val
++        rows.append(rec)
++
++    peer_summary = pd.DataFrame(rows)
++    _log_df("build_peer_tables.peer_summary", peer_summary)
++    _log_mem("build_peer_tables.done")
++
++    if not include_mapping:
++        nodal_mapping = pd.DataFrame(columns=["bess_plant", "cluster_id", "peer_plant", "asset_type"])
++        return bess_map, nodal_mapping, peer_summary
++
++    # Only build full mapping when needed by UI/detail view.
+     peers_long = bess_map.merge(
+         clusters[["plant_name", "cluster_id", "asset_type"]],
+         on="cluster_id",
+-        how="left"
++        how="left",
++        validate="many_to_many",
+     ).rename(columns={"plant_name": "peer_plant"})
+-
+-    # Exclude self from peer stats
+-    peers_excl_self = peers_long[peers_long["peer_plant"] != peers_long["bess_plant"]].copy()
+-
+-    # Counts by type (always available)
+-    peer_type_counts = (
+-        peers_excl_self
+-        .groupby(["bess_plant", "asset_type"])["peer_plant"]
+-        .nunique()
+-        .unstack(fill_value=0)
+-        .add_prefix("peer_count_")
+-        .reset_index()
+-    )
+-
+-    # "Known MW" by type (only where we have MW for that peer from uploaded file)
+-    # print("station_df columns:", station_df.columns)
+-    station_df_local = station_df.copy()
+-    station_df_local.columns = station_df_local.columns.str.lower()
+-    
+-
+-    # print("station_df columns:", station_df.columns)
+-    # MW by type (using inferred full-history capacity)
+-    peer_type_mw = (
+-        peers_excl_self
+-        .merge(
+-            clusters[["plant_name", "inferred_mw"]],
+-            left_on="peer_plant",
+-            right_on="plant_name",
+-            how="left"
+-        )
+-        .groupby(["bess_plant", "asset_type"])["inferred_mw"]
+-        .sum()
+-        .unstack(fill_value=0)
+-        .add_prefix("peer_MW_")
+-        .reset_index()
+-    )
+-
+-    # Combine
+-    peer_summary = peer_type_counts.merge(peer_type_mw, on="bess_plant", how="left")
+-
+-    # Also return mapping table for Tab1
+     nodal_mapping = peers_long[["bess_plant", "cluster_id", "peer_plant", "asset_type"]].copy()
+-
++    _log_df("build_peer_tables.nodal_mapping", nodal_mapping)
+     return bess_map, nodal_mapping, peer_summary
+ 
+ # ==========================================================
+@@ -188,19 +220,23 @@ def infer_capacity_from_history(conversion_factor):
+     return df_cap
+ 
+ def nodal_clustering(df_id):
+-    # Cluster logic
+-    pivot = df_id.pivot_table(
+-        index="datetime",
+-        columns="plant_name",
+-        values="cleared_price",
+-        aggfunc="mean"
+-    ).sort_index()
++    # Avoid wide pivot tables that can spike memory.
++    tmp = df_id[["plant_name", "datetime", "cleared_price"]].copy()
++    tmp["plant_name"] = tmp["plant_name"].astype(str).str.strip()
++    tmp["datetime"] = pd.to_datetime(tmp["datetime"], errors="coerce")
++    tmp["cleared_price"] = pd.to_numeric(tmp["cleared_price"], errors="coerce")
++    tmp = tmp[tmp["datetime"].notna() & tmp["plant_name"].notna()]
++    tmp["px2"] = tmp["cleared_price"].round(2)
++    tmp = tmp.sort_values(["plant_name", "datetime"])
+ 
+     signatures = {}
+-    for plant in pivot.columns:
+-        s = pivot[plant].round(2)
+-        h = pd.util.hash_pandas_object(s, index=True).sum()
+-        signatures[plant] = h
++    for plant, g in tmp.groupby("plant_name", sort=False):
++        h = hashlib.sha1()
++        for ts, px in g[["datetime", "px2"]].itertuples(index=False):
++            if pd.isna(px):
++                continue
++            h.update(f"{ts.isoformat()}|{px:.2f};".encode("utf-8"))
++        signatures[plant] = h.hexdigest()
+ 
+     cluster_df = pd.DataFrame({
+         "plant_name": list(signatures.keys()),
+@@ -208,4 +244,4 @@ def nodal_clustering(df_id):
+     })
+     cluster_df["cluster_id"] = cluster_df.groupby("signature").ngroup() + 1
+     cluster_df["cluster_size"] = cluster_df.groupby("cluster_id")["plant_name"].transform("count")
+-    return cluster_df
+\ No newline at end of file
++    return cluster_df
+diff --git a/infra/terraform/main.tf b/infra/terraform/main.tf
+index 10a0642..34e57b4 100644
+--- a/infra/terraform/main.tf
++++ b/infra/terraform/main.tf
+@@ -948,7 +948,7 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
+         },
+         {
+           name  = "PIPELINE_TASK_DEF"
+-          value = aws_ecs_task_definition.inner_pipeline.arn
++          value = aws_ecs_task_definition.inner_pipeline.family
+         },
+         {
+           name  = "PRIVATE_SUBNETS"

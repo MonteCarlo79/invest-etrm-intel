@@ -1,0 +1,21 @@
+Practical recommendation
+
+Give this set to OpenClaw
+PLATFORM_HANDOFF.md
+OPENCLAW_AGENT.md
+FOUR_AGENTS_OPERATIONS.md
+
+Give this set to GPT-5.4
+PLATFORM_HANDOFF.md
+GPT_MASTERMIND.md
+FOUR_AGENTS_OPERATIONS.md
+
+Give this set to Codex
+PLATFORM_HANDOFF.md
+CODEX_AGENT.md
+relevant task spec
+optionally FOUR_AGENTS_OPERATIONS.md for context
+
+Give this set to MiniMax
+MINIMAX_AGENT.md
+narrow task spec only
