@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Mar 24 12:54:41 2026
-
-@author: dipeng.chen
-"""
-
 # infra/terraform/trading-bess-mengxi/schedules.tf
 
 variable "region" {}
@@ -17,29 +10,33 @@ variable "ecs_task_role_arn" {}
 variable "events_invoke_ecs_role_arn" {}
 variable "image_trading_jobs" {}
 variable "db_dsn" { sensitive = true }
+variable "log_retention_days" {
+  type    = number
+  default = 14
+}
 
 locals {
   common_env = [
     { name = "AWS_REGION", value = var.region },
-    { name = "DB_DSN",     value = var.db_dsn },
-    { name = "PGURL",      value = var.db_dsn },
+    { name = "DB_DSN", value = var.db_dsn },
+    { name = "PGURL", value = var.db_dsn },
     { name = "PYTHONPATH", value = "/app" }
   ]
 }
 
 resource "aws_cloudwatch_log_group" "tt_province_loader" {
   name              = "/ecs/${var.name}/tt-province-loader"
-  retention_in_days = 30
+  retention_in_days = var.log_retention_days
 }
 
 resource "aws_cloudwatch_log_group" "tt_asset_loader" {
   name              = "/ecs/${var.name}/tt-asset-loader"
-  retention_in_days = 30
+  retention_in_days = var.log_retention_days
 }
 
 resource "aws_cloudwatch_log_group" "mengxi_pnl_refresh" {
   name              = "/ecs/${var.name}/mengxi-pnl-refresh"
-  retention_in_days = 30
+  retention_in_days = var.log_retention_days
 }
 
 resource "aws_ecs_task_definition" "tt_province_loader" {
@@ -59,11 +56,11 @@ resource "aws_ecs_task_definition" "tt_province_loader" {
       command   = ["python", "services/loader/province_misc_to_db_v2.py"]
 
       environment = concat(local.common_env, [
-        { name = "MARKET_LIST",        value = "Mengxi,Anhui,Shandong,Jiangsu" },
-        { name = "FULL_HISTORY",       value = "false" },
-        { name = "DB_LOOKBACK_DAYS",   value = "2" },
-        { name = "RUN_INHOUSE_WIND",   value = "true" },
-        { name = "LOG_LEVEL",          value = "INFO" }
+        { name = "MARKET_LIST", value = "Mengxi,Anhui,Shandong,Jiangsu" },
+        { name = "FULL_HISTORY", value = "false" },
+        { name = "DB_LOOKBACK_DAYS", value = "2" },
+        { name = "RUN_INHOUSE_WIND", value = "true" },
+        { name = "LOG_LEVEL", value = "INFO" }
       ])
 
       logConfiguration = {
@@ -95,10 +92,10 @@ resource "aws_ecs_task_definition" "tt_asset_loader" {
       command   = ["python", "services/common/focused_assets_data.py"]
 
       environment = concat(local.common_env, [
-        { name = "MARKET_LIST",      value = "Mengxi_SuYou,Mengxi_WuLaTe,Mengxi_WuHai,Mengxi_WuLanChaBu,Shandong_BinZhou,Anhui_DingYuan,Jiangsu_SheYang" },
-        { name = "FULL_HISTORY",     value = "false" },
+        { name = "MARKET_LIST", value = "Mengxi_SuYou,Mengxi_WuLaTe,Mengxi_WuHai,Mengxi_WuLanChaBu,Shandong_BinZhou,Anhui_DingYuan,Jiangsu_SheYang" },
+        { name = "FULL_HISTORY", value = "false" },
         { name = "DB_LOOKBACK_DAYS", value = "2" },
-        { name = "LOG_LEVEL",        value = "INFO" }
+        { name = "LOG_LEVEL", value = "INFO" }
       ])
 
       logConfiguration = {
@@ -132,7 +129,7 @@ resource "aws_ecs_task_definition" "mengxi_pnl_refresh" {
       environment = concat(local.common_env, [
         { name = "DEFAULT_COMPENSATION_YUAN_PER_MWH", value = "350" },
         { name = "PNL_REFRESH_LOOKBACK_DAYS", value = "7" },
-        { name = "LOG_LEVEL",                value = "INFO" }
+        { name = "LOG_LEVEL", value = "INFO" }
       ])
 
       logConfiguration = {

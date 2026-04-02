@@ -361,13 +361,56 @@ variable "pnl_attribution_desired_count" {
 }
 
 variable "pnl_attribution_pgurl" {
-  description = "PGURL passed directly to Mengxi P&L attribution ECS task environment"
+  description = "Optional PGURL override for Mengxi P&L attribution ECS task. If empty, defaults to stack RDS DSN."
   type        = string
   sensitive   = true
   default     = ""
+}
+
+# -------------------------
+# Optional trading-bess-mengxi scheduled jobs (TT loaders + P&L refresh)
+# -------------------------
+variable "enable_trading_bess_mengxi_schedules" {
+  description = "Enable EventBridge/ECS schedules for TT province loader, TT asset loader, and Mengxi P&L refresh."
+  type        = bool
+  default     = false
+}
+
+variable "image_trading_jobs" {
+  description = "Docker image for trading batch jobs used by trading-bess-mengxi schedules."
+  type        = string
+  default     = ""
 
   validation {
-    condition     = !var.enable_pnl_attribution_service || length(trimspace(var.pnl_attribution_pgurl)) > 0
-    error_message = "pnl_attribution_pgurl must be non-empty when enable_pnl_attribution_service is true."
+    condition     = !var.enable_trading_bess_mengxi_schedules || length(trimspace(var.image_trading_jobs)) > 0
+    error_message = "image_trading_jobs must be non-empty when enable_trading_bess_mengxi_schedules is true."
   }
+}
+
+variable "trading_jobs_db_dsn" {
+  description = "Optional DB DSN override for scheduled trading jobs. If empty, defaults to stack RDS DSN."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# -------------------------
+# Cost-control defaults (safe, reversible)
+# -------------------------
+variable "ecs_log_retention_days" {
+  description = "CloudWatch log retention for the primary ECS log group."
+  type        = number
+  default     = 14
+}
+
+variable "trading_jobs_log_retention_days" {
+  description = "CloudWatch log retention for trading-bess-mengxi scheduled job log groups."
+  type        = number
+  default     = 14
+}
+
+variable "ecr_keep_last_images" {
+  description = "Number of container images to retain per ECR repository."
+  type        = number
+  default     = 10
 }

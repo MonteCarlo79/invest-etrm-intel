@@ -1,0 +1,1 @@
+{"containerOverrides":[{"name":"mengxi-pnl-refresh","command":["python","/app/infra/terraform/.tmp_mengxi_diag.py"]}]}

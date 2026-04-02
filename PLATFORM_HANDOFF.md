@@ -1,55 +1,54 @@
-# Platform Handoff: Investment–Trading–Asset Intelligence System
+# PLATFORM_HANDOFF.md
+# Investment-Trading-Asset Intelligence System
 
 ## 1. Strategic objective
 
-Build a multi-asset power **investment–trading–asset intelligence platform** that compounds advantage through a closed loop:
+Build a multi-asset power investment-trading-asset intelligence platform that compounds advantage through a closed loop:
 
-1. **Where is my money?**  
-   Identify where value pools and opportunities exist across markets, provinces, nodes, and asset classes.
+1. identify where value pools and opportunities exist across markets, provinces, nodes, products, and asset classes
+2. verify whether opportunities are real and durable
+3. monetise assets and books through trading, dispatch, and execution
+4. validate realised P&L versus assumptions
+5. sharpen forecasting, strategy, and future capital allocation
 
-2. **Explore and verify asset opportunities**  
-   Screen markets, compare assets and strategies, validate whether opportunities are real and durable.
+This is not a BESS-only system.
 
-3. **Monetise the assets through trading**  
-   Use trading, dispatch, and execution intelligence to realise value from assets and books.
-
-4. **Validate realised P&L vs assumptions**  
-   Use backtesting, settlement, and attribution to understand why realised outcomes differ from original assumptions.
-
-5. **Sharpen forecasting and strategies**  
-   Improve forecasting, risk controls, and strategy rules so both future trading and future investment decisions improve.
-
-This is not a BESS-only system.  
-It started from `bess-platform`, but the target platform must support:
+It starts from `bess-platform`, but the target platform must support:
 - BESS
 - wind farms
 - retail trading books
-- coal-fired power plants
+- coal-fired plants
 - later VPPs and other flexibility assets
+
+---
 
 ## 2. Core business logic
 
 The platform should answer this sequence continuously:
 
-- **Where are the opportunities?**
-- **Which are real enough to invest in or trade?**
-- **How do we monetise them?**
-- **What did we actually realise?**
-- **Why was realised P&L different from assumptions?**
-- **How do we improve models, forecasts, and strategies?**
+- where are the opportunities?
+- which are real enough to invest in or trade?
+- how do we monetise them?
+- what did we actually realise?
+- why was realised P&L different from assumptions?
+- how do we improve models, forecasts, and strategies?
+- where should future capital and management attention go?
 
-This is the investment–trading flywheel.
+This is the investment-trading flywheel.
+
+---
 
 ## 3. Current architecture direction
 
 Preferred philosophy:
 - reuse and refactor, not rewrite
 - preserve current `bess-platform` with minimal disruption
-- wrap existing apps/jobs/services before deep refactors
+- wrap existing apps, jobs, and services before deep refactors
 - keep `marketdata` as a major operational foundation
 - build common shared layers around existing live modules
+- keep shared logic asset-neutral where reasonable
 
-Current repo shape (approximate but verified enough for design):
+Current repo shape includes:
 - `apps/portal/`
 - `apps/uploader/`
 - `apps/bess-inner-mongolia/im/app.py`
@@ -57,33 +56,104 @@ Current repo shape (approximate but verified enough for design):
 - `services/bess_map/`
 - `services/loader/`
 - `services/common/`
-- `services/bess-inner-mongolia/` (legacy hyphenated path)
+- `services/bess-inner-mongolia/`
 - `shared/agents/registry.py`
 - `auth/`
 - `db/`
 - `infra/terraform/`
 
-## 4. Important current integration decisions
+---
 
-Already done / partially done:
-- `province_misc_to_db_v2.py` moved into `services/loader/`
-- `column_to_matrix_all.py` moved into `services/common/` and renamed to `focused_assets_data.py`
-- `shared/agents/registry.py` updated/clarified for portal + agents
-- New feature branch created for Inner Mongolia strategy diagnostics:
-  - branch: `feature/mengxi-strategy-diagnostics`
-  - commit: `ddbc760`
-- New package added:
-  - `services/bess_inner_mongolia/`
-- New page added:
-  - `apps/bess-inner-mongolia/im/pages/strategy_diagnostics.py`
+## 4. Tool operating model
 
-## 5. Current feature work completed
+### GPT or Claude Code
+Role:
+- paid architect / reviewer / business-logic controller
+
+Use for:
+- architecture
+- business logic
+- cross-module integration planning
+- ambiguity resolution
+- task allocation across tools
+- realism review
+- prioritisation
+- prompt/spec writing
+- final integration control
+
+Do not waste this layer on:
+- repetitive boilerplate coding
+- low-leverage mechanical edits
+
+Claude Code may be used as an alternative to GPT for this paid architect/reviewer role.
+Do not let both tools actively write to the same branch at the same time.
+
+### local Codex Desktop
+Role:
+- free principal implementation engine
+
+Use for:
+- app and service expansion inside the repo
+- refactors across many files
+- schema/service/UI wiring where architecture is already decided
+- test fixes
+- implementation on dedicated feature/fix/refactor branches
+
+### AWS OpenClaw
+Role:
+- paid operations orchestrator and controlled build/run shell
+
+Use for:
+- workflow coordination
+- scheduling and monitoring the 4 agents
+- file intake/routing
+- repo inspection on AWS
+- build/test/run sequencing
+- app validation
+- pipeline monitoring
+- branch-safe operational control
+
+Do not make OpenClaw the unconstrained primary coder.
+
+### claw-code
+Role:
+- free auxiliary implementation and reference-pattern engine
+
+Use for:
+- bounded draft implementation
+- helper modules
+- prompt/governance file drafts
+- alternative implementation sketches
+- reference-pattern extraction from external repos
+
+Do not treat claw-code as the unquestioned source of truth.
+
+---
+
+## 5. Coordination rule
+
+Use this operating pattern:
+
+- GPT or Claude Code = mastermind / architect / reviewer
+- local Codex Desktop = principal implementation engine
+- AWS OpenClaw = orchestrator / operator / controlled build runner
+- claw-code = bounded auxiliary contributor
+
+Rule:
+one AI tool = one active write branch at a time
+
+Never let multiple AI tools write to the same branch concurrently.
+
+---
+
+## 6. Current feature work completed
 
 ### Mengxi Strategy Diagnostics (v1)
+
 Goal:
 Compare Envision-owned BESS assets against top-performing Inner Mongolia BESS assets and diagnose why Envision performance is weaker.
 
-Files created/changed on `feature/mengxi-strategy-diagnostics`:
+Known files created/changed on `feature/mengxi-strategy-diagnostics`:
 - `services/bess_inner_mongolia/__init__.py`
 - `services/bess_inner_mongolia/queries.py`
 - `services/bess_inner_mongolia/peer_benchmark.py`
@@ -92,24 +162,28 @@ Files created/changed on `feature/mengxi-strategy-diagnostics`:
 - `apps/bess-inner-mongolia/im/Dockerfile`
 
 Important note:
-- One Dockerfile line added by OpenClaw was identified as unnecessary and should be removed if still present:
+- remove this unrelated Dockerfile line if still present:
   - `COPY apps/trading/bess/mengxi/pnl_attribution /apps/apps/trading/bess/mengxi/pnl_attribution`
-- The useful Dockerfile addition is:
+- preserve this useful line:
   - `COPY services/bess_inner_mongolia /apps/services/bess_inner_mongolia`
 
-## 6. What still needs verification right now
+---
+
+## 7. What still needs verification right now
 
 Immediate verification tasks:
-1. Remove the unrelated `pnl_attribution` Dockerfile copy line if not already removed
-2. Build and run the Inner Mongolia app container
-3. Check that the new Streamlit page appears correctly under the existing app
-4. Validate actual DB column availability and page runtime
-5. Review the analytical logic in:
+1. remove the unrelated `pnl_attribution` Dockerfile copy line if not already removed
+2. build and run the Inner Mongolia app container
+3. check that the new Streamlit page appears correctly under the existing app
+4. validate actual DB column availability and page runtime
+5. review analytical logic in:
    - `services/bess_inner_mongolia/peer_benchmark.py`
    - `services/bess_inner_mongolia/strategy_diagnostics.py`
-6. Push the feature branch and open PR after validation
+6. push the feature branch and open PR after validation
 
-## 7. Target agent model for platform operations
+---
+
+## 8. Target business agents for platform operations
 
 ### A. Market Strategy & Investment Intelligence Agent
 Mission:
@@ -119,21 +193,21 @@ Mission:
 
 Outputs:
 - opportunity screening
-- market structure summaries
+- market structure summary
 - asset opportunity ranking
-- investment intelligence memos
+- investment intelligence memo
 
 ### B. Enterprise Portfolio, Risk & Capital Allocation Agent
 Mission:
 - explain portfolio P&L and risk
-- compare realised vs assumed economics
+- compare realised versus assumed economics
 - support capital allocation decisions
 
 Outputs:
 - P&L explain
-- risk metrics
-- scenario summaries
-- capital allocation framing
+- risk framing
+- scenario summary
+- capital allocation note
 
 ### C. Trading, Dispatch & Execution Agent
 Mission:
@@ -145,7 +219,7 @@ Outputs:
 - strategy diagnostics
 - backtesting
 - settlement reconciliation
-- realised-vs-theoretical comparison
+- realised-versus-theoretical comparison
 
 ### D. Platform Reliability, Data Quality & Control Agent
 Mission:
@@ -159,100 +233,42 @@ Outputs:
 - platform status
 - safe remediation actions
 
-## 8. Optimal task allocation across tools
+---
 
-### GPT-5.4
-Use for:
-- master architecture
-- business logic design
-- cross-module integration planning
-- review of analytics logic
-- defining agent operating model
-- triaging tradeoffs
-- preparing prompts/specs for other tools
+## 9. Evidence discipline
 
-Do not waste GPT-5.4 on:
-- repetitive boilerplate coding
-- large-scale file-by-file edits once the design is fixed
+Every analytical insight should explicitly distinguish:
+- observed
+- proxy-based
+- heuristic inference
 
-### Codex
-Use for:
-- app and service expansion inside repo
-- implementing new modules and pages
-- refactors across many files
-- schema + service + UI wiring
-- PR-oriented code generation
+No output should imply higher confidence than the evidence supports.
 
-Best use cases:
-- new wind module scaffold
-- retail risk module
-- portal integration work
-- service extraction from legacy scripts
-- test fixes and repo-wide edits
+---
 
-### OpenClaw + Anthropic
-Use as:
-- operations orchestrator
-- workflow coordinator
-- intake/routing controller
-- controlled builder that can coordinate Codex
-- chat/ops interface for running the 4 agents
-
-Best use cases:
-- daily/weekly operational runs
-- file intake/routing
-- build coordination
-- pipeline monitoring
-- alerting
-- scheduling the 4 agents
-
-Do not make OpenClaw the unconstrained primary coder.
-
-### MiniMax
-Use for:
-- bounded coding tasks with a clear spec
-- repetitive implementation blocks
-- UI widgets / helper scripts
-- lower-risk parallel coding tasks
-
-Best use cases:
-- parser utilities
-- report templates
-- dashboards with a fixed design
-- smaller isolated service methods
-
-## 9. Best coordination model
-
-Use this operating pattern:
-
-- **GPT-5.4** = mastermind / architect / reviewer
-- **Codex** = principal implementation engine
-- **OpenClaw** = orchestrator / operator / controlled builder
-- **MiniMax** = bounded parallel contributor
-
-Rule:
-**one AI tool = one branch at a time**
-
-Never let multiple tools write to the same branch concurrently.
-
-## 10. Suggested next roadmap
+## 10. Suggested roadmap
 
 ### Immediate
-- verify Mengxi strategy diagnostics feature
+- verify Mengxi strategy diagnostics
 - clean Dockerfile if needed
 - open PR
+- establish OpenClaw as the operational shell
+- define safe branch workflow across all tools
 
 ### Next
-- formalise data intake & routing layer
+- formalise data intake and routing
 - make OpenClaw operate the 4 agents on schedule
-- add safe branch/PR workflow for auto-expansion tasks
+- define claw-code’s bounded contribution role clearly
+- expand repeatable review workflow between GPT/Claude and Codex
 
-### Then expand apps in this order
-1. BESS diagnostics and operations intelligence (continue)
+### Then expand in this order
+1. BESS diagnostics and operations intelligence
 2. wind trading/risk/strategy module
 3. retail trading book intelligence
 4. coal trading/risk module
 5. VPP later
+
+---
 
 ## 11. Key design constraints for all future work
 
@@ -261,7 +277,4 @@ Never let multiple tools write to the same branch concurrently.
 - prefer additive shared services
 - do not create unnecessary separate apps/routes too early
 - keep SQL out of Streamlit pages where possible
-- every analytical insight should distinguish:
-  - observed
-  - proxy-based
-  - heuristic inference
+- keep architecture multi-asset even if implementation remains phased

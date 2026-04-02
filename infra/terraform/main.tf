@@ -9,7 +9,8 @@ locals {
     Project = var.name
   }
 
-  log_group = "/ecs/${var.name}"
+  log_group                 = "/ecs/${var.name}"
+  db_pgurl                  = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
   pnl_attribution_base_path = trim(var.pnl_attribution_path, "/")
   pnl_attribution_route_patterns = [
     "/${trim(var.pnl_attribution_path, "/")}",
@@ -23,7 +24,7 @@ locals {
 # -------------------------
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = local.log_group
-  retention_in_days = 30
+  retention_in_days = var.ecs_log_retention_days
   tags              = local.tags
 }
 
@@ -62,22 +63,22 @@ resource "aws_security_group" "alb" {
   tags        = local.tags
 
   ingress {
-     description = "HTTPS"
-     from_port   = 443
-     to_port     = 443
-     protocol    = "tcp"
-     cidr_blocks = ["0.0.0.0/0"]
-   
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+
     #    cidr_blocks = [ "138.113.14.246/32", "223.104.5.51/32", "39.144.40.138/32", "103.130.145.210/32"]
   }
 
   ingress {
-     description = "HTTP"
-     from_port   = 80
-     to_port     = 80
-     protocol    = "tcp"
-     cidr_blocks = ["0.0.0.0/0"]
-   }
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
   egress {
     description = "All outbound"
     from_port   = 0
@@ -702,79 +703,79 @@ resource "aws_ecs_task_definition" "bess_map" {
   task_role_arn      = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([
-  {
-    name      = "bess-map"
-    image     = var.image_bess_map
-    essential = true
+    {
+      name      = "bess-map"
+      image     = var.image_bess_map
+      essential = true
 
-    portMappings = [
-      {
-        containerPort = 8503
-        protocol      = "tcp"
-      }
-    ]
+      portMappings = [
+        {
+          containerPort = 8503
+          protocol      = "tcp"
+        }
+      ]
 
-    command = [
-  	"streamlit",
-  	"run",
-  	"streamlit_bess_profit_dashboard_v14.1_consistent_full2.py",
-  	"--server.port=8503",
-  	"--server.address=0.0.0.0",
-  	"--server.baseUrlPath=bess-map",
-  	"--server.enableCORS=false",
-  	"--server.enableXsrfProtection=false",
-  	"--",
-  	"--env",
-  	"/apps/.env",
-  	"--schema",
-  	"marketdata"
-     ]
+      command = [
+        "streamlit",
+        "run",
+        "streamlit_bess_profit_dashboard_v14.1_consistent_full2.py",
+        "--server.port=8503",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=bess-map",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
+        "--",
+        "--env",
+        "/apps/.env",
+        "--schema",
+        "marketdata"
+      ]
 
-    environment = [
-      {
-        name  = "PGURL"
-        value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
-      },
-      {
-        name  = "PGHOST"
-        value = aws_db_instance.pg.address
-      },
-      {
-        name  = "PGPORT"
-        value = "5432"
-      },
-      {
-        name  = "PGDATABASE"
-        value = var.db_name
-      },
-      {
-        name  = "PGUSER"
-        value = var.db_username
-      },
-       {
-         name  = "AWS_REGION"
-         value = var.region
-       },
-       {
-         name  = "COGNITO_USER_POOL_ID"
-         value = aws_cognito_user_pool.bess_users.id
-       },
-      {
-        name  = "PGPASSWORD"
-        value = var.db_password
-      }
-    ]
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "PGHOST"
+          value = aws_db_instance.pg.address
+        },
+        {
+          name  = "PGPORT"
+          value = "5432"
+        },
+        {
+          name  = "PGDATABASE"
+          value = var.db_name
+        },
+        {
+          name  = "PGUSER"
+          value = var.db_username
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = aws_cognito_user_pool.bess_users.id
+        },
+        {
+          name  = "PGPASSWORD"
+          value = var.db_password
+        }
+      ]
 
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = local.log_group
-        awslogs-region        = var.region
-        awslogs-stream-prefix = "bess-map"
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "bess-map"
+        }
       }
     }
-  }
-])
+  ])
 }
 
 
@@ -792,92 +793,92 @@ resource "aws_ecs_task_definition" "uploader" {
   task_role_arn      = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([
-  {
-    name      = "bess-uploader"
-    image     = var.image_uploader
-    essential = true
+    {
+      name      = "bess-uploader"
+      image     = var.image_uploader
+      essential = true
 
-    portMappings = [
-      {
-        containerPort = 8501
-        protocol      = "tcp"
-      }
-    ]
+      portMappings = [
+        {
+          containerPort = 8501
+          protocol      = "tcp"
+        }
+      ]
 
-    command = [
-  	"streamlit",
-  	"run",
-  	"app.py",
-  	"--server.port=8501",
-  	"--server.address=0.0.0.0",
-  	"--server.baseUrlPath=uploader",
-  	"--server.enableCORS=false",
-  	"--server.enableXsrfProtection=false"
-     ]
+      command = [
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.port=8501",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=uploader",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false"
+      ]
 
-    environment = [
-      {
-        name  = "PGURL"
-        value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
-      },
-      {
-        name  = "PGHOST"
-        value = aws_db_instance.pg.address
-      },
-      {
-        name  = "PGPORT"
-        value = "5432"
-      },
-      {
-        name  = "PGDATABASE"
-        value = var.db_name
-      },
-      {
-        name  = "PGUSER"
-        value = var.db_username
-      },
-      {
-        name  = "PGPASSWORD"
-        value = var.db_password
-      },
-      {
-        name  = "DB_SCHEMA"
-        value = "marketdata"
-      },
-      {
-        name  = "UPLOAD_DIR"
-        value = "/tmp/uploads"
-      },
-      {
-        name  = "LOG_DIR"
-        value = "/tmp/logs"
-      },
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "PGHOST"
+          value = aws_db_instance.pg.address
+        },
+        {
+          name  = "PGPORT"
+          value = "5432"
+        },
+        {
+          name  = "PGDATABASE"
+          value = var.db_name
+        },
+        {
+          name  = "PGUSER"
+          value = var.db_username
+        },
+        {
+          name  = "PGPASSWORD"
+          value = var.db_password
+        },
+        {
+          name  = "DB_SCHEMA"
+          value = "marketdata"
+        },
+        {
+          name  = "UPLOAD_DIR"
+          value = "/tmp/uploads"
+        },
+        {
+          name  = "LOG_DIR"
+          value = "/tmp/logs"
+        },
 
-       {
-         name  = "AWS_REGION"
-         value = var.region
-       },
-       {
-         name  = "COGNITO_USER_POOL_ID"
-         value = aws_cognito_user_pool.bess_users.id
-       },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = aws_cognito_user_pool.bess_users.id
+        },
 
-      {
-        name  = "S3_BUCKET"
-        value = aws_s3_bucket.uploads.bucket
-      }
-    ]
+        {
+          name  = "S3_BUCKET"
+          value = aws_s3_bucket.uploads.bucket
+        }
+      ]
 
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = local.log_group
-        awslogs-region        = var.region
-        awslogs-stream-prefix = "bess-uploader"
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "bess-uploader"
+        }
       }
     }
-  }
-])
+  ])
 }
 
 
@@ -945,7 +946,7 @@ resource "aws_ecs_task_definition" "portal" {
           name  = "EMAIL_ROLE_MAP"
           value = "chen_dpeng@hotmail.com=Admin"
         },
-         {
+        {
           name  = "COGNITO_DOMAIN"
           value = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
         },
@@ -1005,14 +1006,14 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
       ]
 
       command = [
-  	"streamlit",
-  	"run",
-  	"app.py",
-  	"--server.port=8504",
-  	"--server.address=0.0.0.0",
-  	"--server.baseUrlPath=inner-mongolia",
-  	"--server.enableCORS=false",
-  	"--server.enableXsrfProtection=false"
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.port=8504",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=inner-mongolia",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false"
       ]
 
       environment = [
@@ -1040,10 +1041,10 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
           name  = "TASK_SECURITY_GROUPS"
           value = aws_security_group.ecs_tasks.id
         },
-          {
-           name  = "COGNITO_USER_POOL_ID"
-           value = aws_cognito_user_pool.bess_users.id
-           },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = aws_cognito_user_pool.bess_users.id
+        },
 
         { name = "CONVERSION_FACTOR", value = var.conversion_factor },
         { name = "DURATION_H", value = var.duration_h },
@@ -1243,11 +1244,11 @@ resource "aws_ecs_task_definition" "pnl_attribution" {
       environment = [
         {
           name  = "PGURL"
-          value = var.pnl_attribution_pgurl
+          value = length(trimspace(var.pnl_attribution_pgurl)) > 0 ? var.pnl_attribution_pgurl : local.db_pgurl
         },
         {
           name  = "DB_DSN"
-          value = var.pnl_attribution_pgurl
+          value = length(trimspace(var.pnl_attribution_pgurl)) > 0 ? var.pnl_attribution_pgurl : local.db_pgurl
         },
         {
           name  = "AWS_REGION"
@@ -1359,6 +1360,24 @@ resource "aws_iam_role_policy" "eventbridge_ecs_run_task" {
       }
     ]
   })
+}
+
+module "trading_bess_mengxi_schedules" {
+  count = var.enable_trading_bess_mengxi_schedules ? 1 : 0
+
+  source = "./trading-bess-mengxi"
+
+  region                     = var.region
+  name                       = var.name
+  ecs_cluster_arn            = aws_ecs_cluster.this.arn
+  private_subnet_ids         = var.private_subnet_ids
+  task_security_group_id     = aws_security_group.ecs_tasks.id
+  ecs_execution_role_arn     = aws_iam_role.task_execution.arn
+  ecs_task_role_arn          = aws_iam_role.task_role.arn
+  events_invoke_ecs_role_arn = aws_iam_role.eventbridge_ecs.arn
+  image_trading_jobs         = var.image_trading_jobs
+  db_dsn                     = length(trimspace(var.trading_jobs_db_dsn)) > 0 ? var.trading_jobs_db_dsn : local.db_pgurl
+  log_retention_days         = var.trading_jobs_log_retention_days
 }
 
 
@@ -1613,6 +1632,132 @@ resource "aws_ecr_repository" "it_dev_agent" {
   name = "bess-it-dev-agent"
 }
 
+resource "aws_ecr_lifecycle_policy" "inner_mongolia" {
+  repository = aws_ecr_repository.inner_mongolia.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last N images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.ecr_keep_last_images
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "pnl_attribution" {
+  repository = aws_ecr_repository.pnl_attribution.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last N images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.ecr_keep_last_images
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "inner_pipeline" {
+  repository = aws_ecr_repository.inner_pipeline.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last N images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.ecr_keep_last_images
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "portfolio_agent" {
+  repository = aws_ecr_repository.portfolio_agent.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last N images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.ecr_keep_last_images
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "execution_agent" {
+  repository = aws_ecr_repository.execution_agent.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last N images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.ecr_keep_last_images
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "it_dev_agent" {
+  repository = aws_ecr_repository.it_dev_agent.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last N images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.ecr_keep_last_images
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
 
 resource "aws_ecs_task_definition" "strategy_agent" {
   family                   = "${var.name}-strategy-agent"
@@ -1791,7 +1936,7 @@ resource "aws_s3_bucket_policy" "alb_logs" {
         Principal = {
           Service = "logdelivery.elasticloadbalancing.amazonaws.com"
         }
-        Action = "s3:PutObject"
+        Action   = "s3:PutObject"
         Resource = "${aws_s3_bucket.uploads.arn}/alb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
         Condition = {
           StringEquals = {
@@ -1805,7 +1950,7 @@ resource "aws_s3_bucket_policy" "alb_logs" {
         Principal = {
           Service = "logdelivery.elasticloadbalancing.amazonaws.com"
         }
-        Action = "s3:GetBucketAcl"
+        Action   = "s3:GetBucketAcl"
         Resource = aws_s3_bucket.uploads.arn
       }
 
@@ -1830,7 +1975,7 @@ resource "aws_cloudwatch_event_target" "strategy_agent_target" {
     task_count          = 1
 
     network_configuration {
-      subnets   =  var.private_subnet_ids
+      subnets          = var.private_subnet_ids
       security_groups  = [aws_security_group.ecs_tasks.id]
       assign_public_ip = false
     }

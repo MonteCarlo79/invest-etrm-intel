@@ -1,0 +1,1 @@
+{"containerOverrides":[{"name":"mengxi-pnl-refresh","environment":[{"name":"PNL_REFRESH_LOOKBACK_DAYS","value":"45"},{"name":"PNL_ENABLE_CANON_COMPAT_VIEWS","value":"0"},{"name":"PNL_PREFER_DIRECT_MD","value":"1"}]}]}
