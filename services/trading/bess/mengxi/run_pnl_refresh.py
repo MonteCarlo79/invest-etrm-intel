@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """
 Created on Tue Mar 24 12:47:32 2026
@@ -345,6 +346,65 @@ def ensure_report_tables(engine: Engine) -> None:
             ADD COLUMN IF NOT EXISTS interval_hours numeric
         """))
 
+        # --- core.asset_alias_map: create table + seed (idempotent) ---
+        con.execute(text("""
+            CREATE TABLE IF NOT EXISTS core.asset_alias_map (
+                asset_code  text        NOT NULL,
+                alias_type  text        NOT NULL,
+                alias_value text        NOT NULL,
+                province    text,
+                city_cn     text,
+                active_flag boolean     NOT NULL DEFAULT TRUE,
+                created_at  timestamptz NOT NULL DEFAULT now(),
+                updated_at  timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (asset_code, alias_type, alias_value)
+            )
+        """))
+        con.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_asset_alias_map_alias_value
+                ON core.asset_alias_map (lower(alias_value))
+        """))
+        con.execute(text("""
+            INSERT INTO core.asset_alias_map
+                (asset_code, alias_type, alias_value, province, city_cn)
+            VALUES
+                ('suyou','dispatch_unit_name_cn','景蓝乌尔图储能电站','Mengxi','锡林郭勒'),
+                ('suyou','short_name_cn','苏右储能','Mengxi','锡林郭勒'),
+                ('suyou','display_name_cn','苏右','Mengxi','锡林郭勒'),
+                ('suyou','tt_asset_name_en','SuYou','Mengxi','锡林郭勒'),
+                ('suyou','market_key','Mengxi_SuYou','Mengxi','锡林郭勒'),
+                ('wulate','dispatch_unit_name_cn','远景乌拉特储能电站','Mengxi','巴彦淖尔'),
+                ('wulate','short_name_cn','乌拉特中期储能','Mengxi','巴彦淖尔'),
+                ('wulate','display_name_cn','乌拉特','Mengxi','巴彦淖尔'),
+                ('wulate','tt_asset_name_en','WuLaTe','Mengxi','巴彦淖尔'),
+                ('wulate','market_key','Mengxi_WuLaTe','Mengxi','巴彦淖尔'),
+                ('wuhai','dispatch_unit_name_cn','富景五虎山储能电站','Mengxi','乌海'),
+                ('wuhai','short_name_cn','乌海储能','Mengxi','乌海'),
+                ('wuhai','display_name_cn','乌海','Mengxi','乌海'),
+                ('wuhai','tt_asset_name_en','WuHai','Mengxi','乌海'),
+                ('wuhai','market_key','Mengxi_WuHai','Mengxi','乌海'),
+                ('wulanchabu','dispatch_unit_name_cn','景通红丰储能电站','Mengxi','乌兰察布'),
+                ('wulanchabu','short_name_cn','乌兰察布储能','Mengxi','乌兰察布'),
+                ('wulanchabu','display_name_cn','乌兰察布','Mengxi','乌兰察布'),
+                ('wulanchabu','tt_asset_name_en','WuLanChaBu','Mengxi','乌兰察布'),
+                ('wulanchabu','market_key','Mengxi_WuLanChaBu','Mengxi','乌兰察布'),
+                ('hetao','dispatch_unit_name_cn','景怡查干哈达储能电站','Mengxi','巴彦淖尔'),
+                ('hetao','short_name_cn','河套储能','Mengxi','巴彦淖尔'),
+                ('hetao','display_name_cn','河套','Mengxi','巴彦淖尔'),
+                ('hangjinqi','dispatch_unit_name_cn','悦杭独贵储能电站','Mengxi','鄂尔多斯'),
+                ('hangjinqi','short_name_cn','杭锦旗储能','Mengxi','鄂尔多斯'),
+                ('hangjinqi','display_name_cn','杭锦旗','Mengxi','鄂尔多斯'),
+                ('siziwangqi','dispatch_unit_name_cn','景通四益堂储能电站','Mengxi','乌兰察布'),
+                ('siziwangqi','short_name_cn','四子王旗储能','Mengxi','乌兰察布'),
+                ('siziwangqi','display_name_cn','四子王旗','Mengxi','乌兰察布'),
+                ('gushanliang','dispatch_unit_name_cn','裕昭沙子坝储能电站','Mengxi','鄂尔多斯'),
+                ('gushanliang','short_name_cn','谷山梁储能','Mengxi','鄂尔多斯'),
+                ('gushanliang','display_name_cn','谷山梁','Mengxi','鄂尔多斯')
+            ON CONFLICT (asset_code, alias_type, alias_value) DO NOTHING
+        """))
+    logger.info("core.asset_alias_map: table and seed verified")
+
+
 def fetch_asset_monthly_compensation(engine: Engine) -> pd.DataFrame:
     sql = text("""
         SELECT
@@ -471,6 +531,9 @@ def load_actual_price(engine: Engine, asset_code: str, trade_date: date) -> pd.D
             alias_df = _normalize_time_column(alias_df)
             if not alias_df.empty:
                 return alias_df
+            logger.debug(
+                "load_actual_price branch=direct_md_alias empty asset=%s date=%s", asset_code, trade_date
+            )
 
     sql = text("""
         SELECT time, price
@@ -484,8 +547,14 @@ def load_actual_price(engine: Engine, asset_code: str, trade_date: date) -> pd.D
     df = _normalize_time_column(df)
     if not df.empty:
         return df
+    logger.debug(
+        "load_actual_price branch=canon_view empty asset=%s date=%s", asset_code, trade_date
+    )
 
     if not md_schema:
+        logger.debug(
+            "load_actual_price branch=no_md_schema asset=%s date=%s", asset_code, trade_date
+        )
         return df
 
     if _relation_exists(engine, "core", "asset_alias_map"):
@@ -517,6 +586,9 @@ def load_actual_price(engine: Engine, asset_code: str, trade_date: date) -> pd.D
         alias_df = _normalize_time_column(alias_df)
         if not alias_df.empty:
             return alias_df
+        logger.debug(
+            "load_actual_price branch=fallback_alias empty asset=%s date=%s", asset_code, trade_date
+        )
 
     fb_sql = text(
         f"""
@@ -537,7 +609,12 @@ def load_actual_price(engine: Engine, asset_code: str, trade_date: date) -> pd.D
         engine,
         params={"start_ts": start_ts, "end_ts": end_ts, "asset_like": f"%{asset_code.lower()}%"},
     )
-    return _normalize_time_column(fb_df)
+    fb_df = _normalize_time_column(fb_df)
+    if fb_df.empty:
+        logger.debug(
+            "load_actual_price branch=fallback_like empty asset=%s date=%s", asset_code, trade_date
+        )
+    return fb_df
 
 
 def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, trade_date: date) -> pd.DataFrame:
@@ -574,6 +651,10 @@ def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, 
             alias_df = _normalize_time_column(alias_df)
             if not alias_df.empty:
                 return alias_df
+            logger.debug(
+                "load_dispatch_scenario branch=direct_md_alias empty asset=%s scenario=%s date=%s",
+                asset_code, scenario_name, trade_date,
+            )
 
     sql = text("""
         SELECT time, dispatch_mw
@@ -596,9 +677,18 @@ def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, 
     )
     df = _normalize_time_column(df)
     if not df.empty or scenario_name != "cleared_actual":
+        if df.empty:
+            logger.debug(
+                "load_dispatch_scenario branch=canon_view empty asset=%s scenario=%s date=%s",
+                asset_code, scenario_name, trade_date,
+            )
         return df
 
     if not md_schema:
+        logger.debug(
+            "load_dispatch_scenario branch=no_md_schema asset=%s scenario=%s date=%s",
+            asset_code, scenario_name, trade_date,
+        )
         return df
 
     if _relation_exists(engine, "core", "asset_alias_map"):
@@ -630,6 +720,10 @@ def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, 
         alias_df = _normalize_time_column(alias_df)
         if not alias_df.empty:
             return alias_df
+        logger.debug(
+            "load_dispatch_scenario branch=fallback_alias empty asset=%s scenario=%s date=%s",
+            asset_code, scenario_name, trade_date,
+        )
 
     fb_sql = text(
         f"""
@@ -650,7 +744,13 @@ def load_dispatch_scenario(engine: Engine, asset_code: str, scenario_name: str, 
         engine,
         params={"start_ts": start_ts, "end_ts": end_ts, "asset_like": f"%{asset_code.lower()}%"},
     )
-    return _normalize_time_column(fb_df)
+    fb_df = _normalize_time_column(fb_df)
+    if fb_df.empty:
+        logger.debug(
+            "load_dispatch_scenario branch=fallback_like empty asset=%s scenario=%s date=%s",
+            asset_code, scenario_name, trade_date,
+        )
+    return fb_df
 
 
 def build_availability_map(df: pd.DataFrame, asset_code: str) -> Dict[str, bool]:
@@ -695,11 +795,30 @@ def main() -> None:
     ensure_report_tables(ENGINE)
     if ENABLE_CANON_COMPAT_VIEWS:
         ensure_canonical_compat_views(ENGINE)
+        logger.info("Canon compatibility views refreshed")
     else:
         logger.info("Skipping canon compatibility view refresh (PNL_ENABLE_CANON_COMPAT_VIEWS disabled)")
 
+    # --- source table diagnostics ---
+    _md_schema = _find_relation_schema(ENGINE, "md_id_cleared_energy", ("marketdata", "public"))
+    if _md_schema:
+        with ENGINE.begin() as _c:
+            _src_count = _c.execute(text(
+                f"SELECT COUNT(*) FROM {_md_schema}.md_id_cleared_energy "
+                f"WHERE datetime >= current_date - interval '{REFRESH_LOOKBACK_DAYS} days'"
+            )).scalar()
+        logger.info("md_id_cleared_energy rows in lookback window (%d days): %s", REFRESH_LOOKBACK_DAYS, _src_count)
+    else:
+        logger.warning("md_id_cleared_energy not found in any schema — dispatch data unavailable")
+    with ENGINE.begin() as _c:
+        _alias_count = _c.execute(text(
+            "SELECT COUNT(*) FROM core.asset_alias_map WHERE active_flag=TRUE"
+        )).scalar()
+    logger.info("core.asset_alias_map active rows: %s", _alias_count)
+
     availability_df = fetch_scenario_availability(ENGINE)
     dates = fetch_trade_dates(ENGINE, REFRESH_LOOKBACK_DAYS)
+    logger.info("Processing %d trade dates for %d assets", len(dates), len(ASSET_ALIAS_MAP))
     compensation_df = fetch_asset_monthly_compensation(ENGINE)
     compensation_coverage_df = fetch_compensation_coverage(ENGINE)
     scenario_rows_all = []
@@ -722,6 +841,11 @@ def main() -> None:
                     continue
                 scenario_dispatch_map[scenario_name] = load_dispatch_scenario(
                     ENGINE, asset_code, scenario_name, trade_date
+                )
+            empty_scenarios = [s for s, df in scenario_dispatch_map.items() if df is None or df.empty]
+            if empty_scenarios:
+                logger.debug(
+                    "asset=%s date=%s empty dispatch scenarios: %s", asset_code, trade_date, empty_scenarios
                 )
 
             scenario_rows = build_daily_scenario_rows(
@@ -747,6 +871,16 @@ def main() -> None:
             scenario_df,
             pk_cols=["trade_date", "asset_code", "scenario_name"],
         )
+        _assets = sorted(scenario_df["asset_code"].dropna().unique().tolist())
+        _n_dates = scenario_df["trade_date"].nunique()
+        _n_scenarios = scenario_df["scenario_name"].nunique()
+        logger.info(
+            "Wrote %d scenario rows to reports.bess_asset_daily_scenario_pnl "
+            "(assets=%s, dates=%d, scenarios=%d)",
+            len(scenario_df), _assets, _n_dates, _n_scenarios,
+        )
+    else:
+        logger.warning("No scenario rows produced — reports.bess_asset_daily_scenario_pnl NOT updated")
 
     if attribution_rows_all:
         attribution_df = pd.concat(attribution_rows_all, ignore_index=True)
@@ -756,6 +890,12 @@ def main() -> None:
             attribution_df,
             pk_cols=["trade_date", "asset_code"],
         )
+        logger.info(
+            "Wrote %d attribution rows to reports.bess_asset_daily_attribution",
+            len(attribution_df),
+        )
+    else:
+        logger.warning("No attribution rows produced — reports.bess_asset_daily_attribution NOT updated")
 
     logger.info("Mengxi P&L refresh completed")
 

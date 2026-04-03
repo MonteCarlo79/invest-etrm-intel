@@ -113,8 +113,8 @@ ASSET_ALIAS_MAP = {
         "province": "Mengxi",
     },
     "wulanchabu": {
-        "dispatch_unit_name_cn": "景通四益堂储能电站",
-        "short_name_cn": "四子王旗储能",
+        "dispatch_unit_name_cn": "景通红丰储能电站",
+        "short_name_cn": "乌兰察布储能",
         "display_name_cn": "乌兰察布",
         "tt_asset_name_en": "WuLanChaBu",
         "market_key": "Mengxi_WuLanChaBu",

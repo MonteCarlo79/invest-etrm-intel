@@ -9,6 +9,7 @@ variable "ecs_execution_role_arn" {}
 variable "ecs_task_role_arn" {}
 variable "events_invoke_ecs_role_arn" {}
 variable "image_trading_jobs" {}
+variable "image_mengxi_ingest" {}
 variable "db_dsn" { sensitive = true }
 variable "log_retention_days" {
   type    = number
@@ -18,8 +19,8 @@ variable "log_retention_days" {
 locals {
   common_env = [
     { name = "AWS_REGION", value = var.region },
-    { name = "DB_DSN", value = var.db_dsn },
-    { name = "PGURL", value = var.db_dsn },
+    { name = "DB_DSN",     value = var.db_dsn },
+    { name = "PGURL",      value = var.db_dsn },
     { name = "PYTHONPATH", value = "/app" }
   ]
 }
@@ -56,11 +57,11 @@ resource "aws_ecs_task_definition" "tt_province_loader" {
       command   = ["python", "services/loader/province_misc_to_db_v2.py"]
 
       environment = concat(local.common_env, [
-        { name = "MARKET_LIST", value = "Mengxi,Anhui,Shandong,Jiangsu" },
-        { name = "FULL_HISTORY", value = "false" },
-        { name = "DB_LOOKBACK_DAYS", value = "2" },
-        { name = "RUN_INHOUSE_WIND", value = "true" },
-        { name = "LOG_LEVEL", value = "INFO" }
+        { name = "MARKET_LIST",        value = "Mengxi,Anhui,Shandong,Jiangsu" },
+        { name = "FULL_HISTORY",       value = "false" },
+        { name = "DB_LOOKBACK_DAYS",   value = "2" },
+        { name = "RUN_INHOUSE_WIND",   value = "true" },
+        { name = "LOG_LEVEL",          value = "INFO" }
       ])
 
       logConfiguration = {
@@ -92,10 +93,10 @@ resource "aws_ecs_task_definition" "tt_asset_loader" {
       command   = ["python", "services/common/focused_assets_data.py"]
 
       environment = concat(local.common_env, [
-        { name = "MARKET_LIST", value = "Mengxi_SuYou,Mengxi_WuLaTe,Mengxi_WuHai,Mengxi_WuLanChaBu,Shandong_BinZhou,Anhui_DingYuan,Jiangsu_SheYang" },
-        { name = "FULL_HISTORY", value = "false" },
+        { name = "MARKET_LIST",      value = "Mengxi_SuYou,Mengxi_WuLaTe,Mengxi_WuHai,Mengxi_WuLanChaBu,Shandong_BinZhou,Anhui_DingYuan,Jiangsu_SheYang" },
+        { name = "FULL_HISTORY",     value = "false" },
         { name = "DB_LOOKBACK_DAYS", value = "2" },
-        { name = "LOG_LEVEL", value = "INFO" }
+        { name = "LOG_LEVEL",        value = "INFO" }
       ])
 
       logConfiguration = {
@@ -127,9 +128,10 @@ resource "aws_ecs_task_definition" "mengxi_pnl_refresh" {
       command   = ["python", "services/trading/bess/mengxi/run_pnl_refresh.py"]
 
       environment = concat(local.common_env, [
-        { name = "DEFAULT_COMPENSATION_YUAN_PER_MWH", value = "350" },
-        { name = "PNL_REFRESH_LOOKBACK_DAYS", value = "7" },
-        { name = "LOG_LEVEL", value = "INFO" }
+        { name = "DEFAULT_COMPENSATION_YUAN_PER_MWH",  value = "350" },
+        { name = "PNL_REFRESH_LOOKBACK_DAYS",          value = "7" },
+        { name = "PNL_ENABLE_CANON_COMPAT_VIEWS",      value = "1" },
+        { name = "LOG_LEVEL",                          value = "INFO" }
       ])
 
       logConfiguration = {
@@ -208,6 +210,75 @@ resource "aws_cloudwatch_event_target" "mengxi_pnl_refresh_daily" {
     launch_type         = "FARGATE"
     task_count          = 1
     task_definition_arn = aws_ecs_task_definition.mengxi_pnl_refresh.arn
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [var.task_security_group_id]
+      assign_public_ip = false
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Mengxi Excel ingest — downloads daily Excel from Mengxi portal and loads
+# md_id_cleared_energy (dispatch volumes) + md_rt_nodal_price into marketdata
+# schema. Must run before the province loader (09:10) and pnl-refresh (10:10).
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "mengxi_excel_ingest" {
+  name              = "/ecs/${var.name}/mengxi-excel-ingest"
+  retention_in_days = 30
+}
+
+resource "aws_ecs_task_definition" "mengxi_excel_ingest" {
+  family                   = "${var.name}-mengxi-excel-ingest"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  execution_role_arn       = var.ecs_execution_role_arn
+  task_role_arn            = var.ecs_task_role_arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "mengxi-excel-ingest"
+      image     = var.image_mengxi_ingest
+      essential = true
+      command   = ["python", "run_pipeline.py"]
+
+      environment = concat(local.common_env, [
+        { name = "RUN_MODE",        value = "daily" },
+        { name = "MARKET_LAG_DAYS", value = "1" },
+        { name = "LOG_LEVEL",       value = "INFO" }
+      ])
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.mengxi_excel_ingest.name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_cloudwatch_event_rule" "mengxi_excel_ingest_daily" {
+  name                = "${var.name}-mengxi-excel-ingest-daily"
+  description         = "Daily Mengxi Excel ingest (md_id_cleared_energy + md_rt_nodal_price)"
+  schedule_expression = "cron(30 0 * * ? *)" # 08:30 China time — before province loader at 09:10
+}
+
+resource "aws_cloudwatch_event_target" "mengxi_excel_ingest_daily" {
+  rule      = aws_cloudwatch_event_rule.mengxi_excel_ingest_daily.name
+  target_id = "mengxi-excel-ingest"
+  arn       = var.ecs_cluster_arn
+  role_arn  = var.events_invoke_ecs_role_arn
+
+  ecs_target {
+    launch_type         = "FARGATE"
+    task_count          = 1
+    task_definition_arn = aws_ecs_task_definition.mengxi_excel_ingest.arn
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
