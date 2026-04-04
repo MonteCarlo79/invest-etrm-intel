@@ -364,6 +364,12 @@ def ensure_report_tables(engine: Engine) -> None:
             CREATE INDEX IF NOT EXISTS idx_asset_alias_map_alias_value
                 ON core.asset_alias_map (lower(alias_value))
         """))
+        # Guard: add columns if table was created before province/city_cn were added
+        con.execute(text("""
+            ALTER TABLE core.asset_alias_map
+                ADD COLUMN IF NOT EXISTS province text,
+                ADD COLUMN IF NOT EXISTS city_cn  text
+        """))
         con.execute(text("""
             INSERT INTO core.asset_alias_map
                 (asset_code, alias_type, alias_value, province, city_cn)

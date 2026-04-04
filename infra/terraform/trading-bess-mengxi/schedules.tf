@@ -11,6 +11,14 @@ variable "events_invoke_ecs_role_arn" {}
 variable "image_trading_jobs" {}
 variable "image_mengxi_ingest" {}
 variable "db_dsn" { sensitive = true }
+variable "tt_app_key"    { sensitive = true }
+variable "tt_app_secret" { sensitive = true }
+# Individual DB vars for focused_assets_data.py (reads DB_DEFAULTS, not DB_DSN)
+variable "db_host"     {}
+variable "db_port"     { default = "5432" }
+variable "db_user"     { default = "postgres" }
+variable "db_password" { sensitive = true }
+variable "db_name"     { default = "marketdata" }
 variable "log_retention_days" {
   type    = number
   default = 14
@@ -25,20 +33,9 @@ locals {
   ]
 }
 
-resource "aws_cloudwatch_log_group" "tt_province_loader" {
-  name              = "/ecs/${var.name}/tt-province-loader"
-  retention_in_days = var.log_retention_days
-}
-
-resource "aws_cloudwatch_log_group" "tt_asset_loader" {
-  name              = "/ecs/${var.name}/tt-asset-loader"
-  retention_in_days = var.log_retention_days
-}
-
-resource "aws_cloudwatch_log_group" "mengxi_pnl_refresh" {
-  name              = "/ecs/${var.name}/mengxi-pnl-refresh"
-  retention_in_days = var.log_retention_days
-}
+# Log groups for tt-province-loader, tt-asset-loader, and mengxi-pnl-refresh
+# already exist in AWS (created outside this module). They are not managed here
+# to avoid ResourceAlreadyExistsException. Names are inlined in task definitions.
 
 resource "aws_ecs_task_definition" "tt_province_loader" {
   family                   = "${var.name}-tt-province-loader"
@@ -57,6 +54,8 @@ resource "aws_ecs_task_definition" "tt_province_loader" {
       command   = ["python", "services/loader/province_misc_to_db_v2.py"]
 
       environment = concat(local.common_env, [
+        { name = "APP_KEY",            value = var.tt_app_key },
+        { name = "APP_SECRET",         value = var.tt_app_secret },
         { name = "MARKET_LIST",        value = "Mengxi,Anhui,Shandong,Jiangsu" },
         { name = "FULL_HISTORY",       value = "false" },
         { name = "DB_LOOKBACK_DAYS",   value = "2" },
@@ -67,7 +66,7 @@ resource "aws_ecs_task_definition" "tt_province_loader" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.tt_province_loader.name
+          awslogs-group         = "/ecs/${var.name}/tt-province-loader"
           awslogs-region        = var.region
           awslogs-stream-prefix = "ecs"
         }
@@ -93,6 +92,16 @@ resource "aws_ecs_task_definition" "tt_asset_loader" {
       command   = ["python", "services/common/focused_assets_data.py"]
 
       environment = concat(local.common_env, [
+        { name = "APP_KEY",          value = var.tt_app_key },
+        { name = "APP_SECRET",       value = var.tt_app_secret },
+        # Individual DB_* vars required by focused_assets_data.py (_db_engine uses
+        # DB_DEFAULTS which reads these; it does not check DB_DSN/PGURL directly).
+        # Remove once bess-trading-jobs image is rebuilt with the DB_DSN-aware fix.
+        { name = "DB_HOST",          value = var.db_host },
+        { name = "DB_PORT",          value = var.db_port },
+        { name = "DB_USER",          value = var.db_user },
+        { name = "DB_PASSWORD",      value = var.db_password },
+        { name = "DB_NAME",          value = var.db_name },
         { name = "MARKET_LIST",      value = "Mengxi_SuYou,Mengxi_WuLaTe,Mengxi_WuHai,Mengxi_WuLanChaBu,Shandong_BinZhou,Anhui_DingYuan,Jiangsu_SheYang" },
         { name = "FULL_HISTORY",     value = "false" },
         { name = "DB_LOOKBACK_DAYS", value = "2" },
@@ -102,7 +111,7 @@ resource "aws_ecs_task_definition" "tt_asset_loader" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.tt_asset_loader.name
+          awslogs-group         = "/ecs/${var.name}/tt-asset-loader"
           awslogs-region        = var.region
           awslogs-stream-prefix = "ecs"
         }
@@ -137,7 +146,7 @@ resource "aws_ecs_task_definition" "mengxi_pnl_refresh" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.mengxi_pnl_refresh.name
+          awslogs-group         = "/ecs/${var.name}/mengxi-pnl-refresh"
           awslogs-region        = var.region
           awslogs-stream-prefix = "ecs"
         }
@@ -177,7 +186,7 @@ resource "aws_cloudwatch_event_target" "tt_province_loader_daily" {
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }
@@ -195,7 +204,7 @@ resource "aws_cloudwatch_event_target" "tt_asset_loader_daily" {
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }
@@ -213,7 +222,7 @@ resource "aws_cloudwatch_event_target" "mengxi_pnl_refresh_daily" {
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }
@@ -282,7 +291,7 @@ resource "aws_cloudwatch_event_target" "mengxi_excel_ingest_daily" {
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }

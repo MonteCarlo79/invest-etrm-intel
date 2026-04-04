@@ -373,7 +373,7 @@ def _shift15_pivot_hour(df_long: pd.DataFrame) -> pd.DataFrame:
     hourly = w.groupby(["metric", "date", "hour"], as_index=False)["price"].mean()
     mat = hourly.pivot_table(index=["metric", "date"], columns="hour", values="price")
     mat = mat.sort_index()
-    mat.columns = [f"Hour_{str(c).zfill(2)}" for c in mat.columns]
+    mat.columns = [f"Hour_{int(c):02d}" for c in mat.columns]
     return mat.reset_index()
 
 def _ensure_matrix_table(engine, table_name: str):

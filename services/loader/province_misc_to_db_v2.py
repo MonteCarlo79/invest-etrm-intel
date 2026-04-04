@@ -721,8 +721,7 @@ def Column_to_Matrix(pricefile: str, market: str):
     app_key = os.getenv("APP_KEY")
     app_secret = os.getenv("APP_SECRET")
     if not app_key or not app_secret:
-        logger.error("APP_KEY / APP_SECRET environment variables are required.")
-        return
+        raise RuntimeError("APP_KEY / APP_SECRET environment variables are required.")
 
     engine = _db_engine()
 
