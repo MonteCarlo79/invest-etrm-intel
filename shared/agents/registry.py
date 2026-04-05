@@ -21,6 +21,13 @@ APP_CATALOG = [
         "category": "Applications",
     },
     {
+        "name": "Mengxi P&L Attribution",
+        "path": "/pnl-attribution/",
+        "description": "Daily P&L attribution, scenario analysis, and cycle analytics for Mengxi BESS assets.",
+        "roles": ["Admin", "Trader", "Quant", "Analyst"],
+        "category": "Applications",
+    },
+    {
         "name": "Market Data Uploader",
         "path": "/uploader/",
         "description": "Market and operational data ingestion.",
