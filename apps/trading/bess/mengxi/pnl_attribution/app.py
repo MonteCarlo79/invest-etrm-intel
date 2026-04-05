@@ -340,8 +340,16 @@ st.sidebar.header("Filters")
 default_end = dt.date.today()
 default_start = default_end - dt.timedelta(days=30)
 date_range = st.sidebar.date_input("Trade date range", value=(default_start, default_end))
-if isinstance(date_range, tuple) and len(date_range) == 2:
-    start_date, end_date = date_range
+if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+    start_date, end_date = date_range[0], date_range[1]
+elif isinstance(date_range, (list, tuple)) and len(date_range) == 1:
+    # User clicked start date but hasn't picked end yet — use start to today
+    start_date = date_range[0]
+    end_date = dt.date.today()
+elif isinstance(date_range, dt.date):
+    # Some Streamlit versions return a bare date for single-click
+    start_date = date_range
+    end_date = dt.date.today()
 else:
     start_date, end_date = default_start, default_end
 if start_date > end_date:
