@@ -1376,8 +1376,13 @@ module "trading_bess_mengxi_schedules" {
   ecs_task_role_arn          = aws_iam_role.task_role.arn
   events_invoke_ecs_role_arn = aws_iam_role.eventbridge_ecs.arn
   image_trading_jobs         = var.image_trading_jobs
+  image_mengxi_ingest        = var.image_mengxi_ingest
   db_dsn                     = length(trimspace(var.trading_jobs_db_dsn)) > 0 ? var.trading_jobs_db_dsn : local.db_pgurl
   log_retention_days         = var.trading_jobs_log_retention_days
+  tt_app_key                 = var.tt_app_key
+  tt_app_secret              = var.tt_app_secret
+  db_host                    = var.db_host
+  db_password                = var.db_password
 }
 
 

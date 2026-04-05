@@ -394,6 +394,29 @@ variable "trading_jobs_db_dsn" {
   default     = ""
 }
 
+variable "tt_app_key" {
+  description = "TT REST API application key for province and asset loaders."
+  type        = string
+  sensitive   = true
+}
+
+variable "tt_app_secret" {
+  description = "TT REST API application secret for province and asset loaders."
+  type        = string
+  sensitive   = true
+}
+
+variable "db_host" {
+  description = "RDS hostname for focused_assets_data.py (DB_HOST env var)."
+  type        = string
+}
+
+variable "image_mengxi_ingest" {
+  description = "Docker image for the Mengxi Excel ingest job."
+  type        = string
+  default     = ""
+}
+
 # -------------------------
 # Cost-control defaults (safe, reversible)
 # -------------------------
