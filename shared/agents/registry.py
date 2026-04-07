@@ -21,6 +21,13 @@ APP_CATALOG = [
         "category": "Applications",
     },
     {
+        "name": "China Spot Market",
+        "path": "/spot-markets/",
+        "description": "Daily DA/RT spot prices for the last 3 report dates, all provinces. Highlights for most recent day.",
+        "roles": ["Admin", "Trader", "Quant", "Analyst", "Viewer"],
+        "category": "Applications",
+    },
+    {
         "name": "Market Data Uploader",
         "path": "/uploader/",
         "description": "Market and operational data ingestion.",

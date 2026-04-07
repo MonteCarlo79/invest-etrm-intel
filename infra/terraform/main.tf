@@ -91,7 +91,7 @@ resource "aws_security_group" "ecs_tasks" {
   ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
-    to_port         = 8504
+    to_port         = 8505
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -1126,6 +1126,310 @@ resource "aws_ecr_repository" "inner_mongolia" {
   }
 
   image_tag_mutability = "MUTABLE"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mengxi P&L Attribution service
+# ─────────────────────────────────────────────────────────────────────────────
+resource "aws_ecr_repository" "pnl_attribution" {
+  count = var.enable_pnl_attribution_service ? 1 : 0
+  name  = "bess-pnl-attribution"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+
+  image_tag_mutability = "MUTABLE"
+}
+
+resource "aws_lb_target_group" "pnl_attribution" {
+  count       = var.enable_pnl_attribution_service ? 1 : 0
+  name_prefix = "tgpnl-"
+  port        = 8502
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  health_check {
+    path                = "/pnl-attribution/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "pnl_attribution_path" {
+  count        = var.enable_pnl_attribution_service ? 1 : 0
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 25
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.pnl_attribution[0].arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/pnl-attribution", "/pnl-attribution/", "/pnl-attribution/*"]
+    }
+  }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# China Spot Market Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_ecr_repository" "spot_markets" {
+  name = "bess-spot-markets"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+
+  image_tag_mutability = "MUTABLE"
+}
+
+resource "aws_lb_target_group" "spot_markets" {
+  name_prefix = "tgsm-"
+  port        = 8505
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path                = "/spot-markets/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "spot_markets_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 30
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.spot_markets.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/spot-markets", "/spot-markets/", "/spot-markets/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "spot_markets" {
+  family                   = "${var.name}-spot-markets"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "spot-markets"
+      image     = var.image_spot_markets
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8505
+          protocol      = "tcp"
+        }
+      ]
+
+      command = [
+        "streamlit",
+        "run",
+        "apps/spot-agent/ui/spot_dashboard.py",
+        "--server.port=8505",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=spot-markets",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false"
+      ]
+
+      environment = [
+        {
+          name  = "DB_URL"
+          value = var.db_dsn
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "spot-markets"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "spot_markets" {
+  name            = "${var.name}-spot-markets-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.spot_markets.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.spot_markets.arn
+    container_name   = "spot-markets"
+    container_port   = 8505
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+resource "aws_ecs_task_definition" "pnl_attribution" {
+  count                    = var.enable_pnl_attribution_service ? 1 : 0
+  family                   = "${var.name}-pnl-attribution"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "pnl-attribution"
+      image     = var.pnl_attribution_image
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8502
+          protocol      = "tcp"
+        }
+      ]
+
+      command = [
+        "streamlit", "run", "app.py",
+        "--server.port=8502",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=pnl-attribution",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false"
+      ]
+
+      environment = [
+        {
+          name  = "DB_DSN"
+          value = var.pnl_attribution_pgurl
+        },
+        {
+          name  = "PGURL"
+          value = var.pnl_attribution_pgurl
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = aws_cognito_user_pool.bess_users.id
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "pnl-attribution"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "pnl_attribution" {
+  count           = var.enable_pnl_attribution_service ? 1 : 0
+  name            = "${var.name}-pnl-attribution-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.pnl_attribution[0].arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.pnl_attribution[0].arn
+    container_name   = "pnl-attribution"
+    container_port   = 8502
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
 }
 
 data "aws_iam_policy_document" "eventbridge_assume" {

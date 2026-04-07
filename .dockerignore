@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 *.pyd
 .env
+**/.env
 .venv
 node_modules
 *.xlsx

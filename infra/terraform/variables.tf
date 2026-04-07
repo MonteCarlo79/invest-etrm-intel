@@ -309,3 +309,75 @@ variable "cognito_callback_urls" {
 variable "cognito_default_redirect_uri" {
   type = string
 }
+
+#################################################
+# PnL Attribution Service
+#################################################
+variable "enable_pnl_attribution_service" {
+  description = "Set to true to deploy the Mengxi P&L attribution Streamlit service"
+  type        = bool
+  default     = false
+}
+
+variable "pnl_attribution_image" {
+  description = "Docker image for the Mengxi P&L attribution service"
+  type        = string
+  default     = ""
+}
+
+variable "pnl_attribution_pgurl" {
+  description = "Postgres DSN for the P&L attribution service"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+#################################################
+# trading-bess-mengxi scheduled jobs
+#################################################
+variable "enable_trading_bess_mengxi_schedules" {
+  description = "Enable EventBridge schedules for Mengxi trading jobs"
+  type        = bool
+  default     = false
+}
+
+variable "image_trading_jobs" {
+  description = "Docker image for Mengxi trading jobs (TT loaders + P&L refresh)"
+  type        = string
+  default     = ""
+}
+
+variable "tt_app_key" {
+  description = "TT API app key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "tt_app_secret" {
+  description = "TT API app secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "db_host" {
+  description = "Postgres hostname (used by trading job containers)"
+  type        = string
+  default     = ""
+}
+
+variable "image_mengxi_ingest" {
+  description = "Docker image for Mengxi ingestion"
+  type        = string
+  default     = ""
+}
+
+#################################################
+# China Spot Market Dashboard
+#################################################
+variable "image_spot_markets" {
+  description = "Docker image for China Spot Market dashboard"
+  type        = string
+  default     = ""
+}
