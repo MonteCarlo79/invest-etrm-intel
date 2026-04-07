@@ -1,0 +1,55 @@
+# spot_header_bess.yaml
+# Configuration for bess-platform spot report ingestion.
+# Local files live under bess-platform/data/spot reports/ in year sub-folders.
+
+# Default year used when a page contains no year in its date header.
+# Per-PDF year is still auto-inferred from the folder path or S3 key when possible.
+year: 2025
+
+# Source mode:
+#   local -> preserve the existing Windows / OneDrive glob behavior
+#   s3    -> list PDFs from S3, stage each file to temp local disk, then parse
+source_mode: local
+
+# Existing local multi-year glob patterns.
+pdf_globs:
+  - "C:/Users/dipeng.chen/OneDrive/ETRM/bess-platform/data/spot reports/2024/*.pdf"
+  - "C:/Users/dipeng.chen/OneDrive/ETRM/bess-platform/data/spot reports/2025/*.pdf"
+  - "C:/Users/dipeng.chen/OneDrive/ETRM/bess-platform/data/spot reports/2026/*.pdf"
+
+# Optional S3-backed source mode for AWS-safe ingestion.
+# Leave blank when source_mode=local.
+s3_bucket: ""
+s3_region: "ap-southeast-1"
+s3_prefixes: []
+
+# Province Chinese -> English code mapping.
+# Must match province names that appear verbatim in PDF tables.
+provinces:
+  山西: Shanxi
+  山东: Shandong
+  甘肃: Gansu
+  河北南网: HebeiSouth
+  湖北: Hubei
+  蒙西: Mengxi
+  浙江: Zhejiang
+  陕西: Shaanxi
+  安徽: Anhui
+  辽宁: Liaoning
+  黑龙�?: Heilongjiang
+  江苏: Jiangsu
+  吉林: Jilin
+  福建: Fujian
+  河南: Henan
+  宁夏: Ningxia
+  江西: Jiangxi
+  新疆: Xinjiang
+  四川: Sichuan
+  蒙东: Mengdong
+  湖南: Hunan
+  上海: Shanghai
+  青海: Qinghai
+  重庆: Chongqing
+  广东: Guangdong
+  南方: South
+  全国: National
