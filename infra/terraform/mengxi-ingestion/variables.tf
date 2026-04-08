@@ -91,3 +91,16 @@ variable "MAX_DOWNLOAD_WORKERS" {
   type        = number
   default     = 1
 }
+
+variable "alert_webhook_url" {
+  description = "Optional webhook URL for terminal Mengxi ingestion alerts"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "alert_context" {
+  description = "Optional context label included in Mengxi ingestion alerts"
+  type        = string
+  default     = "mengxi-ingestion"
+}

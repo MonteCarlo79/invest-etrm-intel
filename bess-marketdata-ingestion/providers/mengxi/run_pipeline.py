@@ -1,8 +1,12 @@
+import json
 import os
 import subprocess
 import time
-import psycopg2
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+
+import psycopg2
 
 OUTPUT_DIR = "./output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -15,6 +19,10 @@ RECONCILE_DAYS = os.getenv("RECONCILE_DAYS")
 
 MARKET_LAG_DAYS = int(os.getenv("MARKET_LAG_DAYS", "1"))
 DB_DSN = os.getenv("PGURL") or os.getenv("DB_DSN")
+ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "").strip()
+ALERT_CONTEXT = os.getenv("ALERT_CONTEXT", "mengxi-ingestion")
+PIPELINE_NAME = os.getenv("PIPELINE_NAME", "bess-mengxi-ingestion")
+DB_CONNECT_TIMEOUT_SECONDS = 5
 
 today = datetime.utcnow().date()
 latest_available = today - timedelta(days=MARKET_LAG_DAYS)
@@ -32,6 +40,59 @@ print("=====================================")
 # ------------------------------------------------
 # DB CONNECTION CHECK
 # ------------------------------------------------
+
+def extract_db_host(dsn):
+
+    if not dsn:
+        return None
+
+    parsed = urlparse(dsn)
+    return parsed.hostname
+
+
+def send_alert(payload):
+
+    if not ALERT_WEBHOOK_URL:
+        return
+
+    body = json.dumps(payload).encode("utf-8")
+    request = Request(
+        ALERT_WEBHOOK_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+
+    try:
+        with urlopen(request, timeout=10) as response:
+            print("Alert sent with status:", response.status)
+    except Exception as alert_error:
+        print("Alert delivery failed:", str(alert_error))
+
+
+def build_db_timeout_alert(max_attempts, delay, last_error):
+
+    summary = (
+        "Mengxi ingestion alert: DB connectivity timeout. "
+        "The ECS task could not reach Postgres on port 5432 after repeated retries. "
+        "This is likely an infra/network reachability issue rather than a SQL/query error."
+    )
+
+    return {
+        "text": summary,
+        "pipeline_name": PIPELINE_NAME,
+        "alert_context": ALERT_CONTEXT,
+        "run_mode": mode,
+        "start_date": START_DATE,
+        "end_date": END_DATE,
+        "error_class": "db_connect_timeout",
+        "db_host": extract_db_host(DB_DSN),
+        "retry_attempts": max_attempts,
+        "retry_delay_seconds": delay,
+        "db_connect_timeout_seconds": DB_CONNECT_TIMEOUT_SECONDS,
+        "utc_timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "error_message": str(last_error),
+    }
 
 def wait_for_db(max_attempts=10, delay=10):
 
@@ -54,7 +115,8 @@ def wait_for_db(max_attempts=10, delay=10):
             print("DB connection failed:", str(e))
 
             if attempt == max_attempts:
-                raise RuntimeError("Database not reachable")
+                send_alert(build_db_timeout_alert(max_attempts, delay, e))
+                raise RuntimeError("Database not reachable") from e
 
             time.sleep(delay)
 

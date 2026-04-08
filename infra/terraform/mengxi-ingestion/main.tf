@@ -101,6 +101,14 @@ resource "aws_ecs_task_definition" "mengxi_ingestion" {
         {
           name  = "FORCE_RELOAD"
           value = var.force_reload
+        },
+        {
+          name  = "ALERT_WEBHOOK_URL"
+          value = var.alert_webhook_url
+        },
+        {
+          name  = "ALERT_CONTEXT"
+          value = var.alert_context
         }
       ]
 
@@ -194,6 +202,14 @@ resource "aws_ecs_task_definition" "mengxi_reconcile" {
         {
           name  = "MAX_DOWNLOAD_WORKERS"
           value = tostring(var.MAX_DOWNLOAD_WORKERS)
+        },
+        {
+          name  = "ALERT_WEBHOOK_URL"
+          value = var.alert_webhook_url
+        },
+        {
+          name  = "ALERT_CONTEXT"
+          value = var.alert_context
         }
       ]
 
@@ -300,23 +316,23 @@ resource "aws_iam_role_policy" "lambda_invoke_ecs" {
 #####################################
 
 resource "aws_lambda_function" "mengxi_launcher" {
-  function_name = "bess-mengxi-launcher"
-  role          = aws_iam_role.lambda_invoke_ecs.arn
-  handler       = "lambda_function.handler"
-  runtime       = "python3.11"
-  filename      = "${path.module}/lambda_launcher.zip"
+  function_name    = "bess-mengxi-launcher"
+  role             = aws_iam_role.lambda_invoke_ecs.arn
+  handler          = "lambda_function.handler"
+  runtime          = "python3.11"
+  filename         = "${path.module}/lambda_launcher.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_launcher.zip")
-  timeout       = 60
+  timeout          = 60
 
   environment {
     variables = {
-      CLUSTER_ARN         = data.aws_ecs_cluster.target.arn
-      TASK_DEFINITION_ARN = aws_ecs_task_definition.mengxi_reconcile.arn
-      SUBNET_IDS          = join(",", var.private_subnet_ids)
-      SECURITY_GROUP_ID   = aws_security_group.ecs_ingestion.id
-      CONTAINER_NAME      = "mengxi-reconcile"
-        DEFAULT_START_DATE   = "2026-03-12"
-       DEFAULT_FORCE_RELOAD = "true"
+      CLUSTER_ARN          = data.aws_ecs_cluster.target.arn
+      TASK_DEFINITION_ARN  = aws_ecs_task_definition.mengxi_reconcile.arn
+      SUBNET_IDS           = join(",", var.private_subnet_ids)
+      SECURITY_GROUP_ID    = aws_security_group.ecs_ingestion.id
+      CONTAINER_NAME       = "mengxi-reconcile"
+      DEFAULT_START_DATE   = "2026-03-12"
+      DEFAULT_FORCE_RELOAD = "true"
     }
   }
 
