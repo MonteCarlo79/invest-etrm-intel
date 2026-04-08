@@ -101,6 +101,14 @@ resource "aws_ecs_task_definition" "mengxi_ingestion" {
         {
           name  = "FORCE_RELOAD"
           value = var.force_reload
+        },
+        {
+          name  = "ALERT_WEBHOOK_URL"
+          value = var.alert_webhook_url
+        },
+        {
+          name  = "ALERT_CONTEXT"
+          value = var.alert_context
         }
       ]
 
@@ -194,6 +202,14 @@ resource "aws_ecs_task_definition" "mengxi_reconcile" {
         {
           name  = "MAX_DOWNLOAD_WORKERS"
           value = tostring(var.MAX_DOWNLOAD_WORKERS)
+        },
+        {
+          name  = "ALERT_WEBHOOK_URL"
+          value = var.alert_webhook_url
+        },
+        {
+          name  = "ALERT_CONTEXT"
+          value = var.alert_context
         }
       ]
 
