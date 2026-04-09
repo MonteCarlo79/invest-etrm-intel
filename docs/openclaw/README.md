@@ -6,6 +6,8 @@ This is the operator entrypoint for the current Mengxi incident, governance, and
 
 Use this page first before diving into individual runbooks.
 
+This file is the canonical starting point for future Codex, Claude, and OpenClaw work on Mengxi and closely related operational investigations.
+
 ---
 
 ## Start here
@@ -22,6 +24,10 @@ Use this page first before diving into individual runbooks.
 ### Current Mengxi handoff and coordination
 
 - [CODEX_TASK_MENGXI_DRIFT_GUARDRAILS_AND_COORDINATION.md](C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform\docs\openclaw\CODEX_TASK_MENGXI_DRIFT_GUARDRAILS_AND_COORDINATION.md)
+
+### Workflow and reporting rule
+
+- [REPO_INFRA_REPORTING_RULE.md](C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform\docs\workflow\REPO_INFRA_REPORTING_RULE.md)
 
 ---
 
@@ -42,3 +48,10 @@ For Mengxi infra incidents:
 - Terraform describes intended state
 - live AWS inspection proves deployed state
 - controlled rerun and logs prove runtime recovery
+
+Every repo/infra investigation should also report explicitly:
+
+- branch
+- exact commits
+- pushed status
+- deploy status
