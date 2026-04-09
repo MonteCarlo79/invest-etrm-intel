@@ -20,6 +20,7 @@ This file is the canonical starting point for future Codex, Claude, and OpenClaw
 ### Terraform vs live-state validation
 
 - [MENGXI_TERRAFORM_LIVE_STATE_CHECKLIST.md](C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform\docs\openclaw\MENGXI_TERRAFORM_LIVE_STATE_CHECKLIST.md)
+- [MENGXI_DRIFT_CLEANUP_AND_VERIFICATION_RUNBOOK.md](C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform\docs\openclaw\MENGXI_DRIFT_CLEANUP_AND_VERIFICATION_RUNBOOK.md)
 
 ### Current Mengxi handoff and coordination
 
