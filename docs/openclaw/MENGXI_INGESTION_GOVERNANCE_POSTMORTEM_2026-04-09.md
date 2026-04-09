@@ -24,6 +24,19 @@ That confusion slowed diagnosis and made it easier to argue from the wrong layer
 
 ## What went wrong
 
+### Provenance finding
+
+Later evidence clarified that the drift was not abstract or accidental:
+
+- both drift artefacts were created by the AWS root account
+- both originated from AWS Console usage
+- the rogue ECS service came from ECS Console `Create Service`
+- AWS wrapped that service in CloudFormation
+- the orphan EventBridge target persisted because Terraform never owned that target ID in state
+- the same source IP observed for those artefacts matched the `terraform-admin` path, indicating the same operator/machine
+
+This matters because it turns the lesson from generic “drift can happen” into a concrete governance rule: avoid console-side changes that bypass Terraform ownership unless they are explicitly temporary, recorded, and cleaned up.
+
 ### 1. Local state was treated as if it were shared truth
 
 Operators discussed branch contents before confirming whether the relevant changes or docs were pushed to GitHub.
@@ -42,6 +55,10 @@ Guardrail:
 - never claim deployed state from Terraform code alone
 - always verify live AWS attachments and runtime placement
 
+Additional lesson:
+
+- if a resource was created from the AWS Console and Terraform never imported/owned it in state, Terraform reviews alone will miss it
+
 ### 3. Console/live AWS observations were not tied back to branch/commit evidence cleanly
 
 Operators could identify live SG IDs but still lacked a lightweight pattern for tying those findings back to:
@@ -53,6 +70,10 @@ Operators could identify live SG IDs but still lacked a lightweight pattern for 
 Guardrail:
 
 - every incident update should include branch, commit, Terraform path, and live AWS evidence
+- provenance should be captured when available:
+  - creating principal/account
+  - creation path (`Terraform`, `AWS Console`, `CloudFormation`, etc.)
+  - source IP or equivalent operator trace if available
 
 ### 4. Handoff docs were branch-fragmented
 
@@ -76,11 +97,13 @@ Guardrail:
 
 - Terraform code and vars define intended state
 - Terraform state/plan help explain expected state
+- resources not owned in Terraform state may survive even when they contradict Terraform intent
 
 ### Deployed reality
 
 - live AWS API results are source of truth for actual deployed state
 - ECS task ENI, subnet, SG, RDS SG attachment, and CloudWatch logs outrank assumptions
+- CloudTrail/creation provenance can explain why live reality diverged
 
 ### Incident closure
 
@@ -100,7 +123,11 @@ Every Mengxi infra incident update should include:
    - observed
    - inferred
    - intended only
-6. next operator action
+6. provenance details when available:
+   - creating account/principal
+   - creation path
+   - source IP/operator trace
+7. next operator action
 
 ---
 

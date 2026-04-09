@@ -32,6 +32,9 @@ Validated from live AWS inspection:
 - ECS task and RDS were in the same VPC
 - subnet placement was not proven to be the primary blocker
 - the critical mismatch was security-group drift between Terraform intent and live attached state
+- both drift artefacts were created outside Terraform ownership via AWS Console usage
+- both drift artefacts were attributed to the AWS root account
+- the same source IP seen for the console artefacts matched the `terraform-admin` operator path, indicating the same operator/machine was involved
 
 Validated live mismatch:
 
@@ -43,6 +46,12 @@ Result:
 - the DB ingress rule in live AWS did not match the SG actually used by the failing task path
 - the task timed out at the network layer
 
+Validated provenance details:
+
+- the rogue ECS service was created through ECS Console `Create Service`
+- AWS wrapped that console-created service in CloudFormation-managed resources
+- the orphan EventBridge target persisted because Terraform never owned that target ID in state
+
 ---
 
 ## Root-cause conclusion
@@ -51,10 +60,18 @@ Result:
 
 - recurring timeout was caused by a live ECS-to-RDS SG path mismatch
 - the deployed/live state did not match the intended Terraform connectivity path
+- the relevant drift artefacts were console-created rather than Terraform-state-owned
+- the artefact provenance pointed to AWS root account activity
 
 ### Best conclusion
 
 This was primarily a **Terraform-applied-state / live-console drift problem**, not a loader-code bug.
+
+More specifically:
+
+- a console-created ECS service introduced rogue runtime behavior outside Terraform control
+- a non-Terraform-owned EventBridge target remained in place
+- both artefacts came from the same operator/machine path indicated by shared source IP evidence
 
 ### Important nuance
 

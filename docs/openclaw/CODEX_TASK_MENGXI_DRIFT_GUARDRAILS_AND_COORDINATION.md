@@ -62,6 +62,10 @@ Required behavior:
 - verify ECS task subnet and SGs from live task/task ENI
 - verify RDS-attached SGs from live DB inspection
 - verify runtime outcome from CloudWatch logs or controlled rerun
+- verify provenance when drift artefacts exist:
+  - creating account/principal
+  - whether the resource came from Terraform, AWS Console, or CloudFormation
+  - whether Terraform actually owns the resource in state
 
 ---
 
@@ -88,6 +92,11 @@ Every Mengxi infra/runtime incident update should contain these fields:
 - ECS task SG(s):
 - RDS SG(s):
 - DB endpoint:
+- provenance notes:
+  - creating account/principal:
+  - creation path:
+  - Terraform state ownership:
+  - source IP / operator trace if known:
 
 ### Runtime evidence
 
@@ -144,8 +153,9 @@ For a Mengxi ECS-to-RDS connectivity failure that matches the known SG-drift pat
 
 1. do not start by changing ingestion code
 2. first verify live ECS SG and live RDS-attached SG
-3. if drift is confirmed, rerun `terraform apply` in `infra/terraform/mengxi-ingestion/`
-4. then re-check live state and rerun one controlled task
+3. identify whether the drift artefact was console-created and whether Terraform owns it in state
+4. if drift is confirmed, rerun `terraform apply` in `infra/terraform/mengxi-ingestion/`
+5. then re-check live state and rerun one controlled task
 
 ---
 
