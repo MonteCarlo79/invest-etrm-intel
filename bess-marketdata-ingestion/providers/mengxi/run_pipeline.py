@@ -16,6 +16,7 @@ mode = os.getenv("RUN_MODE", "daily")
 START_DATE = os.getenv("START_DATE")
 END_DATE = os.getenv("END_DATE")
 RECONCILE_DAYS = os.getenv("RECONCILE_DAYS")
+REMEDIATION_BATCH_SIZE = int(os.getenv("REMEDIATION_BATCH_SIZE", "7"))
 
 MARKET_LAG_DAYS = int(os.getenv("MARKET_LAG_DAYS", "1"))
 DB_DSN = os.getenv("PGURL") or os.getenv("DB_DSN")
@@ -32,6 +33,7 @@ print("RUN_MODE:", mode)
 print("START_DATE:", START_DATE)
 print("END_DATE:", END_DATE)
 print("RECONCILE_DAYS:", RECONCILE_DAYS)
+print("REMEDIATION_BATCH_SIZE:", REMEDIATION_BATCH_SIZE)
 print("MARKET_LAG_DAYS:", MARKET_LAG_DAYS)
 print("LATEST_AVAILABLE_DATE:", latest_available)
 print("=====================================")
@@ -129,6 +131,56 @@ wait_for_db()
 
 
 # ------------------------------------------------
+# SHARED EXEC HELPERS
+# ------------------------------------------------
+
+def run_loader_with_retry():
+    print("Loading Excel files to database")
+
+    max_attempts = 5
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            wait_for_db()
+            subprocess.run(
+                ["python", "load_excel_to_marketdata.py", OUTPUT_DIR],
+                check=True
+            )
+            return
+        except subprocess.CalledProcessError:
+            print(f"Load attempt {attempt} failed")
+            if attempt == max_attempts:
+                raise
+            print("Retrying in 15 seconds...")
+            time.sleep(15)
+
+
+def run_downloader():
+    subprocess.run(["python", "batch_downloader.py"], check=True)
+
+
+def resolve_window_for_non_daily():
+    if not START_DATE:
+        raise RuntimeError("START_DATE must be set for reconcile/remediation mode")
+
+    start_date = datetime.strptime(START_DATE, "%Y-%m-%d").date()
+
+    if END_DATE:
+        end_date = datetime.strptime(END_DATE, "%Y-%m-%d").date()
+    elif RECONCILE_DAYS:
+        end_date = start_date + timedelta(days=int(RECONCILE_DAYS) - 1)
+    else:
+        end_date = latest_available
+
+    return start_date, end_date
+
+
+def chunked(values, size):
+    for i in range(0, len(values), size):
+        yield values[i:i + size]
+
+
+# ------------------------------------------------
 # STEP 2 — DOWNLOAD DATA
 # ------------------------------------------------
 
@@ -136,72 +188,50 @@ if mode == "reconcile":
 
     print("Running reconciliation mode")
 
-    if not START_DATE:
-        raise RuntimeError("START_DATE must be set for reconcile mode")
-
-    start_date = datetime.strptime(START_DATE, "%Y-%m-%d").date()
-
-    if END_DATE:
-        end_date = datetime.strptime(END_DATE, "%Y-%m-%d").date()
-
-    elif RECONCILE_DAYS:
-        end_date = start_date + timedelta(days=int(RECONCILE_DAYS) - 1)
-
-    else:
-        end_date = latest_available
+    start_date, end_date = resolve_window_for_non_daily()
 
     print(f"Reconciling window: {start_date} → {end_date}")
 
-    subprocess.run(
-        [
-            "python",
-            "batch_downloader.py",
-            start_date.strftime("%Y-%m-%d"),
-            end_date.strftime("%Y-%m-%d")
-        ],
-        check=True
-    )
+    os.environ["START_DATE"] = start_date.strftime("%Y-%m-%d")
+    os.environ["END_DATE"] = end_date.strftime("%Y-%m-%d")
+    os.environ.pop("EXACT_DATES", None)
+    run_downloader()
+    run_loader_with_retry()
+
+elif mode == "remediation":
+    print("Running remediation mode (targeted missing dates)")
+
+    start_date, end_date = resolve_window_for_non_daily()
+    window_start = start_date.strftime("%Y-%m-%d")
+    window_end = end_date.strftime("%Y-%m-%d")
+
+    print(f"Remediation window: {window_start} → {window_end}")
+
+    from batch_downloader import get_missing_dates
+    missing_dates = get_missing_dates(window_start, window_end)
+
+    if not missing_dates:
+        print("No missing dates found in remediation window")
+    else:
+        print(f"Targeted remediation dates: {len(missing_dates)}")
+        for chunk in chunked(missing_dates, max(1, REMEDIATION_BATCH_SIZE)):
+            print(f"Remediation chunk: {chunk[0]} → {chunk[-1]} ({len(chunk)} dates)")
+            os.environ["EXACT_DATES"] = json.dumps(chunk, ensure_ascii=False)
+            os.environ["START_DATE"] = chunk[0]
+            os.environ["END_DATE"] = chunk[-1]
+            run_downloader()
+            run_loader_with_retry()
 
 else:
-
     target_day = latest_available.strftime("%Y-%m-%d")
-
     print("Daily ingestion for:", target_day)
-
+    os.environ["START_DATE"] = target_day
+    os.environ["END_DATE"] = target_day
+    os.environ.pop("EXACT_DATES", None)
     subprocess.run(
         ["python", "batch_downloader.py", target_day, target_day],
         check=True
     )
+    run_loader_with_retry()
 
-
-# ------------------------------------------------
-# STEP 3 — LOAD WITH RETRY
-# ------------------------------------------------
-
-print("Loading Excel files to database")
-
-max_attempts = 5
-
-for attempt in range(1, max_attempts + 1):
-
-    try:
-
-        wait_for_db()
-
-        subprocess.run(
-            ["python", "load_excel_to_marketdata.py", OUTPUT_DIR],
-            check=True
-        )
-
-        print("Pipeline completed successfully")
-        break
-
-    except subprocess.CalledProcessError as e:
-
-        print(f"Load attempt {attempt} failed")
-
-        if attempt == max_attempts:
-            raise
-
-        print("Retrying in 15 seconds...")
-        time.sleep(15)
+print("Pipeline completed successfully")

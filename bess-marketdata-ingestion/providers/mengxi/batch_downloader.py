@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tqdm import tqdm
 import os
+import json
 import time
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -48,7 +49,19 @@ DEFAULT_START_DATE = "2026-01-01"
 ENV_START_DATE = os.getenv("START_DATE")
 ENV_END_DATE = os.getenv("END_DATE")
 ENV_RECONCILE_DAYS = os.getenv("RECONCILE_DAYS")
+ENV_EXACT_DATES = os.getenv("EXACT_DATES")
 # ==========================================
+
+TABLE_SOURCE_RULES = {
+    "marketdata.md_rt_nodal_price": 0,
+    "marketdata.md_rt_total_cleared_energy": 0,
+    "marketdata.md_da_cleared_energy": -1,
+    "marketdata.md_da_fuel_summary": -1,
+    "marketdata.md_avg_bid_price": 0,
+    "marketdata.md_id_cleared_energy": 0,
+    "marketdata.md_id_fuel_summary": 0,
+    "marketdata.md_settlement_ref_price": 0,
+}
 def excel_contains_data(filepath: Path):
 
     try:
@@ -69,38 +82,55 @@ def excel_contains_data(filepath: Path):
         return False
 def get_engine():
 
-    db_dsn = os.getenv("DB_DSN")
+    db_dsn = os.getenv("DB_DSN") or os.getenv("PGURL")
 
     if not db_dsn:
-        raise RuntimeError("DB_DSN environment variable not set")
+        raise RuntimeError("DB_DSN/PGURL environment variable not set")
 
     return sa.create_engine(db_dsn, pool_pre_ping=True)
 
 def get_missing_dates(start_date_str, end_date_str):
 
     engine = get_engine()
+    params = {"start_date": start_date_str, "end_date": end_date_str}
+    union_parts = []
 
-    start = datetime.strptime(start_date_str, "%Y-%m-%d")
-    end = datetime.strptime(end_date_str, "%Y-%m-%d")
+    for table_name, source_offset in TABLE_SOURCE_RULES.items():
+        source_expr = (
+            "w.dt"
+            if source_offset == 0
+            else f"(w.dt + interval '{source_offset} day')::date"
+        )
+        union_parts.append(f"""
+            SELECT DISTINCT {source_expr} AS source_file_date
+            FROM weekdays w
+            LEFT JOIN (SELECT DISTINCT data_date FROM {table_name}) t
+              ON t.data_date = w.dt
+            WHERE t.data_date IS NULL
+        """)
 
-    all_dates = {dt.date() for dt in daterange(start, end)}
-
-    query = """
-        SELECT DISTINCT data_date
-        FROM marketdata.md_rt_nodal_price
-        WHERE data_date BETWEEN :start AND :end
+    query = f"""
+        WITH weekdays AS (
+            SELECT d::date AS dt
+            FROM generate_series(
+                CAST(:start_date AS date),
+                CAST(:end_date AS date),
+                interval '1 day'
+            ) d
+            WHERE extract(isodow from d) < 6
+        ),
+        source_dates AS (
+            {' UNION ALL '.join(union_parts)}
+        )
+        SELECT DISTINCT source_file_date
+        FROM source_dates
+        WHERE source_file_date BETWEEN CAST(:start_date AS date) AND CAST(:end_date AS date)
+        ORDER BY source_file_date
     """
 
     with engine.connect() as conn:
-
-        rows = conn.execute(
-            sa.text(query),
-            {"start": start_date_str, "end": end_date_str}
-        )
-
-        existing = {r[0] for r in rows}
-
-    missing = sorted(all_dates - existing)
+        rows = conn.execute(sa.text(query), params)
+        missing = [r[0] for r in rows]
 
     return [d.strftime("%Y-%m-%d") for d in missing]
 
@@ -146,6 +176,48 @@ def download_missing_dates(start_date_str, end_date_str):
 
     if failed:
         print("Failed dates:", failed)
+
+
+def resolve_exact_dates():
+    if not ENV_EXACT_DATES:
+        return []
+
+    raw = ENV_EXACT_DATES.strip()
+    if not raw:
+        return []
+
+    if raw.startswith("["):
+        values = json.loads(raw)
+    else:
+        values = [part.strip() for part in raw.split(",")]
+
+    return [value for value in values if value]
+
+
+def download_exact_dates(date_values):
+    if not date_values:
+        print("No exact dates supplied.")
+        return
+
+    failed_dates = []
+    max_workers = int(os.getenv("MAX_DOWNLOAD_WORKERS", 1))
+
+    print(f"Downloading exact dates: {date_values}")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(download_excel_for_date, d): d for d in date_values}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading"):
+            date_str = futures[future]
+            try:
+                success = future.result()
+                if not success:
+                    failed_dates.append(date_str)
+            except Exception as e:
+                print(f"[ERROR] {date_str} {e}")
+                failed_dates.append(date_str)
+
+    if failed_dates:
+        print("Failed exact dates:", failed_dates)
 
 def daterange(start_date, end_date):
     current = start_date
@@ -355,8 +427,14 @@ if __name__ == "__main__":
     print("MAX_DOWNLOAD_WORKERS:", os.getenv("MAX_DOWNLOAD_WORKERS"))
     print("=========================")
 
+    exact_dates = resolve_exact_dates()
+
+    if exact_dates:
+        print(f"Exact remediation mode: {exact_dates}")
+        download_exact_dates(exact_dates)
+
     # Manual range mode
-    if len(sys.argv) == 3:
+    elif len(sys.argv) == 3:
 
         start_date = sys.argv[1]
         end_date = sys.argv[2]
