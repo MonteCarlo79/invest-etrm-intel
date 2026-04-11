@@ -113,11 +113,61 @@ Before this PR, several log groups had 30-day retention (twice what operators ne
 
 ---
 
+## Second Pass (2026-04-11) — targeting additional $50–200/month
+
+### A. Ranked Savings Opportunities
+
+| # | Component | Current config (live) | Proposed | Savings/month | Confidence | Risk |
+|---|---|---|---|---|---|---|
+| 1 | **inner-mongolia ECS service** | 2048 vCPU / 8192 MB | 1024 / 2048 (code ready) | **~$49** | High — 7-day peak 149 MB, 13× headroom | Low |
+| 2 | **bess-map ECS service** | 512 / 1024 | 256 / 512 (code ready) | **~$9** | High — 7-day peak 186 MB, 2.7× headroom | Low |
+| 3 | **bess-uploader ECS service** | 512 / 1024 | 256 / 512 (code ready) | **~$9** | High — 7-day peak 76 MB, 6.7× headroom | Low |
+| 4 | **inner-pipeline on-demand task** | 4096 / 16384 (live drift from TF) | 1024 / 2048 (already in TF) | **~$5–7** | Medium — on-demand; TF was originally set at 1024/2048 but live is 4096/16384 | Medium — validate memory in pipeline logs first |
+| 5 | **RDS gp2 → gp3** | gp2, 100 GB | gp3, 100 GB (code ready) | **~$1.90** | Certain — same IOPS, in-place | None |
+| 6 | **Container Insights** | Enabled (cluster level) | Disabled | **~$2.30** | Certain — ~10 MB/day logs at $0.076/day | Reduces CloudWatch memory/CPU metric visibility |
+| | **Achievable total (items 1–5)** | | | **~$74/month** | | |
+
+---
+
+### B. Implement now ✅ (code updated in this PR, safe to apply)
+
+| Action | Savings | Risk | How to apply |
+|---|---|---|---|
+| **RDS gp2 → gp3** | ~$1.90/month | None — in-place, same IOPS | `terraform apply -target=aws_db_instance.pg` |
+
+---
+
+### C. Validate first — code written, DO NOT apply yet ⚠️
+
+| Action | Savings | Validation steps | Apply command |
+|---|---|---|---|
+| **inner-mongolia 2048/8192 → 1024/2048** | ~$49/month | (1) Grep `/ecs/bess-platform` streams for OOM/killed/memory errors. (2) Confirm no large data loads pending. (3) Apply in low-traffic window. (4) Monitor 24h. | `terraform apply -target=aws_ecs_task_definition.inner_mongolia -target=aws_ecs_service.inner_mongolia` |
+| **bess-map 512/1024 → 256/512** | ~$9/month | (1) Check CloudWatch MemoryUtilization last 7 days — peak is 18.2% (186 MB); confirm no spike > 30% recently. (2) Apply during low-traffic window. (3) Monitor 24h. | `terraform apply -target=aws_ecs_task_definition.bess_map -target=aws_ecs_service.bess_map` |
+| **bess-uploader 512/1024 → 256/512** | ~$9/month | (1) Check CloudWatch peak — 7.4% (76 MB); confirm no spike during large Excel uploads. (2) Apply. (3) Monitor 24h. | `terraform apply -target=aws_ecs_task_definition.uploader -target=aws_ecs_service.uploader` |
+| **inner-pipeline 4096/16384 → 1024/2048** | ~$5–7/month | (1) TF already says 1024/2048 (same Terraform drift as inner-mongolia). (2) Check `/ecs/bess-platform` inner-pipeline log streams — look for memory pressure, OOM, or "killed" events. (3) If clean, apply. Note: this is on-demand only, not always-on. | `terraform apply -target=aws_ecs_task_definition.inner_pipeline` |
+
+**Rollback for all service right-sizes:** revert cpu/memory in `main.tf` + `terraform apply`. ECS does a rolling deployment back to prior size.
+
+---
+
+### D. Not worth it / deferred
+
+| Action | Reason |
+|---|---|
+| RDS downsize (t4g.micro → smaller) | Already at smallest class; CPU hits 97–99.8% daily max — do NOT resize. |
+| pnl-attribution right-size (512/1024) | Not in Terraform; must `terraform import` first before any Terraform changes are safe. |
+| spot-markets right-size (512/1024) | Not in Terraform; same import requirement. |
+| Container Insights disable | Reduces CloudWatch memory metrics used for right-sizing decisions. Keep until right-sizing work is complete. |
+| ARM64 / Graviton migration | ~10–15% Fargate savings but requires rebuilding all images as ARM. Medium effort; revisit after right-sizing is done. |
+| NAT Gateway audit | Private subnet tasks (strategy/portfolio/execution agents) use `assign_public_ip = false`. These run successfully, confirming NAT gateways exist. If you want to eliminate NAT gateways entirely by moving all tasks to public subnets, that's ~$45/month saving but is a VPC topology change with higher blast radius. |
+
+---
+
 ## 4. Files Changed in This PR
 
 | File | Change |
 |---|---|
-| `infra/terraform/main.tf` | CloudWatch retention 30→14 days; ECR lifecycle (keep 5) added to `inner_mongolia`, `inner_pipeline`, `portfolio_agent`, `execution_agent`, `it_dev_agent`; `strategy_agent` lifecycle 10→5; inner-mongolia task def **code updated to 1024/2048** (not yet applied) |
+| `infra/terraform/main.tf` | **Pass 1:** CloudWatch retention 30→14 days; ECR lifecycle (keep 5) on 5 repos; inner-mongolia task def 512/1024 → **1024/2048** (not yet applied to live). **Pass 2:** RDS `storage_type = "gp3"` (ready to apply); bess-map task def 512/1024 → **256/512** (not yet applied); uploader task def 512/1024 → **256/512** (not yet applied); comment added to inner-pipeline re: live 4096/16384 drift |
 | `infra/terraform/data-ingestion/main.tf` | CloudWatch retention 30→14 days on 3 log groups; ECR lifecycle 10→5 |
 | `infra/terraform/trading-bess-mengxi/schedules.tf` | CloudWatch retention 30→14 days on 3 log groups |
 | *(AWS CLI — not in Terraform)* | Lifecycle policies applied to 9 ECR repos; retention set on 3 extra log groups |
@@ -139,4 +189,7 @@ All applied changes are safe to reverse:
 - [ ] Check `/ecs/bess-platform-portal` — this log group is outside Terraform; confirm which service writes to it and whether it should be imported
 - [ ] Verify `bess-platform-spot-markets-svc` is intentional and owned — it is not in any Terraform module
 - [ ] After inner-mongolia resize is applied: confirm no OOM events for 48h before marking stable
-- [ ] RDS: change `storage_type = "gp2"` to `"gp3"` for ~$1.90/month saving (separate low-risk change)
+- [ ] Apply RDS gp3 change: `terraform apply -target=aws_db_instance.pg` (~$1.90/month, zero risk)
+- [ ] Check inner-pipeline CloudWatch logs for memory pressure before applying 1024/2048 TF value to live (current live: 4096/16384)
+- [ ] After bess-map/uploader resize: confirm no OOM events for 24h; check ALB target group healthy host count stays at 1
+- [ ] Trading-bess-mengxi EventBridge targets are pointing to stale task def revisions (tt-province-loader :4 vs :6, mengxi-pnl-refresh :3 vs :5) — run `terraform apply -chdir=infra/terraform/trading-bess-mengxi` to re-pin to latest

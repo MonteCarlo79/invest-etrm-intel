@@ -144,6 +144,7 @@ resource "aws_db_instance" "pg" {
   engine_version               = "18.2"
   instance_class               = var.db_instance_class
   allocated_storage            = 100
+  storage_type                 = "gp3"   # was gp2; gp3 saves ~$1.90/month, same 3000 IOPS, in-place change
   db_name                      = var.db_name
   username                     = var.db_username
   password                     = var.db_password
@@ -608,13 +609,16 @@ resource "aws_iam_role_policy_attachment" "attach_run_task" {
 
 ############################################
 # BESS MAP TASK
+# 7-day metrics: avg mem 10.1%, peak 18.2% of 1024 MB = 186 MB peak.
+# 256/512 gives 2.7x headroom over observed peak. Apply after confirming no
+# memory spike pattern. Rolling deployment; roll back by reverting + apply.
 ############################################
 resource "aws_ecs_task_definition" "bess_map" {
   family                   = "bess-platform-bess-map"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "512"
-  memory                   = "1024"
+  cpu                      = "256"
+  memory                   = "512"
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -698,13 +702,16 @@ resource "aws_ecs_task_definition" "bess_map" {
 
 ############################################
 # BESS UPLOADER TASK
+# 7-day metrics: avg mem 5.9%, peak 7.4% of 1024 MB = 75.8 MB peak.
+# 256/512 gives 6.7x headroom over observed peak. Apply after confirming no
+# memory spike during large Excel uploads. Rolling deployment; roll back by reverting + apply.
 ############################################
 resource "aws_ecs_task_definition" "uploader" {
   family                   = "${var.name}-uploader"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "512"
-  memory                   = "1024"
+  cpu                      = "256"
+  memory                   = "512"
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -990,6 +997,10 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   ])
 }
 
+# Live task def (v35) runs at 4096/16384 — manually scaled up at some point.
+# Terraform target: 1024/2048. This is an on-demand task (spawned by inner-mongolia),
+# so savings depend on run frequency/duration. Validate memory usage in logs before
+# applying. At 60 min/day, 4096/16384→1024/2048 saves ~$5-7/month.
 resource "aws_ecs_task_definition" "inner_pipeline" {
   family                   = "${var.name}-inner-pipeline"
   requires_compatibilities = ["FARGATE"]
