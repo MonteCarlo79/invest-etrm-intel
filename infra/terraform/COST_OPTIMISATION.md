@@ -193,3 +193,88 @@ All applied changes are safe to reverse:
 - [ ] Check inner-pipeline CloudWatch logs for memory pressure before applying 1024/2048 TF value to live (current live: 4096/16384)
 - [ ] After bess-map/uploader resize: confirm no OOM events for 24h; check ALB target group healthy host count stays at 1
 - [ ] Trading-bess-mengxi EventBridge targets are pointing to stale task def revisions (tt-province-loader :4 vs :6, mengxi-pnl-refresh :3 vs :5) — run `terraform apply -chdir=infra/terraform/trading-bess-mengxi` to re-pin to latest
+
+---
+
+## 7. Post-Change Report (2026-04-11)
+
+### Before / After State
+
+| Item | Before | After | Savings/month |
+|---|---|---|---|
+| `inner-mongolia` ECS | task def :43 — 2048 vCPU / 8192 MB (live drift from TF) | task def :44 — 1024 vCPU / 2048 MB | ~$49 |
+| `bess-map` ECS | task def :40 — 512 vCPU / 1024 MB | task def :41 — 256 vCPU / 512 MB | ~$9 |
+| `uploader` ECS | task def :27 — 512 vCPU / 1024 MB | task def :28 — 256 vCPU / 512 MB | ~$9 |
+| RDS `bess-platform-pg` | `storage_type = gp2`, 100 GB | `storage_type = gp3`, 100 GB | ~$1.90 |
+| `inner-pipeline` ECS | TF incorrectly had 1024/2048; live :35 = 4096/16384 | TF corrected to 4096/16384 — **no change to live** | $0 (blocker: 12,570 MB observed peak) |
+
+**Total realized savings: ~$68.90/month (~$827/year)**
+
+### Deployment Health (T+0)
+
+| Service | Task def | Running | Pending | ALB status |
+|---|---|---|---|---|
+| `bess-platform-inner-mongolia-svc` | :44 (1024/2048) | 1 | 0 | healthy |
+| `bess-platform-bess-map-svc` | :41 (256/512) | 1 | 0 | healthy |
+| `bess-platform-uploader-svc` | :28 (256/512) | 1 | 0 | healthy |
+| RDS `bess-platform-pg` | — | — | — | storage-optimization in progress |
+
+### 24-Hour Validation Checklist
+
+```powershell
+# 1. ECS MemoryUtilization — confirm no service exceeds 80% in first 24h
+aws cloudwatch get-metric-statistics --namespace AWS/ECS --metric-name MemoryUtilization `
+  --dimensions Name=ServiceName,Value=bess-platform-inner-mongolia-svc Name=ClusterName,Value=bess-platform `
+  --start-time (Get-Date).AddHours(-24).ToUniversalTime().ToString("o") `
+  --end-time (Get-Date).ToUniversalTime().ToString("o") `
+  --period 3600 --statistics Maximum --query "sort_by(Datapoints,&Timestamp)[-1].Maximum"
+
+# Repeat with Value=bess-platform-bess-map-svc and Value=bess-platform-uploader-svc
+
+# 2. OOM / exit-137 check (run against all three services)
+aws logs start-query --log-group-name /ecs/bess-platform `
+  --start-time ([long](Get-Date).AddHours(-24).ToUniversalTime().Subtract([datetime]"1970-01-01").TotalSeconds) `
+  --end-time   ([long](Get-Date).ToUniversalTime().Subtract([datetime]"1970-01-01").TotalSeconds) `
+  --query-string 'fields @message | filter @message like /(?i)(oom|killed|exit code 137|OutOfMemory)/ | limit 20'
+
+# 3. RDS storage type — confirm gp3 migration complete
+aws rds describe-db-instances --db-instance-identifier bess-platform-pg `
+  --query "DBInstances[0].{StorageType:StorageType,Status:DBInstanceStatus,Pending:PendingModifiedValues}"
+
+# 4. ALB target group health
+aws elbv2 describe-target-health `
+  --target-group-arn (aws elbv2 describe-target-groups --query "TargetGroups[?contains(TargetGroupName,'tgim')].TargetGroupArn" --output text) `
+  --query "TargetHealthDescriptions[*].{Target:Target.Id,State:TargetHealth.State}"
+```
+
+### Rollback References
+
+| Service | Rollback action |
+|---|---|
+| `inner-mongolia` | Set `cpu=2048, memory=8192` in `main.tf` → `terraform apply -target=aws_ecs_task_definition.inner_mongolia -target=aws_ecs_service.inner_mongolia` |
+| `bess-map` | Set `cpu=512, memory=1024` in `main.tf` → `terraform apply -target=aws_ecs_task_definition.bess_map -target=aws_ecs_service.bess_map` |
+| `uploader` | Set `cpu=512, memory=1024` in `main.tf` → `terraform apply -target=aws_ecs_task_definition.uploader -target=aws_ecs_service.uploader` |
+| RDS gp3 | `aws rds modify-db-instance --db-instance-identifier bess-platform-pg --storage-type gp2 --apply-immediately` |
+
+### Completion Status
+
+| Item | Status |
+|---|---|
+| `inner-mongolia` right-size | **Complete** — running stable at :44; monitor 24h for OOM |
+| `bess-map` right-size | **Complete** — running stable at :41; monitor 24h for OOM |
+| `uploader` right-size | **Complete** — running stable at :28; monitor 24h for OOM |
+| RDS gp2 → gp3 | **Implementation complete, awaiting final status=available confirmation** |
+| `inner-pipeline` TF correction | **Complete** — TF now matches live; no apply needed |
+
+---
+
+### Operations Handoff — T+24h Checks (2026-04-12)
+
+Tomorrow (2026-04-12), confirm the following before closing this wave:
+
+1. **RDS `bess-platform-pg`:** `StorageType=gp3`, `DBInstanceStatus=available`, `PendingModifiedValues={}`. Run check #3 above.
+2. **MemoryUtilization peaks:** All three right-sized services remain below 80% over the first 24h window. Run check #1 above for each.
+3. **No OOM events:** Check #2 above returns 0 results across all log streams.
+4. **ALB healthy host count:** All three target groups show 1 healthy target. Run check #4 above.
+
+If all four pass, this optimisation wave is closed. No further action required.
