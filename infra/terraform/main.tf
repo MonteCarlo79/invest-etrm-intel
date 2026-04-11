@@ -997,16 +997,17 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   ])
 }
 
-# Live task def (v35) runs at 4096/16384 — manually scaled up at some point.
-# Terraform target: 1024/2048. This is an on-demand task (spawned by inner-mongolia),
-# so savings depend on run frequency/duration. Validate memory usage in logs before
-# applying. At 60 min/day, 4096/16384→1024/2048 saves ~$5-7/month.
+# Live task def (v35): 4096 vCPU / 16384 MB.
+# Container Insights confirms this sizing is CORRECT — not legacy padding.
+# Observed peak: 12,570 MB (Mar 28 backfill run, 76.7% of 16384 MB).
+# Typical daily runs: 134–1,332 MB peak. DO NOT reduce memory — large runs will OOM.
+# DO NOT apply any right-sizing change to this task definition.
 resource "aws_ecs_task_definition" "inner_pipeline" {
   family                   = "${var.name}-inner-pipeline"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = 4096
+  memory                   = 16384
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn

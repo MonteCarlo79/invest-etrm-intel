@@ -122,7 +122,7 @@ Before this PR, several log groups had 30-day retention (twice what operators ne
 | 1 | **inner-mongolia ECS service** | 2048 vCPU / 8192 MB | 1024 / 2048 (code ready) | **~$49** | High — 7-day peak 149 MB, 13× headroom | Low |
 | 2 | **bess-map ECS service** | 512 / 1024 | 256 / 512 (code ready) | **~$9** | High — 7-day peak 186 MB, 2.7× headroom | Low |
 | 3 | **bess-uploader ECS service** | 512 / 1024 | 256 / 512 (code ready) | **~$9** | High — 7-day peak 76 MB, 6.7× headroom | Low |
-| 4 | **inner-pipeline on-demand task** | 4096 / 16384 (live drift from TF) | 1024 / 2048 (already in TF) | **~$5–7** | Medium — on-demand; TF was originally set at 1024/2048 but live is 4096/16384 | Medium — validate memory in pipeline logs first |
+| 4 | ~~inner-pipeline on-demand task~~ | 4096 / 16384 (live = TF corrected) | **NO CHANGE** | **$0** | **BLOCKED** — Container Insights confirms peak 12,570 MB (76.7% of 16 GB) on Mar 28 backfill. Would OOM at 1024/2048. TF code corrected to 4096/16384. |
 | 5 | **RDS gp2 → gp3** | gp2, 100 GB | gp3, 100 GB (code ready) | **~$1.90** | Certain — same IOPS, in-place | None |
 | 6 | **Container Insights** | Enabled (cluster level) | Disabled | **~$2.30** | Certain — ~10 MB/day logs at $0.076/day | Reduces CloudWatch memory/CPU metric visibility |
 | | **Achievable total (items 1–5)** | | | **~$74/month** | | |
@@ -144,7 +144,7 @@ Before this PR, several log groups had 30-day retention (twice what operators ne
 | **inner-mongolia 2048/8192 → 1024/2048** | ~$49/month | (1) Grep `/ecs/bess-platform` streams for OOM/killed/memory errors. (2) Confirm no large data loads pending. (3) Apply in low-traffic window. (4) Monitor 24h. | `terraform apply -target=aws_ecs_task_definition.inner_mongolia -target=aws_ecs_service.inner_mongolia` |
 | **bess-map 512/1024 → 256/512** | ~$9/month | (1) Check CloudWatch MemoryUtilization last 7 days — peak is 18.2% (186 MB); confirm no spike > 30% recently. (2) Apply during low-traffic window. (3) Monitor 24h. | `terraform apply -target=aws_ecs_task_definition.bess_map -target=aws_ecs_service.bess_map` |
 | **bess-uploader 512/1024 → 256/512** | ~$9/month | (1) Check CloudWatch peak — 7.4% (76 MB); confirm no spike during large Excel uploads. (2) Apply. (3) Monitor 24h. | `terraform apply -target=aws_ecs_task_definition.uploader -target=aws_ecs_service.uploader` |
-| **inner-pipeline 4096/16384 → 1024/2048** | ~$5–7/month | (1) TF already says 1024/2048 (same Terraform drift as inner-mongolia). (2) Check `/ecs/bess-platform` inner-pipeline log streams — look for memory pressure, OOM, or "killed" events. (3) If clean, apply. Note: this is on-demand only, not always-on. | `terraform apply -target=aws_ecs_task_definition.inner_pipeline` |
+| ~~**inner-pipeline resize**~~ | **$0 — BLOCKED** | Container Insights confirms peak 12,570 MB on Mar 28 (76.7% of 16 GB). Would OOM at 1024/2048. TF code corrected from 1024/2048 → 4096/16384 to match live. No apply needed for this. | N/A |
 
 **Rollback for all service right-sizes:** revert cpu/memory in `main.tf` + `terraform apply`. ECS does a rolling deployment back to prior size.
 
