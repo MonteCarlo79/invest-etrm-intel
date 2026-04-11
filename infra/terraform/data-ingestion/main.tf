@@ -303,7 +303,7 @@ resource "aws_cloudwatch_event_target" "enos_market" {
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }
@@ -321,7 +321,7 @@ resource "aws_cloudwatch_event_target" "tt_api" {
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }
@@ -339,7 +339,7 @@ resource "aws_cloudwatch_event_target" "freshness_monitor" {
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [var.task_security_group_id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }
