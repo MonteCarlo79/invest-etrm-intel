@@ -29,17 +29,17 @@ locals {
 
 resource "aws_cloudwatch_log_group" "tt_province_loader" {
   name              = "/ecs/${var.name}/tt-province-loader"
-  retention_in_days = 30
+  retention_in_days = 14
 }
 
 resource "aws_cloudwatch_log_group" "tt_asset_loader" {
   name              = "/ecs/${var.name}/tt-asset-loader"
-  retention_in_days = 30
+  retention_in_days = 14
 }
 
 resource "aws_cloudwatch_log_group" "mengxi_pnl_refresh" {
   name              = "/ecs/${var.name}/mengxi-pnl-refresh"
-  retention_in_days = 30
+  retention_in_days = 14
 }
 
 resource "aws_ecs_task_definition" "tt_province_loader" {

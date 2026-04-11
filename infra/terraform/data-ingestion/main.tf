@@ -63,11 +63,11 @@ resource "aws_ecr_lifecycle_policy" "data_ingestion" {
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "keep last 10 images"
+      description  = "keep last 5 images"
       selection = {
         tagStatus   = "any"
         countType   = "imageCountMoreThan"
-        countNumber = 10
+        countNumber = 5
       }
       action = { type = "expire" }
     }]
@@ -80,19 +80,19 @@ resource "aws_ecr_lifecycle_policy" "data_ingestion" {
 
 resource "aws_cloudwatch_log_group" "enos_market" {
   name              = "/ecs/${var.name}/enos-market-collector"
-  retention_in_days = 30
+  retention_in_days = 14
   tags              = { Project = var.name }
 }
 
 resource "aws_cloudwatch_log_group" "tt_api" {
   name              = "/ecs/${var.name}/tt-api-collector"
-  retention_in_days = 30
+  retention_in_days = 14
   tags              = { Project = var.name }
 }
 
 resource "aws_cloudwatch_log_group" "lingfeng" {
   name              = "/ecs/${var.name}/lingfeng-collector"
-  retention_in_days = 30
+  retention_in_days = 14
   tags              = { Project = var.name }
 }
 

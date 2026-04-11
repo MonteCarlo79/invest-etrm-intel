@@ -17,7 +17,7 @@ locals {
 # -------------------------
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = local.log_group
-  retention_in_days = 30
+  retention_in_days = 14
   tags              = local.tags
 }
 
@@ -899,12 +899,17 @@ resource "aws_ecs_task_definition" "portal" {
 
   tags = local.tags
 }
+# Live task def (v43) runs at 2048/8192 — manually scaled up at some point.
+# 7-day metrics: avg CPU 0.01%, avg mem 1.78% (149 MB peak out of 8192 MB).
+# Terraform target: 1024/2048 gives 6.8x headroom over observed peak — safe.
+# Applying this will trigger a rolling ECS service deployment. Validate metrics
+# are stable before applying; roll back with: terraform apply after reverting.
 resource "aws_ecs_task_definition" "inner_mongolia" {
   family                   = "${var.name}-inner-mongolia"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 1024
+  memory                   = 2048
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -1128,6 +1133,18 @@ resource "aws_ecr_repository" "inner_mongolia" {
   image_tag_mutability = "MUTABLE"
 }
 
+resource "aws_ecr_lifecycle_policy" "inner_mongolia" {
+  repository = aws_ecr_repository.inner_mongolia.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 data "aws_iam_policy_document" "eventbridge_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -1153,6 +1170,18 @@ resource "aws_ecr_repository" "inner_pipeline" {
   tags = {
     Project = "bess-platform"
   }
+}
+
+resource "aws_ecr_lifecycle_policy" "inner_pipeline" {
+  repository = aws_ecr_repository.inner_pipeline.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
 }
 
 resource "aws_iam_role" "eventbridge_ecs" {
@@ -1386,34 +1415,61 @@ resource "aws_ecr_repository" "strategy_agent" {
 }
 resource "aws_ecr_lifecycle_policy" "strategy_agent" {
   repository = aws_ecr_repository.strategy_agent.name
-
   policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "keep last 10 images"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
   })
 }
 resource "aws_ecr_repository" "portfolio_agent" {
   name = "bess-portfolio-agent"
 }
 
+resource "aws_ecr_lifecycle_policy" "portfolio_agent" {
+  repository = aws_ecr_repository.portfolio_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 resource "aws_ecr_repository" "execution_agent" {
   name = "bess-execution-agent"
 }
 
+resource "aws_ecr_lifecycle_policy" "execution_agent" {
+  repository = aws_ecr_repository.execution_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 resource "aws_ecr_repository" "it_dev_agent" {
   name = "bess-it-dev-agent"
+}
+
+resource "aws_ecr_lifecycle_policy" "it_dev_agent" {
+  repository = aws_ecr_repository.it_dev_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
 }
 
 
