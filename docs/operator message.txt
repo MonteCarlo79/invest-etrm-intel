@@ -1,0 +1,2 @@
+PR #5 is now the canonical Mengxi operations/incident doc trail. Start from docs/openclaw/README.md. It includes the incident summary, governance postmortem, Terraform-vs-live checklist, and     
+ │ cleanup/verification runbook. For future repo/infra investigations, always state branch, exact commits, pushed status, and deploy status explicitly.     
