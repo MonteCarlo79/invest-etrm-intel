@@ -3,6 +3,34 @@
 Created on Mon Aug 14 17:32:11 2017
 
 @author: Dipeng.Chen
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LEGACY / ORPHANED — NOT THE PRODUCTION OPTIMISATION ENGINE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This file contains the original 2017 BESS optimisation implementation
+using a pairwise hourly-spread LP formulation (vij decision variables).
+
+It is NOT the current production engine. Do not call it from new code.
+
+PRODUCTION ENGINE IS:
+    services/bess_map/optimisation_engine.py  — optimise_day()
+
+The production engine uses a cleaner formulation with explicit
+charge/discharge variables (ch[t], dis[t], soc[t]), binary no-simultaneous-
+C/D constraint, and optional degradation caps.
+
+WHY THIS FILE STILL EXISTS:
+    Retained for historical reference only. No known callers remain
+    in the current codebase (as of 2026-04). Safe to archive or delete
+    once confirmed that no downstream scripts still import StorageOpt.
+
+IF YOU NEED THE OPTIMISATION ENGINE:
+    from services.bess_map.optimisation_engine import optimise_day
+    # or, via the shared model library:
+    import libs.decision_models.bess_dispatch_optimization
+    from libs.decision_models.runners.local import run
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 from pulp import *

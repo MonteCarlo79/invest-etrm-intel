@@ -1,0 +1,182 @@
+public | Hist_MengXi_HuEast                                            | table | postgres
+ public | _tmp_daily_1770389974                                         | table | postgres
+ public | _tmp_monthly_1770389974                                       | table | postgres
+ public | _tmp_raw_1770389972                                           | table | postgres
+ public | actual_mengxi_suyou                                           | table | postgres
+ public | actual_mengxi_wulate                                          | table | postgres
+ public | agent_request_log                                             | table | postgres
+ public | forecast_mengxi_东送计划_d_1_mw                               | table | postgres
+ public | forecast_mengxi_光伏出力_d_1_mw                               | table | postgres
+ public | forecast_mengxi_新能源出力_d_1_mw                             | table | postgres
+ public | forecast_mengxi_统调负荷_d_1_mw                               | table | postgres
+ public | forecast_mengxi_非市场出力_d_1_mw                             | table | postgres
+ public | forecast_mengxi_风电出力_d_1_mw                               | table | postgres
+ public | hist_anhui_day_ahead_outer_delivery_trade_plan_forecast_15min | table | postgres
+ public | hist_anhui_dayaheadouterdeliverytradeplanforecast_15min       | table | postgres
+ public | hist_anhui_dingyuan                                           | table | postgres
+ public | hist_anhui_dingyuan_clear                                     | table | postgres
+ public | hist_anhui_dingyuan_clear_15min                               | table | postgres
+ public | hist_anhui_dingyuan_clear_dayahead                            | table | postgres
+ public | hist_anhui_dingyuan_clear_dayahead_15min                      | table | postgres
+ public | hist_anhui_dingyuan_forecast                                  | table | postgres
+ public | hist_anhui_dingyuan_forecast_15min                            | table | postgres
+ public | hist_anhui_dingyuan_forecast_dayahead                         | table | postgres
+ public | hist_anhui_dingyuan_forecast_dayahead_15min                   | table | postgres
+ public | hist_anhui_load_regulation_forecast_15min                     | table | postgres
+ public | hist_anhui_loadregulationforecast_15min                       | table | postgres
+ public | hist_anhui_loadregulationreal_15min                           | table | postgres
+ public | hist_anhui_negativesparereal_15min                            | table | postgres
+ public | hist_anhui_new_energy_forecast_15min                          | table | postgres
+ public | hist_anhui_new_energy_real_15min                              | table | postgres
+ public | hist_anhui_newenergyforecast_15min                            | table | postgres
+ public | hist_anhui_newenergyreal_15min                                | table | postgres
+ public | hist_anhui_not_market_power_forecast_15min                    | table | postgres
+ public | hist_anhui_not_market_power_real_15min                        | table | postgres
+ public | hist_anhui_notmarketpowerforecast_15min                       | table | postgres
+ public | hist_anhui_notmarketpowerreal_15min                           | table | postgres
+ public | hist_anhui_positivesparereal_15min                            | table | postgres
+ public | hist_anhui_provincedayaheadclearprice_15min                   | table | postgres
+ public | hist_anhui_provincerealtimeclearprice_15min                   | table | postgres
+ public | hist_anhui_solar_power_forecast_15min                         | table | postgres
+ public | hist_anhui_solar_power_real_15min                             | table | postgres
+ public | hist_anhui_solarpowerforecast_15min                           | table | postgres
+ public | hist_anhui_solarpowerreal_15min                               | table | postgres
+ public | hist_anhui_tie_line_load_forecast_15min                       | table | postgres
+ public | hist_anhui_tie_line_load_real_15min                           | table | postgres
+ public | hist_anhui_tielineloadforecast_15min                          | table | postgres
+ public | hist_anhui_tielineloadreal_15min                              | table | postgres
+ public | hist_anhui_tielineloadreal__5901__15min                       | table | postgres
+ public | hist_anhui_tielineloadreal__5904__15min                       | table | postgres
+ public | hist_anhui_tielineloadreal__5907__15min                       | table | postgres
+ public | hist_anhui_tielineloadreal__5914__15min                       | table | postgres
+ public | hist_anhui_tielineloadreal__5917__15min                       | table | postgres
+ public | hist_anhui_tielineloadreal__5921__15min                       | table | postgres
+ public | hist_anhui_tielineloadreal__5931__15min                       | table | postgres
+ public | hist_anhui_tielineloadreal__i__15min                          | table | postgres
+ public | hist_anhui_tielineloadreal__ii__15min                         | table | postgres
+ public | hist_anhui_total_power_forecast_15min                         | table | postgres
+ public | hist_anhui_water_power_forecast_15min                         | table | postgres
+ public | hist_anhui_water_power_real_15min                             | table | postgres
+ public | hist_anhui_waterpowerforecast_15min                           | table | postgres
+ public | hist_anhui_waterpowerreal_15min                               | table | postgres
+ public | hist_anhui_wind_power_forecast_15min                          | table | postgres
+ public | hist_anhui_wind_power_real_15min                              | table | postgres
+ public | hist_anhui_windpowerforecast_15min                            | table | postgres
+ public | hist_anhui_windpowerreal_15min                                | table | postgres
+ 2026-03-15 23:30:00	public | hist_mengxi_biddingspaceforecast_15min                        | table | postgres
+ 2026-02-10 23:30:00	public | hist_mengxi_biddingspacereal_15min                            | table | postgres
+ 2026-03-15 23:30:00	public | hist_mengxi_eastwardplanforecast_15min                        | table | postgres
+ 2026-02-10 23:30:00	public | hist_mengxi_eastwardplanreal_15min                            | table | postgres
+ 2026-03-10 23:30:00	public | hist_mengxi_hubaodongrealtimeclearprice_15min                 | table | postgres
+ 2026-03-22 23:30:00	public | hist_mengxi_hubaodongrealtimepriceforecast_15min              | table | postgres
+ 2026-03-10 23:30:00	public | hist_mengxi_hubaoxirealtimeclearprice_15min                   | table | postgres
+ 2026-03-22 23:30:00	public | hist_mengxi_hubaoxirealtimepriceforecast_15min                | table | postgres
+ 2025-03-14			public | hist_mengxi_hueast                                            | table | postgres
+2025-10-28 23:45:00	public | hist_mengxi_inhouse_windforecast_15min                        | table | postgres
+ 2026-03-15 23:30:00	public | hist_mengxi_loadregulationforecast_15min                      | table | postgres
+ 2026-02-10 23:30:00	public | hist_mengxi_loadregulationreal_15min                          | table | postgres
+ 2026-03-15 23:30:00	public | hist_mengxi_newenergyforecast_15min                           | table | postgres
+ 2026-02-10 23:30:00	public | hist_mengxi_newenergyreal_15min                               | table | postgres
+ 2026-03-15 23:30:00	public | hist_mengxi_notmarketpowerforecast_15min                      | table | postgres
+ 2026-02-10 23:30:00	public | hist_mengxi_notmarketpowerreal_15min                          | table | postgres
+2026-03-10 23:30:00	 public | hist_mengxi_provincerealtimeclearprice_15min                  | table | postgres
+ public | hist_mengxi_provincerealtimepriceforecast_15min               | table | postgres
+ public | hist_mengxi_solarpowerforecast_15min                          | table | postgres
+ public | hist_mengxi_solarpowerreal_15min                              | table | postgres
+ public | hist_mengxi_suyou                                             | table | postgres
+ public | hist_mengxi_suyou_clear                                       | table | postgres
+ public | hist_mengxi_suyou_clear_15min                                 | table | postgres
+ public | hist_mengxi_suyou_forecast                                    | table | postgres
+ public | hist_mengxi_suyou_forecast_15min                              | table | postgres
+ public | hist_mengxi_windpowerforecast_15min                           | table | postgres
+ public | hist_mengxi_windpowerreal_15min                               | table | postgres
+ public | hist_mengxi_wuhai                                             | table | postgres
+ public | hist_mengxi_wuhai_clear                                       | table | postgres
+ public | hist_mengxi_wuhai_clear_15min                                 | table | postgres
+ public | hist_mengxi_wuhai_forecast                                    | table | postgres
+ public | hist_mengxi_wuhai_forecast_15min                              | table | postgres
+ public | hist_mengxi_wulanchabu                                        | table | postgres
+ public | hist_mengxi_wulanchabu_clear                                  | table | postgres
+ public | hist_mengxi_wulanchabu_clear_15min                            | table | postgres
+ public | hist_mengxi_wulanchabu_clear_dayahead                         | table | postgres
+ public | hist_mengxi_wulanchabu_clear_dayahead_15min                   | table | postgres
+ public | hist_mengxi_wulanchabu_forecast                               | table | postgres
+ public | hist_mengxi_wulanchabu_forecast_15min                         | table | postgres
+ public | hist_mengxi_wulate                                            | table | postgres
+ public | hist_mengxi_wulate_clear                                      | table | postgres
+ public | hist_mengxi_wulate_clear_15min                                | table | postgres
+ public | hist_mengxi_wulate_forecast                                   | table | postgres
+ public | hist_mengxi_wulate_forecast_15min                             | table | postgres
+ public | hist_shandong_binzhou                                         | table | postgres
+ public | hist_shandong_binzhou_clear                                   | table | postgres
+ public | hist_shandong_binzhou_clear_15min                             | table | postgres
+ public | hist_shandong_binzhou_clear_dayahead                          | table | postgres
+ public | hist_shandong_binzhou_clear_dayahead_15min                    | table | postgres
+ public | hist_shandong_binzhou_forecast                                | table | postgres
+ public | hist_shandong_binzhou_forecast_15min                          | table | postgres
+ public | hist_shandong_binzhou_forecast_dayahead                       | table | postgres
+ public | hist_shandong_binzhou_forecast_dayahead_15min                 | table | postgres
+ public | hist_shandong_inhouse_windforecast_15min                      | table | postgres
+ public | hist_shandong_loadregulationforecast_15min                    | table | postgres
+ public | hist_shandong_loadregulationforecastafterclear_15min          | table | postgres
+ public | hist_shandong_loadregulationreal_15min                        | table | postgres
+ public | hist_shandong_loadregulationsubtielineloadforecast_15min      | table | postgres
+ public | hist_shandong_loadregulationsubtielineloadreal_15min          | table | postgres
+ public | hist_shandong_localpowerplantforecast_15min                   | table | postgres
+ public | hist_shandong_localpowerplantreal_15min                       | table | postgres
+ public | hist_shandong_motmarketnuclearpowerforecast_15min             | table | postgres
+ public | hist_shandong_negativespareforecast_15min                     | table | postgres
+ public | hist_shandong_negativesparereal_15min                         | table | postgres
+ public | hist_shandong_networkloadforecast_15min                       | table | postgres
+ public | hist_shandong_networkloadforecastafterclear_15min             | table | postgres
+ public | hist_shandong_networkloadreal_15min                           | table | postgres
+ public | hist_shandong_newenergyforecast_15min                         | table | postgres
+ public | hist_shandong_newenergyforecastafterclear_15min               | table | postgres
+ public | hist_shandong_newenergyreal_15min                             | table | postgres
+ public | hist_shandong_newpositivespareforecast_15min                  | table | postgres
+ public | hist_shandong_notmarketnuclearpowerforecast_15min             | table | postgres
+ public | hist_shandong_notmarketnuclearpowerreal_15min                 | table | postgres
+ public | hist_shandong_positivespareforecast_15min                     | table | postgres
+ public | hist_shandong_positivesparereal_15min                         | table | postgres
+ public | hist_shandong_provincedayaheadclearprice_15min                | table | postgres
+ public | hist_shandong_provincerealtimeclearprice_15min                | table | postgres
+ public | hist_shandong_pumpedstoragepowerforecast_15min                | table | postgres
+ public | hist_shandong_pumpedstoragepowerreal_15min                    | table | postgres
+ public | hist_shandong_solarpowerforecast_15min                        | table | postgres
+ public | hist_shandong_solarpowerforecastafterclear_15min              | table | postgres
+ public | hist_shandong_solarpowerreal_15min                            | table | postgres
+ public | hist_shandong_standbyunitforecast_15min                       | table | postgres
+ public | hist_shandong_standbyunitreal_15min                           | table | postgres
+ public | hist_shandong_testunitforecast_15min                          | table | postgres
+ public | hist_shandong_testunitreal_15min                              | table | postgres
+ public | hist_shandong_thermalpowerbiddingspaceforecast_15min          | table | postgres
+ public | hist_shandong_thermalpowerbiddingspacereal_15min              | table | postgres
+ 2026-04-05 23:30:00	public | hist_shandong_tielineloadforecast_15min                       | table | postgres
+ 2026-04-05 23:30:00	public | hist_shandong_tielineloadforecast___15min                     | table | postgres
+2025-12-31 23:30:00	public | hist_shandong_tielineloadforecastafterclear_15min             | table | postgres
+ 2026-04-05 08:15:00	public | hist_shandong_tielineloadreal_15min                           | table | postgres
+ 2026-01-22 23:30:00	public | hist_shandong_tielineloadreal___15min                         | table | postgres
+ 2026-04-05 23:30:00	public | hist_shandong_windpowerforecast_15min                         | table | postgres
+ 2025-12-31 23:30:00	public | hist_shandong_windpowerforecastafterclear_15min               | table | postgres
+  2026-04-05 08:15:00	public | hist_shandong_windpowerreal_15min                             | table | postgres
+ stop	2025-02-01	public | hourly_power_pricessuyou                                      | table | postgres
+ not working	 2025-08-22	public | measured_mengxi_东送计划_实测_mw                              | table | postgres
+ not working 	public | measured_mengxi_光伏出力_实测_mw                              | table | postgres
+ not working 	public | measured_mengxi_新能源出力_实测_mw                            | table | postgres
+ not working 	public | measured_mengxi_统调负荷_实测_mw                              | table | postgres
+ not working 	public | measured_mengxi_非市场出力_实测_mw                            | table | postgres
+ not working 	public | measured_mengxi_风电出力_实测_mw                              | table | postgres
+ stop	public | mengxi_hueast                                                 | table | postgres
+ stop	2026-01-18	all zero	public | nominated_mengxi_suyou                                        | table | postgres
+ stop	2026-01-18	all zero	public | nominated_mengxi_wulate                                       | table | postgres
+ stop	public | nominated_mengxi_wulater                                      | table | postgres
+ public | pipeline_file_log                                             | table | postgres
+ public | pipeline_job_status                                           | table | postgres
+ public | price_d1_mengxi_hubao_east                                    | table | postgres
+ public | price_real_mengxi_hubao_east                                  | table | postgres
+ public | spot_daily                                                    | table | postgres
+ public | spot_hourly                                                   | table | postgres
+ public | spot_parse_log                                                | table | postgres
+ public | spotprice_ingest_log                                          | table | postgres
+ public | strategy_mengxi_suyou                                         | table | postgres
+ public | strategy_mengxi_wulate                                        | table | postgres

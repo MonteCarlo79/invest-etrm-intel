@@ -155,6 +155,14 @@ variable "desired_count_inner_mongolia" {
   default     = 1
 }
 
+#################################################
+# Mengxi Dashboard Image
+#################################################
+variable "image_mengxi_dashboard" {
+  description = "Docker image for Mengxi 15-min market data dashboard"
+  type        = string
+}
+
 variable "pipeline_image_tag" {
   description = "Docker tag for pipeline image"
   type        = string

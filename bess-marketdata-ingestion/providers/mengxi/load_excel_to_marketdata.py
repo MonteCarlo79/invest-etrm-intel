@@ -2,6 +2,7 @@ import os
 import re
 from datetime import datetime, date, timedelta, timezone
 import io
+from uuid import uuid4
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -153,6 +154,7 @@ def update_data_quality(
     file_date: date,
     filepath: str,
     interval_count: int,
+    has_failures: bool = False,
     notes: str | None = None,
 ):
     file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
@@ -163,6 +165,7 @@ def update_data_quality(
     is_complete = (
         file_size_mb >= MIN_FILE_SIZE_MB
         and interval_count >= expected
+        and not has_failures
     )
 
     sql = f"""
@@ -492,7 +495,7 @@ def upsert(engine, schema, table, df):
     if df.empty:
         return
 
-    stage = f"_stg_{table}_{int(datetime.now(timezone.utc).timestamp())}"
+    stage = f"_stg_{table}_{uuid4().hex}"
 
     ensure_table(engine, schema, stage, df)
     copy_dataframe_to_postgres(df, stage, engine, schema=schema)
@@ -582,6 +585,7 @@ def main(output_dir):
                 file_date=file_date,
                 filepath=filepath,
                 interval_count=0,
+                has_failures=True,
                 notes=msg,
             )
             continue
@@ -685,19 +689,29 @@ def main(output_dir):
                 file_date=file_date,
                 filepath=filepath,
                 interval_count=interval_count_for_quality,
+                has_failures=bool(file_errors),
                 notes=notes,
             )
 
             if file_had_success:
+                status = "partial_success" if file_errors else "success"
+                message_bits = []
+                if force_reload:
+                    message_bits.append("force_reload=true")
+                if file_errors:
+                    message_bits.append("\n".join(file_errors))
                 log_load_status(
                     engine,
                     schema,
                     file_date,
                     fn,
-                    "success",
-                    "force_reload=true" if force_reload else None,
+                    status,
+                    "\n".join(message_bits) if message_bits else None,
                 )
-                print(f"[OK] {fn}")
+                if file_errors:
+                    print(f"[PARTIAL] {fn}")
+                else:
+                    print(f"[OK] {fn}")
             else:
                 msg = "\n".join(file_errors) if file_errors else "No recognized sheets were loaded successfully"
                 log_load_status(engine, schema, file_date, fn, "failed", msg)
@@ -719,6 +733,7 @@ def main(output_dir):
                     file_date=file_date,
                     filepath=filepath,
                     interval_count=interval_count_for_quality,
+                    has_failures=True,
                     notes=message,
                 )
             except Exception as dq_error:

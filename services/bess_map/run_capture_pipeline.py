@@ -32,15 +32,24 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
-import pulp
 from sqlalchemy import create_engine, text as sql_text
 from psycopg2.extras import execute_values
+
+from services.bess_map.optimisation_engine import (  # noqa: E402
+    DispatchResult,
+    optimise_day,
+    compute_dispatch_from_hourly_prices,
+)
+from services.bess_map.forecast_engine import (  # noqa: E402
+    build_forecast,
+    forecast_naive_da,
+    forecast_ols_da_time_v1,
+)
 
 
 # =============================================================================
@@ -250,143 +259,11 @@ def get_last_capture_day(engine, schema: str, province: str, model: str, duratio
     return r[0]
 
 
-# =============================================================================
-# Forecast Models
-# =============================================================================
-def _design_matrix(hours: np.ndarray, da: np.ndarray) -> np.ndarray:
-    h = hours.astype(float)
-    return np.column_stack([
-        np.ones_like(h),
-        da.astype(float),
-        np.sin(2 * np.pi * h / 24.0),
-        np.cos(2 * np.pi * h / 24.0),
-    ])
+# _design_matrix, forecast_naive_da, forecast_ols_da_time_v1, and build_forecast
+# are imported from services.bess_map.forecast_engine above.
 
-
-def forecast_naive_da(hourly: pd.DataFrame) -> pd.Series:
-    """rt_pred = da_price"""
-    s = hourly["da_price"].copy()
-    s.name = "rt_pred"
-    return s
-
-
-def forecast_ols_da_time_v1(hourly: pd.DataFrame, min_train_days: int = 7, lookback_days: int = 60) -> pd.Series:
-    if hourly.empty:
-        return pd.Series(dtype=float, name="rt_pred")
-
-    df = hourly[["rt_price", "da_price"]].copy()
-    df["hour"] = df.index.hour
-    df["date"] = df.index.date
-
-    dates = pd.Index(pd.to_datetime(df["date"]).unique()).sort_values()
-    preds: List[pd.DataFrame] = []
-
-    for d in dates:
-        day = d.date()
-        day_df = df.loc[df["date"] == day]
-        if day_df.empty:
-            continue
-
-        train_end = pd.Timestamp(day)
-        train_start = train_end - pd.Timedelta(days=lookback_days)
-        train_df = df.loc[(df.index < train_end) & (df.index >= train_start)].dropna(subset=["rt_price", "da_price"])
-
-        if train_df["date"].nunique() < min_train_days:
-            pred = day_df["da_price"].copy()
-            pred.name = "rt_pred"
-            preds.append(pred.to_frame())
-            continue
-
-        X = _design_matrix(train_df["hour"].to_numpy(), train_df["da_price"].to_numpy())
-        y = train_df["rt_price"].to_numpy(dtype=float)
-        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
-
-        Xp = _design_matrix(day_df["hour"].to_numpy(), day_df["da_price"].to_numpy())
-        yhat = Xp @ beta
-        preds.append(pd.Series(yhat, index=day_df.index, name="rt_pred").to_frame())
-
-    out = pd.concat(preds).sort_index()
-    out = out[~out.index.duplicated(keep="last")]
-    return out["rt_pred"].astype(float)
-
-
-def build_forecast(hourly: pd.DataFrame, model: str, min_train_days: int, lookback_days: int) -> pd.Series:
-    model = model.lower().strip()
-    if model == "naive_da":
-        return forecast_naive_da(hourly)
-    if model == "ols_da_time_v1":
-        return forecast_ols_da_time_v1(hourly, min_train_days=min_train_days, lookback_days=lookback_days)
-    raise ValueError(f"Unknown model: {model}. Use one of: naive_da, ols_da_time_v1")
-
-
-# =============================================================================
-# Optimisation (with degradation / throughput cap)
-# =============================================================================
-@dataclass
-class DispatchResult:
-    charge_mw: np.ndarray
-    discharge_mw: np.ndarray
-    soc_mwh: np.ndarray
-    profit: float
-    status: str
-
-
-def optimise_day(
-    prices: np.ndarray,
-    power_mw: float,
-    duration_h: float,
-    roundtrip_eff: float,
-    max_throughput_mwh: Optional[float] = None,
-    max_cycles_per_day: Optional[float] = None,
-) -> DispatchResult:
-    """
-    max_throughput_mwh: optional cap on total discharge energy per day (MWh), a simple degradation proxy.
-    max_cycles_per_day: optional cap on equivalent full cycles/day (approx via discharge energy / energy_capacity).
-    """
-    T = len(prices)
-    if T != 24:
-        raise ValueError(f"optimise_day expects 24 hourly prices, got {T}")
-
-    eta_c = float(np.sqrt(roundtrip_eff))
-    eta_d = float(np.sqrt(roundtrip_eff))
-    e_cap = float(power_mw * duration_h)
-
-    prob = pulp.LpProblem("bess_arbitrage", pulp.LpMaximize)
-
-    ch = pulp.LpVariable.dicts("ch", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
-    dis = pulp.LpVariable.dicts("dis", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
-    soc = pulp.LpVariable.dicts("soc", range(T + 1), lowBound=0, upBound=e_cap, cat="Continuous")
-
-    # binary prevents simultaneous charge/discharge
-    y = pulp.LpVariable.dicts("y", range(T), lowBound=0, upBound=1, cat="Binary")
-    M = power_mw
-
-    prob += soc[0] == 0
-
-    for t in range(T):
-        prob += soc[t + 1] == soc[t] + ch[t] * eta_c - dis[t] * (1.0 / eta_d)
-        prob += ch[t] <= M * y[t]
-        prob += dis[t] <= M * (1 - y[t])
-
-    # degradation proxies
-    if max_throughput_mwh is not None:
-        prob += pulp.lpSum(dis[t] for t in range(T)) <= float(max_throughput_mwh)
-
-    if max_cycles_per_day is not None:
-        # discharge_energy <= cycles * energy_capacity
-        prob += pulp.lpSum(dis[t] for t in range(T)) <= float(max_cycles_per_day) * e_cap
-
-    prob += pulp.lpSum(float(prices[t]) * (dis[t] - ch[t]) for t in range(T))
-    prob.solve(pulp.PULP_CBC_CMD(msg=False))
-
-    status = pulp.LpStatus.get(prob.status, str(prob.status))
-
-    chv = np.array([pulp.value(ch[t]) for t in range(T)], dtype=float)
-    disv = np.array([pulp.value(dis[t]) for t in range(T)], dtype=float)
-    socv = np.array([pulp.value(soc[t + 1]) for t in range(T)], dtype=float)
-    profit = float(np.nansum(prices * (disv - chv)))
-
-    return DispatchResult(chv, disv, socv, profit, status)
+# DispatchResult, optimise_day, and compute_dispatch_from_hourly_prices are
+# imported from services.bess_map.optimisation_engine above.
 
 def get_last_theoretical_ts(conn, province: str, duration_h: float, power_mw: float, roundtrip_eff: float):
     """ Get last theoretical datetime from spot_dispatch_hourly_theoretical """
@@ -402,63 +279,6 @@ def get_last_theoretical_ts(conn, province: str, duration_h: float, power_mw: fl
         return cur.fetchone()[0]
 
 
-
-
-def compute_dispatch_from_hourly_prices(
-    hourly_prices: pd.Series,
-    power_mw: float,
-    duration_h: float,
-    roundtrip_eff: float,
-    max_throughput_mwh: Optional[float],
-    max_cycles_per_day: Optional[float],
-) -> Tuple[pd.DataFrame, pd.Series]:
-    s = hourly_prices.dropna().copy()
-    if s.empty:
-        return pd.DataFrame(), pd.Series(dtype=float)
-
-    if not isinstance(s.index, pd.DatetimeIndex):
-        s.index = pd.to_datetime(s.index)
-
-    df = s.to_frame("price")
-    df["date"] = df.index.date
-    df["hour"] = df.index.hour
-
-    dispatch_rows: List[pd.DataFrame] = []
-    daily_profit: Dict[dt.date, float] = {}
-
-    for d, g in df.groupby("date"):
-        idx = pd.date_range(pd.Timestamp(d), periods=24, freq="h")
-        g2 = g.reindex(idx)
-        prices = g2["price"].to_numpy(dtype=float)
-
-        if np.isnan(prices).any():
-            continue
-
-        res = optimise_day(
-            prices,
-            power_mw=power_mw,
-            duration_h=duration_h,
-            roundtrip_eff=roundtrip_eff,
-            max_throughput_mwh=max_throughput_mwh,
-            max_cycles_per_day=max_cycles_per_day,
-        )
-
-        out = pd.DataFrame({
-            "datetime": idx,
-            "charge_mw": res.charge_mw,
-            "discharge_mw": res.discharge_mw,
-            "dispatch_grid_mw": res.discharge_mw - res.charge_mw,
-            "soc_mwh": res.soc_mwh,
-            "solver_status": res.status,
-        }).set_index("datetime")
-
-        dispatch_rows.append(out)
-        daily_profit[d] = res.profit
-
-    dispatch_df = pd.concat(dispatch_rows).sort_index() if dispatch_rows else pd.DataFrame()
-    profit_s = pd.Series(daily_profit).sort_index()
-    profit_s.name = "profit"
-    return dispatch_df, profit_s
 
 
 # =============================================================================

@@ -2,6 +2,7 @@ import os
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
+from dataclasses import dataclass
 
 import pandas as pd
 import requests
@@ -11,6 +12,108 @@ from email.message import EmailMessage
 import smtplib
 
 from shared.agents.db import run_query
+
+
+@dataclass
+class TrustGateStatus:
+    trust_state: str
+    can_proceed: bool
+    should_block: bool
+    headline: str
+    detail: str
+    recommended_action: str | None = None
+    evidence_summary: str | None = None
+    source_log_stream: str | None = None
+
+
+def get_mengxi_agent4_status() -> TrustGateStatus:
+    try:
+        rows = run_query(
+            """
+            select
+                trust_state,
+                last_run_status,
+                failure_class,
+                evidence_summary,
+                recommended_action,
+                source_log_stream
+            from ops.mengxi_agent4_status
+            where pipeline_name = 'bess-mengxi-ingestion'
+            limit 1
+            """
+        )
+    except Exception as exc:
+        return TrustGateStatus(
+            trust_state="unavailable",
+            can_proceed=False,
+            should_block=True,
+            headline="Agent 4 trust status unavailable",
+            detail="Execution Agent could not read ops.mengxi_agent4_status, so Mengxi execution output is not safe to present normally.",
+            recommended_action=f"Inspect Agent 4 status availability before using Mengxi execution outputs. Read error: {exc}",
+        )
+
+    if rows.empty:
+        return TrustGateStatus(
+            trust_state="unavailable",
+            can_proceed=False,
+            should_block=True,
+            headline="Agent 4 trust status missing",
+            detail="No Mengxi Agent 4 trust-state row is available, so Execution Agent must not silently assume healthy data.",
+            recommended_action="Run the Agent 4 sentinel and verify ops.mengxi_agent4_status is populated before relying on Mengxi output.",
+        )
+
+    row = rows.iloc[0]
+    trust_state = str(row.get("trust_state") or "").strip().lower()
+    evidence_summary = row.get("evidence_summary")
+    recommended_action = row.get("recommended_action")
+    source_log_stream = row.get("source_log_stream")
+
+    if trust_state == "healthy":
+        return TrustGateStatus(
+            trust_state="healthy",
+            can_proceed=True,
+            should_block=False,
+            headline="Mengxi trust status healthy",
+            detail="Agent 4 reports Mengxi ingestion is healthy, so Execution Agent can proceed normally.",
+            recommended_action=recommended_action,
+            evidence_summary=evidence_summary,
+            source_log_stream=source_log_stream,
+        )
+
+    if trust_state == "degraded":
+        return TrustGateStatus(
+            trust_state="degraded",
+            can_proceed=True,
+            should_block=False,
+            headline="Mengxi trust status degraded",
+            detail="Agent 4 reports degraded Mengxi trust state. Execution Agent may proceed, but it must surface an explicit caveat.",
+            recommended_action=recommended_action,
+            evidence_summary=evidence_summary,
+            source_log_stream=source_log_stream,
+        )
+
+    if trust_state == "unsafe_to_trust":
+        return TrustGateStatus(
+            trust_state="unsafe_to_trust",
+            can_proceed=False,
+            should_block=True,
+            headline="Mengxi trust status unsafe_to_trust",
+            detail="Agent 4 reports Mengxi outputs are unsafe to trust. Execution Agent should block normal Mengxi output until the issue is cleared.",
+            recommended_action=recommended_action,
+            evidence_summary=evidence_summary,
+            source_log_stream=source_log_stream,
+        )
+
+    return TrustGateStatus(
+        trust_state="unavailable",
+        can_proceed=False,
+        should_block=True,
+        headline="Mengxi trust status unrecognized",
+        detail=f"Agent 4 returned an unrecognized trust_state value ({trust_state!r}), so Execution Agent must not default to healthy behavior.",
+        recommended_action=recommended_action,
+        evidence_summary=evidence_summary,
+        source_log_stream=source_log_stream,
+    )
 
 
 def build_execution_queue() -> pd.DataFrame:
@@ -24,6 +127,18 @@ def build_execution_queue() -> pd.DataFrame:
 
 def build_execution_plan(region: str, objective: str) -> str:
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    trust_gate = get_mengxi_agent4_status()
+    trust_note = ""
+    if region.lower() == "mengxi":
+        trust_note = (
+            f"\nMengxi trust gate:\n"
+            f"- State: {trust_gate.trust_state}\n"
+            f"- Assessment: {trust_gate.headline}\n"
+            f"- Guidance: {trust_gate.detail}\n"
+        )
+        if trust_gate.recommended_action:
+            trust_note += f"- Recommended action: {trust_gate.recommended_action}\n"
+
     return f"""
 Execution Agent v2
 
@@ -35,6 +150,7 @@ Region:
 
 Objective:
 {objective}
+{trust_note}
 
 Recommended sequence:
 1. Refresh latest market and spread tables
@@ -46,6 +162,7 @@ Recommended sequence:
 
 
 def build_daily_operations_report() -> dict:
+    trust_gate = get_mengxi_agent4_status()
     top_provinces = run_query(
         """
         select province, irr_total, payback_years_total
@@ -93,6 +210,7 @@ def build_daily_operations_report() -> dict:
 
     return {
         "generated_at": datetime.utcnow(),
+        "trust_gate": trust_gate,
         "top_provinces": top_provinces,
         "spread_monitor": spread_monitor,
         "mengxi": mengxi,
@@ -102,6 +220,7 @@ def build_daily_operations_report() -> dict:
 
 
 def build_report_summary_text(report: dict) -> str:
+    trust_gate: TrustGateStatus = report["trust_gate"]
     tp = report["top_provinces"]
     sm = report["spread_monitor"]
     mx = report["mengxi"]
@@ -121,9 +240,22 @@ def build_report_summary_text(report: dict) -> str:
         latest_slice = mx[pd.to_datetime(mx["date"]) == latest_date].sort_values("rank").head(3)
         mengxi_line = ", ".join(latest_slice["site"].astype(str).tolist())
 
+    trust_block = ""
+    if trust_gate.trust_state == "degraded":
+        trust_block = (
+            f"Agent 4 trust gate: DEGRADED\n"
+            f"Caveat: {trust_gate.detail}\n"
+        )
+    elif trust_gate.trust_state != "healthy":
+        trust_block = (
+            f"Agent 4 trust gate: {trust_gate.trust_state.upper()}\n"
+            f"Constraint: {trust_gate.detail}\n"
+        )
+
     return (
         f"Daily Execution Report\n"
         f"Generated: {report['generated_at']:%Y-%m-%d %H:%M:%S UTC}\n\n"
+        f"{trust_block}"
         f"Top province shortlist: {top_line}\n"
         f"Spread monitor: {spread_line}\n"
         f"Mengxi top sites: {mengxi_line}\n"

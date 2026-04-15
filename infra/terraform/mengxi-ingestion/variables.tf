@@ -69,9 +69,45 @@ variable "schedule_expression" {
   default = "cron(0 22 * * ? *)"
 }
 
+variable "remediation_schedule_expression" {
+  description = "Schedule for recurring targeted Mengxi remediation"
+  type        = string
+  default     = "cron(0 1 ? * SAT *)"
+}
+
+variable "remediation_start_date" {
+  description = "Start date for recurring remediation window"
+  type        = string
+  default     = "2025-07-01"
+}
+
+variable "remediation_end_date" {
+  description = "Optional end date for recurring remediation window"
+  type        = string
+  default     = "2025-12-31"
+}
+
+variable "remediation_reconcile_days" {
+  description = "Fallback remediation window width when remediation_end_date is empty"
+  type        = number
+  default     = 30
+}
+
+variable "remediation_batch_size" {
+  description = "Chunk size for exact-date remediation loops"
+  type        = number
+  default     = 7
+}
+
 variable "ecs_task_role_arn" {
   description = "IAM role used by ECS task containers"
   type        = string
+}
+
+variable "scheduler_role_arn" {
+  description = "IAM role assumed by EventBridge for direct ECS targets"
+  type        = string
+  default     = ""
 }
 
 variable "MARKET_LAG_DAYS" {
@@ -90,4 +126,17 @@ variable "MAX_DOWNLOAD_WORKERS" {
   description = "Parallel download workers"
   type        = number
   default     = 1
+}
+
+variable "alert_webhook_url" {
+  description = "Optional webhook URL for terminal Mengxi ingestion alerts"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "alert_context" {
+  description = "Optional context label included in Mengxi ingestion alerts"
+  type        = string
+  default     = "mengxi-ingestion"
 }

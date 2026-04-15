@@ -1,0 +1,5 @@
+1. settlement invoice
+2. bess strategies data upload
+3. ingestion data fix
+4. spot market database
+5. operations and 4 agents

@@ -101,6 +101,14 @@ resource "aws_ecs_task_definition" "mengxi_ingestion" {
         {
           name  = "FORCE_RELOAD"
           value = var.force_reload
+        },
+        {
+          name  = "ALERT_WEBHOOK_URL"
+          value = var.alert_webhook_url
+        },
+        {
+          name  = "ALERT_CONTEXT"
+          value = var.alert_context
         }
       ]
 
@@ -194,6 +202,14 @@ resource "aws_ecs_task_definition" "mengxi_reconcile" {
         {
           name  = "MAX_DOWNLOAD_WORKERS"
           value = tostring(var.MAX_DOWNLOAD_WORKERS)
+        },
+        {
+          name  = "ALERT_WEBHOOK_URL"
+          value = var.alert_webhook_url
+        },
+        {
+          name  = "ALERT_CONTEXT"
+          value = var.alert_context
         }
       ]
 
@@ -215,6 +231,111 @@ resource "aws_ecs_task_definition" "mengxi_reconcile" {
 
   tags = {
     Name = "bess-mengxi-reconcile"
+  }
+}
+
+#####################################
+# ECS Task Definition - Recurring Remediation
+#####################################
+
+resource "aws_ecs_task_definition" "mengxi_remediation" {
+  depends_on = [
+    aws_security_group_rule.ecs_to_rds_ingestion
+  ]
+
+  family                   = "bess-mengxi-remediation"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+
+  cpu    = "1024"
+  memory = "2048"
+
+  task_role_arn      = var.ecs_task_role_arn
+  execution_role_arn = var.ecs_task_execution_role_arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "mengxi-remediation"
+      image     = var.container_image
+      essential = true
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = var.pgurl
+        },
+        {
+          name  = "DB_SCHEMA"
+          value = var.db_schema
+        },
+        {
+          name  = "PROVINCE"
+          value = var.province
+        },
+        {
+          name  = "RUN_MODE"
+          value = "remediation"
+        },
+        {
+          name  = "START_DATE"
+          value = var.remediation_start_date
+        },
+        {
+          name  = "END_DATE"
+          value = var.remediation_end_date
+        },
+        {
+          name  = "RECONCILE_DAYS"
+          value = tostring(var.remediation_reconcile_days)
+        },
+        {
+          name  = "REMEDIATION_BATCH_SIZE"
+          value = tostring(var.remediation_batch_size)
+        },
+        {
+          name  = "FORCE_RELOAD"
+          value = "true"
+        },
+        {
+          name  = "MARKET_LAG_DAYS"
+          value = tostring(var.MARKET_LAG_DAYS)
+        },
+        {
+          name  = "REQUEST_DELAY"
+          value = tostring(var.REQUEST_DELAY)
+        },
+        {
+          name  = "MAX_DOWNLOAD_WORKERS"
+          value = tostring(var.MAX_DOWNLOAD_WORKERS)
+        },
+        {
+          name  = "ALERT_WEBHOOK_URL"
+          value = var.alert_webhook_url
+        },
+        {
+          name  = "ALERT_CONTEXT"
+          value = var.alert_context
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.ingestion.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  tags = {
+    Name = "bess-mengxi-remediation"
   }
 }
 
@@ -300,23 +421,23 @@ resource "aws_iam_role_policy" "lambda_invoke_ecs" {
 #####################################
 
 resource "aws_lambda_function" "mengxi_launcher" {
-  function_name = "bess-mengxi-launcher"
-  role          = aws_iam_role.lambda_invoke_ecs.arn
-  handler       = "lambda_function.handler"
-  runtime       = "python3.11"
-  filename      = "${path.module}/lambda_launcher.zip"
+  function_name    = "bess-mengxi-launcher"
+  role             = aws_iam_role.lambda_invoke_ecs.arn
+  handler          = "lambda_function.handler"
+  runtime          = "python3.11"
+  filename         = "${path.module}/lambda_launcher.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_launcher.zip")
-  timeout       = 60
+  timeout          = 60
 
   environment {
     variables = {
-      CLUSTER_ARN         = data.aws_ecs_cluster.target.arn
-      TASK_DEFINITION_ARN = aws_ecs_task_definition.mengxi_reconcile.arn
-      SUBNET_IDS          = join(",", var.private_subnet_ids)
-      SECURITY_GROUP_ID   = aws_security_group.ecs_ingestion.id
-      CONTAINER_NAME      = "mengxi-reconcile"
-        DEFAULT_START_DATE   = "2026-03-12"
-       DEFAULT_FORCE_RELOAD = "true"
+      CLUSTER_ARN          = data.aws_ecs_cluster.target.arn
+      TASK_DEFINITION_ARN  = aws_ecs_task_definition.mengxi_reconcile.arn
+      SUBNET_IDS           = join(",", var.private_subnet_ids)
+      SECURITY_GROUP_ID    = aws_security_group.ecs_ingestion.id
+      CONTAINER_NAME       = "mengxi-reconcile"
+      DEFAULT_START_DATE   = "2026-03-12"
+      DEFAULT_FORCE_RELOAD = "true"
     }
   }
 
@@ -351,4 +472,41 @@ resource "aws_lambda_permission" "allow_eventbridge" {
   function_name = aws_lambda_function.mengxi_launcher.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.mengxi_daily.arn
+}
+
+#####################################
+# EventBridge Rule - Recurring Remediation
+#####################################
+
+resource "aws_cloudwatch_event_rule" "mengxi_remediation_weekly" {
+  count               = var.scheduler_role_arn == "" ? 0 : 1
+  name                = "bess-mengxi-remediation-weekly"
+  description         = "Run recurring targeted Mengxi remediation over configured gap window"
+  schedule_expression = var.remediation_schedule_expression
+  event_bus_name      = "default"
+
+  tags = {
+    Name = "bess-mengxi-remediation-weekly"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "mengxi_remediation_ecs" {
+  count          = var.scheduler_role_arn == "" ? 0 : 1
+  rule           = aws_cloudwatch_event_rule.mengxi_remediation_weekly[0].name
+  event_bus_name = "default"
+  target_id      = "bess-mengxi-remediation"
+  arn            = data.aws_ecs_cluster.target.arn
+  role_arn       = var.scheduler_role_arn
+
+  ecs_target {
+    launch_type         = "FARGATE"
+    task_count          = 1
+    task_definition_arn = aws_ecs_task_definition.mengxi_remediation.arn
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_ingestion.id]
+      assign_public_ip = true
+    }
+  }
 }

@@ -1,0 +1,62 @@
+Both documents are complete. Here's the executive summary:
+
+  ---
+  5 fields successfully calibrated from live evidence:
+
+  1. rows_written baseline — 267,493 for a single-day run (2026-04-09), broken down as: md_rt_nodal_price 149,472 + md_id_cleared_energy 60,581 +
+  md_da_cleared_energy 56,928 + md_da_fuel_summary 480 + md_settlement_ref_price 24 + md_id_fuel_summary 5 + md_avg_bid_price 3 + md_rt_total_cleared_energy
+  0. Sum matches DB observation exactly.
+  2. md_rt_total_cleared_energy structural 2-day lag — confirmed from DB: max_date=2026-04-08 while all other tables show 2026-04-09. yesterday_rows=0 for
+  the most recent date is always normal, not a partial write.
+  3. DA tables lead by 1 day — md_da_cleared_energy and md_da_fuel_summary both show max_date=CURRENT_DATE not CURRENT_DATE-1. Operator can expect these two
+  tables' max_date to equal today (not yesterday) after every successful run.
+  4. Run duration from local proxy — 13 min 34 sec for a 1-day reconcile. Calibrated from ops.ingestion_job_runs started_at/finished_at. Used as the basis
+  for the ECS provisional estimate of 13–20 min.
+  5. Fast-failure signature — two failed runs (run_ids 1, 2) each lasted ~6–8 seconds with subprocess.CalledProcessError: returned non-zero exit status 1 in
+  error_message. Duration < 10 sec + failed status = subprocess crash, not a transient network issue.
+
+  ---
+  5 fields still provisional (pre-live ECS estimates):
+
+  1. ECS task launch latency — time from EventBridge trigger to container RUNNING. Not yet observed (no ECS runs).
+  2. ECS Fargate run duration — 13–20 min estimate is based on a Windows local run; Fargate Linux environment may differ.
+  3. CloudWatch log event format and sequence — expected run_start → pipeline_ok → rows_counted is derived from code inspection; never observed from ECS.
+  4. Day-to-day variance in rows_written — only 1 data point (2026-04-09). Weekend/holiday patterns unknown.
+  5. rows_written for md_id_fuel_summary (5) and md_avg_bid_price (3) — extremely low counts observed, but unclear if these are always this low or if
+  2026-04-09 was atypical.
+
+  ---
+  3 operator decisions that changed because of calibration:
+
+  1. "If 7/8 tables advance but md_rt_total_cleared_energy stays behind — this is a partial write" → changed to "this is the confirmed structural lag
+  pattern; only escalate if max_date is more than 3 days old." Previously the document would have flagged every daily run as a partial failure.
+  2. "All 8 tables should share the same max_date after success" → changed to "6 tables = yesterday, 2 DA tables = today (CURRENT_DATE),
+  md_rt_total_cleared_energy = yesterday-2." The pre-live guide would have sent a false alarm on every single healthy run.
+  3. "rows_written < 10,000 is anomalous" (pre-live generic threshold) → changed to "rows_written < 150,000 warrants investigation; < 50,000 is a warning; =
+  0 is a hard failure." The calibrated lower bound is now 20× higher, preventing under-sensitivity to real failures.
+
+✻ Fluttering… thoughtsfor 35s)                           35s)
+✻Churned for 10m 55s
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+● Background command "PGURL_TUNNEL="postgresql://postgres:%21BESSmap2026@127.0.0.1:15432/marketdata?sslmode=require"                                         ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   ⏵ accept edits on (shift+tab to cycle) · esc to interrupt                                                                         10% until auto-compact
+# MAX(data_date) and row counts for each of the 8 EnOS target tables for 2026-04-09                                                                          psql "$PGURL_TUNNEL" -c "
+SELECT 'md_rt_nodal_price'          AS tbl, MAX(data_date) AS max_date, COUNT(*) FILTER (WHERE data_date='2026-04-09') AS rows_0409 FROM
+marketdata.md_rt_nodal_price
+UNION ALL
+SELECT 'md_rt_total_cleared_energy', MAX(data_date), COUNT(*) FILTER (WHERE data_date='2026-04-09') FROM marketdata.md_rt_total_cleared_energy
+UNION ALL
+SELECT 'md_da_cleared_energy',       MAX(data_date), COUNT(*) FILTER (WHERE data_date='2026-04-09') FROM marketdata.md_da_cleared_energy
+UNION ALL
+SELECT 'md_da_fuel_summary',         MAX(data_date), COUNT(*) FILTER (WHERE data_date='2026-04-09') FROM marketdata.md_da_fuel_summary
+UNION ALL
+SELECT 'md_avg_bid_price',           MAX(data_date), COUNT(*) FILTER (WHERE data_date='2026-04-09') FROM marketdata.md_avg_bid_price
+UNION ALL
+SELECT 'md_id_cleared_energy',       MAX(data_date), COUNT(*) FILTER (WHERE data_date='2026-04-09') FROM marketdata.md_id_cleared_energy
+UNION ALL
+SELECT 'md_id_fuel_summary',         MAX(data_date), COUNT(*) FILTER (WHERE data_date='2026-04-09') FROM marketdata.md_id_fuel_summary
+UNION ALL
+SELECT 'md_settlement_ref_price',    MAX(data_date), COUNT(*) FILTER (WHERE data_date='2026-04-09') FROM marketdata.md_settlement_ref_price
+ORDER BY tbl;" 2&gt;&amp;1" completed (exit code 0)
+
+●Already captured — that wassthe per-table row count query whose results were retrieved earlier and used for calibration. Nothing further needed.

@@ -1,0 +1,19 @@
+Continue the Mengxi investigation from invest-etrm-intel/docs/openclaw/OPENCLAW_MENGXI_PROGRESS_HANDOFF.md.                                                                                        
+ │ Treat GitHub remote as source of truth, not local-only state.                                                                                                                                      
+ │ Relevant branch already pushed: origin/codex/ops-mengxi-db-timeout-alerting.                                                                                                                       
+ │ First verify whether live AWS (EventBridge/Lambda/ECS/task definitions/images) is actually running artifacts/config derived from that branch.                                                      
+ │ Work read-only. Determine exactly why bess-mengxi-ingestion is running so frequently in daily mode and why the expected reconcile/backfill from 2026-03-12 today is missing.                       
+ │ Report:                                                                                                                                                                                            
+ │ 1. root cause summary                                                                                                                                                                              
+ │ 2. exact AWS resources involved                                                                                                                                                                    
+ │ 3. why reconcile did not happen                                                                                                                                                                    
+ │ 4. why daily is running so frequently                                                                                                                                                              
+ │ 5. exact production config                                                                                                                                                                         
+ │ 6. Terraform-vs-live drift                                                                                                                                                                         
+ │ 7. minimal fix                                                                                                                                                                                     
+ │ 8. exact next actions                                                                                                                                                                              
+ │ Also, before trusting any repo conclusion, confirm:                                                                                                                                                
+ │ - changes pushed to GitHub                                                                                                                                                                         
+ │ - exact branch                                                                                                                                                                                     
+ │ - exact commits                                                                                                                                                                                    
+ │ - whether any deploy actually ran from those commits                 

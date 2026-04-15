@@ -435,6 +435,11 @@ if "run" in st.session_state:
                 / pd.to_numeric(result[mw_col], errors="coerce").fillna(0)
                 / 365
             )
+
+    # Daily average revenue
+    num_days = (end_dt - start_dt).days
+    if "expected_total_profit_万元" in result.columns and num_days > 0:
+        result["daily_avg_revenue_万元"] = result["expected_total_profit_万元"] / num_days
             
     yuanjing_df = result[result["owner"].str.contains("远景", na=False)]
 
@@ -498,6 +503,7 @@ if "run" in st.session_state:
         "energy_revenue_万元",
         "subsidy_万元",
         "expected_total_profit_万元",
+        "daily_avg_revenue_万元",
     ]:
         if col in result.columns:
             format_dict[col] = "{:,.2f}"
@@ -532,6 +538,7 @@ if "run" in st.session_state:
         "energy_revenue_万元",
         "subsidy_万元",
         "expected_total_profit_万元",
+        "daily_avg_revenue_万元",
         "peer_count_bess",
         "peer_count_solar",
         "peer_count_wind",

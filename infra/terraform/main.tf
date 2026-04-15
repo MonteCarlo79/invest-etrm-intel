@@ -17,7 +17,7 @@ locals {
 # -------------------------
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = local.log_group
-  retention_in_days = 30
+  retention_in_days = 14
   tags              = local.tags
 }
 
@@ -144,6 +144,7 @@ resource "aws_db_instance" "pg" {
   engine_version               = "18.2"
   instance_class               = var.db_instance_class
   allocated_storage            = 100
+  storage_type                 = "gp3"   # was gp2; gp3 saves ~$1.90/month, same 3000 IOPS, in-place change
   db_name                      = var.db_name
   username                     = var.db_username
   password                     = var.db_password
@@ -608,13 +609,16 @@ resource "aws_iam_role_policy_attachment" "attach_run_task" {
 
 ############################################
 # BESS MAP TASK
+# 7-day metrics: avg mem 10.1%, peak 18.2% of 1024 MB = 186 MB peak.
+# 256/512 gives 2.7x headroom over observed peak. Apply after confirming no
+# memory spike pattern. Rolling deployment; roll back by reverting + apply.
 ############################################
 resource "aws_ecs_task_definition" "bess_map" {
   family                   = "bess-platform-bess-map"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "512"
-  memory                   = "1024"
+  cpu                      = "256"
+  memory                   = "512"
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -698,13 +702,16 @@ resource "aws_ecs_task_definition" "bess_map" {
 
 ############################################
 # BESS UPLOADER TASK
+# 7-day metrics: avg mem 5.9%, peak 7.4% of 1024 MB = 75.8 MB peak.
+# 256/512 gives 6.7x headroom over observed peak. Apply after confirming no
+# memory spike during large Excel uploads. Rolling deployment; roll back by reverting + apply.
 ############################################
 resource "aws_ecs_task_definition" "uploader" {
   family                   = "${var.name}-uploader"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "512"
-  memory                   = "1024"
+  cpu                      = "256"
+  memory                   = "512"
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -899,12 +906,17 @@ resource "aws_ecs_task_definition" "portal" {
 
   tags = local.tags
 }
+# Live task def (v43) runs at 2048/8192 — manually scaled up at some point.
+# 7-day metrics: avg CPU 0.01%, avg mem 1.78% (149 MB peak out of 8192 MB).
+# Terraform target: 1024/2048 gives 6.8x headroom over observed peak — safe.
+# Applying this will trigger a rolling ECS service deployment. Validate metrics
+# are stable before applying; roll back with: terraform apply after reverting.
 resource "aws_ecs_task_definition" "inner_mongolia" {
   family                   = "${var.name}-inner-mongolia"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 1024
+  memory                   = 2048
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -985,12 +997,17 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   ])
 }
 
+# Live task def (v35): 4096 vCPU / 16384 MB.
+# Container Insights confirms this sizing is CORRECT — not legacy padding.
+# Observed peak: 12,570 MB (Mar 28 backfill run, 76.7% of 16384 MB).
+# Typical daily runs: 134–1,332 MB peak. DO NOT reduce memory — large runs will OOM.
+# DO NOT apply any right-sizing change to this task definition.
 resource "aws_ecs_task_definition" "inner_pipeline" {
   family                   = "${var.name}-inner-pipeline"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = 4096
+  memory                   = 16384
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -1128,6 +1145,18 @@ resource "aws_ecr_repository" "inner_mongolia" {
   image_tag_mutability = "MUTABLE"
 }
 
+resource "aws_ecr_lifecycle_policy" "inner_mongolia" {
+  repository = aws_ecr_repository.inner_mongolia.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 data "aws_iam_policy_document" "eventbridge_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -1153,6 +1182,18 @@ resource "aws_ecr_repository" "inner_pipeline" {
   tags = {
     Project = "bess-platform"
   }
+}
+
+resource "aws_ecr_lifecycle_policy" "inner_pipeline" {
+  repository = aws_ecr_repository.inner_pipeline.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
 }
 
 resource "aws_iam_role" "eventbridge_ecs" {
@@ -1318,6 +1359,157 @@ resource "aws_ecs_service" "inner_mongolia" {
   tags       = local.tags
 }
 
+# -------------------------
+# Mengxi Dashboard — ECR, ALB, ECS
+# -------------------------
+
+resource "aws_ecr_repository" "mengxi_dashboard" {
+  name                 = "bess-mengxi-dashboard"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_ecr_lifecycle_policy" "mengxi_dashboard" {
+  repository = aws_ecr_repository.mengxi_dashboard.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_lb_target_group" "mengxi_dashboard" {
+  name_prefix = "tgmxd-"
+  port        = 8505
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  health_check {
+    path                = "/mengxi-dashboard/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "mengxi_dashboard_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 25
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.mengxi_dashboard.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/mengxi-dashboard", "/mengxi-dashboard/", "/mengxi-dashboard/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "mengxi_dashboard" {
+  family                   = "${var.name}-mengxi-dashboard"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "mengxi-dashboard"
+      image     = var.image_mengxi_dashboard
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8505
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "mengxi-dashboard"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "mengxi_dashboard" {
+  name            = "${var.name}-mengxi-dashboard-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.mengxi_dashboard.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  health_check_grace_period_seconds = 60
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.mengxi_dashboard.arn
+    container_name   = "mengxi-dashboard"
+    container_port   = 8505
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
 resource "aws_ecs_task_definition" "execution_report" {
   family                   = "${var.name}-execution-report"
   requires_compatibilities = ["FARGATE"]
@@ -1386,34 +1578,61 @@ resource "aws_ecr_repository" "strategy_agent" {
 }
 resource "aws_ecr_lifecycle_policy" "strategy_agent" {
   repository = aws_ecr_repository.strategy_agent.name
-
   policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "keep last 10 images"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
   })
 }
 resource "aws_ecr_repository" "portfolio_agent" {
   name = "bess-portfolio-agent"
 }
 
+resource "aws_ecr_lifecycle_policy" "portfolio_agent" {
+  repository = aws_ecr_repository.portfolio_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 resource "aws_ecr_repository" "execution_agent" {
   name = "bess-execution-agent"
 }
 
+resource "aws_ecr_lifecycle_policy" "execution_agent" {
+  repository = aws_ecr_repository.execution_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 resource "aws_ecr_repository" "it_dev_agent" {
   name = "bess-it-dev-agent"
+}
+
+resource "aws_ecr_lifecycle_policy" "it_dev_agent" {
+  repository = aws_ecr_repository.it_dev_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
 }
 
 
