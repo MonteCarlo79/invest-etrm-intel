@@ -29,9 +29,14 @@ sys.path.insert(0, str(_REPO))
 
 try:
     from dotenv import load_dotenv
-    _env = _REPO / ".env"
-    if _env.exists():
-        load_dotenv(_env)
+    # Look for .env in repo root first, then apps/spot-agent (has DB_URL for this project)
+    for _env_candidate in [
+        _REPO / ".env",
+        _REPO / "apps" / "spot-agent" / ".env",
+    ]:
+        if _env_candidate.exists():
+            load_dotenv(_env_candidate)
+            break
 except ImportError:
     pass
 
@@ -48,6 +53,7 @@ from services.knowledge_pool.fact_extraction import (
 
 # Province mapping — extend as reports include more provinces
 PROVINCES_MAP = {
+    # Core spot market provinces (formal pilot participants)
     "山东": "Shandong",
     "山西": "Shanxi",
     "蒙西": "Mengxi",
@@ -68,6 +74,21 @@ PROVINCES_MAP = {
     "陕西": "Shaanxi",
     "宁夏": "Ningxia",
     "新疆": "Xinjiang",
+    # Extended / trial provinces also mentioned in reports
+    "辽宁": "Liaoning",
+    "吉林": "Jilin",
+    "黑龙江": "Heilongjiang",
+    "蒙东": "Mengdong",
+    "河北": "Hebei",
+    "冀北": "Hebei-North",
+    "冀南": "Hebei-South",
+    "青海": "Qinghai",
+    "江西": "Jiangxi",
+    "海南": "Hainan",
+    "重庆": "Chongqing",
+    "上海": "Shanghai",
+    "北京": "Beijing",
+    "天津": "Tianjin",
 }
 
 
@@ -129,25 +150,29 @@ def _ingest_one(pdf: Path, year: int, force: bool) -> bool:
         fact_count = extract_facts_for_document(doc_id, PROVINCES_MAP)
         print(f"    facts (text extraction): {fact_count}", flush=True)
 
-        # Step 4: bridge price data already in public.spot_daily
-        report_dates = []
-        if date_min and date_max:
-            import datetime as dt
-            d = date_min
-            while d <= date_max:
-                report_dates.append(d)
-                d += dt.timedelta(days=1)
-
-        price_facts = pull_price_facts_from_spot_daily(doc_id, report_dates)
-        print(f"    facts (price bridge): {price_facts}", flush=True)
-
-        # Mark as parsed
+        # Mark core ingestion as parsed before attempting optional enrichment
         set_document_status(
             doc_id, "parsed",
             page_count=page_count,
             report_date_min=date_min,
             report_date_max=date_max,
         )
+
+        # Step 4: bridge price data from public.spot_daily (optional enrichment)
+        # Failure here does NOT roll back the parsed status — spot_daily may not exist yet.
+        import datetime as dt
+        report_dates = []
+        if date_min and date_max:
+            d = date_min
+            while d <= date_max:
+                report_dates.append(d)
+                d += dt.timedelta(days=1)
+        try:
+            price_facts = pull_price_facts_from_spot_daily(doc_id, report_dates)
+            print(f"    facts (price bridge): {price_facts}", flush=True)
+        except Exception as bridge_err:
+            print(f"    [WARN] spot_daily bridge skipped: {bridge_err}", flush=True)
+
         return True
 
     except Exception as e:
@@ -169,18 +194,28 @@ def main():
         print("[DB] Initialising knowledge pool tables...", flush=True)
         init_knowledge_tables()
 
-    year = args.year or 2025
     pdfs = _collect_pdfs(args.year, args.pdf)
 
     if args.limit:
         pdfs = pdfs[: args.limit]
 
-    print(f"[INFO] {len(pdfs)} PDF(s) to process (year={year})", flush=True)
+    print(f"[INFO] {len(pdfs)} PDF(s) to process", flush=True)
 
     processed = skipped = errors = 0
     for pdf in pdfs:
+        # Derive year from parent directory name if it looks like a year,
+        # otherwise fall back to --year arg or 2025.
         try:
-            result = _ingest_one(pdf, year, args.force)
+            dir_year = int(pdf.parent.name)
+            if 2020 <= dir_year <= 2030:
+                pdf_year = dir_year
+            else:
+                pdf_year = args.year or 2025
+        except (ValueError, AttributeError):
+            pdf_year = args.year or 2025
+
+        try:
+            result = _ingest_one(pdf, pdf_year, args.force)
             if result:
                 processed += 1
             else:

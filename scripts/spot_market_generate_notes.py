@@ -30,9 +30,13 @@ sys.path.insert(0, str(_REPO))
 
 try:
     from dotenv import load_dotenv
-    _env = _REPO / ".env"
-    if _env.exists():
-        load_dotenv(_env)
+    for _env_candidate in [
+        _REPO / ".env",
+        _REPO / "apps" / "spot-agent" / ".env",
+    ]:
+        if _env_candidate.exists():
+            load_dotenv(_env_candidate)
+            break
 except ImportError:
     pass
 

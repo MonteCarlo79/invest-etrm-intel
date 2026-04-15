@@ -105,9 +105,15 @@ CREATE TABLE IF NOT EXISTS staging.spot_report_facts (
     page_no         smallint,
     confidence      text            NOT NULL DEFAULT 'medium',
                                                         -- high | medium | low
+    source_method   text            NOT NULL DEFAULT 'pdf_regex',
+                                                        -- pdf_regex | spot_daily_bridge | filename_inference
     created_at      timestamptz     NOT NULL DEFAULT now(),
     UNIQUE (document_id, report_date, province_cn, fact_type, metric_name)
 );
+
+-- Migration: add source_method to any pre-existing staging.spot_report_facts table
+ALTER TABLE staging.spot_report_facts
+    ADD COLUMN IF NOT EXISTS source_method text NOT NULL DEFAULT 'pdf_regex';
 
 CREATE INDEX IF NOT EXISTS idx_srf_doc       ON staging.spot_report_facts(document_id);
 CREATE INDEX IF NOT EXISTS idx_srf_date      ON staging.spot_report_facts(report_date);
