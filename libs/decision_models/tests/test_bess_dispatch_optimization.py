@@ -124,7 +124,7 @@ class TestMetadataContract:
 
     def test_source_module_points_to_engine(self):
         spec = registry.get("bess_dispatch_optimization")
-        assert "optimisation_engine" in spec.metadata["source_module"]
+        assert "optimisation_engine" in spec.metadata["source_of_truth_module"]
 
     def test_multiday_cross_reference_present(self):
         spec = registry.get("bess_dispatch_optimization")

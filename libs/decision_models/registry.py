@@ -4,10 +4,16 @@ libs/decision_models/registry.py
 In-process registry for ModelSpec instances.
 Models self-register at import time via `registry.register(spec)`.
 Runners and adapters look up models by name (latest version) or name@version.
+
+Introspection helpers
+---------------------
+registry.get_model_metadata(name)   -> metadata dict for one model
+registry.describe_model(name)       -> full JSON-serialisable descriptor dict
+registry.summarize()                -> list of descriptor dicts for all models
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from libs.decision_models.model_spec import ModelSpec
 
@@ -48,6 +54,40 @@ class ModelRegistry:
 
     def list_models(self) -> List[ModelSpec]:
         return list(self._store.values())
+
+    def get_model_metadata(self, name: str, version: Optional[str] = None) -> Dict[str, Any]:
+        """Return the metadata dict for a registered model."""
+        return self.get(name, version=version).metadata
+
+    def describe_model(self, name: str, version: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Return a JSON-serialisable descriptor dict for a registered model.
+
+        Suitable for agent introspection, UI display, or logging.
+        Does NOT include run_fn, input_schema, or output_schema (not serialisable).
+        """
+        spec = self.get(name, version=version)
+        return {
+            "name": spec.name,
+            "version": spec.version,
+            "key": spec.key,
+            "description": spec.description,
+            "tags": spec.tags,
+            "has_run_fn": spec.run_fn is not None,
+            "has_input_schema": spec.input_schema is not None,
+            "has_output_schema": spec.output_schema is not None,
+            "metadata": spec.metadata,
+        }
+
+    def summarize(self) -> List[Dict[str, Any]]:
+        """
+        Return a list of describe_model() dicts for all registered models,
+        sorted by name then version.
+
+        Useful for building model catalogues, agent system prompts, or UI dropdowns.
+        """
+        specs = sorted(self._store.values(), key=lambda s: (s.name, s.version))
+        return [self.describe_model(s.name, s.version) for s in specs]
 
     def deregister(self, name: str, version: str) -> None:
         key = f"{name}@{version}"

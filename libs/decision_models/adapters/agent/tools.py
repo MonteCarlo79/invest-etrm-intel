@@ -26,10 +26,10 @@ import json
 from typing import Any, Dict, List
 
 # Trigger model registration
-import libs.decision_models.bess_dispatch_optimization          # noqa: F401
-import libs.decision_models.bess_dispatch_simulation_multiday   # noqa: F401
-import libs.decision_models.revenue_scenario_engine             # noqa: F401
-import libs.decision_models.price_forecast_dayahead             # noqa: F401
+import libs.decision_models.bess_dispatch_optimization           # noqa: F401
+import libs.decision_models.bess_dispatch_simulation_multiday    # noqa: F401
+import libs.decision_models.revenue_scenario_engine              # noqa: F401
+import libs.decision_models.price_forecast_dayahead              # noqa: F401
 
 from libs.decision_models.runners.local import run
 
@@ -162,6 +162,81 @@ DECISION_MODEL_TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "run_price_forecast_dayahead",
+        "description": (
+            "Forecast province-level hourly RT prices for a target date using day-ahead (DA) prices as input. "
+            "Two models available: 'ols_da_time_v1' (default, rolling OLS with DA price + hour-of-day features) "
+            "and 'naive_da' (RT = DA price, no training). "
+            "Returns 24 hourly RT predictions for the target date. "
+            "SCOPE: province-level only — NOT nodal/asset. Hourly only — NOT 15-min. "
+            "Requires a lookback window of historical RT+DA prices plus the target date's DA prices."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hourly_prices": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "datetime": {
+                                "type": "string",
+                                "description": "ISO8601 timestamp, e.g. '2026-04-15T08:00:00'",
+                            },
+                            "da_price": {
+                                "type": "number",
+                                "description": "Day-ahead clearing price (Yuan/MWh). Required for all hours.",
+                            },
+                            "rt_price": {
+                                "type": ["number", "null"],
+                                "description": (
+                                    "Actual RT settlement price (Yuan/MWh). "
+                                    "Required for history days used as training. "
+                                    "Should be null/absent for target_date hours (not yet known)."
+                                ),
+                            },
+                        },
+                        "required": ["datetime", "da_price"],
+                    },
+                    "description": (
+                        "Hourly price records. Include lookback history (both rt_price and da_price) "
+                        "plus all 24 hours of target_date with da_price (rt_price=null). "
+                        "For ols_da_time_v1: include at least min_train_days × 24 prior hours with both prices."
+                    ),
+                },
+                "target_date": {
+                    "type": "string",
+                    "description": "ISO date string for the day to forecast, e.g. '2026-04-15'. Must be present in hourly_prices.",
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["ols_da_time_v1", "naive_da"],
+                    "description": (
+                        "'ols_da_time_v1' (default): rolling OLS with [intercept, da_price, sin(2πh/24), cos(2πh/24)] features. "
+                        "'naive_da': RT prediction = DA price."
+                    ),
+                    "default": "ols_da_time_v1",
+                },
+                "min_train_days": {
+                    "type": "integer",
+                    "description": (
+                        "Minimum complete training days required before OLS is used. "
+                        "Falls back to naive_da if fewer days available. Default: 7."
+                    ),
+                    "minimum": 1,
+                    "default": 7,
+                },
+                "lookback_days": {
+                    "type": "integer",
+                    "description": "Rolling training window width in days. Default: 60.",
+                    "minimum": 1,
+                    "default": 60,
+                },
+            },
+            "required": ["hourly_prices", "target_date"],
+        },
+    },
+    {
         "name": "run_revenue_scenario_engine",
         "description": (
             "Calculate daily BESS P&L attribution for a given asset and date. "
@@ -235,6 +310,9 @@ def handle_tool_call(tool_name: str, tool_input: Dict[str, Any]) -> str:
 
     elif tool_name == "run_bess_dispatch_simulation_multiday":
         result = run("bess_dispatch_simulation_multiday", tool_input)
+
+    elif tool_name == "run_price_forecast_dayahead":
+        result = run("price_forecast_dayahead", tool_input)
 
     elif tool_name == "run_revenue_scenario_engine":
         from datetime import date

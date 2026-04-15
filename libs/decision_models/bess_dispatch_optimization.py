@@ -190,31 +190,33 @@ _SPEC = ModelSpec(
     run_fn=_run,
     tags=["bess", "dispatch", "optimization", "perfect_foresight", "lp", "single_day", "arbitrage"],
     metadata={
-        # Identity
-        "asset_type": "bess",
-        "source_module": "services/bess_map/optimisation_engine.py",
-        "production_pipeline": "services/bess_map/run_capture_pipeline.py",
-
-        # Contract — machine-readable for agents and runners
+        # Standard metadata contract keys
+        "category": "optimization",
         "scope": "single_day",
+        "market": None,
+        "asset_type": "bess",
         "granularity": "hourly",
+        "horizon": "single_day",
+        "deterministic": True,
+        "model_family": "lp_milp",
+        "source_of_truth_module": "services/bess_map/optimisation_engine.py",
+        "source_of_truth_functions": ["optimise_day"],
+        "assumptions": MODEL_ASSUMPTIONS,
+        "limitations": MODEL_ASSUMPTIONS["limitations"],
+        "fallback_behavior": None,
+        "status": "production",
+        "owner": "bess-platform",
+
+        # Domain-specific extras
+        "production_pipeline": "services/bess_map/run_capture_pipeline.py",
         "intervals_per_day": 24,
         "price_vector_length_required": 24,
-
-        # SOC boundary conditions
         "initial_soc": "zero",
         "terminal_soc": "unconstrained",
         "cross_day_soc_carryover": False,
-
-        # Solver
         "solver": "pulp_cbc",
         "solver_type": "milp",
-
-        # For multi-day use
         "multiday_model": "bess_dispatch_simulation_multiday",
-
-        # Full assumptions dict (importable by tests/docs)
-        "assumptions": MODEL_ASSUMPTIONS,
     },
 )
 

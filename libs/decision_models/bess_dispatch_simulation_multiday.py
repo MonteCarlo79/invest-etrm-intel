@@ -166,27 +166,44 @@ _SPEC = ModelSpec(
     run_fn=_run,
     tags=["bess", "dispatch", "simulation", "perfect_foresight", "multi_day", "batch", "arbitrage"],
     metadata={
-        "asset_type": "bess",
-        "source_module": "services/bess_map/optimisation_engine.py",
-        "production_pipeline": "services/bess_map/run_capture_pipeline.py",
-
+        # Standard metadata contract keys
+        "category": "simulation",
         "scope": "multi_day",
+        "market": None,
+        "asset_type": "bess",
         "granularity": "hourly",
+        "horizon": "multi_day",
+        "deterministic": True,
+        "model_family": "lp_milp",
+        "source_of_truth_module": "services/bess_map/optimisation_engine.py",
+        "source_of_truth_functions": ["compute_dispatch_from_hourly_prices"],
+        "assumptions": {
+            "cross_day_soc_carryover": False,
+            "initial_soc_per_day": "zero",
+            "terminal_soc_per_day": "unconstrained",
+            "days_with_missing_hours": "skipped",
+            "per_day_solver": "pulp_cbc_milp",
+        },
+        "limitations": [
+            "No cross-day SOC carryover — each day resets to SOC=0",
+            "Hourly granularity only",
+            "Perfect foresight — requires complete price series up front",
+            "Days with missing hourly prices are skipped silently",
+            "Same per-day constraints as bess_dispatch_optimization",
+        ],
+        "fallback_behavior": None,
+        "status": "production",
+        "owner": "bess-platform",
+
+        # Domain-specific extras
+        "production_pipeline": "services/bess_map/run_capture_pipeline.py",
         "cross_day_soc_carryover": False,
         "initial_soc_per_day": "zero",
         "terminal_soc_per_day": "unconstrained",
         "days_with_nan_prices": "skipped",
         "solver": "pulp_cbc",
         "solver_type": "milp",
-
         "singleday_model": "bess_dispatch_optimization",
-
-        "limitations": [
-            "No cross-day SOC carryover — each day resets to SOC=0",
-            "Hourly granularity only",
-            "Perfect foresight — requires complete price series up front",
-            "Same per-day constraints as bess_dispatch_optimization",
-        ],
     },
 )
 

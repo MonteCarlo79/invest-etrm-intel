@@ -45,6 +45,11 @@ from services.bess_map.optimisation_engine import (  # noqa: E402
     optimise_day,
     compute_dispatch_from_hourly_prices,
 )
+from services.bess_map.forecast_engine import (  # noqa: E402
+    build_forecast,
+    forecast_naive_da,
+    forecast_ols_da_time_v1,
+)
 
 
 # =============================================================================
@@ -254,74 +259,8 @@ def get_last_capture_day(engine, schema: str, province: str, model: str, duratio
     return r[0]
 
 
-# =============================================================================
-# Forecast Models
-# =============================================================================
-def _design_matrix(hours: np.ndarray, da: np.ndarray) -> np.ndarray:
-    h = hours.astype(float)
-    return np.column_stack([
-        np.ones_like(h),
-        da.astype(float),
-        np.sin(2 * np.pi * h / 24.0),
-        np.cos(2 * np.pi * h / 24.0),
-    ])
-
-
-def forecast_naive_da(hourly: pd.DataFrame) -> pd.Series:
-    """rt_pred = da_price"""
-    s = hourly["da_price"].copy()
-    s.name = "rt_pred"
-    return s
-
-
-def forecast_ols_da_time_v1(hourly: pd.DataFrame, min_train_days: int = 7, lookback_days: int = 60) -> pd.Series:
-    if hourly.empty:
-        return pd.Series(dtype=float, name="rt_pred")
-
-    df = hourly[["rt_price", "da_price"]].copy()
-    df["hour"] = df.index.hour
-    df["date"] = df.index.date
-
-    dates = pd.Index(pd.to_datetime(df["date"]).unique()).sort_values()
-    preds: List[pd.DataFrame] = []
-
-    for d in dates:
-        day = d.date()
-        day_df = df.loc[df["date"] == day]
-        if day_df.empty:
-            continue
-
-        train_end = pd.Timestamp(day)
-        train_start = train_end - pd.Timedelta(days=lookback_days)
-        train_df = df.loc[(df.index < train_end) & (df.index >= train_start)].dropna(subset=["rt_price", "da_price"])
-
-        if train_df["date"].nunique() < min_train_days:
-            pred = day_df["da_price"].copy()
-            pred.name = "rt_pred"
-            preds.append(pred.to_frame())
-            continue
-
-        X = _design_matrix(train_df["hour"].to_numpy(), train_df["da_price"].to_numpy())
-        y = train_df["rt_price"].to_numpy(dtype=float)
-        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
-
-        Xp = _design_matrix(day_df["hour"].to_numpy(), day_df["da_price"].to_numpy())
-        yhat = Xp @ beta
-        preds.append(pd.Series(yhat, index=day_df.index, name="rt_pred").to_frame())
-
-    out = pd.concat(preds).sort_index()
-    out = out[~out.index.duplicated(keep="last")]
-    return out["rt_pred"].astype(float)
-
-
-def build_forecast(hourly: pd.DataFrame, model: str, min_train_days: int, lookback_days: int) -> pd.Series:
-    model = model.lower().strip()
-    if model == "naive_da":
-        return forecast_naive_da(hourly)
-    if model == "ols_da_time_v1":
-        return forecast_ols_da_time_v1(hourly, min_train_days=min_train_days, lookback_days=lookback_days)
-    raise ValueError(f"Unknown model: {model}. Use one of: naive_da, ols_da_time_v1")
-
+# _design_matrix, forecast_naive_da, forecast_ols_da_time_v1, and build_forecast
+# are imported from services.bess_map.forecast_engine above.
 
 # DispatchResult, optimise_day, and compute_dispatch_from_hourly_prices are
 # imported from services.bess_map.optimisation_engine above.
