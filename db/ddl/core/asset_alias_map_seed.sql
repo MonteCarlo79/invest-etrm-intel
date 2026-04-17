@@ -57,3 +57,16 @@ INSERT INTO core.asset_alias_map (asset_code, alias_type, alias_value, province,
 ('gushanliang', 'dispatch_unit_name_cn', '裕昭沙子坝储能电站', 'Mengxi', '鄂尔多斯'),
 ('gushanliang', 'short_name_cn', '谷山梁储能', 'Mengxi', '鄂尔多斯'),
 ('gushanliang', 'display_name_cn', '谷山梁', 'Mengxi', '鄂尔多斯');
+
+-- invoice_dir_code aliases: B-code → asset_slug mapping for settlement invoice parsing
+-- Added: 2026-04-15
+INSERT INTO core.asset_alias_map (asset_code, alias_type, alias_value, province, city_cn) VALUES
+('wulanchabu', 'invoice_dir_code', 'B-1',  'Mengxi', '乌兰察布'),
+('suyou',      'invoice_dir_code', 'B-6',  'Mengxi', '锡林郭勒'),
+('wulate',     'invoice_dir_code', 'B-7',  'Mengxi', '巴彦淖尔'),
+('hangjinqi',  'invoice_dir_code', 'B-8',  'Mengxi', '鄂尔多斯'),
+('hetao',      'invoice_dir_code', 'B-9',  'Mengxi', '巴彦淖尔'),
+('gushanliang','invoice_dir_code', 'B-10', 'Mengxi', '鄂尔多斯'),
+('siziwangqi', 'invoice_dir_code', 'B-11', 'Mengxi', '乌兰察布'),
+('wuhai',      'invoice_dir_code', 'B-外', 'Mengxi', '乌海')
+ON CONFLICT (asset_code, alias_type, alias_value) DO NOTHING;

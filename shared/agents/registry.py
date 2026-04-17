@@ -28,6 +28,13 @@ APP_CATALOG = [
         "category": "Applications",
     },
     {
+        "name": "Model Catalogue",
+        "path": "/model-catalogue/",
+        "description": "Registry of all decision models — metadata, assumptions, and data lineage.",
+        "roles": ["Admin", "Trader", "Quant", "Analyst"],
+        "category": "Applications",
+    },
+    {
         "name": "Strategy Agent",
         "path": "/strategy-agent/",
         "description": "Opportunity screening, market structure, and deployment ranking.",

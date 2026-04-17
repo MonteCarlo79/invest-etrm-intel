@@ -141,7 +141,10 @@ def test_runcontext_reconcile_requires_start_date():
 
 def test_column_to_matrix_db_precedence(monkeypatch):
     """_db_engine() respects DB_DSN > PGURL > discrete vars without connecting to DB."""
-    import services.data_ingestion.column_to_matrix_all as cma
+    try:
+        import services.data_ingestion.column_to_matrix_all as cma
+    except SystemExit:
+        pytest.skip("enos-poseidon SDK not installed — skip column_to_matrix_all tests")
 
     # --- Test 1: DB_DSN beats PGURL ---
     monkeypatch.setenv("DB_DSN",  "postgresql://u:p@dsn-host:5432/testdb")
