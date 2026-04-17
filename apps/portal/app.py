@@ -421,12 +421,15 @@ with header_left:
 
 with header_right:
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown(
-        f'<a href="{logout_url}" target="_self">'
-        f'<button style="padding:0.5rem 1rem; border-radius:0.5rem; border:1px solid #ccc; background:white; cursor:pointer;">Logout</button>'
-        f"</a>",
-        unsafe_allow_html=True,
-    )
+    if os.getenv("AUTH_MODE", "alb_oidc").lower() == "dev":
+        st.caption("Dev Mode")
+    else:
+        st.markdown(
+            f'<a href="{logout_url}" target="_self">'
+            f'<button style="padding:0.5rem 1rem; border-radius:0.5rem; border:1px solid #ccc; background:white; cursor:pointer;">Logout</button>'
+            f"</a>",
+            unsafe_allow_html=True,
+        )
 
 if IS_VIEWER:
     st.info("You are signed in as Viewer. This role has read-only access to the portal.")

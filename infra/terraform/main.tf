@@ -1457,7 +1457,7 @@ resource "aws_ecs_service" "spot_markets" {
   name            = "${var.name}-spot-markets-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.spot_markets.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_spot_markets
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -1837,7 +1837,7 @@ resource "aws_ecs_service" "mengxi_dashboard" {
   name            = "${var.name}-mengxi-dashboard-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.mengxi_dashboard.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_mengxi_dashboard
   launch_type     = "FARGATE"
 
   health_check_grace_period_seconds = 60
@@ -1984,7 +1984,7 @@ resource "aws_ecs_service" "model_catalogue" {
   name            = "${var.name}-model-catalogue-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.model_catalogue.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_model_catalogue
   launch_type     = "FARGATE"
 
   health_check_grace_period_seconds = 60

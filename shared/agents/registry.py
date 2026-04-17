@@ -1,3 +1,5 @@
+import os
+
 APP_CATALOG = [
     {
         "name": "Portal",
@@ -69,9 +71,43 @@ APP_CATALOG = [
 ]
 
 
+def _url_overrides() -> dict:
+    """
+    Parse APP_URL_MAP env var (comma-separated slug=url pairs).
+
+    APP_URL_MAP format:  <path-slug>=<url>[,<path-slug>=<url>...]
+    The slug is the path component without leading/trailing slashes.
+
+    Example (local dev):
+        APP_URL_MAP=inner-mongolia=http://localhost:8504,bess-map=http://localhost:8503
+
+    In AWS mode, leave APP_URL_MAP unset so catalog paths (/inner-mongolia/, etc.) are used.
+    """
+    raw = os.getenv("APP_URL_MAP", "")
+    result = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        slug, url = item.split("=", 1)
+        result[slug.strip()] = url.strip()
+    return result
+
+
 def get_visible_apps(role: str):
     role_normalized = (role or "").strip()
-    return [x for x in APP_CATALOG if role_normalized in x.get("roles", [])]
+    items = [x for x in APP_CATALOG if role_normalized in x.get("roles", [])]
+    overrides = _url_overrides()
+    if not overrides:
+        return items
+    result = []
+    for item in items:
+        slug = item.get("path", "").strip("/")
+        if slug in overrides:
+            item = dict(item)  # don't mutate the shared catalog
+            item["path"] = overrides[slug]
+        result.append(item)
+    return result
 
 
 def get_visible_by_category(role: str, category: str):

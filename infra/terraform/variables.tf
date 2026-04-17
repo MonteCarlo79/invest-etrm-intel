@@ -222,6 +222,28 @@ variable "pnl_attribution_desired_count" {
 }
 
 #################################################
+# Non-essential Dashboard Desired Counts
+# Set to 0 to scale down without destroying resources.
+#################################################
+variable "desired_count_spot_markets" {
+  description = "Desired task count for the spot-markets dashboard ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "desired_count_mengxi_dashboard" {
+  description = "Desired task count for the mengxi-dashboard ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "desired_count_model_catalogue" {
+  description = "Desired task count for the model-catalogue ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
 # trading-bess-mengxi scheduled jobs (TT loaders + Mengxi P&L refresh)
 #################################################
 variable "enable_trading_bess_mengxi_schedules" {

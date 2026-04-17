@@ -65,6 +65,11 @@ def start_pipeline_task(start_date: str, end_date: str, config: dict) -> str:
     Start the ECS task that runs inner_pipeline.py.
     Pass runtime config via container environment variables.
     """
+    # Local mode: ECS_CLUSTER / PIPELINE_TASK_DEF are not set.
+    # This app runs in view-only mode locally — previously computed results
+    # (stored in the DB) are fully readable.  Triggering a new pipeline run
+    # requires AWS credentials + network access to ECS; set ECS_CLUSTER and
+    # PIPELINE_TASK_DEF env vars to re-enable in a hybrid local setup.
     if not _ECS_CLUSTER or not _PIPELINE_TASK_DEF:
         raise RuntimeError(
             "Pipeline trigger unavailable in local mode "
