@@ -147,12 +147,176 @@ variable "image_inner_pipeline" {
 }
 
 #################################################
+# Portal Service Desired Count
+#################################################
+variable "desired_count_portal" {
+  description = "Desired task count for the portal ECS service. Set to 0 to scale down without destroying."
+  type        = number
+  default     = 1
+}
+
+#################################################
 # Inner Mongolia Service Desired Count
 #################################################
 variable "desired_count_inner_mongolia" {
   description = "Number of running tasks for inner-mongolia service"
   type        = number
   default     = 1
+}
+
+#################################################
+# PnL Attribution Service
+#################################################
+variable "enable_pnl_attribution_service" {
+  description = "Set to true to deploy the Mengxi P&L attribution Streamlit service"
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_pnl_attribution_service || length(trimspace(var.pnl_attribution_image)) > 0
+    error_message = "pnl_attribution_image must be non-empty when enable_pnl_attribution_service is true."
+  }
+}
+
+variable "pnl_attribution_image" {
+  description = "Docker image for the Mengxi P&L attribution service"
+  type        = string
+  default     = ""
+}
+
+variable "pnl_attribution_pgurl" {
+  description = "Optional PGURL override for Mengxi P&L attribution ECS task. If empty, defaults to stack RDS DSN."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "pnl_attribution_container_port" {
+  description = "Container port for Mengxi P&L attribution Streamlit app"
+  type        = number
+  default     = 8502
+}
+
+variable "pnl_attribution_path" {
+  description = "ALB base path for Mengxi P&L attribution app"
+  type        = string
+  default     = "/pnl-attribution"
+}
+
+variable "pnl_attribution_cpu" {
+  description = "Fargate task CPU units for Mengxi P&L attribution app"
+  type        = number
+  default     = 512
+}
+
+variable "pnl_attribution_memory" {
+  description = "Fargate task memory (MiB) for Mengxi P&L attribution app"
+  type        = number
+  default     = 1024
+}
+
+variable "pnl_attribution_desired_count" {
+  description = "Desired ECS task count for Mengxi P&L attribution app"
+  type        = number
+  default     = 1
+}
+
+#################################################
+# Non-essential Dashboard Desired Counts
+# Set to 0 to scale down without destroying resources.
+#################################################
+variable "desired_count_spot_markets" {
+  description = "Desired task count for the spot-markets dashboard ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "desired_count_mengxi_dashboard" {
+  description = "Desired task count for the mengxi-dashboard ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "desired_count_model_catalogue" {
+  description = "Desired task count for the model-catalogue ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# trading-bess-mengxi scheduled jobs (TT loaders + Mengxi P&L refresh)
+#################################################
+variable "enable_trading_bess_mengxi_schedules" {
+  description = "Enable EventBridge/ECS schedules for TT province loader, TT asset loader, and Mengxi P&L refresh."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_trading_bess_mengxi_schedules || length(trimspace(var.image_trading_jobs)) > 0
+    error_message = "image_trading_jobs must be non-empty when enable_trading_bess_mengxi_schedules is true."
+  }
+}
+
+variable "image_trading_jobs" {
+  description = "Docker image for Mengxi trading jobs (TT loaders + P&L refresh)"
+  type        = string
+  default     = ""
+}
+
+variable "trading_jobs_db_dsn" {
+  description = "Optional DB DSN override for scheduled trading jobs. If empty, defaults to stack RDS DSN."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "trading_jobs_log_retention_days" {
+  description = "CloudWatch log retention for trading-bess-mengxi scheduled job log groups."
+  type        = number
+  default     = 14
+}
+
+variable "tt_app_key" {
+  description = "TT REST API application key for province and asset loaders."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "tt_app_secret" {
+  description = "TT REST API application secret for province and asset loaders."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "db_host" {
+  description = "RDS hostname for focused_assets_data.py (DB_HOST env var)."
+  type        = string
+  default     = ""
+}
+
+variable "image_mengxi_ingest" {
+  description = "Docker image for the Mengxi Excel ingest job."
+  type        = string
+  default     = ""
+}
+
+#################################################
+# China Spot Market Dashboard
+#################################################
+variable "image_spot_markets" {
+  description = "Docker image for China Spot Market dashboard"
+  type        = string
+  default     = ""
+}
+
+#################################################
+# Model Catalogue Image
+#################################################
+variable "image_model_catalogue" {
+  description = "Docker image for model catalogue Streamlit app"
+  type        = string
 }
 
 #################################################

@@ -302,8 +302,8 @@ Yes:
 
 | Check | Finding | Fix required |
 |---|---|---|
-| `tt_api_collector` rows_written is 1 per market (not actual row count) | `rows_written=1` in ops reflects 1 matrix execution per market, not 15-min rows. Misleading but not a blocker for monitoring. | Document or post-go-live fix. |
-| No index on `ops.ingestion_gap_queue(status)` | Low — full scan on status='pending'. Acceptable until table exceeds ~10k rows. | `CREATE INDEX CONCURRENTLY ON ops.ingestion_gap_queue(status, detected_at)` post go-live. |
+| `tt_api_collector` rows_written = number of markets run | `rows_written` in ops reflects number of markets processed (e.g. 4), not the actual row count. Monitoring should rely on `ops.ingestion_job_runs.status` and `ops.ingestion_dataset_status.last_date_seen` instead. `enos_market` does report real row counts via `_count_rows_written()`. | Accepted limitation — column_to_matrix_all returns no row count; would require a post-run DB query across ~28 dynamic table names to fix. |
+| No index on `ops.ingestion_gap_queue(status)` | Low — full scan on status='pending'. Acceptable until table exceeds ~10k rows. | **DONE** 2026-04-16 — added to `ingestion_control.sql`; apply with `psql $PGURL -f db/ddl/ops/ingestion_control.sql` |
 | `task_role_arn` ECS RunTask permissions unverified | freshness_monitor `dispatch_gaps()` has no try/except — will fail the task if `ecs:RunTask` / `iam:PassRole` missing. ECS_DISPATCH=false by default, so safe for now. | Verify IAM before enabling ECS_DISPATCH (see P5). |
 
 ### Rollback steps
@@ -333,6 +333,51 @@ Yes:
    aws ecr delete-repository --repository-name bess-data-ingestion --force --region ap-southeast-1
    ```
 
+### Phase 5 — Enable enos_market (NEXT ACTION)
+
+Run these in order:
+
+**Step 1 — Apply DDL updates** (adds 3 indexes + 2 CHECK constraints; idempotent):
+```bash
+psql "$PGURL" -f db/ddl/ops/ingestion_control.sql
+```
+
+**Step 2 — Verify EventBridge rule exists and is currently disabled:**
+```bash
+aws events describe-rule \
+  --name bess-platform-enos-market-daily \
+  --region ap-southeast-1 \
+  --query '{State:State, ScheduleExpression:ScheduleExpression}'
+```
+Expected: `"State": "DISABLED"` (created by terraform apply, initially disabled)
+
+**Step 3 — Enable the rule:**
+```bash
+aws events enable-rule \
+  --name bess-platform-enos-market-daily \
+  --region ap-southeast-1
+```
+
+**Step 4 — Verify it fires next morning (04:05 SGT = 20:05 UTC):**
+```bash
+# Check for new run in job_runs table:
+psql "$PGURL" -c "
+  SELECT id, run_mode, start_date, end_date, status, rows_written, started_at
+  FROM ops.ingestion_job_runs
+  WHERE collector = 'enos_market'
+  ORDER BY started_at DESC
+  LIMIT 5;"
+
+# Check CloudWatch logs:
+aws logs tail /ecs/bess-platform/enos-market-collector \
+  --follow \
+  --region ap-southeast-1
+```
+
+**Gate before Phase 7:** Two consecutive days with `status='success'` and `rows_written > 0` in `ops.ingestion_job_runs`.
+
+---
+
 ### Recommended rollout order
 
 | Phase | Action | Gate | Status |
@@ -341,7 +386,7 @@ Yes:
 | 2 | Build + push Docker image; `terraform apply` (standalone module) | 16 resources created, `terraform plan` 0 changes to existing | **DONE** 2026-04-10 — task defs `:2`, ECR `bess-data-ingestion:latest` |
 | 3 | Dry-run enos_market: `DRY_RUN=true RUN_MODE=daily PGURL=... python services/data_ingestion/enos_market_collector.py` | ops.ingestion_job_runs has 1 row status='skipped' | **DONE** 2026-04-10 |
 | 4 | Live reconcile enos_market 1 day: `RUN_MODE=reconcile START_DATE=2026-04-09 END_DATE=2026-04-09 PGURL=...` | ops.ingestion_job_runs status='success'; rows_written > 0; all 8 tables dataset_status | **DONE** 2026-04-10 — 267,493 rows, 8 tables updated |
-| 5 | Enable enos_market EventBridge rule; monitor 2 days | Daily rows in ops.ingestion_job_runs | **NEXT ACTION** |
+| 5 | Apply DDL indexes + constraints; enable enos_market EventBridge rule; monitor 2 days | Daily rows in ops.ingestion_job_runs | **NEXT ACTION** — commands below |
 | 6 | Live run tt_api locally with PGURL only: confirm startup log shows `mode=pgurl` | ops.ingestion_job_runs status='success' for tt_api | **DONE** 2026-04-10 — `mode=pgurl` confirmed; `hist_shandong_binzhou_*` updated |
 | 7 | Enable tt_api EventBridge rule | Monitor 2 days; verify public.hist_* tables updated | Pending phase 5 |
 | 8 | Enable freshness_monitor EventBridge rule (ECS_DISPATCH=false by default) | Gaps appear in ops.ingestion_gap_queue; no ECS tasks launched | Pending phase 7 |

@@ -68,3 +68,39 @@ INSERT INTO ops.ingestion_expected_freshness (dataset, collector, date_column, m
   ('public.hist_shandong_binzhou_clear',     'tt_api', 'date', 3),
   ('public.hist_anhui_dingyuan_clear',       'tt_api', 'date', 3)
 ON CONFLICT (dataset) DO NOTHING;
+
+-- Monitoring indexes (safe to re-apply: IF NOT EXISTS)
+CREATE INDEX IF NOT EXISTS idx_ingestion_job_runs_collector_started
+    ON ops.ingestion_job_runs (collector, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_gap_queue_status_detected
+    ON ops.ingestion_gap_queue (status, detected_at)
+    WHERE status IN ('pending', 'dispatched');
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_gap_queue_dataset_status
+    ON ops.ingestion_gap_queue (dataset, status);
+
+-- Status value constraints (safe to re-apply: DO NOTHING on duplicate name)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_job_runs_status' AND conrelid = 'ops.ingestion_job_runs'::regclass
+    ) THEN
+        ALTER TABLE ops.ingestion_job_runs
+            ADD CONSTRAINT chk_job_runs_status
+            CHECK (status IN ('running', 'success', 'failed', 'skipped'));
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_gap_queue_status' AND conrelid = 'ops.ingestion_gap_queue'::regclass
+    ) THEN
+        ALTER TABLE ops.ingestion_gap_queue
+            ADD CONSTRAINT chk_gap_queue_status
+            CHECK (status IN ('pending', 'dispatched', 'resolved', 'suppressed'));
+    END IF;
+END $$;

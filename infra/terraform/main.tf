@@ -10,6 +10,17 @@ locals {
   }
 
   log_group = "/ecs/${var.name}"
+
+  # Constructed DSN used by services that don't have an explicit pgurl override
+  db_pgurl = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+
+  # PnL attribution routing helpers
+  pnl_attribution_base_path = trim(var.pnl_attribution_path, "/")
+  pnl_attribution_route_patterns = [
+    "/${trim(var.pnl_attribution_path, "/")}",
+    "/${trim(var.pnl_attribution_path, "/")}/",
+    "/${trim(var.pnl_attribution_path, "/")}/*",
+  ]
 }
 
 # -------------------------
@@ -91,7 +102,7 @@ resource "aws_security_group" "ecs_tasks" {
   ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
-    to_port         = 8504
+    to_port         = 8506
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -1157,6 +1168,314 @@ resource "aws_ecr_lifecycle_policy" "inner_mongolia" {
   })
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Mengxi P&L Attribution service — RECOVERED (was removed in commit 30e76fa)
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_ecr_repository" "pnl_attribution" {
+  count                = var.enable_pnl_attribution_service ? 1 : 0
+  name                 = "bess-pnl-attribution"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_target_group" "pnl_attribution" {
+  count       = var.enable_pnl_attribution_service ? 1 : 0
+  name_prefix = "tgpnl-"
+  port        = var.pnl_attribution_container_port
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path                = "/${local.pnl_attribution_base_path}/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "pnl_attribution_path" {
+  count        = var.enable_pnl_attribution_service ? 1 : 0
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 35  # was 25; 25 is now used by mengxi_dashboard
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.pnl_attribution[0].arn
+  }
+
+  condition {
+    path_pattern {
+      values = local.pnl_attribution_route_patterns
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "pnl_attribution" {
+  count                    = var.enable_pnl_attribution_service ? 1 : 0
+  family                   = "${var.name}-pnl-attribution"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = tostring(var.pnl_attribution_cpu)
+  memory                   = tostring(var.pnl_attribution_memory)
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "pnl-attribution"
+      image     = var.pnl_attribution_image
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = var.pnl_attribution_container_port
+          protocol      = "tcp"
+        }
+      ]
+
+      command = [
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.port=${var.pnl_attribution_container_port}",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=${local.pnl_attribution_base_path}",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false"
+      ]
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = length(trimspace(var.pnl_attribution_pgurl)) > 0 ? var.pnl_attribution_pgurl : local.db_pgurl
+        },
+        {
+          name  = "DB_DSN"
+          value = length(trimspace(var.pnl_attribution_pgurl)) > 0 ? var.pnl_attribution_pgurl : local.db_pgurl
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = aws_cognito_user_pool.bess_users.id
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "pnl-attribution"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "pnl_attribution" {
+  count           = var.enable_pnl_attribution_service ? 1 : 0
+  name            = "${var.name}-pnl-attribution-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.pnl_attribution[0].arn
+  desired_count   = var.pnl_attribution_desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.pnl_attribution[0].arn
+    container_name   = "pnl-attribution"
+    container_port   = var.pnl_attribution_container_port
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# China Spot Market Dashboard — RECOVERED (was removed in commit 30e76fa)
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_ecr_repository" "spot_markets" {
+  name                 = "bess-spot-markets"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+}
+
+resource "aws_lb_target_group" "spot_markets" {
+  name_prefix = "tgsm-"
+  port        = 8505
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path                = "/spot-markets/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "spot_markets_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 40  # was 30; 30 is now used by model_catalogue
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.spot_markets.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/spot-markets", "/spot-markets/", "/spot-markets/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "spot_markets" {
+  family                   = "${var.name}-spot-markets"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "spot-markets"
+      image     = var.image_spot_markets
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8505
+          protocol      = "tcp"
+        }
+      ]
+
+      command = [
+        "streamlit",
+        "run",
+        "apps/spot-agent/ui/spot_dashboard.py",
+        "--server.port=8505",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=spot-markets",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false"
+      ]
+
+      environment = [
+        {
+          name  = "DB_URL"
+          value = var.db_dsn
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "spot-markets"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "spot_markets" {
+  name            = "${var.name}-spot-markets-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.spot_markets.arn
+  desired_count   = var.desired_count_spot_markets
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.spot_markets.arn
+    container_name   = "spot-markets"
+    container_port   = 8505
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
 data "aws_iam_policy_document" "eventbridge_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -1237,6 +1556,35 @@ resource "aws_iam_role_policy" "eventbridge_ecs_run_task" {
 
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Mengxi trading-bess-mengxi scheduled jobs — RECOVERED (was removed in 30e76fa)
+# Module manages: tt-province-loader, tt-asset-loader, mengxi-pnl-refresh,
+# mengxi-excel-ingest task definitions + EventBridge rules/targets + log groups.
+# ─────────────────────────────────────────────────────────────────────────────
+
+module "trading_bess_mengxi_schedules" {
+  count = var.enable_trading_bess_mengxi_schedules ? 1 : 0
+
+  source = "./trading-bess-mengxi"
+
+  region                     = var.region
+  name                       = var.name
+  ecs_cluster_arn            = aws_ecs_cluster.this.arn
+  private_subnet_ids         = var.private_subnet_ids
+  task_security_group_id     = aws_security_group.ecs_tasks.id
+  ecs_execution_role_arn     = aws_iam_role.task_execution.arn
+  ecs_task_role_arn          = aws_iam_role.task_role.arn
+  events_invoke_ecs_role_arn = aws_iam_role.eventbridge_ecs.arn
+  image_trading_jobs         = var.image_trading_jobs
+  image_mengxi_ingest        = var.image_mengxi_ingest
+  db_dsn                     = length(trimspace(var.trading_jobs_db_dsn)) > 0 ? var.trading_jobs_db_dsn : local.db_pgurl
+  log_retention_days         = var.trading_jobs_log_retention_days
+  tt_app_key                 = var.tt_app_key
+  tt_app_secret              = var.tt_app_secret
+  db_host                    = var.db_host
+  db_password                = var.db_password
+}
+
 resource "aws_cloudwatch_event_rule" "inner_agent_daily" {
   name                = "${var.name}-inner-agent-daily"
   schedule_expression = "cron(0 21 * * ? *)"
@@ -1312,7 +1660,7 @@ resource "aws_ecs_service" "portal" {
   name            = "bess-platform-portal-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.portal.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_portal
   launch_type     = "FARGATE"
 
   health_check_grace_period_seconds = 60
@@ -1340,7 +1688,7 @@ resource "aws_ecs_service" "inner_mongolia" {
   name            = "${var.name}-inner-mongolia-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.inner_mongolia.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_inner_mongolia
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -1489,7 +1837,7 @@ resource "aws_ecs_service" "mengxi_dashboard" {
   name            = "${var.name}-mengxi-dashboard-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.mengxi_dashboard.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_mengxi_dashboard
   launch_type     = "FARGATE"
 
   health_check_grace_period_seconds = 60
@@ -1504,6 +1852,153 @@ resource "aws_ecs_service" "mengxi_dashboard" {
     target_group_arn = aws_lb_target_group.mengxi_dashboard.arn
     container_name   = "mengxi-dashboard"
     container_port   = 8505
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# -------------------------
+# Model Catalogue — ECR, ALB, ECS
+# -------------------------
+
+resource "aws_ecr_repository" "model_catalogue" {
+  name                 = "bess-model-catalogue"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_ecr_lifecycle_policy" "model_catalogue" {
+  repository = aws_ecr_repository.model_catalogue.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_lb_target_group" "model_catalogue" {
+  name_prefix = "tgmdc-"
+  port        = 8506
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  health_check {
+    path                = "/model-catalogue/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "model_catalogue_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 30
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.model_catalogue.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/model-catalogue", "/model-catalogue/", "/model-catalogue/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "model_catalogue" {
+  family                   = "${var.name}-model-catalogue"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "model-catalogue"
+      image     = var.image_model_catalogue
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8506
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "model-catalogue"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "model_catalogue" {
+  name            = "${var.name}-model-catalogue-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.model_catalogue.arn
+  desired_count   = var.desired_count_model_catalogue
+  launch_type     = "FARGATE"
+
+  health_check_grace_period_seconds = 60
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.model_catalogue.arn
+    container_name   = "model-catalogue"
+    container_port   = 8506
   }
 
   depends_on = [aws_lb_listener.https]

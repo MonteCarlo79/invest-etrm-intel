@@ -55,11 +55,27 @@ def get_engine():
 # ==========================================================
 ecs = boto3.client("ecs", region_name=os.getenv("AWS_REGION", "ap-southeast-1"))
 
+_ECS_CLUSTER = os.getenv("ECS_CLUSTER")
+_PIPELINE_TASK_DEF = os.getenv("PIPELINE_TASK_DEF")
+_PRIVATE_SUBNETS = os.getenv("PRIVATE_SUBNETS", "")
+_TASK_SECURITY_GROUPS = os.getenv("TASK_SECURITY_GROUPS", "")
+
 def start_pipeline_task(start_date: str, end_date: str, config: dict) -> str:
     """
     Start the ECS task that runs inner_pipeline.py.
     Pass runtime config via container environment variables.
     """
+    # Local mode: ECS_CLUSTER / PIPELINE_TASK_DEF are not set.
+    # This app runs in view-only mode locally — previously computed results
+    # (stored in the DB) are fully readable.  Triggering a new pipeline run
+    # requires AWS credentials + network access to ECS; set ECS_CLUSTER and
+    # PIPELINE_TASK_DEF env vars to re-enable in a hybrid local setup.
+    if not _ECS_CLUSTER or not _PIPELINE_TASK_DEF:
+        raise RuntimeError(
+            "Pipeline trigger unavailable in local mode "
+            "(ECS_CLUSTER / PIPELINE_TASK_DEF not configured)."
+        )
+
     env_list = [
         {"name": "START_DATE", "value": start_date},
         {"name": "END_DATE", "value": end_date},
@@ -74,13 +90,13 @@ def start_pipeline_task(start_date: str, end_date: str, config: dict) -> str:
     ]
 
     resp = ecs.run_task(
-        cluster=os.environ["ECS_CLUSTER"],
-        taskDefinition=os.environ["PIPELINE_TASK_DEF"],
+        cluster=_ECS_CLUSTER,
+        taskDefinition=_PIPELINE_TASK_DEF,
         launchType="FARGATE",
         networkConfiguration={
             "awsvpcConfiguration": {
-                "subnets": os.environ["PRIVATE_SUBNETS"].split(","),
-                "securityGroups": os.environ["TASK_SECURITY_GROUPS"].split(","),
+                "subnets": _PRIVATE_SUBNETS.split(","),
+                "securityGroups": _TASK_SECURITY_GROUPS.split(","),
                 "assignPublicIp": "ENABLED"
             }
         },
@@ -105,7 +121,7 @@ def get_task_status(task_arn: str) -> dict:
     """
     Return status dict: {"lastStatus": ..., "stopCode":..., "stoppedReason":..., "exitCode":...}
     """
-    r = ecs.describe_tasks(cluster=os.environ["ECS_CLUSTER"], tasks=[task_arn])
+    r = ecs.describe_tasks(cluster=_ECS_CLUSTER, tasks=[task_arn])
     tasks = r.get("tasks", [])
     if not tasks:
         return {"lastStatus": "UNKNOWN"}

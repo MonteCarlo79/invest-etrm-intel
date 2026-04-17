@@ -5,36 +5,53 @@ to match the spot-agent tools_db.py pattern.
 """
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 
 import psycopg2
 import psycopg2.extras
 
+_log = logging.getLogger(__name__)
 
-def _get_url() -> str:
-    url = (
-        os.getenv("PGURL")
-        or os.getenv("DB_URL")
-        or os.getenv("DATABASE_URL")
-        or os.getenv("MARKETDATA_DB_URL")
+_URL_ENV_KEYS = ["PGURL", "DB_URL", "DATABASE_URL", "MARKETDATA_DB_URL"]
+
+
+def _get_url() -> tuple[str, str]:
+    """Return (url, env_key_used). Raises RuntimeError if none set."""
+    for key in _URL_ENV_KEYS:
+        val = os.getenv(key)
+        if val:
+            return val, key
+    raise RuntimeError(
+        "No DB URL found. Set PGURL (or DB_URL / DATABASE_URL / MARKETDATA_DB_URL).\n"
+        "For RDS access set: export PGURL='postgresql://user:pass@host:5432/db?sslmode=require'\n"
+        "Hint: config/.env contains the live RDS PGURL — source it or copy to repo root .env"
     )
-    if not url:
-        raise RuntimeError(
-            "No DB URL found. Set PGURL (or DB_URL / DATABASE_URL)."
-        )
-    return url
 
 
 @contextmanager
 def get_conn():
-    conn = psycopg2.connect(
-        _get_url(),
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=10,
-        keepalives_count=5,
-    )
+    url, key = _get_url()
+    _log.debug("Connecting via %s", key)
+    try:
+        conn = psycopg2.connect(
+            url,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+    except psycopg2.OperationalError as exc:
+        msg = str(exc)
+        if "Connection timed out" in msg or "could not connect" in msg.lower():
+            raise psycopg2.OperationalError(
+                f"{msg}\n"
+                "Hint: RDS security group only allows inbound 5432 from ecs_tasks-sg.\n"
+                "To connect from a developer machine, add your IP to the rds-sg inbound rules (port 5432).\n"
+                "Tailscale VPC host 172.31.30.155 also needs to be added if connecting via jump host."
+            ) from exc
+        raise
     try:
         yield conn
     finally:
