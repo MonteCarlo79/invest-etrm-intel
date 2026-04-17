@@ -1660,7 +1660,7 @@ resource "aws_ecs_service" "portal" {
   name            = "bess-platform-portal-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.portal.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_portal
   launch_type     = "FARGATE"
 
   health_check_grace_period_seconds = 60
@@ -1688,7 +1688,7 @@ resource "aws_ecs_service" "inner_mongolia" {
   name            = "${var.name}-inner-mongolia-svc"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.inner_mongolia.arn
-  desired_count   = 1
+  desired_count   = var.desired_count_inner_mongolia
   launch_type     = "FARGATE"
 
   network_configuration {

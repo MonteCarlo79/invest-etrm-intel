@@ -91,6 +91,14 @@ def _password_login() -> Optional[Dict[str, Any]]:
 
 
 def get_user() -> Optional[Dict[str, Any]]:
+    # Dev mode: synthetic user, no OIDC or ALB required
+    if os.getenv("AUTH_MODE", "alb_oidc").lower() == "dev":
+        return {
+            "email": os.getenv("DEV_USER_EMAIL", "dev@local"),
+            "role": os.getenv("DEV_USER_ROLE", "Admin"),
+            "_auth_source": "dev",
+        }
+
     user = _get_user_from_oidc()
     if user:
         return user

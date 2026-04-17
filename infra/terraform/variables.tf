@@ -147,6 +147,15 @@ variable "image_inner_pipeline" {
 }
 
 #################################################
+# Portal Service Desired Count
+#################################################
+variable "desired_count_portal" {
+  description = "Desired task count for the portal ECS service. Set to 0 to scale down without destroying."
+  type        = number
+  default     = 1
+}
+
+#################################################
 # Inner Mongolia Service Desired Count
 #################################################
 variable "desired_count_inner_mongolia" {
