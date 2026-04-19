@@ -138,6 +138,12 @@ resource "aws_security_group" "rds" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  # Laptop/developer CIDR rules are added manually in AWS and must not be
+  # removed by Terraform. Add or remove them directly in the AWS console.
+  lifecycle {
+    ignore_changes = [ingress]
+  }
 }
 
 # -------------------------
@@ -160,7 +166,7 @@ resource "aws_db_instance" "pg" {
   username                     = var.db_username
   password                     = var.db_password
   port                         = 5432
-  publicly_accessible          = false
+  publicly_accessible          = true
   multi_az                     = false
   storage_encrypted            = true
   skip_final_snapshot          = true
@@ -505,6 +511,12 @@ resource "aws_ecs_cluster" "this" {
   }
 
   tags = local.tags
+
+  # execute_command_configuration is managed manually (ECS Exec enabled for
+  # debugging). Ignore it here so Terraform does not strip it on apply.
+  lifecycle {
+    ignore_changes = [configuration]
+  }
 }
 
 # -------------------------
