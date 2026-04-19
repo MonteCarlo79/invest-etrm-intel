@@ -20,7 +20,7 @@ from sqlalchemy.engine import Engine
 from apps.trading.bess.mengxi.pnl_attribution.calc import (
     ASSET_ALIAS_MAP,
     SCENARIOS,
-    SUBSIDY_PER_MWH_DEFAULT,
+    DEFAULT_COMPENSATION_YUAN_PER_MWH,
     build_daily_attribution_row,
     build_daily_scenario_rows,
 )

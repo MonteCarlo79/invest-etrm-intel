@@ -15,9 +15,9 @@ import botocore
 
 from auth.rbac import get_user, get_groups, get_role, get_email, require_role
 
-require_role(["Admin", "Trader", "Quant", "Analyst"])
-
 st.set_page_config(page_title="BESS Pipeline", layout="wide")
+
+require_role(["Admin", "Trader", "Quant", "Analyst"])
 
 
 def resolve_role() -> str | None:
