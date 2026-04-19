@@ -176,6 +176,7 @@ resource "aws_db_instance" "pg" {
   tags                         = local.tags
   backup_retention_period      = 7
   performance_insights_enabled = true
+  max_allocated_storage        = 1000   # storage auto-scaling cap; set in AWS, reconciled here
 }
 
 # -------------------------
