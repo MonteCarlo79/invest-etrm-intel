@@ -58,5 +58,10 @@ data/
 *.xlsx
 *.csv
 
-# Terraform plan
+# Terraform plan (binary output files — contain embedded secrets from tfvars)
 *.tfplan
+tfplan
+tfplan_*
+
+# Local runtime copies (uploader Dockerfile mounts services/bess_map here)
+apps/uploader/models/
