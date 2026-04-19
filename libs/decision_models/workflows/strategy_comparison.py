@@ -1,0 +1,1437 @@
+"""
+libs/decision_models/workflows/strategy_comparison.py
+
+Six reusable skills for BESS dispatch strategy comparison, ranking,
+discrepancy attribution, and report generation.
+
+────────────────────────────────────────────────────────────
+SKILL SUMMARY
+────────────────────────────────────────────────────────────
+Skill 1  load_bess_strategy_comparison_context(asset_code, date_from, date_to)
+Skill 2  run_perfect_foresight_dispatch(context)
+Skill 3  run_forecast_dispatch_suite(context, forecast_models)
+Skill 4  rank_dispatch_strategies(context, pf_result, forecast_suite, db_pnl_df)
+Skill 5  attribute_dispatch_discrepancy(context, ranking, attribution_df)
+Skill 6  generate_asset_strategy_report(asset_code, date_from, date_to, period_type,
+                                         context, ranking, attribution)
+
+────────────────────────────────────────────────────────────
+DESIGN RULES
+────────────────────────────────────────────────────────────
+- Model logic stays in libs/decision_models/<model>.py — never duplicated here.
+- DB logic stays in libs/decision_models/resources/bess_context.py — never here.
+- Each skill returns a JSON-serialisable dataclass (via dataclasses.asdict).
+- All approximations are documented in output.caveats / output.data_quality_notes.
+- Each skill can be called standalone or chained in a pipeline.
+
+────────────────────────────────────────────────────────────
+GRANULARITY NOTE
+────────────────────────────────────────────────────────────
+Perfect-foresight and forecast-driven strategies use HOURLY dispatch
+(bess_dispatch_simulation_multiday) and are settled against hourly mean of
+15-min actual prices.  Nominated / actual strategies come from the DB at
+15-min granularity.  Do NOT directly compare hourly P&L to 15-min P&L as
+absolute values — use them for relative gap / attribution only.
+
+────────────────────────────────────────────────────────────
+ATTRIBUTION METHOD
+────────────────────────────────────────────────────────────
+Rules-based waterfall.  Buckets do NOT prove causality.  Cascade:
+
+  1. forecast_error         = PF_pnl − best_forecast_pnl
+  2. grid_restriction       = from DB (PF_unrestricted − PF_grid_feasible) if available
+  3. execution_nomination   = best_forecast_pnl − nominated_pnl (if nominated available)
+  4. execution_clearing     = nominated_pnl − actual_pnl (if both available)
+  5. asset_issue            = proxy from outage flags (always None until table exists)
+  6. residual               = total_gap − sum(explained)
+"""
+from __future__ import annotations
+
+import dataclasses
+import datetime
+import logging
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+from libs.decision_models.schemas.strategy_comparison import (
+    AssetMetadata,
+    AssetStrategyReport,
+    DailyDiscrepancyRow,
+    DiscrepancyAttributionResult,
+    DiscrepancyBuckets,
+    ForecastDispatchSuiteResult,
+    ForecastStrategyResult,
+    ForecastToYearEnd,
+    PerfectForesightResult,
+    PnLComparisonTable,
+    StrategyComparisonContext,
+    StrategyPnLResult,
+    StrategyRankRow,
+    StrategyRankingResult,
+    YTDSummary,
+)
+
+logger = logging.getLogger(__name__)
+
+_INTERVAL_HRS_15MIN = 0.25
+_INTERVAL_HRS_HOURLY = 1.0
+
+# Names of scenarios stored in the DB (canon.scenario_dispatch_15min)
+_DB_SCENARIOS = [
+    "perfect_foresight_unrestricted",
+    "perfect_foresight_grid_feasible",
+    "tt_forecast_optimal",
+    "tt_strategy",
+    "nominated_dispatch",
+    "cleared_actual",
+]
+
+
+# ===========================================================================
+# Skill 1 — Load context
+# ===========================================================================
+
+def load_bess_strategy_comparison_context(
+    asset_code: str,
+    date_from: str,
+    date_to: str,
+) -> Dict[str, Any]:
+    """
+    Load all data needed to run the strategy comparison workflow.
+
+    Parameters
+    ----------
+    asset_code : stable asset code, e.g. "suyou"
+    date_from  : ISO date string, e.g. "2026-03-01"
+    date_to    : ISO date string, e.g. "2026-03-31"
+
+    Returns
+    -------
+    JSON-serialisable dict matching StrategyComparisonContext schema.
+    Contains actual prices, DA prices, nominated/actual dispatch, asset metadata,
+    and a list of data_quality_notes for any missing/degraded data.
+    """
+    from libs.decision_models.resources.bess_context import (
+        load_actual_prices_15min,
+        load_asset_metadata,
+        load_available_scenarios,
+        load_curtailment_flags,
+        load_da_prices_hourly,
+        load_id_cleared_energy,
+        load_outage_flags,
+        load_scenario_dispatch_15min,
+        resample_15min_to_hourly,
+    )
+
+    d_from = datetime.date.fromisoformat(date_from)
+    d_to = datetime.date.fromisoformat(date_to)
+    notes: List[str] = []
+
+    # --- Asset metadata ---
+    meta_dict, meta_notes = load_asset_metadata(asset_code, trade_month=d_from)
+    notes.extend(meta_notes)
+
+    # --- Actual prices ---
+    prices_15min_df, price_notes = load_actual_prices_15min(asset_code, d_from, d_to)
+    notes.extend(price_notes)
+
+    prices_hourly_df = resample_15min_to_hourly(prices_15min_df)
+
+    # --- DA prices (for forecast input) ---
+    da_prices_df, da_notes = load_da_prices_hourly(d_from, d_to)
+    notes.extend(da_notes)
+
+    # --- Scenario availability ---
+    available_scenarios, avail_notes = load_available_scenarios(asset_code, d_from, d_to)
+    notes.extend(avail_notes)
+
+    # --- Nominated dispatch ---
+    nominated_df, nom_notes = load_scenario_dispatch_15min(
+        asset_code, "nominated_dispatch", d_from, d_to
+    )
+    notes.extend(nom_notes)
+
+    # --- Actual dispatch (cleared_actual scenario from canon table) ---
+    # NOTE: "cleared_actual" in canon.scenario_dispatch_15min records the as-cleared
+    # or as-dispatched schedule.  Do NOT conflate with id_cleared_energy_15min below.
+    actual_df, act_notes = load_scenario_dispatch_15min(
+        asset_code, "cleared_actual", d_from, d_to
+    )
+    notes.extend(act_notes)
+
+    # --- Inner Mongolia DA cleared energy (distinct from actual physical dispatch) ---
+    # marketdata.md_id_cleared_energy = DA market-cleared trading energy.
+    # Applies to Mengxi assets only; non-Mengxi assets get None with no error.
+    id_cleared_df, id_cleared_notes = load_id_cleared_energy(asset_code, d_from, d_to)
+    notes.extend(id_cleared_notes)
+    if not id_cleared_df.empty:
+        # Add standing caveat for any Mengxi asset with cleared energy data
+        notes.append(
+            "id_cleared_energy: Inner Mongolia DA cleared energy loaded — "
+            "this is market-cleared trading volume, NOT actual physical dispatch; "
+            "gap between id_cleared_energy and actual_dispatch may indicate "
+            "asset issue / BOP constraint / grid restriction"
+        )
+
+    # --- Outage / curtailment (TODO placeholders) ---
+    outage_flags, outage_notes = load_outage_flags(asset_code, d_from, d_to)
+    notes.extend(outage_notes)
+    curtailment_flags, curtailment_notes = load_curtailment_flags(asset_code, d_from, d_to)
+    notes.extend(curtailment_notes)
+
+    asset_meta = AssetMetadata(
+        asset_code=meta_dict["asset_code"],
+        display_name=meta_dict["display_name"],
+        power_mw=meta_dict["power_mw"],
+        duration_h=meta_dict["duration_h"],
+        roundtrip_eff=meta_dict["roundtrip_eff"],
+        compensation_yuan_per_mwh=meta_dict["compensation_yuan_per_mwh"],
+        province=meta_dict["province"],
+        source=meta_dict["source"],
+    )
+
+    ctx = StrategyComparisonContext(
+        asset_code=asset_code,
+        date_from=date_from,
+        date_to=date_to,
+        asset_metadata=asset_meta,
+        actual_prices_15min=prices_15min_df.to_dict("records") if not prices_15min_df.empty else [],
+        actual_prices_hourly=prices_hourly_df.to_dict("records") if not prices_hourly_df.empty else [],
+        da_prices_hourly=da_prices_df.to_dict("records") if not da_prices_df.empty else [],
+        nominated_dispatch_15min=nominated_df.to_dict("records") if not nominated_df.empty else None,
+        actual_dispatch_15min=actual_df.to_dict("records") if not actual_df.empty else None,
+        id_cleared_energy_15min=(
+            id_cleared_df.to_dict("records") if not id_cleared_df.empty else None
+        ),
+        available_scenarios=available_scenarios,
+        outage_flags=outage_flags,
+        curtailment_flags=curtailment_flags,
+        data_quality_notes=notes,
+    )
+    return dataclasses.asdict(ctx)
+
+
+# ===========================================================================
+# Skill 2 — Perfect foresight dispatch
+# ===========================================================================
+
+def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Compute perfect-foresight BESS dispatch using actual hourly prices as input.
+
+    Uses bess_dispatch_simulation_multiday (LP over each day independently).
+    P&L is settled against hourly mean of actual 15-min prices.
+
+    APPROXIMATION: hourly granularity; results not directly comparable to
+    15-min DB P&L figures.
+
+    Parameters
+    ----------
+    context : output dict from load_bess_strategy_comparison_context()
+
+    Returns
+    -------
+    JSON-serialisable dict matching PerfectForesightResult schema.
+    """
+    import libs.decision_models.bess_dispatch_simulation_multiday  # noqa: F401
+    from libs.decision_models.runners.local import run
+
+    caveats: List[str] = [
+        "perfect_foresight: hourly granularity — P&L settled on hourly mean of actual 15-min prices",
+        "perfect_foresight: SOC resets to 0 each day (no cross-day carryover)",
+        "perfect_foresight: single-asset LP — no portfolio or grid constraints",
+    ]
+
+    meta = context["asset_metadata"]
+    hourly_prices: List[dict] = context.get("actual_prices_hourly", [])
+
+    if not hourly_prices:
+        caveats.append("perfect_foresight: no actual hourly prices available — returning empty result")
+        result = PerfectForesightResult(
+            strategy_name="perfect_foresight_hourly",
+            pnl=StrategyPnLResult(
+                strategy_name="perfect_foresight_hourly",
+                pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+                notes=caveats,
+            ),
+            dispatch_hourly=[], daily_profit=[], energy_capacity_mwh=0.0,
+            caveats=caveats,
+        )
+        return dataclasses.asdict(result)
+
+    # Normalise datetimes
+    price_records = []
+    for rec in hourly_prices:
+        ts = rec.get("datetime") or rec.get("time")
+        price = rec.get("price")
+        if ts is not None and price is not None and not (isinstance(price, float) and np.isnan(price)):
+            price_records.append({"datetime": str(pd.Timestamp(ts)), "price": float(price)})
+
+    if not price_records:
+        caveats.append("perfect_foresight: hourly prices are all null — returning empty result")
+        result = PerfectForesightResult(
+            strategy_name="perfect_foresight_hourly",
+            pnl=StrategyPnLResult(
+                strategy_name="perfect_foresight_hourly",
+                pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+                notes=caveats,
+            ),
+            dispatch_hourly=[], daily_profit=[], energy_capacity_mwh=0.0,
+            caveats=caveats,
+        )
+        return dataclasses.asdict(result)
+
+    opt_result = run("bess_dispatch_simulation_multiday", {
+        "hourly_prices": price_records,
+        "power_mw": meta["power_mw"],
+        "duration_h": meta["duration_h"],
+        "roundtrip_eff": meta["roundtrip_eff"],
+    })
+
+    # Build dispatch_hourly with prices merged in
+    price_map = {rec["datetime"]: rec["price"] for rec in price_records}
+    dispatch_hourly = []
+    for rec in opt_result.get("dispatch_records", []):
+        dt_str = rec["datetime"]
+        p = price_map.get(dt_str, 0.0)
+        dispatch_hourly.append({
+            "datetime": dt_str,
+            "charge_mw": rec["charge_mw"],
+            "discharge_mw": rec["discharge_mw"],
+            "dispatch_grid_mw": rec["dispatch_grid_mw"],
+            "soc_mwh": rec["soc_mwh"],
+            "price": p,
+        })
+
+    # Compute P&L at hourly resolution
+    pnl_market = sum(
+        r["dispatch_grid_mw"] * r["price"] * _INTERVAL_HRS_HOURLY
+        for r in dispatch_hourly
+    )
+    discharge_mwh = sum(
+        max(r["discharge_mw"], 0) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
+    )
+    charge_mwh = sum(
+        abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
+    )
+    pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
+
+    solver_statuses = {
+        rec["date"]: str(
+            next(
+                (d["solver_status"] for d in opt_result.get("dispatch_records", [])
+                 if d["datetime"].startswith(rec["date"])),
+                "unknown",
+            )
+        )
+        for rec in opt_result.get("daily_profit", [])
+    }
+
+    pnl_obj = StrategyPnLResult(
+        strategy_name="perfect_foresight_hourly",
+        pnl_market_yuan=pnl_market,
+        pnl_compensation_yuan=pnl_comp,
+        pnl_total_yuan=pnl_market + pnl_comp,
+        discharge_mwh=discharge_mwh,
+        charge_mwh=charge_mwh,
+        n_days_solved=opt_result.get("n_days_solved", 0),
+        granularity="hourly",
+    )
+
+    result = PerfectForesightResult(
+        strategy_name="perfect_foresight_hourly",
+        pnl=pnl_obj,
+        dispatch_hourly=dispatch_hourly,
+        daily_profit=opt_result.get("daily_profit", []),
+        energy_capacity_mwh=opt_result.get("energy_capacity_mwh", 0.0),
+        solver_statuses=solver_statuses,
+        caveats=caveats,
+    )
+    return dataclasses.asdict(result)
+
+
+# ===========================================================================
+# Skill 3 — Forecast dispatch suite
+# ===========================================================================
+
+def run_forecast_dispatch_suite(
+    context: Dict[str, Any],
+    forecast_models: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Run one or more day-ahead forecast models, then optimise dispatch on each
+    forecast, and settle the resulting dispatch on actual prices.
+
+    Parameters
+    ----------
+    context         : output of load_bess_strategy_comparison_context()
+    forecast_models : list of model names to run, e.g. ["ols_da_time_v1", "naive_da"]
+                      Defaults to ["ols_da_time_v1"].
+
+    Returns
+    -------
+    JSON-serialisable dict matching ForecastDispatchSuiteResult schema.
+
+    Granularity approximation
+    -------------------------
+    price_forecast_dayahead produces HOURLY province-level predictions.
+    bess_dispatch_simulation_multiday produces HOURLY dispatch.
+    P&L is settled against hourly mean of actual 15-min nodal prices.
+
+    Province vs nodal gap: forecast prices are province-level (settlement ref);
+    actual prices used for settlement are asset-level nodal.  This introduces
+    a basis risk that is NOT modelled here — treat gaps conservatively.
+    """
+    import libs.decision_models.bess_dispatch_simulation_multiday  # noqa: F401
+    import libs.decision_models.price_forecast_dayahead             # noqa: F401
+    from libs.decision_models.runners.local import run
+
+    if forecast_models is None:
+        forecast_models = ["ols_da_time_v1"]
+
+    suite_caveats: List[str] = [
+        "forecast_suite: price_forecast_dayahead is province-level (not nodal/asset) — "
+        "forecast dispatch is optimised on province prices but settled on asset nodal prices",
+        "forecast_suite: hourly granularity — settled on hourly mean of actual 15-min prices",
+        "forecast_suite: SOC resets to 0 each day (no cross-day carryover)",
+    ]
+
+    meta = context["asset_metadata"]
+    actual_prices_hourly: List[dict] = context.get("actual_prices_hourly", [])
+    da_prices_hourly: List[dict] = context.get("da_prices_hourly", [])
+
+    # Build combined price record list for forecast model
+    # Map: datetime -> {rt_price, da_price}
+    rt_map: Dict[str, float] = {}
+    for rec in actual_prices_hourly:
+        ts = str(pd.Timestamp(rec.get("datetime") or rec.get("time")))
+        rt_map[ts] = float(rec.get("price", float("nan")))
+
+    da_map: Dict[str, float] = {}
+    for rec in da_prices_hourly:
+        ts = str(pd.Timestamp(rec["datetime"]))
+        da_map[ts] = float(rec.get("da_price", float("nan")))
+
+    if not da_map:
+        suite_caveats.append(
+            "forecast_suite: no DA prices available — all forecast models will use naive_da fallback"
+        )
+
+    all_datetimes = sorted(set(rt_map.keys()) | set(da_map.keys()))
+
+    strategies: List[ForecastStrategyResult] = []
+
+    for model_name in forecast_models:
+        model_caveats: List[str] = []
+        strategy_name = f"forecast_{model_name}"
+
+        if not all_datetimes:
+            model_caveats.append(f"{strategy_name}: no price data available — skipping")
+            strategies.append(ForecastStrategyResult(
+                model_name=model_name,
+                strategy_name=strategy_name,
+                pnl=StrategyPnLResult(
+                    strategy_name=strategy_name,
+                    pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                    discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+                ),
+                forecast_prices_hourly=[], dispatch_hourly=[], daily_profit=[],
+                n_days_with_forecast=0, n_days_missing_da_prices=0,
+                caveats=model_caveats,
+            ))
+            continue
+
+        # Build hourly_prices list with rt_price + da_price for each timestamp
+        hourly_prices_input = []
+        for ts in all_datetimes:
+            rt = rt_map.get(ts)
+            da = da_map.get(ts)
+            if da is None or (isinstance(da, float) and np.isnan(da)):
+                continue  # skip hours without DA prices
+            hourly_prices_input.append({
+                "datetime": ts,
+                "rt_price": rt if (rt is not None and not np.isnan(rt)) else None,
+                "da_price": da,
+            })
+
+        # Group by date to run forecast day by day
+        df_input = pd.DataFrame(hourly_prices_input)
+        if df_input.empty:
+            model_caveats.append(f"{strategy_name}: no valid DA prices — cannot run forecast")
+            strategies.append(ForecastStrategyResult(
+                model_name=model_name, strategy_name=strategy_name,
+                pnl=StrategyPnLResult(
+                    strategy_name=strategy_name,
+                    pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                    discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+                ),
+                forecast_prices_hourly=[], dispatch_hourly=[], daily_profit=[],
+                n_days_with_forecast=0, n_days_missing_da_prices=len(all_datetimes) // 24,
+                caveats=model_caveats,
+            ))
+            continue
+
+        df_input["datetime"] = pd.to_datetime(df_input["datetime"])
+        dates_in_range = sorted(df_input["datetime"].dt.date.unique())
+        d_from = datetime.date.fromisoformat(context["date_from"])
+        d_to = datetime.date.fromisoformat(context["date_to"])
+        target_dates = [d for d in dates_in_range if d_from <= d <= d_to]
+
+        all_forecast_records: List[dict] = []
+        model_used_per_day: Dict[str, str] = {}
+        n_missing_da = 0
+        n_forecast = 0
+
+        for target_date in target_dates:
+            # Need lookback history + target day in input
+            cutoff = pd.Timestamp(target_date)
+            history = df_input[df_input["datetime"] < cutoff].copy()
+
+            target_day_da = df_input[df_input["datetime"].dt.date == target_date].copy()
+            if target_day_da.empty or target_day_da["da_price"].isna().all():
+                n_missing_da += 1
+                model_caveats.append(
+                    f"{strategy_name}: missing DA prices for {target_date} — day skipped"
+                )
+                continue
+
+            # Build combined input: history + target day (rt_price=None for target)
+            target_day_for_forecast = target_day_da.copy()
+            target_day_for_forecast["rt_price"] = None
+
+            combined = pd.concat([history, target_day_for_forecast], ignore_index=True)
+            combined = combined.sort_values("datetime")
+
+            forecast_input_records = []
+            for _, row in combined.iterrows():
+                rt_val = row["rt_price"]
+                forecast_input_records.append({
+                    "datetime": row["datetime"].isoformat(),
+                    "rt_price": float(rt_val) if (rt_val is not None and not pd.isna(rt_val)) else None,
+                    "da_price": float(row["da_price"]),
+                })
+
+            try:
+                fc_result = run("price_forecast_dayahead", {
+                    "hourly_prices": forecast_input_records,
+                    "target_date": str(target_date),
+                    "model": model_name,
+                })
+                for ts_str, pred in zip(fc_result["datetimes"], fc_result["rt_pred"]):
+                    all_forecast_records.append({"datetime": ts_str, "rt_pred": pred})
+                model_used_per_day[str(target_date)] = fc_result.get("model_used", "unknown")
+                n_forecast += 1
+            except Exception as exc:
+                model_caveats.append(
+                    f"{strategy_name}: forecast failed for {target_date} — {exc}"
+                )
+
+        if not all_forecast_records:
+            model_caveats.append(
+                f"{strategy_name}: no forecast records produced — skipping dispatch"
+            )
+            strategies.append(ForecastStrategyResult(
+                model_name=model_name, strategy_name=strategy_name,
+                pnl=StrategyPnLResult(
+                    strategy_name=strategy_name,
+                    pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                    discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+                ),
+                forecast_prices_hourly=all_forecast_records, dispatch_hourly=[], daily_profit=[],
+                n_days_with_forecast=n_forecast, n_days_missing_da_prices=n_missing_da,
+                model_used_per_day=model_used_per_day, caveats=model_caveats,
+            ))
+            continue
+
+        # Optimise dispatch on forecast prices
+        opt_result = run("bess_dispatch_simulation_multiday", {
+            "hourly_prices": [
+                {"datetime": r["datetime"], "price": r["rt_pred"]}
+                for r in all_forecast_records
+            ],
+            "power_mw": meta["power_mw"],
+            "duration_h": meta["duration_h"],
+            "roundtrip_eff": meta["roundtrip_eff"],
+        })
+
+        # Settle dispatch on ACTUAL hourly prices
+        actual_price_map = {
+            str(pd.Timestamp(r.get("datetime") or r.get("time"))): float(r.get("price", 0.0))
+            for r in actual_prices_hourly
+        }
+        dispatch_hourly = []
+        for rec in opt_result.get("dispatch_records", []):
+            dt_str = str(pd.Timestamp(rec["datetime"]))
+            actual_p = actual_price_map.get(dt_str, 0.0)
+            dispatch_hourly.append({
+                "datetime": rec["datetime"],
+                "charge_mw": rec["charge_mw"],
+                "discharge_mw": rec["discharge_mw"],
+                "dispatch_grid_mw": rec["dispatch_grid_mw"],
+                "soc_mwh": rec["soc_mwh"],
+                "actual_price": actual_p,
+            })
+
+        pnl_market = sum(
+            r["dispatch_grid_mw"] * r["actual_price"] * _INTERVAL_HRS_HOURLY
+            for r in dispatch_hourly
+        )
+        discharge_mwh = sum(
+            max(r["discharge_mw"], 0) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
+        )
+        charge_mwh = sum(
+            abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
+        )
+        pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
+
+        # Daily profit settled on actual prices
+        daily_profit = []
+        dispatch_df = pd.DataFrame(dispatch_hourly)
+        if not dispatch_df.empty:
+            dispatch_df["datetime"] = pd.to_datetime(dispatch_df["datetime"])
+            dispatch_df["date"] = dispatch_df["datetime"].dt.date.astype(str)
+            dispatch_df["hourly_pnl"] = (
+                dispatch_df["dispatch_grid_mw"] * dispatch_df["actual_price"] * _INTERVAL_HRS_HOURLY
+            )
+            for d, grp in dispatch_df.groupby("date"):
+                daily_profit.append({"date": d, "profit_actual_prices": float(grp["hourly_pnl"].sum())})
+
+        pnl_obj = StrategyPnLResult(
+            strategy_name=strategy_name,
+            pnl_market_yuan=pnl_market,
+            pnl_compensation_yuan=pnl_comp,
+            pnl_total_yuan=pnl_market + pnl_comp,
+            discharge_mwh=discharge_mwh,
+            charge_mwh=charge_mwh,
+            n_days_solved=opt_result.get("n_days_solved", 0),
+            granularity="hourly",
+        )
+        strategies.append(ForecastStrategyResult(
+            model_name=model_name,
+            strategy_name=strategy_name,
+            pnl=pnl_obj,
+            forecast_prices_hourly=all_forecast_records,
+            dispatch_hourly=dispatch_hourly,
+            daily_profit=daily_profit,
+            n_days_with_forecast=n_forecast,
+            n_days_missing_da_prices=n_missing_da,
+            model_used_per_day=model_used_per_day,
+            caveats=model_caveats,
+        ))
+
+    result = ForecastDispatchSuiteResult(
+        strategies=strategies,
+        requested_models=forecast_models,
+        suite_caveats=suite_caveats,
+    )
+    return dataclasses.asdict(result)
+
+
+# ===========================================================================
+# Skill 4 — Rank strategies
+# ===========================================================================
+
+def rank_dispatch_strategies(
+    context: Dict[str, Any],
+    pf_result: Dict[str, Any],
+    forecast_suite: Dict[str, Any],
+    db_pnl_df: Optional[pd.DataFrame] = None,
+) -> Dict[str, Any]:
+    """
+    Rank all available strategies by realised P&L.
+
+    Parameters
+    ----------
+    context        : from load_bess_strategy_comparison_context()
+    pf_result      : from run_perfect_foresight_dispatch()
+    forecast_suite : from run_forecast_dispatch_suite()
+    db_pnl_df      : optional DataFrame from load_precomputed_scenario_pnl()
+                     If None, nominated/actual come from context dispatch + calc.
+
+    Returns
+    -------
+    JSON-serialisable dict matching StrategyRankingResult schema.
+    """
+    asset_code = context["asset_code"]
+    date_from = context["date_from"]
+    date_to = context["date_to"]
+    meta = context["asset_metadata"]
+    caveats: List[str] = []
+
+    # Collect all strategies as {name -> (pnl_total, granularity, available)}
+    strategies: Dict[str, Dict[str, Any]] = {}
+
+    # 1. Perfect foresight (hourly)
+    pf_pnl = pf_result.get("pnl", {})
+    if pf_pnl.get("n_days_solved", 0) > 0:
+        strategies["perfect_foresight_hourly"] = {
+            "pnl_total": pf_pnl.get("pnl_total_yuan", 0.0),
+            "granularity": "hourly",
+            "available": True,
+        }
+    else:
+        caveats.append("ranking: perfect_foresight_hourly has no solved days — excluded from ranking")
+
+    # 2. Forecast strategies (hourly)
+    for strat in forecast_suite.get("strategies", []):
+        strat_pnl = strat.get("pnl", {})
+        n = strat.get("n_days_with_forecast", 0)
+        name = strat["strategy_name"]
+        if n > 0:
+            strategies[name] = {
+                "pnl_total": strat_pnl.get("pnl_total_yuan", 0.0),
+                "granularity": "hourly",
+                "available": True,
+            }
+        else:
+            strategies[name] = {"pnl_total": None, "granularity": "hourly", "available": False}
+            caveats.append(f"ranking: {name} has no forecast days — marked unavailable")
+
+    # 3. DB scenarios (15-min P&L from reports table)
+    if db_pnl_df is not None and not db_pnl_df.empty:
+        for scenario_name in _DB_SCENARIOS:
+            hit = db_pnl_df[db_pnl_df["scenario_name"] == scenario_name]
+            avail_hit = hit[hit["scenario_available"] == True]
+            if not avail_hit.empty:
+                total = avail_hit["total_revenue_yuan"].sum()
+                strategies[scenario_name] = {
+                    "pnl_total": float(total),
+                    "granularity": "15min",
+                    "available": True,
+                }
+            else:
+                strategies[scenario_name] = {
+                    "pnl_total": None,
+                    "granularity": "15min",
+                    "available": False,
+                }
+    else:
+        # Fall back to raw dispatch from context + inline P&L calc
+        for scenario_name, dispatch_key in [
+            ("nominated_dispatch", "nominated_dispatch_15min"),
+            ("cleared_actual", "actual_dispatch_15min"),
+        ]:
+            dispatch = context.get(dispatch_key)
+            actual_prices = context.get("actual_prices_15min", [])
+            if dispatch and actual_prices:
+                pnl = _calc_15min_pnl(dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
+                strategies[scenario_name] = {
+                    "pnl_total": pnl,
+                    "granularity": "15min",
+                    "available": True,
+                }
+            else:
+                strategies[scenario_name] = {
+                    "pnl_total": None,
+                    "granularity": "15min",
+                    "available": False,
+                }
+        caveats.append(
+            "ranking: DB pnl_df not provided — nominated/actual P&L computed from raw dispatch"
+        )
+
+    # Build ranking
+    available = {k: v for k, v in strategies.items() if v["available"] and v["pnl_total"] is not None}
+    sorted_strategies = sorted(available.items(), key=lambda x: x[1]["pnl_total"], reverse=True)
+
+    pf_pnl_total = strategies.get("perfect_foresight_hourly", {}).get("pnl_total")
+    actual_pnl_total = strategies.get("cleared_actual", {}).get("pnl_total")
+
+    # Best forecast strategy
+    forecast_strategy_names = [
+        k for k in available if k.startswith("forecast_")
+    ]
+    best_forecast = None
+    best_forecast_pnl = None
+    if forecast_strategy_names:
+        best_forecast = max(
+            forecast_strategy_names,
+            key=lambda k: available[k]["pnl_total"],
+        )
+        best_forecast_pnl = available[best_forecast]["pnl_total"]
+
+    rows: List[StrategyRankRow] = []
+    rank = 0
+    for name, info in sorted_strategies:
+        rank += 1
+        pnl_val = info["pnl_total"]
+        rows.append(StrategyRankRow(
+            rank=rank,
+            strategy_name=name,
+            pnl_total_yuan=pnl_val,
+            gap_vs_perfect_foresight_yuan=(
+                pf_pnl_total - pnl_val if pf_pnl_total is not None else None
+            ),
+            gap_vs_best_forecast_yuan=(
+                best_forecast_pnl - pnl_val if best_forecast_pnl is not None else None
+            ),
+            gap_vs_nominated_yuan=(
+                (strategies.get("nominated_dispatch", {}).get("pnl_total") or 0.0) - pnl_val
+                if strategies.get("nominated_dispatch", {}).get("available") else None
+            ),
+            gap_vs_actual_yuan=(
+                pnl_val - (actual_pnl_total or 0.0)
+                if actual_pnl_total is not None else None
+            ),
+            capture_rate_vs_pf=(
+                pnl_val / pf_pnl_total if pf_pnl_total and pf_pnl_total > 0 else None
+            ),
+            granularity=info["granularity"],
+            data_available=True,
+        ))
+
+    # Add unavailable strategies at the bottom
+    for name, info in strategies.items():
+        if not info["available"] or info["pnl_total"] is None:
+            rows.append(StrategyRankRow(
+                rank=len(rows) + 1,
+                strategy_name=name,
+                pnl_total_yuan=0.0,
+                gap_vs_perfect_foresight_yuan=None,
+                gap_vs_best_forecast_yuan=None,
+                gap_vs_nominated_yuan=None,
+                gap_vs_actual_yuan=None,
+                capture_rate_vs_pf=None,
+                granularity=info["granularity"],
+                data_available=False,
+            ))
+
+    caveats.append(
+        "ranking: hourly and 15-min P&L figures are NOT directly comparable — "
+        "use gaps for relative comparison only, not absolute amounts"
+    )
+
+    result = StrategyRankingResult(
+        asset_code=asset_code,
+        date_from=date_from,
+        date_to=date_to,
+        rows=rows,
+        best_strategy=sorted_strategies[0][0] if sorted_strategies else None,
+        best_forecast_strategy=best_forecast,
+        perfect_foresight_pnl=pf_pnl_total,
+        actual_pnl=actual_pnl_total,
+        caveats=caveats,
+    )
+    return dataclasses.asdict(result)
+
+
+def _calc_15min_pnl(
+    dispatch_records: List[dict],
+    price_records: List[dict],
+    compensation_yuan_per_mwh: float,
+) -> float:
+    """Inline 15-min P&L helper (used when DB pnl_df not available)."""
+    dispatch_map = {
+        str(pd.Timestamp(r.get("time") or r.get("datetime"))): float(r.get("dispatch_mw", 0.0))
+        for r in dispatch_records
+    }
+    price_map = {
+        str(pd.Timestamp(r.get("time") or r.get("datetime"))): float(r.get("price", 0.0))
+        for r in price_records
+    }
+    market_pnl = 0.0
+    discharge_mwh = 0.0
+    for ts, dispatch in dispatch_map.items():
+        price = price_map.get(ts, 0.0)
+        market_pnl += dispatch * price * _INTERVAL_HRS_15MIN
+        discharge_mwh += max(dispatch, 0) * _INTERVAL_HRS_15MIN
+    return market_pnl + discharge_mwh * compensation_yuan_per_mwh
+
+
+# ===========================================================================
+# Skill 5 — Attribute discrepancy
+# ===========================================================================
+
+def attribute_dispatch_discrepancy(
+    context: Dict[str, Any],
+    ranking: Dict[str, Any],
+    attribution_df: Optional[pd.DataFrame] = None,
+) -> Dict[str, Any]:
+    """
+    Decompose the gap between perfect foresight and actual P&L into buckets.
+
+    Attribution is a rules-based waterfall — NOT causal proof.
+
+    Bucket cascade:
+      grid_restriction    : from DB (PF_unrestricted - PF_grid_feasible), if available
+      forecast_error      : PF_hourly_pnl - best_forecast_pnl
+      execution_nomination: best_forecast_pnl - nominated_pnl (if available)
+      execution_clearing  : nominated_pnl - actual_pnl (if both available)
+      asset_issue         : None (outage table not yet implemented)
+      residual            : total_gap - sum(non-None buckets)
+
+    Parameters
+    ----------
+    context        : from load_bess_strategy_comparison_context()
+    ranking        : from rank_dispatch_strategies()
+    attribution_df : optional DataFrame from load_precomputed_attribution()
+                     When provided, grid_restriction is sourced from it.
+
+    Returns
+    -------
+    JSON-serialisable dict matching DiscrepancyAttributionResult schema.
+    """
+    asset_code = context["asset_code"]
+    date_from = context["date_from"]
+    date_to = context["date_to"]
+    caveats: List[str] = [
+        "attribution: rules-based waterfall — not causal proof",
+        "attribution: hourly and 15-min P&L figures bridged by relative gaps, "
+        "not absolute amounts",
+    ]
+
+    # Inner Mongolia: if DA cleared energy is available, note the cleared-vs-actual distinction
+    id_cleared = context.get("id_cleared_energy_15min")
+    if id_cleared:
+        caveats.append(
+            "attribution: id_cleared_energy_15min present (Inner Mongolia DA cleared energy) — "
+            "cleared trading energy ≠ actual physical dispatch; "
+            "execution_clearing bucket uses nominated vs actual (canon.scenario_dispatch_15min); "
+            "gap between id_cleared_energy and actual_dispatch is NOT modelled here — "
+            "may represent asset_issue / BOP / grid restriction when outage data is available"
+        )
+
+    # Collect key P&L values from ranking
+    pnl_by_strategy: Dict[str, Optional[float]] = {
+        r["strategy_name"]: r["pnl_total_yuan"] if r["data_available"] else None
+        for r in ranking.get("rows", [])
+    }
+
+    pf_pnl = ranking.get("perfect_foresight_pnl")
+    actual_pnl = ranking.get("actual_pnl")
+    best_forecast = ranking.get("best_forecast_strategy")
+    best_forecast_pnl = pnl_by_strategy.get(best_forecast) if best_forecast else None
+    nominated_pnl = pnl_by_strategy.get("nominated_dispatch")
+
+    total_gap = (pf_pnl - actual_pnl) if (pf_pnl is not None and actual_pnl is not None) else None
+
+    # --- Grid restriction from DB (period aggregate) ---
+    grid_restriction: Optional[float] = None
+    if attribution_df is not None and not attribution_df.empty:
+        if "grid_restriction_loss" in attribution_df.columns:
+            gr_series = pd.to_numeric(attribution_df["grid_restriction_loss"], errors="coerce")
+            if gr_series.notna().any():
+                grid_restriction = float(gr_series.sum())
+                caveats.append(
+                    "grid_restriction: sourced from reports.bess_asset_daily_attribution "
+                    "(PF_unrestricted - PF_grid_feasible from DB)"
+                )
+    if grid_restriction is None:
+        db_pf_unres = pnl_by_strategy.get("perfect_foresight_unrestricted")
+        db_pf_grid = pnl_by_strategy.get("perfect_foresight_grid_feasible")
+        if db_pf_unres is not None and db_pf_grid is not None:
+            grid_restriction = db_pf_unres - db_pf_grid
+            caveats.append("grid_restriction: derived from DB scenario P&L difference")
+        else:
+            caveats.append(
+                "grid_restriction: could not be estimated — "
+                "neither precomputed attribution nor both PF scenarios available"
+            )
+
+    # --- Forecast error ---
+    forecast_error: Optional[float] = None
+    if pf_pnl is not None and best_forecast_pnl is not None:
+        forecast_error = pf_pnl - best_forecast_pnl
+        caveats.append(
+            f"forecast_error: PF(hourly) - {best_forecast}(hourly) — "
+            "both hourly; province-level forecast vs asset-level PF"
+        )
+    else:
+        caveats.append("forecast_error: could not be estimated — PF or forecast P&L missing")
+
+    # --- Execution / nomination ---
+    execution_nomination: Optional[float] = None
+    if best_forecast_pnl is not None and nominated_pnl is not None:
+        execution_nomination = best_forecast_pnl - nominated_pnl
+        caveats.append(
+            "execution_nomination: forecast_optimal(hourly) - nominated(15min) — "
+            "cross-granularity comparison; treat as directional only"
+        )
+    else:
+        if nominated_pnl is None:
+            caveats.append(
+                "execution_nomination: nominated_dispatch P&L not available — bucket is None"
+            )
+
+    # --- Execution / clearing ---
+    execution_clearing: Optional[float] = None
+    if nominated_pnl is not None and actual_pnl is not None:
+        execution_clearing = nominated_pnl - actual_pnl
+    else:
+        if actual_pnl is None:
+            caveats.append("execution_clearing: actual P&L not available — bucket is None")
+
+    # --- Asset issue (TODO) ---
+    asset_issue: Optional[float] = None
+    caveats.append("asset_issue: None — outage table not yet implemented")
+
+    # --- Residual ---
+    explained = sum(
+        v for v in [grid_restriction, forecast_error, execution_nomination, execution_clearing]
+        if v is not None
+    )
+    residual = (total_gap - explained) if total_gap is not None else None
+
+    # --- Daily rows ---
+    daily_rows: List[DailyDiscrepancyRow] = []
+    if attribution_df is not None and not attribution_df.empty:
+        for _, row in attribution_df.iterrows():
+            d_str = str(pd.Timestamp(row["trade_date"]).date())
+            daily_rows.append(DailyDiscrepancyRow(
+                date=d_str,
+                pf_pnl=_safe_float(row.get("pf_unrestricted_pnl")),
+                forecast_pnl=_safe_float(row.get("tt_forecast_optimal_pnl")),
+                nominated_pnl=_safe_float(row.get("nominated_pnl")),
+                actual_pnl=_safe_float(row.get("cleared_actual_pnl")),
+                forecast_error=_safe_float(row.get("forecast_error_loss")),
+                execution_nomination=_safe_float(row.get("nomination_loss")),
+                execution_clearing=_safe_float(row.get("execution_clearing_loss")),
+                residual=None,  # not pre-computed in DB
+            ))
+
+    total_explained = sum(
+        v for v in [grid_restriction, forecast_error, execution_nomination, execution_clearing]
+        if v is not None
+    ) if any(
+        v is not None for v in [grid_restriction, forecast_error, execution_nomination, execution_clearing]
+    ) else None
+
+    result = DiscrepancyAttributionResult(
+        asset_code=asset_code,
+        date_from=date_from,
+        date_to=date_to,
+        total_pf_pnl=pf_pnl,
+        total_actual_pnl=actual_pnl,
+        total_gap=total_gap,
+        buckets=DiscrepancyBuckets(
+            forecast_error=forecast_error,
+            asset_issue=asset_issue,
+            grid_restriction=grid_restriction,
+            execution_nomination=execution_nomination,
+            execution_clearing=execution_clearing,
+            residual=residual,
+            total_explained=total_explained,
+        ),
+        attribution_method="rules_based_waterfall",
+        daily_rows=daily_rows,
+        caveats=caveats,
+    )
+    return dataclasses.asdict(result)
+
+
+def _safe_float(v: Any) -> Optional[float]:
+    try:
+        f = float(v)
+        return None if np.isnan(f) else f
+    except (TypeError, ValueError):
+        return None
+
+
+# ===========================================================================
+# Skill 6 — Generate asset strategy report
+# ===========================================================================
+
+def generate_asset_strategy_report(
+    asset_code: str,
+    date_from: str,
+    date_to: str,
+    period_type: str = "monthly",
+    context: Optional[Dict[str, Any]] = None,
+    ranking: Optional[Dict[str, Any]] = None,
+    attribution: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Generate a reusable daily / weekly / monthly asset strategy report.
+
+    If context / ranking / attribution are not supplied, they are computed
+    on the fly using the other 5 skills with default settings.
+
+    period_type : "daily" | "weekly" | "monthly"
+
+    Returns
+    -------
+    JSON-serialisable dict matching AssetStrategyReport schema.
+    Includes:
+      - sections dict (text, suitable for agent responses)
+      - dataframes/rows (suitable for Streamlit display)
+      - markdown string (suitable for Slack/email distribution)
+    """
+    from libs.decision_models.resources.bess_context import (
+        load_precomputed_attribution,
+        load_precomputed_scenario_pnl,
+    )
+
+    generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    d_from = datetime.date.fromisoformat(date_from)
+    d_to = datetime.date.fromisoformat(date_to)
+    all_caveats: List[str] = []
+
+    # --- Compute or reuse context ---
+    if context is None:
+        context = load_bess_strategy_comparison_context(asset_code, date_from, date_to)
+    all_caveats.extend(context.get("data_quality_notes", []))
+
+    # --- Load pre-computed DB P&L (most accurate for nominated/actual) ---
+    db_pnl_df, db_pnl_notes = load_precomputed_scenario_pnl(asset_code, d_from, d_to)
+    all_caveats.extend(db_pnl_notes)
+
+    db_attr_df, db_attr_notes = load_precomputed_attribution(asset_code, d_from, d_to)
+    all_caveats.extend(db_attr_notes)
+
+    # --- Compute or reuse ranking and attribution ---
+    if ranking is None:
+        pf_result = run_perfect_foresight_dispatch(context)
+        forecast_suite = run_forecast_dispatch_suite(context)
+        ranking = rank_dispatch_strategies(
+            context, pf_result, forecast_suite,
+            db_pnl_df=db_pnl_df if not db_pnl_df.empty else None,
+        )
+    all_caveats.extend(ranking.get("caveats", []))
+
+    if attribution is None:
+        attribution = attribute_dispatch_discrepancy(
+            context, ranking,
+            attribution_df=db_attr_df if not db_attr_df.empty else None,
+        )
+    all_caveats.extend(attribution.get("caveats", []))
+
+    # --- Build period-aggregated P&L tables ---
+    daily_rows: List[dict] = []
+    weekly_rows: List[dict] = []
+    monthly_rows: List[dict] = []
+
+    if not db_pnl_df.empty:
+        daily_rows = _build_period_rows(db_pnl_df, "D")
+        weekly_rows = _build_period_rows(db_pnl_df, "W")
+        monthly_rows = _build_period_rows(db_pnl_df, "M")
+
+    # --- YTD summary ---
+    ytd_summary = _build_ytd_summary(asset_code, d_to, db_pnl_df, ranking)
+
+    # --- Forecast to year-end ---
+    fy_summary = _build_fy_summary(asset_code, d_to, db_pnl_df, ytd_summary)
+
+    # --- P&L comparison table ---
+    pnl_rows = []
+    for row in ranking.get("rows", []):
+        if row["data_available"]:
+            pnl_rows.append([
+                row["strategy_name"],
+                f"{row['pnl_total_yuan']:,.0f}" if row["pnl_total_yuan"] is not None else "—",
+                f"{row['gap_vs_perfect_foresight_yuan']:,.0f}" if row["gap_vs_perfect_foresight_yuan"] is not None else "—",
+                f"{row['capture_rate_vs_pf']:.1%}" if row["capture_rate_vs_pf"] is not None else "—",
+                row["granularity"],
+            ])
+    pnl_table = PnLComparisonTable(
+        headers=["strategy", "total_pnl_yuan", "gap_vs_pf", "capture_vs_pf", "granularity"],
+        rows=pnl_rows,
+    )
+
+    # --- Sections ---
+    buckets = attribution.get("buckets", {})
+    total_gap = attribution.get("total_gap")
+    sections: Dict[str, Any] = {
+        "executive_summary": _build_exec_summary(
+            asset_code, date_from, date_to, ranking, attribution, period_type
+        ),
+        "strategy_ranking": ranking.get("rows", []),
+        "realised_pnl_comparison": dataclasses.asdict(pnl_table),
+        "discrepancy_waterfall": {
+            "method": "rules_based_waterfall",
+            "total_gap_yuan": total_gap,
+            "buckets": buckets,
+        },
+        "asset_issues": [
+            "No outage data available — ops.asset_outage_log not yet implemented"
+        ],
+        "grid_restrictions": [
+            f"Grid restriction loss (period): {buckets.get('grid_restriction'):,.0f} CNY"
+            if buckets.get("grid_restriction") is not None
+            else "Grid restriction data not available for this period"
+        ],
+        "ytd_and_forecast": {
+            "ytd": dataclasses.asdict(ytd_summary) if ytd_summary else None,
+            "forecast_to_year_end": dataclasses.asdict(fy_summary) if fy_summary else None,
+        },
+        "data_quality_caveats": list(dict.fromkeys(all_caveats)),  # deduplicated
+    }
+
+    # --- Markdown ---
+    markdown = _build_markdown_report(
+        asset_code, date_from, date_to, period_type,
+        sections, ranking, attribution, ytd_summary, fy_summary,
+        context=context,
+    )
+
+    result = AssetStrategyReport(
+        asset_code=asset_code,
+        date_from=date_from,
+        date_to=date_to,
+        period_type=period_type,
+        generated_at=generated_at,
+        pnl_comparison=pnl_table,
+        strategy_ranking=ranking.get("rows", []),
+        discrepancy_waterfall=sections["discrepancy_waterfall"],
+        ytd_summary=ytd_summary,
+        forecast_to_year_end=fy_summary,
+        daily_rows=daily_rows,
+        weekly_rows=weekly_rows,
+        monthly_rows=monthly_rows,
+        sections=sections,
+        markdown=markdown,
+        data_quality_caveats=list(dict.fromkeys(all_caveats)),
+    )
+    return dataclasses.asdict(result)
+
+
+# ---------------------------------------------------------------------------
+# Report helpers
+# ---------------------------------------------------------------------------
+
+def _build_period_rows(db_pnl_df: pd.DataFrame, freq: str) -> List[dict]:
+    """Aggregate DB scenario P&L by period (D/W/M) across scenarios."""
+    df = db_pnl_df.copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df["period"] = df["trade_date"].dt.to_period(freq).astype(str)
+
+    grp = df.groupby(["period", "scenario_name"]).agg(
+        total_revenue_yuan=("total_revenue_yuan", "sum"),
+        market_revenue_yuan=("market_revenue_yuan", "sum"),
+        discharge_mwh=("discharge_mwh", "sum"),
+    ).reset_index()
+
+    rows = []
+    for period, period_grp in grp.groupby("period"):
+        row: dict = {"period": period}
+        for _, r in period_grp.iterrows():
+            prefix = r["scenario_name"]
+            row[f"{prefix}_total"] = _safe_float(r["total_revenue_yuan"])
+            row[f"{prefix}_market"] = _safe_float(r["market_revenue_yuan"])
+            row[f"{prefix}_discharge_mwh"] = _safe_float(r["discharge_mwh"])
+        rows.append(row)
+    return rows
+
+
+def _build_ytd_summary(
+    asset_code: str,
+    as_of_date: datetime.date,
+    db_pnl_df: pd.DataFrame,
+    ranking: Dict[str, Any],
+) -> Optional[YTDSummary]:
+    if db_pnl_df.empty:
+        return None
+
+    df = db_pnl_df.copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    ytd_df = df[df["trade_date"].dt.year == as_of_date.year]
+
+    cleared = ytd_df[ytd_df["scenario_name"] == "cleared_actual"]
+    ytd_actual = _safe_float(cleared["total_revenue_yuan"].sum()) if not cleared.empty else None
+
+    pf_unres = ytd_df[ytd_df["scenario_name"] == "perfect_foresight_unrestricted"]
+    ytd_pf = _safe_float(pf_unres["total_revenue_yuan"].sum()) if not pf_unres.empty else None
+
+    ytd_capture = (ytd_actual / ytd_pf) if (ytd_actual and ytd_pf and ytd_pf > 0) else None
+    ytd_days = int(ytd_df["trade_date"].dt.date.nunique())
+    data_through = str(ytd_df["trade_date"].max().date()) if not ytd_df.empty else str(as_of_date)
+
+    return YTDSummary(
+        asset_code=asset_code,
+        year=as_of_date.year,
+        ytd_actual_pnl=ytd_actual,
+        ytd_pf_pnl=ytd_pf,
+        ytd_capture_rate=ytd_capture,
+        ytd_days_with_data=ytd_days,
+        data_through=data_through,
+    )
+
+
+def _build_fy_summary(
+    asset_code: str,
+    as_of_date: datetime.date,
+    db_pnl_df: pd.DataFrame,
+    ytd: Optional[YTDSummary],
+) -> Optional[ForecastToYearEnd]:
+    if ytd is None or ytd.ytd_actual_pnl is None or ytd.ytd_days_with_data == 0:
+        return ForecastToYearEnd(
+            asset_code=asset_code,
+            year=as_of_date.year,
+            realized_ytd=None,
+            projected_remainder=None,
+            projected_total=None,
+            projection_method="ytd_daily_avg_run_rate",
+            caveats=["insufficient YTD data for year-end projection"],
+        )
+    year_start = datetime.date(as_of_date.year, 1, 1)
+    year_end = datetime.date(as_of_date.year, 12, 31)
+    days_elapsed = max((as_of_date - year_start).days + 1, 1)
+    days_remaining = max((year_end - as_of_date).days, 0)
+    daily_avg = ytd.ytd_actual_pnl / ytd.ytd_days_with_data
+    projected_remainder = daily_avg * days_remaining
+    projected_total = ytd.ytd_actual_pnl + projected_remainder
+    return ForecastToYearEnd(
+        asset_code=asset_code,
+        year=as_of_date.year,
+        realized_ytd=ytd.ytd_actual_pnl,
+        projected_remainder=projected_remainder,
+        projected_total=projected_total,
+        projection_method="ytd_daily_avg_run_rate",
+        caveats=[
+            "projection uses simple daily average run rate — does not account for "
+            "seasonality, market changes, or curtailment",
+        ],
+    )
+
+
+def _build_exec_summary(
+    asset_code: str,
+    date_from: str,
+    date_to: str,
+    ranking: Dict[str, Any],
+    attribution: Dict[str, Any],
+    period_type: str,
+) -> str:
+    best = ranking.get("best_strategy", "—")
+    pf_pnl = ranking.get("perfect_foresight_pnl")
+    actual_pnl = ranking.get("actual_pnl")
+    total_gap = attribution.get("total_gap")
+
+    parts = [
+        f"Asset: {asset_code}  |  Period: {date_from} to {date_to} ({period_type})",
+        f"Best strategy by realised P&L: {best}",
+    ]
+    if pf_pnl is not None:
+        parts.append(f"Perfect foresight benchmark (hourly): {pf_pnl:,.0f} CNY")
+    if actual_pnl is not None:
+        parts.append(f"Actual (cleared) P&L: {actual_pnl:,.0f} CNY")
+    if total_gap is not None:
+        parts.append(f"Total gap (PF - actual): {total_gap:,.0f} CNY")
+    buckets = attribution.get("buckets", {})
+    for bucket, label in [
+        ("forecast_error", "Forecast error"),
+        ("grid_restriction", "Grid restriction"),
+        ("execution_nomination", "Execution / nomination"),
+        ("execution_clearing", "Execution / clearing"),
+        ("asset_issue", "Asset issue"),
+        ("residual", "Residual / unexplained"),
+    ]:
+        val = buckets.get(bucket)
+        if val is not None:
+            parts.append(f"  {label}: {val:,.0f} CNY")
+    return "\n".join(parts)
+
+
+def _build_markdown_report(
+    asset_code: str,
+    date_from: str,
+    date_to: str,
+    period_type: str,
+    sections: Dict[str, Any],
+    ranking: Dict[str, Any],
+    attribution: Dict[str, Any],
+    ytd: Optional[YTDSummary],
+    fy: Optional[ForecastToYearEnd],
+    context: Optional[Dict[str, Any]] = None,
+) -> str:
+    lines = [
+        f"# BESS Strategy Report — {asset_code}",
+        f"**Period:** {date_from} to {date_to} ({period_type})  ",
+        "",
+        "## 1. Executive Summary",
+        "```",
+        sections.get("executive_summary", ""),
+        "```",
+        "",
+        "## 2. Strategy Ranking",
+        "| Rank | Strategy | P&L (CNY) | Gap vs PF | Capture % | Granularity |",
+        "|------|----------|-----------|-----------|-----------|-------------|",
+    ]
+    for row in ranking.get("rows", []):
+        if not row["data_available"]:
+            continue
+        pnl_str = f"{row['pnl_total_yuan']:,.0f}" if row["pnl_total_yuan"] is not None else "—"
+        gap_str = f"{row['gap_vs_perfect_foresight_yuan']:,.0f}" if row["gap_vs_perfect_foresight_yuan"] is not None else "—"
+        cap_str = f"{row['capture_rate_vs_pf']:.1%}" if row["capture_rate_vs_pf"] is not None else "—"
+        lines.append(
+            f"| {row['rank']} | {row['strategy_name']} | {pnl_str} | {gap_str} | {cap_str} | {row['granularity']} |"
+        )
+
+    lines += [
+        "",
+        "## 3. Discrepancy Attribution (Waterfall)",
+        "_Rules-based waterfall — not causal proof._  ",
+        "",
+    ]
+    buckets = attribution.get("buckets", {})
+    total_gap = attribution.get("total_gap")
+    if total_gap is not None:
+        lines.append(f"**Total gap (PF − actual): {total_gap:,.0f} CNY**  ")
+    for bucket, label in [
+        ("grid_restriction", "Grid restriction"),
+        ("forecast_error", "Forecast error"),
+        ("execution_nomination", "Execution / nomination"),
+        ("execution_clearing", "Execution / clearing"),
+        ("asset_issue", "Asset issue"),
+        ("residual", "Residual"),
+    ]:
+        val = buckets.get(bucket)
+        lines.append(
+            f"- {label}: {'—' if val is None else f'{val:,.0f} CNY'}"
+        )
+
+    if ytd is not None:
+        lines += [
+            "",
+            "## 4. YTD Summary",
+            f"- YTD actual P&L: {'—' if ytd.ytd_actual_pnl is None else f'{ytd.ytd_actual_pnl:,.0f} CNY'}",
+            f"- YTD PF benchmark: {'—' if ytd.ytd_pf_pnl is None else f'{ytd.ytd_pf_pnl:,.0f} CNY'}",
+            f"- YTD capture rate: {'—' if ytd.ytd_capture_rate is None else f'{ytd.ytd_capture_rate:.1%}'}",
+            f"- Data through: {ytd.data_through}",
+        ]
+
+    if fy is not None and fy.projected_total is not None:
+        lines += [
+            "",
+            "## 5. Forecast to Year-End",
+            f"- Realized YTD: {fy.realized_ytd:,.0f} CNY" if fy.realized_ytd else "",
+            f"- Projected remainder: {fy.projected_remainder:,.0f} CNY" if fy.projected_remainder else "",
+            f"- Projected full-year: {fy.projected_total:,.0f} CNY",
+            f"- Method: {fy.projection_method}",
+        ]
+        if fy.caveats:
+            lines.append(f"- _{fy.caveats[0]}_")
+
+    # Inner Mongolia cleared-vs-actual note
+    if context is not None and context.get("id_cleared_energy_15min"):
+        lines += [
+            "",
+            "## 6. Inner Mongolia Market Data Note",
+            "_Applies to Mengxi assets only._  ",
+            "",
+            "- **`id_cleared_energy`** = DA market-cleared trading energy "
+            "(`marketdata.md_id_cleared_energy`) — NOT actual physical dispatch.",
+            "- **`actual_dispatch`** = physical output as recorded in "
+            "`canon.scenario_dispatch_15min` (cleared_actual scenario).",
+            "- These two figures may differ. The gap may indicate asset issues, "
+            "BOP constraints, or grid operator real-time re-dispatch.",
+            "- `cleared_power_mw_implied_15min` = cleared_energy_mwh_15min / 0.25 "
+            "(implied average power — informational only, not a measured value).",
+            "- Do NOT interpret `id_cleared_energy` as the asset's physical output.",
+        ]
+
+    caveats = sections.get("data_quality_caveats", [])
+    if caveats:
+        lines += [
+            "",
+            "## 7. Data Quality Caveats",
+        ]
+        for c in caveats[:10]:  # cap at 10 in markdown
+            lines.append(f"- {c}")
+        if len(caveats) > 10:
+            lines.append(f"- _...and {len(caveats) - 10} more — see full caveats in data_quality_caveats field_")
+
+    return "\n".join(lines)

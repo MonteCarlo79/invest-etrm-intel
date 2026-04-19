@@ -1,18 +1,24 @@
 """
 libs/decision_models/adapters/agent/tools.py
 
-OpenClaw / Claude API tool definitions for registered decision models.
+OpenClaw / Claude API tool definitions for registered decision models
+and strategy comparison workflow skills.
 
-Each DECISION_MODEL_TOOLS entry can be passed in the `tools` parameter of a
-Claude API messages call. handle_tool_call() dispatches the tool_use block to
-the appropriate model runner.
+Each entry in DECISION_MODEL_TOOLS or STRATEGY_COMPARISON_TOOLS can be passed
+in the `tools` parameter of a Claude API messages call.
+handle_tool_call() dispatches any tool_use block to the correct handler.
 
 Usage:
-    from libs.decision_models.adapters.agent.tools import DECISION_MODEL_TOOLS, handle_tool_call
+    from libs.decision_models.adapters.agent.tools import (
+        DECISION_MODEL_TOOLS,
+        STRATEGY_COMPARISON_TOOLS,
+        ALL_TOOLS,
+        handle_tool_call,
+    )
 
     response = client.messages.create(
         model="claude-opus-4-6",
-        tools=DECISION_MODEL_TOOLS,
+        tools=ALL_TOOLS,    # or choose a subset
         messages=[...],
     )
     if response.stop_reason == "tool_use":
@@ -294,9 +300,200 @@ DECISION_MODEL_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+STRATEGY_COMPARISON_TOOLS: List[Dict[str, Any]] = [
+    {
+        "name": "load_bess_strategy_comparison_context",
+        "description": (
+            "Load all data required for BESS dispatch strategy comparison: actual 15-min RT prices, "
+            "hourly DA prices, nominated and actual dispatch, asset physical/commercial metadata. "
+            "Returns a context bundle used by the other 5 strategy comparison skills. "
+            "Data quality notes are included for any missing or degraded data fields."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": "string",
+                    "description": (
+                        "Stable internal asset code, e.g. 'suyou', 'wulate', 'wuhai'. "
+                        "See ASSET_ALIAS_MAP in calc.py for full list."
+                    ),
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": "ISO date string for start of period, e.g. '2026-03-01'.",
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": "ISO date string for end of period (inclusive), e.g. '2026-03-31'.",
+                },
+            },
+            "required": ["asset_code", "date_from", "date_to"],
+        },
+    },
+    {
+        "name": "run_perfect_foresight_dispatch",
+        "description": (
+            "Compute perfect-foresight BESS dispatch using actual realised prices as input. "
+            "Uses bess_dispatch_simulation_multiday (LP per day, hourly, SOC resets each day). "
+            "P&L settled at hourly granularity against hourly mean of actual 15-min prices. "
+            "This is the benchmark / upper-bound strategy for comparison. "
+            "Input: context dict from load_bess_strategy_comparison_context."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "context": {
+                    "type": "object",
+                    "description": "Context dict returned by load_bess_strategy_comparison_context.",
+                },
+            },
+            "required": ["context"],
+        },
+    },
+    {
+        "name": "run_forecast_dispatch_suite",
+        "description": (
+            "Run one or more day-ahead price forecast models, optimise BESS dispatch on each forecast, "
+            "and settle the resulting dispatch on actual realised prices. "
+            "Returns per-model strategy results including forecast prices, hourly dispatch, "
+            "and realised P&L. "
+            "SCOPE: price_forecast_dayahead is province-level (not nodal) and hourly (not 15-min). "
+            "P&L settled on actual 15-min asset prices resampled to hourly mean."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "context": {
+                    "type": "object",
+                    "description": "Context dict returned by load_bess_strategy_comparison_context.",
+                },
+                "forecast_models": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["ols_da_time_v1", "naive_da"],
+                    },
+                    "description": (
+                        "List of forecast model names to run. "
+                        "Defaults to ['ols_da_time_v1'] if omitted. "
+                        "'ols_da_time_v1': rolling OLS with DA price + hour-of-day. "
+                        "'naive_da': RT = DA price."
+                    ),
+                },
+            },
+            "required": ["context"],
+        },
+    },
+    {
+        "name": "rank_dispatch_strategies",
+        "description": (
+            "Rank all available dispatch strategies by realised P&L. "
+            "Strategies compared: perfect foresight (hourly), forecast-driven (hourly), "
+            "nominated dispatch (15-min from DB), actual/cleared dispatch (15-min from DB). "
+            "Returns strategy ranking with gaps vs perfect foresight, vs best forecast, "
+            "vs nominated, and vs actual. "
+            "NOTE: hourly and 15-min P&L are not directly comparable — use gaps directionally."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "context": {
+                    "type": "object",
+                    "description": "Context dict from load_bess_strategy_comparison_context.",
+                },
+                "pf_result": {
+                    "type": "object",
+                    "description": "Perfect foresight result from run_perfect_foresight_dispatch.",
+                },
+                "forecast_suite": {
+                    "type": "object",
+                    "description": "Forecast suite result from run_forecast_dispatch_suite.",
+                },
+            },
+            "required": ["context", "pf_result", "forecast_suite"],
+        },
+    },
+    {
+        "name": "attribute_dispatch_discrepancy",
+        "description": (
+            "Decompose the P&L gap between perfect foresight and actual dispatch into attribution buckets. "
+            "Method: rules-based waterfall (not causal proof). "
+            "Buckets: forecast_error, grid_restriction, execution_nomination, execution_clearing, "
+            "asset_issue (None until outage table exists), residual. "
+            "Uses pre-computed attribution from reports.bess_asset_daily_attribution when available."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "context": {
+                    "type": "object",
+                    "description": "Context dict from load_bess_strategy_comparison_context.",
+                },
+                "ranking": {
+                    "type": "object",
+                    "description": "Ranking result from rank_dispatch_strategies.",
+                },
+            },
+            "required": ["context", "ranking"],
+        },
+    },
+    {
+        "name": "generate_asset_strategy_report",
+        "description": (
+            "Generate a reusable daily / weekly / monthly BESS asset strategy report. "
+            "If context / ranking / attribution are not supplied, they are computed on the fly. "
+            "Returns: executive summary, strategy ranking, P&L comparison, discrepancy waterfall, "
+            "YTD summary, forecast-to-year-end, and data quality caveats. "
+            "Output includes structured sections, period-aggregated tables, and a markdown string "
+            "suitable for Slack / email distribution."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": "string",
+                    "description": "Stable internal asset code, e.g. 'suyou'.",
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": "ISO date string for report period start, e.g. '2026-03-01'.",
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": "ISO date string for report period end, e.g. '2026-03-31'.",
+                },
+                "period_type": {
+                    "type": "string",
+                    "enum": ["daily", "weekly", "monthly"],
+                    "description": "Aggregation period for the report tables. Default: 'monthly'.",
+                    "default": "monthly",
+                },
+                "context": {
+                    "type": "object",
+                    "description": "Optional: pre-computed context from load_bess_strategy_comparison_context.",
+                },
+                "ranking": {
+                    "type": "object",
+                    "description": "Optional: pre-computed ranking from rank_dispatch_strategies.",
+                },
+                "attribution": {
+                    "type": "object",
+                    "description": "Optional: pre-computed attribution from attribute_dispatch_discrepancy.",
+                },
+            },
+            "required": ["asset_code", "date_from", "date_to"],
+        },
+    },
+]
+
+# Combined list for passing to the Claude API
+ALL_TOOLS: List[Dict[str, Any]] = DECISION_MODEL_TOOLS + STRATEGY_COMPARISON_TOOLS
+
+
 def handle_tool_call(tool_name: str, tool_input: Dict[str, Any]) -> str:
     """
-    Dispatch a tool_use block from the Claude API to the appropriate model runner.
+    Dispatch a tool_use block from the Claude API to the appropriate handler.
 
     Args:
         tool_name:  The tool name from the tool_use content block.
@@ -319,6 +516,67 @@ def handle_tool_call(tool_name: str, tool_input: Dict[str, Any]) -> str:
         inp = dict(tool_input)
         inp["trade_date"] = date.fromisoformat(inp["trade_date"])
         result = run("revenue_scenario_engine", inp)
+
+    # -----------------------------------------------------------------------
+    # Strategy comparison workflow tools
+    # -----------------------------------------------------------------------
+    elif tool_name == "load_bess_strategy_comparison_context":
+        from libs.decision_models.workflows.strategy_comparison import (
+            load_bess_strategy_comparison_context,
+        )
+        result = load_bess_strategy_comparison_context(
+            asset_code=tool_input["asset_code"],
+            date_from=tool_input["date_from"],
+            date_to=tool_input["date_to"],
+        )
+
+    elif tool_name == "run_perfect_foresight_dispatch":
+        from libs.decision_models.workflows.strategy_comparison import (
+            run_perfect_foresight_dispatch,
+        )
+        result = run_perfect_foresight_dispatch(context=tool_input["context"])
+
+    elif tool_name == "run_forecast_dispatch_suite":
+        from libs.decision_models.workflows.strategy_comparison import (
+            run_forecast_dispatch_suite,
+        )
+        result = run_forecast_dispatch_suite(
+            context=tool_input["context"],
+            forecast_models=tool_input.get("forecast_models"),
+        )
+
+    elif tool_name == "rank_dispatch_strategies":
+        from libs.decision_models.workflows.strategy_comparison import (
+            rank_dispatch_strategies,
+        )
+        result = rank_dispatch_strategies(
+            context=tool_input["context"],
+            pf_result=tool_input["pf_result"],
+            forecast_suite=tool_input["forecast_suite"],
+        )
+
+    elif tool_name == "attribute_dispatch_discrepancy":
+        from libs.decision_models.workflows.strategy_comparison import (
+            attribute_dispatch_discrepancy,
+        )
+        result = attribute_dispatch_discrepancy(
+            context=tool_input["context"],
+            ranking=tool_input["ranking"],
+        )
+
+    elif tool_name == "generate_asset_strategy_report":
+        from libs.decision_models.workflows.strategy_comparison import (
+            generate_asset_strategy_report,
+        )
+        result = generate_asset_strategy_report(
+            asset_code=tool_input["asset_code"],
+            date_from=tool_input["date_from"],
+            date_to=tool_input["date_to"],
+            period_type=tool_input.get("period_type", "monthly"),
+            context=tool_input.get("context"),
+            ranking=tool_input.get("ranking"),
+            attribution=tool_input.get("attribution"),
+        )
 
     else:
         result = {"error": f"Unknown tool: {tool_name!r}"}
