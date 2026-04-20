@@ -34,6 +34,7 @@ from typing import Any, Dict, List
 # Trigger model registration
 import libs.decision_models.bess_dispatch_optimization           # noqa: F401
 import libs.decision_models.bess_dispatch_simulation_multiday    # noqa: F401
+import libs.decision_models.dispatch_pnl_attribution             # noqa: F401
 import libs.decision_models.revenue_scenario_engine              # noqa: F401
 import libs.decision_models.price_forecast_dayahead              # noqa: F401
 
@@ -240,6 +241,118 @@ DECISION_MODEL_TOOLS: List[Dict[str, Any]] = [
                 },
             },
             "required": ["hourly_prices", "target_date"],
+        },
+    },
+    {
+        "name": "run_dispatch_pnl_attribution",
+        "description": (
+            "Compute BESS dispatch P&L attribution ladder from per-scenario PnL values. "
+            "Accepts pre-computed daily PnL for up to 6 scenarios in the dispatch chain "
+            "(perfect_foresight_unrestricted → pf_grid_feasible → tt_forecast_optimal → "
+            "tt_strategy → nominated → cleared_actual) and returns the loss at each step. "
+            "Use this when scenario PnL values are already known (e.g. from the DB or from "
+            "run_revenue_scenario_engine). Losses are None for missing scenario pairs. "
+            "Persisted daily to reports.bess_asset_daily_attribution."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": "string",
+                    "description": "Stable internal asset code, e.g. 'suyou', 'wulate'.",
+                },
+                "trade_date": {
+                    "type": "string",
+                    "description": "ISO date string, e.g. '2026-04-01'.",
+                },
+                "pf_unrestricted_pnl": {
+                    "type": ["number", "null"],
+                    "description": "Perfect foresight unrestricted daily PnL (Yuan).",
+                },
+                "pf_grid_feasible_pnl": {
+                    "type": ["number", "null"],
+                    "description": "Perfect foresight grid-feasible daily PnL (Yuan).",
+                },
+                "tt_forecast_optimal_pnl": {
+                    "type": ["number", "null"],
+                    "description": "TT forecast-optimal dispatch daily PnL (Yuan).",
+                },
+                "tt_strategy_pnl": {
+                    "type": ["number", "null"],
+                    "description": "TT strategy dispatch daily PnL (Yuan).",
+                },
+                "nominated_pnl": {
+                    "type": ["number", "null"],
+                    "description": "Nominated dispatch daily PnL (Yuan).",
+                },
+                "cleared_actual_pnl": {
+                    "type": ["number", "null"],
+                    "description": "Cleared actual dispatch daily PnL (Yuan).",
+                },
+            },
+            "required": ["asset_code", "trade_date"],
+        },
+    },
+    {
+        "name": "query_asset_realization_status",
+        "description": (
+            "Fetch current realization status for one or all assets from the monitoring DB. "
+            "Returns rolling realization ratio (cleared_actual / pf_grid_feasible), "
+            "attribution breakdown averages, and status level (NORMAL/WARN/ALERT/CRITICAL). "
+            "This is a read-only DB query — no model computation. "
+            "Data is updated daily by the realization monitor batch job."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": ["string", "null"],
+                    "description": "Asset code to filter on. Omit or null to return all assets.",
+                },
+                "snapshot_date": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "ISO date string. Defaults to today's snapshot. "
+                        "Use latest available if today is not yet computed."
+                    ),
+                },
+                "lookback_days": {
+                    "type": "integer",
+                    "description": "Window size to query (default: 30).",
+                    "default": 30,
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_asset_fragility_status",
+        "description": (
+            "Fetch current fragility status for one or all assets from the monitoring DB. "
+            "Returns composite fragility score (0–1), fragility level (LOW/MEDIUM/HIGH/CRITICAL), "
+            "component scores (realization, trend), dominant factor, and narrative. "
+            "This is a read-only DB query — no model computation. "
+            "Data is updated daily by the fragility monitor batch job, after realization monitor."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": ["string", "null"],
+                    "description": "Asset code to filter on. Omit or null to return all assets.",
+                },
+                "snapshot_date": {
+                    "type": ["string", "null"],
+                    "description": "ISO date string. Defaults to today's snapshot.",
+                },
+                "min_level": {
+                    "type": "string",
+                    "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                    "description": "Return only assets at or above this fragility level.",
+                    "default": "LOW",
+                },
+            },
+            "required": [],
         },
     },
     {
@@ -510,6 +623,28 @@ def handle_tool_call(tool_name: str, tool_input: Dict[str, Any]) -> str:
 
     elif tool_name == "run_price_forecast_dayahead":
         result = run("price_forecast_dayahead", tool_input)
+
+    elif tool_name == "run_dispatch_pnl_attribution":
+        from datetime import date
+        inp = dict(tool_input)
+        inp["trade_date"] = date.fromisoformat(inp["trade_date"])
+        result = run("dispatch_pnl_attribution", inp)
+
+    elif tool_name == "query_asset_realization_status":
+        from services.monitoring.realization_monitor import query_realization_status
+        result = query_realization_status(
+            asset_code=tool_input.get("asset_code"),
+            snapshot_date=tool_input.get("snapshot_date"),
+            lookback_days=tool_input.get("lookback_days", 30),
+        )
+
+    elif tool_name == "query_asset_fragility_status":
+        from services.monitoring.fragility_monitor import query_fragility_status
+        result = query_fragility_status(
+            asset_code=tool_input.get("asset_code"),
+            snapshot_date=tool_input.get("snapshot_date"),
+            min_level=tool_input.get("min_level", "LOW"),
+        )
 
     elif tool_name == "run_revenue_scenario_engine":
         from datetime import date
