@@ -338,10 +338,14 @@ class TestForceReprocessSameHash:
         with patch('inner_mongolia.writer._lookup_by_hash', return_value=self._EXISTING_CURRENT), \
              patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
              patch('inner_mongolia.writer.load_asset_map', return_value={}), \
-             patch('inner_mongolia.writer.parse_workbook', return_value=[]), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=_fake_sheets(['SheetA'])), \
+             patch('inner_mongolia.writer.match_sheet', side_effect=_make_match_side_effect()), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
              patch('inner_mongolia.writer._reset_registry_pending') as mock_reset, \
              patch('inner_mongolia.writer._insert_registry') as mock_insert, \
              patch('inner_mongolia.writer._supersede_previous') as mock_sup, \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows', return_value=3), \
              patch('inner_mongolia.writer._update_registry_status'):
             result = ingest_file(str(f), engine=engine, force=True, dry_run=False)
 
@@ -431,11 +435,15 @@ class TestDifferentHashSupersession:
         with patch('inner_mongolia.writer._lookup_by_hash', return_value=None), \
              patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
              patch('inner_mongolia.writer.load_asset_map', return_value={}), \
-             patch('inner_mongolia.writer.parse_workbook', return_value=[]), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=_fake_sheets(['SheetA'])), \
+             patch('inner_mongolia.writer.match_sheet', side_effect=_make_match_side_effect()), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
              patch('inner_mongolia.writer._next_ingest_version', return_value=next_version), \
              patch('inner_mongolia.writer._insert_registry', return_value=new_file_id) as mock_ins, \
              patch('inner_mongolia.writer._supersede_previous') as mock_sup, \
              patch('inner_mongolia.writer._reset_registry_pending') as mock_reset, \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows', return_value=3), \
              patch('inner_mongolia.writer._update_registry_status'):
             result = ingest_file(str(f), engine=engine, force=False, dry_run=False)
 
@@ -476,3 +484,299 @@ class TestDifferentHashSupersession:
         """For a genuinely new hash, _reset_registry_pending is never called."""
         _, _, _, mock_reset = self._run_new_file(tmp_path)
         mock_reset.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test class: transient-error retry logic
+# ---------------------------------------------------------------------------
+
+class TestRetryLogic:
+    """
+    Verify the _is_transient_db_error helper and the retry loop in ingest_file.
+
+    All tests mock the DB helpers so no real connection is needed.
+    time.sleep is also mocked to keep tests instant.
+    """
+
+    # ---- unit tests for the classifier ----------------------------------
+
+    def test_ssl_abort_is_transient(self):
+        from sqlalchemy.exc import OperationalError as SAOperationalError
+        from inner_mongolia.writer import _is_transient_db_error
+        exc = SAOperationalError(
+            "SELECT 1", {},
+            Exception("ssl syscall error: software caused connection abort"),
+        )
+        assert _is_transient_db_error(exc)
+
+    def test_connection_reset_is_transient(self):
+        from sqlalchemy.exc import OperationalError as SAOperationalError
+        from inner_mongolia.writer import _is_transient_db_error
+        exc = SAOperationalError("SELECT 1", {}, Exception("connection reset by peer"))
+        assert _is_transient_db_error(exc)
+
+    def test_integrity_error_is_not_transient(self):
+        from sqlalchemy.exc import IntegrityError
+        from inner_mongolia.writer import _is_transient_db_error
+        exc = IntegrityError(
+            "INSERT", {},
+            Exception("duplicate key value violates unique constraint"),
+        )
+        assert not _is_transient_db_error(exc)
+
+    def test_non_db_exception_is_not_transient(self):
+        from inner_mongolia.writer import _is_transient_db_error
+        assert not _is_transient_db_error(ValueError("bad value"))
+        assert not _is_transient_db_error(RuntimeError("ssl syscall error"))
+
+    # ---- integration tests for the retry loop ---------------------------
+
+    def _base_patches(self, tmp_path, sheets=None):
+        """Return a dict of common patch kwargs for ingest_file tests."""
+        f = tmp_path / "file.xlsx"
+        f.write_bytes(b"bytes")
+        existing = {'id': 42, 'report_date': '2026-04-17', 'is_current': True, 'ingest_version': 1}
+        s = sheets or _fake_sheets(['SheetA'])
+        return str(f), existing, s
+
+    def test_transient_error_is_retried_and_succeeds(self, tmp_path):
+        """
+        First _upsert_dispatch_rows call raises a transient OperationalError.
+        Second call succeeds. Result should be 'success' after one retry.
+        """
+        from sqlalchemy.exc import OperationalError as SAOperationalError
+        fpath, existing, sheets = self._base_patches(tmp_path)
+        engine, _ = _make_engine_cm()
+
+        transient = SAOperationalError(
+            "stmt", {}, Exception("ssl syscall error: connection abort")
+        )
+        call_seq = [transient, 3]   # raise on attempt 1, return 3 on attempt 2
+        idx = [0]
+
+        def upsert_side(*a, **kw):
+            v = call_seq[idx[0]]
+            idx[0] += 1
+            if isinstance(v, Exception):
+                raise v
+            return v
+
+        with patch('inner_mongolia.writer._lookup_by_hash', return_value=existing), \
+             patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
+             patch('inner_mongolia.writer.load_asset_map', return_value={}), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=sheets), \
+             patch('inner_mongolia.writer.match_sheet', side_effect=_make_match_side_effect()), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
+             patch('inner_mongolia.writer._reset_registry_pending'), \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows', side_effect=upsert_side), \
+             patch('inner_mongolia.writer._update_registry_status'), \
+             patch('inner_mongolia.writer.time') as mock_time:
+            result = ingest_file(fpath, engine=engine, force=True, dry_run=False)
+
+        assert result.status == 'success'
+        mock_time.sleep.assert_called_once()   # exactly one sleep between the two attempts
+
+    def test_non_transient_error_not_retried(self, tmp_path):
+        """A non-transient error (e.g. IntegrityError) fails immediately without retry."""
+        from sqlalchemy.exc import IntegrityError
+        fpath, existing, sheets = self._base_patches(tmp_path)
+        engine, _ = _make_engine_cm()
+
+        non_transient = IntegrityError("INSERT", {}, Exception("duplicate key"))
+        call_count = [0]
+
+        def upsert_side(*a, **kw):
+            call_count[0] += 1
+            raise non_transient
+
+        with patch('inner_mongolia.writer._lookup_by_hash', return_value=existing), \
+             patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
+             patch('inner_mongolia.writer.load_asset_map', return_value={}), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=sheets), \
+             patch('inner_mongolia.writer.match_sheet', side_effect=_make_match_side_effect()), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
+             patch('inner_mongolia.writer._reset_registry_pending'), \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows', side_effect=upsert_side), \
+             patch('inner_mongolia.writer._update_registry_status'), \
+             patch('inner_mongolia.writer.time') as mock_time:
+            result = ingest_file(fpath, engine=engine, force=True, dry_run=False)
+
+        assert result.status == 'failed'
+        assert call_count[0] == 1          # only one attempt
+        mock_time.sleep.assert_not_called()
+
+    def test_transient_exhausted_retries_returns_failed(self, tmp_path):
+        """Transient errors on all _MAX_RETRIES attempts → status='failed'."""
+        from sqlalchemy.exc import OperationalError as SAOperationalError
+        from inner_mongolia.writer import _MAX_RETRIES
+        fpath, existing, sheets = self._base_patches(tmp_path)
+        engine, _ = _make_engine_cm()
+
+        transient = SAOperationalError("stmt", {}, Exception("ssl syscall error: connection abort"))
+
+        with patch('inner_mongolia.writer._lookup_by_hash', return_value=existing), \
+             patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
+             patch('inner_mongolia.writer.load_asset_map', return_value={}), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=sheets), \
+             patch('inner_mongolia.writer.match_sheet', side_effect=_make_match_side_effect()), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
+             patch('inner_mongolia.writer._reset_registry_pending'), \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows', side_effect=transient), \
+             patch('inner_mongolia.writer._update_registry_status'), \
+             patch('inner_mongolia.writer.time') as mock_time:
+            result = ingest_file(fpath, engine=engine, force=True, dry_run=False)
+
+        assert result.status == 'failed'
+        # sleep is called between attempts 1→2 and 2→3, not after the last failure
+        assert mock_time.sleep.call_count == _MAX_RETRIES - 1
+
+    def test_retry_uses_exponential_backoff(self, tmp_path):
+        """Sleep durations double each retry: 1 s, 2 s for _MAX_RETRIES=3."""
+        from sqlalchemy.exc import OperationalError as SAOperationalError
+        from inner_mongolia.writer import _RETRY_DELAY_BASE
+        fpath, existing, sheets = self._base_patches(tmp_path)
+        engine, _ = _make_engine_cm()
+
+        transient = SAOperationalError("stmt", {}, Exception("ssl syscall error: connection abort"))
+
+        with patch('inner_mongolia.writer._lookup_by_hash', return_value=existing), \
+             patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
+             patch('inner_mongolia.writer.load_asset_map', return_value={}), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=sheets), \
+             patch('inner_mongolia.writer.match_sheet', side_effect=_make_match_side_effect()), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
+             patch('inner_mongolia.writer._reset_registry_pending'), \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows', side_effect=transient), \
+             patch('inner_mongolia.writer._update_registry_status'), \
+             patch('inner_mongolia.writer.time') as mock_time:
+            ingest_file(fpath, engine=engine, force=True, dry_run=False)
+
+        sleep_calls = [c.args[0] for c in mock_time.sleep.call_args_list]
+        assert sleep_calls == [_RETRY_DELAY_BASE, _RETRY_DELAY_BASE * 2]
+
+
+# ---------------------------------------------------------------------------
+# Test class: zero-row classification
+# ---------------------------------------------------------------------------
+
+class TestZeroRowClassification:
+    """
+    Verify _classify_zero_rows and that ingest_file writes the correct
+    parse_status for files that produce no dispatch rows.
+    """
+
+    def test_classify_no_sheets_is_unsupported_format(self):
+        from inner_mongolia.writer import _classify_zero_rows
+        status, notes = _classify_zero_rows(sheet_results=[], matched=[])
+        assert status == 'unsupported_format'
+        assert 'parseable' in notes.lower() or 'format' in notes.lower() or 'sheet' in notes.lower()
+
+    def test_classify_sheets_no_match_is_no_dispatch_section(self):
+        from inner_mongolia.writer import _classify_zero_rows
+        # Build matched list where no sheet has an asset_code
+        unmatched = MagicMock()
+        unmatched.sheet_name = 'Summary'
+        mr = MagicMock()
+        mr.asset_code = None
+        matched = [{'sheet': unmatched, 'match': mr}]
+        status, notes = _classify_zero_rows(sheet_results=[unmatched], matched=matched)
+        assert status == 'no_dispatch_section'
+
+    def test_classify_matched_empty_rows_is_partial_bundle(self):
+        from inner_mongolia.writer import _classify_zero_rows
+        sheet = MagicMock()
+        sheet.sheet_name = 'SheetA'
+        mr = MagicMock()
+        mr.asset_code = 'suyou'
+        matched = [{'sheet': sheet, 'match': mr}]
+        status, notes = _classify_zero_rows(sheet_results=[sheet], matched=matched)
+        assert status == 'partial_bundle'
+        assert '0' in notes or 'zero' in notes.lower() or 'no data' in notes.lower() or 'data rows' in notes.lower()
+
+    def test_ingest_file_no_sheets_gets_unsupported_format_status(self, tmp_path):
+        """ingest_file with empty parse_workbook result → registry status=unsupported_format."""
+        f = tmp_path / "file.xlsx"
+        f.write_bytes(b"bytes")
+        engine, _ = _make_engine_cm()
+
+        with patch('inner_mongolia.writer._lookup_by_hash', return_value=None), \
+             patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
+             patch('inner_mongolia.writer.load_asset_map', return_value={}), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=[]), \
+             patch('inner_mongolia.writer._next_ingest_version', return_value=1), \
+             patch('inner_mongolia.writer._insert_registry', return_value=1), \
+             patch('inner_mongolia.writer._supersede_previous'), \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows') as mock_upsert, \
+             patch('inner_mongolia.writer._update_registry_status') as mock_update:
+            result = ingest_file(str(f), engine=engine, force=False, dry_run=False)
+
+        assert result.status == 'unsupported_format'
+        mock_upsert.assert_not_called()   # no fact rows written for zero-row case
+        # _update_registry_status(conn, file_id, status, row_count, notes=...)
+        # status is positional arg index 2
+        call_args = mock_update.call_args[0] if mock_update.call_args else ()
+        written_status = call_args[2] if len(call_args) > 2 else None
+        assert written_status == 'unsupported_format'
+
+    def test_ingest_file_no_dispatch_section_skips_fact_writes(self, tmp_path):
+        """Sheets parsed but none matched → no _upsert_dispatch_rows calls."""
+        f = tmp_path / "file.xlsx"
+        f.write_bytes(b"bytes")
+        engine, _ = _make_engine_cm()
+
+        # Sheet exists but match returns no asset_code
+        sheet = MagicMock(sheet_name='Summary', n_rows=0, rows=[])
+        no_match = MagicMock()
+        no_match.asset_code = None
+        no_match.match_method = 'unmatched'
+        no_match.dispatch_unit_name = None
+        no_match.plant_name = None
+        no_match.nickname_cn = None
+        no_match.bracket_cn = None
+        no_match.sheet_name = 'Summary'
+
+        with patch('inner_mongolia.writer._lookup_by_hash', return_value=None), \
+             patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
+             patch('inner_mongolia.writer.load_asset_map', return_value={}), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=[sheet]), \
+             patch('inner_mongolia.writer.match_sheet', return_value=no_match), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
+             patch('inner_mongolia.writer._next_ingest_version', return_value=1), \
+             patch('inner_mongolia.writer._insert_registry', return_value=1), \
+             patch('inner_mongolia.writer._supersede_previous'), \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows') as mock_upsert, \
+             patch('inner_mongolia.writer._update_registry_status'):
+            result = ingest_file(str(f), engine=engine, force=False, dry_run=False)
+
+        assert result.status == 'no_dispatch_section'
+        mock_upsert.assert_not_called()
+
+    def test_nonzero_rows_is_success_not_classified(self, tmp_path):
+        """Files with matched rows remain status='success' (classification not applied)."""
+        f = tmp_path / "file.xlsx"
+        f.write_bytes(b"bytes")
+        engine, _ = _make_engine_cm()
+        sheets = _fake_sheets(['SheetA'], rows_per_sheet=96)
+
+        with patch('inner_mongolia.writer._lookup_by_hash', return_value=None), \
+             patch('inner_mongolia.writer.parse_date', return_value=datetime.date(2026, 4, 17)), \
+             patch('inner_mongolia.writer.load_asset_map', return_value={}), \
+             patch('inner_mongolia.writer.parse_workbook', return_value=sheets), \
+             patch('inner_mongolia.writer.match_sheet', side_effect=_make_match_side_effect()), \
+             patch('inner_mongolia.writer.verify_prices_no_db', return_value=_fake_vr()), \
+             patch('inner_mongolia.writer._next_ingest_version', return_value=1), \
+             patch('inner_mongolia.writer._insert_registry', return_value=1), \
+             patch('inner_mongolia.writer._supersede_previous'), \
+             patch('inner_mongolia.writer._upsert_sheet_map'), \
+             patch('inner_mongolia.writer._upsert_dispatch_rows', return_value=96), \
+             patch('inner_mongolia.writer._update_registry_status'):
+            result = ingest_file(str(f), engine=engine, force=False, dry_run=False)
+
+        assert result.status == 'success'
+        assert result.rows_written == 96

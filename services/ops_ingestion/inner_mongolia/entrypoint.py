@@ -237,7 +237,9 @@ def main(argv=None) -> int:
 
     from services.ops_ingestion.inner_mongolia.writer import ingest_file
 
-    total_success = total_skip = total_fail = 0
+    total_success = total_skip = total_zero_row = total_fail = 0
+
+    _ZERO_ROW_STATUSES = {'unsupported_format', 'no_dispatch_section', 'partial_bundle'}
 
     for path in files:
         year_hint = _infer_year_hint(path, args.year)
@@ -261,13 +263,19 @@ def main(argv=None) -> int:
             total_skip += 1
         elif result.status == 'dry_run':
             total_success += 1   # count dry-run as processed for summary
+        elif result.status in _ZERO_ROW_STATUSES:
+            total_zero_row += 1
+            log.warning(
+                "Zero-row: %s — %s — %s",
+                os.path.basename(path), result.status, result.notes,
+            )
         else:
             total_fail += 1
             log.error("Failed: %s — %s", os.path.basename(path), result.notes)
 
     log.info(
-        "Done. success=%d  skipped=%d  failed=%d  total=%d",
-        total_success, total_skip, total_fail, len(files),
+        "Done. success=%d  skipped=%d  zero_row=%d  failed=%d  total=%d",
+        total_success, total_skip, total_zero_row, total_fail, len(files),
     )
     return 0 if total_fail == 0 else 1
 

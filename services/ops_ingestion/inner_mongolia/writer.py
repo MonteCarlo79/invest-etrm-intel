@@ -31,6 +31,7 @@ import datetime
 import hashlib
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -47,6 +48,28 @@ from .price_verifier import (
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Retry configuration
+# ---------------------------------------------------------------------------
+
+_MAX_RETRIES = 3          # total attempts per file (first try + 2 retries)
+_RETRY_DELAY_BASE = 1.0   # seconds; doubles each retry: 1 s, 2 s
+
+# Substrings that identify transient DB / SSL / network errors (lower-cased).
+_TRANSIENT_ERROR_STRINGS: tuple = (
+    'ssl syscall error',
+    'connection abort',
+    'connection reset',
+    'connection refused',
+    'could not connect',
+    'server closed the connection',
+    'connection timed out',
+    'broken pipe',
+    'no connection to the server',
+    'connection is closed',
+    'lost connection',
+)
+
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -57,7 +80,9 @@ class IngestResult:
     path: str
     report_date: Optional[str]       # ISO date
     file_hash: str
-    status: str                       # 'skipped_duplicate' | 'skipped_superseded' | 'dry_run' | 'success' | 'failed'
+    status: str                       # 'skipped_duplicate' | 'skipped_superseded' | 'dry_run'
+                                      # | 'success' | 'failed'
+                                      # | 'unsupported_format' | 'no_dispatch_section' | 'partial_bundle'
     file_id: Optional[int] = None     # new registry id
     ingest_version: Optional[int] = None
     sheets_matched: int = 0
@@ -202,12 +227,26 @@ def ingest_file(
     ]
 
     # ------------------------------------------------------------------
+    # 4b. Classify zero-row results before any DB work
+    # ------------------------------------------------------------------
+    zero_row_status: Optional[str] = None
+    zero_row_notes: Optional[str] = None
+    if total_rows == 0 and not dry_run:
+        zero_row_status, zero_row_notes = _classify_zero_rows(sheet_results, matched)
+        log.warning(
+            "Zero-row result for %s (date=%s): status=%s — %s",
+            basename, report_date_str, zero_row_status, zero_row_notes,
+        )
+
+    # ------------------------------------------------------------------
     # 5. Dry run — print summary and return
     # ------------------------------------------------------------------
     if dry_run:
+        dry_note = zero_row_notes or "Dry run — no DB writes"
+        dry_status = zero_row_status or 'dry_run'
         log.info(
-            "[DRY RUN] %s | date=%s | sheets_matched=%d/%d | rows=%d",
-            basename, report_date_str, sheets_matched, len(matched), total_rows,
+            "[DRY RUN] %s | date=%s | sheets_matched=%d/%d | rows=%d | status=%s",
+            basename, report_date_str, sheets_matched, len(matched), total_rows, dry_status,
         )
         for s in sheet_summary:
             log.info("  Sheet %-30s → asset=%-15s method=%-10s rows=%d verify=%s",
@@ -216,78 +255,97 @@ def ingest_file(
         return IngestResult(
             path=path, report_date=report_date_str, file_hash=file_hash,
             status='dry_run', sheets_matched=sheets_matched, rows_written=total_rows,
-            notes="Dry run — no DB writes", sheet_results=sheet_summary,
+            notes=dry_note, sheet_results=sheet_summary,
         )
 
     # ------------------------------------------------------------------
-    # 6. Write to DB (single transaction)
+    # 6. Write to DB — with per-file retry for transient network/SSL errors.
+    #
+    # Rollback is automatic: engine.begin() rolls back on any exception.
+    # For force-reprocess (existing row), file_id is stable across retries.
+    # For a new file, file_id is assigned inside the transaction; a rolled-back
+    # transaction leaves the DB clean — the next retry re-inserts a fresh row.
     # ------------------------------------------------------------------
-    file_id: Optional[int] = None   # initialise so except block can reference it safely
-    try:
-        with engine.begin() as conn:
-            if force_reprocess_id is not None:
-                # ---- Case 1b: same hash + --force ----
-                # Reuse the existing registry row; reset to pending so status
-                # reflects this reprocess run, not the previous one.
-                file_id = force_reprocess_id
-                ingest_version = force_reprocess_version
-                _reset_registry_pending(conn, file_id, path, sheet_count=len(sheet_results))
-                # _supersede_previous intentionally skipped: supersession chain
-                # is unchanged when the file itself hasn't changed.
-            else:
-                # ---- Case 2: new file (different hash or first ingest) ----
-                # 6a. Determine ingest_version
-                ingest_version = _next_ingest_version(conn, report_date_str)
+    file_id: Optional[int] = force_reprocess_id         # None for new files
+    ingest_version: Optional[int] = force_reprocess_version
+    final_status: str = zero_row_status or 'success'
 
-                # 6b. INSERT new registry row
-                file_id = _insert_registry(
-                    conn, path, file_hash, report_date_str, ingest_version,
-                    sheet_count=len(sheet_results),
+    for attempt in range(1, _MAX_RETRIES + 1):
+        rows_written = 0
+        try:
+            with engine.begin() as conn:
+                if force_reprocess_id is not None:
+                    # ---- Case 1b: same hash + --force ----
+                    file_id = force_reprocess_id
+                    ingest_version = force_reprocess_version
+                    _reset_registry_pending(conn, file_id, path, sheet_count=len(sheet_results))
+                    # _supersede_previous intentionally skipped: supersession chain
+                    # is unchanged when the file itself hasn't changed.
+                else:
+                    # ---- Case 2: new file (different hash or first ingest) ----
+                    ingest_version = _next_ingest_version(conn, report_date_str)
+                    file_id = _insert_registry(
+                        conn, path, file_hash, report_date_str, ingest_version,
+                        sheet_count=len(sheet_results),
+                    )
+                    _supersede_previous(conn, report_date_str, file_id)
+
+                # Write sheet map (always — records match/verify results even for zero-row)
+                for m in matched:
+                    _upsert_sheet_map(conn, file_id, m['match'], m['verify'])
+
+                # Write fact rows only when data exists
+                if total_rows > 0:
+                    for m in matched:
+                        if m['match'].asset_code is None:
+                            continue   # skip unmatched sheets
+                        rows_written += _upsert_dispatch_rows(conn, file_id, m['sheet'], m['match'])
+
+                _update_registry_status(conn, file_id, final_status, rows_written,
+                                        notes=zero_row_notes)
+
+            # ---- success ----
+            action = "Force-reprocessed" if force_reprocess_id is not None else "Ingested"
+            log.info(
+                "%s %s | date=%s | v%d | sheets=%d/%d | rows=%d | status=%s",
+                action, basename, report_date_str, ingest_version,
+                sheets_matched, len(matched), rows_written, final_status,
+            )
+            return IngestResult(
+                path=path, report_date=report_date_str, file_hash=file_hash,
+                status=final_status, file_id=file_id, ingest_version=ingest_version,
+                sheets_matched=sheets_matched, rows_written=rows_written,
+                sheet_results=sheet_summary,
+            )
+
+        except Exception as exc:
+            if _is_transient_db_error(exc) and attempt < _MAX_RETRIES:
+                wait = _RETRY_DELAY_BASE * (2 ** (attempt - 1))
+                log.warning(
+                    "Transient DB error on attempt %d/%d for %s — rolled back; "
+                    "retrying in %.0fs: %s",
+                    attempt, _MAX_RETRIES, basename, wait, exc,
                 )
+                time.sleep(wait)
+                continue
 
-                # 6c. Mark previous registry rows as superseded
-                _supersede_previous(conn, report_date_str, file_id)
+            # Non-transient error, or max retries exhausted
+            retry_suffix = f" (failed after {attempt} attempt(s))" if attempt > 1 else ""
+            log.exception("Failed to ingest %s%s: %s", basename, retry_suffix, exc)
 
-            # 6d. Write sheet map rows (ON CONFLICT DO UPDATE handles re-run)
-            for m in matched:
-                _upsert_sheet_map(conn, file_id, m['match'], m['verify'])
-
-            # 6e. Write / update fact rows (ON CONFLICT DO UPDATE)
-            rows_written = 0
-            for m in matched:
-                if m['match'].asset_code is None:
-                    continue   # skip unmatched sheets
-                rows_written += _upsert_dispatch_rows(conn, file_id, m['sheet'], m['match'])
-
-            # 6f. Update registry status
-            _update_registry_status(conn, file_id, 'success', rows_written)
-
-        action = "Force-reprocessed" if force_reprocess_id is not None else "Ingested"
-        log.info(
-            "%s %s | date=%s | v%d | sheets=%d/%d | rows=%d",
-            action, basename, report_date_str, ingest_version,
-            sheets_matched, len(matched), rows_written,
-        )
-        return IngestResult(
-            path=path, report_date=report_date_str, file_hash=file_hash,
-            status='success', file_id=file_id, ingest_version=ingest_version,
-            sheets_matched=sheets_matched, rows_written=rows_written,
-            sheet_results=sheet_summary,
-        )
-
-    except Exception as exc:
-        log.exception("Failed to ingest %s: %s", basename, exc)
-        # Attempt to mark registry row as failed (best-effort; may not exist yet)
-        if file_id is not None:
-            try:
-                with engine.begin() as conn:
-                    _update_registry_status(conn, file_id, 'failed', 0)
-            except Exception:
-                pass
-        return IngestResult(
-            path=path, report_date=report_date_str, file_hash=file_hash,
-            status='failed', notes=str(exc), sheet_results=sheet_summary,
-        )
+            # Best-effort: persist failed status to registry (may itself fail if
+            # the connection is completely gone — caught and ignored silently).
+            if file_id is not None:
+                try:
+                    with engine.begin() as conn:
+                        _update_registry_status(conn, file_id, 'failed', 0,
+                                                notes=str(exc)[:500])
+                except Exception:
+                    pass
+            return IngestResult(
+                path=path, report_date=report_date_str, file_hash=file_hash,
+                status='failed', notes=str(exc), sheet_results=sheet_summary,
+            )
 
 
 def ensure_tables(engine) -> None:
@@ -307,6 +365,70 @@ def ensure_tables(engine) -> None:
     with engine.begin() as conn:
         conn.execute(text(ddl_sql))
     log.info("Tables ensured from %s", ddl_path)
+
+
+# ---------------------------------------------------------------------------
+# Transient-error detection
+# ---------------------------------------------------------------------------
+
+def _is_transient_db_error(exc: Exception) -> bool:
+    """
+    Return True if *exc* is a transient DB / SSL / network error worth retrying.
+
+    Matches SQLAlchemy OperationalError (which wraps psycopg2 errors) and raw
+    psycopg2.OperationalError, keyed on well-known substrings in the message.
+    """
+    from sqlalchemy.exc import OperationalError as SAOperationalError
+
+    is_op = isinstance(exc, SAOperationalError)
+    if not is_op:
+        try:
+            import psycopg2
+            is_op = isinstance(exc, psycopg2.OperationalError)
+        except ImportError:
+            pass
+    if not is_op:
+        return False
+
+    msg = str(exc).lower()
+    return any(s in msg for s in _TRANSIENT_ERROR_STRINGS)
+
+
+# ---------------------------------------------------------------------------
+# Zero-row classification
+# ---------------------------------------------------------------------------
+
+def _classify_zero_rows(
+    sheet_results: List,
+    matched: List[dict],
+) -> tuple:
+    """
+    Classify why an ingest produced zero fact rows.
+
+    Returns (parse_status, notes_str) where parse_status is one of:
+      'unsupported_format'  — parse_workbook returned no sheets at all
+      'no_dispatch_section' — sheets parsed but none matched a known asset
+      'partial_bundle'      — asset sheets matched but contained no data rows
+    """
+    if not sheet_results:
+        return (
+            'unsupported_format',
+            'No parseable dispatch sheets found in workbook',
+        )
+
+    sheets_matched = sum(1 for m in matched if m['match'].asset_code is not None)
+    if sheets_matched == 0:
+        names = [m['sheet'].sheet_name for m in matched]
+        return (
+            'no_dispatch_section',
+            f'Sheets found but none matched a known asset: {names}',
+        )
+
+    # Sheets matched but every row list was empty
+    return (
+        'partial_bundle',
+        f'Matched {sheets_matched} asset sheet(s) but all had 0 data rows',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -489,13 +611,28 @@ def _upsert_dispatch_rows(conn, file_id: int, sr: SheetParseResult, mr: MatchRes
     return count
 
 
-def _update_registry_status(conn, file_id: int, status: str, row_count: int) -> None:
+def _update_registry_status(
+    conn,
+    file_id: int,
+    status: str,
+    row_count: int,
+    notes: Optional[str] = None,
+) -> None:
+    """
+    Update parse_status and row_count on the registry row.
+
+    If *notes* is given it is written to the notes column; if None, the
+    existing notes value is preserved (useful for force-reprocess where
+    _reset_registry_pending already wrote 'force-reprocessed').
+    """
     sql = text("""
         UPDATE marketdata.ops_dispatch_file_registry
-        SET parse_status = :status, row_count = :rc
+        SET parse_status = :status,
+            row_count    = :rc,
+            notes        = CASE WHEN :notes IS NOT NULL THEN :notes ELSE notes END
         WHERE id = :fid
     """)
-    conn.execute(sql, {"status": status, "rc": row_count, "fid": file_id})
+    conn.execute(sql, {"status": status, "rc": row_count, "notes": notes, "fid": file_id})
 
 
 def _row_to_dict(row) -> dict:
