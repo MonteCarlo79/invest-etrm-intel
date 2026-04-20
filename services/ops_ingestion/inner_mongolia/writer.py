@@ -231,7 +231,7 @@ def ingest_file(
     # ------------------------------------------------------------------
     zero_row_status: Optional[str] = None
     zero_row_notes: Optional[str] = None
-    if total_rows == 0 and not dry_run:
+    if total_rows == 0:
         zero_row_status, zero_row_notes = _classify_zero_rows(sheet_results, matched)
         log.warning(
             "Zero-row result for %s (date=%s): status=%s — %s",
