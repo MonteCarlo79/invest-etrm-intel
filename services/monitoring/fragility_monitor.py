@@ -83,17 +83,6 @@ def _load_realization_rows(
 
     sql = text("""
         SELECT
-            realization_ratio, realization_status_level, days_in_window,
-            avg_cleared_actual_pnl, avg_pf_grid_feasible_pnl,
-            status_level
-        FROM monitoring.asset_realization_status
-        WHERE asset_code = :asset
-          AND snapshot_date = :snap
-          AND lookback_days = :lookback
-    """)
-    # Note: the table has status_level not realization_status_level — aliased in query
-    sql = text("""
-        SELECT
             realization_ratio,
             status_level,
             days_in_window,
