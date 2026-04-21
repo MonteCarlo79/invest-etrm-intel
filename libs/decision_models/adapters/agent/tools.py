@@ -600,8 +600,128 @@ STRATEGY_COMPARISON_TOOLS: List[Dict[str, Any]] = [
     },
 ]
 
+DAILY_OPS_TOOLS: List[Dict[str, Any]] = [
+    {
+        "name": "run_bess_daily_strategy_analysis",
+        "description": (
+            "Run the full 4-strategy performance analysis for one Inner Mongolia BESS asset on one day. "
+            "Strategies compared: perfect foresight (LP benchmark), forecast-price-optimised, "
+            "nominated dispatch (from ops Excel ingestion), and actual dispatch (from ops Excel). "
+            "Ops dispatch data is loaded from marketdata.ops_bess_dispatch_15min when available "
+            "and preferred over canon.scenario_dispatch_15min. "
+            "Returns: context, strategy ranking, discrepancy attribution, and full report. "
+            "Assets: suyou, hangjinqi, siziwangqi, gushanliang (Inner Mongolia only)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": "string",
+                    "enum": ["suyou", "hangjinqi", "siziwangqi", "gushanliang"],
+                    "description": "Inner Mongolia BESS asset code.",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "ISO date string, e.g. '2026-04-17'.",
+                },
+                "forecast_models": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["ols_da_time_v1", "naive_da"]},
+                    "description": "Forecast models to run. Default: ['ols_da_time_v1'].",
+                },
+                "use_ops_dispatch": {
+                    "type": "boolean",
+                    "description": (
+                        "When true (default), load and prefer ops dispatch data from "
+                        "marketdata.ops_bess_dispatch_15min for nominated/actual strategies."
+                    ),
+                    "default": True,
+                },
+            },
+            "required": ["asset_code", "date"],
+        },
+    },
+    {
+        "name": "generate_bess_daily_strategy_report",
+        "description": (
+            "Generate a daily strategy report for one Inner Mongolia BESS asset. "
+            "Output formats: 'markdown' (default, returns string), 'html' (returns HTML string), "
+            "'pdf' (returns PDF bytes — requires reportlab; falls back to markdown bytes if absent). "
+            "If analysis is not provided, runs run_bess_daily_strategy_analysis() on the fly. "
+            "Report includes: executive summary, strategy ranking, P&L comparison, "
+            "discrepancy waterfall, YTD summary, and data quality caveats."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": "string",
+                    "enum": ["suyou", "hangjinqi", "siziwangqi", "gushanliang"],
+                    "description": "Inner Mongolia BESS asset code.",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "ISO date string, e.g. '2026-04-17'.",
+                },
+                "output_format": {
+                    "type": "string",
+                    "enum": ["markdown", "html", "pdf"],
+                    "description": "Output format. Default: 'markdown'.",
+                    "default": "markdown",
+                },
+                "forecast_models": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["ols_da_time_v1", "naive_da"]},
+                    "description": "Forecast models to run. Default: ['ols_da_time_v1'].",
+                },
+                "use_ops_dispatch": {
+                    "type": "boolean",
+                    "description": "Prefer ops dispatch data. Default: true.",
+                    "default": True,
+                },
+            },
+            "required": ["asset_code", "date"],
+        },
+    },
+    {
+        "name": "render_bess_strategy_dashboard_payload",
+        "description": (
+            "Return a structured Streamlit-ready payload for the daily BESS strategy view. "
+            "Includes: summary_cards (for st.metric), strategy_table (for st.dataframe), "
+            "dispatch_chart_data (nominated vs actual MW time series), price_chart_data, "
+            "waterfall_data (discrepancy attribution buckets), pnl_comparison, and caveats. "
+            "Use this when building a custom dashboard or agent response with structured data."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": "string",
+                    "enum": ["suyou", "hangjinqi", "siziwangqi", "gushanliang"],
+                    "description": "Inner Mongolia BESS asset code.",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "ISO date string, e.g. '2026-04-17'.",
+                },
+                "forecast_models": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["ols_da_time_v1", "naive_da"]},
+                    "description": "Forecast models to run. Default: ['ols_da_time_v1'].",
+                },
+                "use_ops_dispatch": {
+                    "type": "boolean",
+                    "description": "Prefer ops dispatch data. Default: true.",
+                    "default": True,
+                },
+            },
+            "required": ["asset_code", "date"],
+        },
+    },
+]
+
 # Combined list for passing to the Claude API
-ALL_TOOLS: List[Dict[str, Any]] = DECISION_MODEL_TOOLS + STRATEGY_COMPARISON_TOOLS
+ALL_TOOLS: List[Dict[str, Any]] = DECISION_MODEL_TOOLS + STRATEGY_COMPARISON_TOOLS + DAILY_OPS_TOOLS
 
 
 def handle_tool_call(tool_name: str, tool_input: Dict[str, Any]) -> str:
@@ -711,6 +831,59 @@ def handle_tool_call(tool_name: str, tool_input: Dict[str, Any]) -> str:
             context=tool_input.get("context"),
             ranking=tool_input.get("ranking"),
             attribution=tool_input.get("attribution"),
+        )
+
+    # -----------------------------------------------------------------------
+    # Daily ops strategy tools
+    # -----------------------------------------------------------------------
+    elif tool_name == "run_bess_daily_strategy_analysis":
+        from libs.decision_models.workflows.daily_strategy_report import (
+            run_bess_daily_strategy_analysis,
+        )
+        result = run_bess_daily_strategy_analysis(
+            asset_code=tool_input["asset_code"],
+            date=tool_input["date"],
+            forecast_models=tool_input.get("forecast_models"),
+            use_ops_dispatch=tool_input.get("use_ops_dispatch", True),
+        )
+        # Strip the raw context to keep the response size manageable
+        result = {k: v for k, v in result.items() if k != "context"}
+
+    elif tool_name == "generate_bess_daily_strategy_report":
+        from libs.decision_models.workflows.daily_strategy_report import (
+            generate_bess_daily_strategy_report,
+        )
+        output = generate_bess_daily_strategy_report(
+            asset_code=tool_input["asset_code"],
+            date=tool_input["date"],
+            output_format=tool_input.get("output_format", "markdown"),
+            forecast_models=tool_input.get("forecast_models"),
+            use_ops_dispatch=tool_input.get("use_ops_dispatch", True),
+        )
+        if isinstance(output, bytes):
+            result = {
+                "output_format": tool_input.get("output_format", "markdown"),
+                "content_bytes_len": len(output),
+                "note": (
+                    "PDF/bytes output cannot be JSON-serialised via tool_call. "
+                    "Use generate_bess_daily_strategy_report() directly in Python to obtain bytes."
+                ),
+            }
+        else:
+            result = {
+                "output_format": tool_input.get("output_format", "markdown"),
+                "content": output,
+            }
+
+    elif tool_name == "render_bess_strategy_dashboard_payload":
+        from libs.decision_models.workflows.daily_strategy_report import (
+            render_bess_strategy_dashboard_payload,
+        )
+        result = render_bess_strategy_dashboard_payload(
+            asset_code=tool_input["asset_code"],
+            date=tool_input["date"],
+            forecast_models=tool_input.get("forecast_models"),
+            use_ops_dispatch=tool_input.get("use_ops_dispatch", True),
         )
 
     else:

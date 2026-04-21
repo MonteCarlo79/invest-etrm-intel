@@ -576,6 +576,90 @@ def load_id_cleared_energy(
     ]], notes
 
 
+def load_ops_dispatch_15min(
+    asset_code: str,
+    date_from: date,
+    date_to: date,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Load 15-min ops dispatch from marketdata.ops_bess_dispatch_15min.
+
+    This is the Inner Mongolia operations ingestion pipeline's output —
+    data parsed directly from the daily Excel operations files.
+
+    IMPORTANT — Semantic distinctions
+    ----------------------------------
+    nominated_dispatch_mw : 申报曲线 (BESS operator nomination to grid operator).
+                            NOT the same as md_id_cleared_energy.cleared_energy_mwh.
+    actual_dispatch_mw    : 实际充放曲线 (physical output as reported in ops file).
+                            NOT the same as md_id_cleared_energy.cleared_energy_mwh.
+    nodal_price_excel     : 节点电价 from Excel col E.  May differ from
+                            canon.nodal_rt_price_15min (DB source of truth).
+
+    Returns
+    -------
+    df    : columns [interval_start (datetime), nominated_dispatch_mw (float),
+                     actual_dispatch_mw (float), nodal_price_excel (float)]
+    notes : list of data quality / warning strings
+    """
+    notes: List[str] = []
+    sql = """
+        SELECT
+            interval_start,
+            nominated_dispatch_mw,
+            actual_dispatch_mw,
+            nodal_price_excel
+        FROM marketdata.ops_bess_dispatch_15min
+        WHERE asset_code = %(asset_code)s
+          AND data_date >= %(date_from)s
+          AND data_date <= %(date_to)s
+        ORDER BY interval_start
+    """
+    params = {
+        "asset_code": asset_code,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    df, err = _run_query_safe(sql, params)
+    if err:
+        notes.append(f"ops_dispatch_15min: query failed — {err}")
+        return pd.DataFrame(columns=[
+            "interval_start", "nominated_dispatch_mw", "actual_dispatch_mw", "nodal_price_excel",
+        ]), notes
+    if df.empty:
+        notes.append(
+            f"ops_dispatch_15min: no data for {asset_code} "
+            f"between {date_from} and {date_to} in marketdata.ops_bess_dispatch_15min "
+            "— ops ingestion may not have run for this date range yet"
+        )
+        return pd.DataFrame(columns=[
+            "interval_start", "nominated_dispatch_mw", "actual_dispatch_mw", "nodal_price_excel",
+        ]), notes
+
+    df["interval_start"] = pd.to_datetime(df["interval_start"])
+    df["nominated_dispatch_mw"] = pd.to_numeric(df["nominated_dispatch_mw"], errors="coerce")
+    df["actual_dispatch_mw"] = pd.to_numeric(df["actual_dispatch_mw"], errors="coerce")
+    df["nodal_price_excel"] = pd.to_numeric(df["nodal_price_excel"], errors="coerce")
+
+    n_nom_null = df["nominated_dispatch_mw"].isna().sum()
+    n_act_null = df["actual_dispatch_mw"].isna().sum()
+    if n_nom_null > 0:
+        notes.append(
+            f"ops_dispatch_15min: {n_nom_null} null nominated_dispatch_mw values for {asset_code}"
+        )
+    if n_act_null > 0:
+        notes.append(
+            f"ops_dispatch_15min: {n_act_null} null actual_dispatch_mw values for {asset_code}"
+        )
+    notes.append(
+        f"ops_dispatch_15min: {len(df)} rows loaded from marketdata.ops_bess_dispatch_15min "
+        f"for {asset_code} {date_from} to {date_to} — "
+        "nominated_dispatch_mw is the operator nomination (NOT market-cleared energy); "
+        "actual_dispatch_mw is physical output (NOT market-cleared energy)"
+    )
+    return df, notes
+
+
 def load_precomputed_attribution(
     asset_code: str,
     date_from: date,
