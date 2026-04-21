@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import time
 from datetime import date, timedelta
 from typing import List
 
@@ -57,6 +58,7 @@ def ensure_monitoring_schema(engine) -> None:
 
 def run_for_date(snapshot_date: date, engine, lookback_days: int = _DEFAULT_LOOKBACK) -> int:
     """Compute and upsert realization status for all assets on snapshot_date."""
+    t0 = time.monotonic()
     rows = []
     for asset_code in _ASSET_CODES:
         try:
@@ -73,12 +75,25 @@ def run_for_date(snapshot_date: date, engine, lookback_days: int = _DEFAULT_LOOK
 
     if rows:
         upsert_realization_status(engine, rows)
-        alert_count = sum(1 for r in rows if r["status_level"] in ("ALERT", "CRITICAL"))
-        logger.info(
-            "Realization status written for %d assets on %s (lookback=%dd). "
-            "ALERT/CRITICAL: %d.",
-            len(rows), snapshot_date, lookback_days, alert_count,
-        )
+
+    # B5: structured MONITORING_RUN event for ops dashboards / log aggregation
+    status_counts = {}
+    for r in rows:
+        lvl = r["status_level"]
+        status_counts[lvl] = status_counts.get(lvl, 0) + 1
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    logger.info(
+        "MONITORING_RUN job=realization_monitor date=%s assets=%d lookback_days=%d "
+        "NORMAL=%d WARN=%d ALERT=%d CRITICAL=%d DATA_ABSENT=%d INDETERMINATE=%d elapsed_ms=%d",
+        snapshot_date, len(rows), lookback_days,
+        status_counts.get("NORMAL", 0),
+        status_counts.get("WARN", 0),
+        status_counts.get("ALERT", 0),
+        status_counts.get("CRITICAL", 0),
+        status_counts.get("DATA_ABSENT", 0),
+        status_counts.get("INDETERMINATE", 0),
+        elapsed_ms,
+    )
     return len(rows)
 
 

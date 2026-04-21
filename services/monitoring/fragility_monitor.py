@@ -33,6 +33,9 @@ _STATUS_TO_SCORE = {
     "WARN": 0.33,
     "ALERT": 0.67,
     "CRITICAL": 1.0,
+    # B1/B2: neutral score for non-performance statuses — pipeline/market issue, not execution
+    "DATA_ABSENT": 0.5,
+    "INDETERMINATE": 0.5,
 }
 
 _FRAGILITY_THRESHOLDS = [

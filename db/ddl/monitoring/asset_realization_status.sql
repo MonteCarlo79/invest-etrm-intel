@@ -34,10 +34,12 @@ CREATE TABLE IF NOT EXISTS monitoring.asset_realization_status (
     dominant_loss_bucket       text,
 
     -- Status classification
-    -- NORMAL  : realization_ratio >= 0.70
-    -- WARN    : realization_ratio in [0.50, 0.70)
-    -- ALERT   : realization_ratio in [0.30, 0.50)
-    -- CRITICAL: realization_ratio < 0.30 OR days_in_window = 0
+    -- NORMAL       : realization_ratio >= 0.70
+    -- WARN         : realization_ratio in [0.50, 0.70)
+    -- ALERT        : realization_ratio in [0.30, 0.50)
+    -- CRITICAL     : realization_ratio < 0.30  (data present, ratio computable)
+    -- DATA_ABSENT  : days_in_window < 5  (not enough data to assess)
+    -- INDETERMINATE: avg_pf_grid_feasible_pnl <= 0  (benchmark unavailable)
     status_level               text        NOT NULL,
 
     narrative                  text,
