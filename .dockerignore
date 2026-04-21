@@ -13,3 +13,16 @@ node_modules
 *.log
 .dump
 *.dump
+
+# Large directories not needed in any container
+infra/
+archived/
+backup/
+data/
+tmp/
+outputs/
+reports/
+knowledge/
+docs/
+claw-code-main/
+bess-marketdata-ingestion/
