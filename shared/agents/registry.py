@@ -68,6 +68,18 @@ APP_CATALOG = [
         "category": "Agents",
         "task_definition": "bess-platform-dev-agent",
     },
+    {
+        "name": "Trading Performance Agent",
+        "path": "/trading-performance-agent/",
+        "description": (
+            "Daily strategy performance monitoring for the 4 Inner Mongolia BESS assets. "
+            "Claude-powered: strategy ranking, discrepancy attribution, realization & fragility "
+            "status, operator narrative, and email reports."
+        ),
+        "roles": ["Admin", "Trader", "Quant"],
+        "category": "Agents",
+        "task_definition": "bess-trading-performance-agent",
+    },
 ]
 
 
