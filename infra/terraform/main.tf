@@ -2432,3 +2432,117 @@ resource "aws_cloudwatch_event_target" "dev_agent_target" {
     }
   }
 }
+
+
+# ---------------------------------------------------------------------------
+# Trading Performance Agent
+# Runs daily after Inner Mongolia ops ingestion (23:00 UTC = 07:00 CST).
+# Calls run_trading_agent.py --send-email via the container CMD.
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "trading_performance_agent" {
+  name = "bess-trading-performance-agent"
+}
+
+resource "aws_ecr_lifecycle_policy" "trading_performance_agent" {
+  repository = aws_ecr_repository.trading_performance_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_ecs_task_definition" "trading_performance_agent" {
+  family                   = "${var.name}-trading-performance-agent"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "trading-performance-agent"
+      image     = var.image_trading_performance_agent
+      essential = true
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "DB_DSN"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "SMTP_FROM"
+          value = var.smtp_from
+        },
+        {
+          name  = "REPORT_EMAIL_TO"
+          value = var.report_email_to
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "trading-performance-agent"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_cloudwatch_event_rule" "trading_performance_agent_daily" {
+  name                = "${var.name}-trading-performance-agent-daily"
+  description         = "Daily BESS trading performance review — runs after IM ops ingestion"
+  schedule_expression = "cron(0 23 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "trading_performance_agent_target" {
+  rule     = aws_cloudwatch_event_rule.trading_performance_agent_daily.name
+  arn      = aws_ecs_cluster.this.arn
+  role_arn = aws_iam_role.eventbridge_ecs.arn
+
+  ecs_target {
+    launch_type         = "FARGATE"
+    task_definition_arn = aws_ecs_task_definition.trading_performance_agent.arn
+    task_count          = 1
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_tasks.id]
+      assign_public_ip = false
+    }
+  }
+}

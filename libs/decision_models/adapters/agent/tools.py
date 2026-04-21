@@ -34,6 +34,7 @@ from typing import Any, Dict, List
 # Trigger model registration
 import libs.decision_models.bess_dispatch_optimization           # noqa: F401
 import libs.decision_models.bess_dispatch_simulation_multiday    # noqa: F401
+import libs.decision_models.bess_spread_call_strip               # noqa: F401
 import libs.decision_models.dispatch_pnl_attribution             # noqa: F401
 import libs.decision_models.revenue_scenario_engine              # noqa: F401
 import libs.decision_models.price_forecast_dayahead              # noqa: F401
@@ -410,6 +411,93 @@ DECISION_MODEL_TOOLS: List[Dict[str, Any]] = [
             "required": ["asset_code", "trade_date", "actual_price", "scenario_dispatch"],
         },
     },
+    {
+        "name": "run_bess_spread_call_strip",
+        "description": (
+            "Price a BESS asset as a strip of N daily spread call options using "
+            "Kirk/Margrabe approximation (closed-form, no external dependencies). "
+            "Returns: strip_value_yuan (total embedded option value), per_day_value_yuan, "
+            "intrinsic_value_yuan, time_value_yuan, moneyness_pct, net_spread_forward, "
+            "and Greeks: delta_yuan_per_yuan (dV/dF_peak), vega_yuan_per_vol_point, "
+            "theta_yuan_per_day. "
+            "Use for: BESS embedded option valuation, investment analysis, realization overlay "
+            "(actual PnL / option value = capture rate), and fleet-level spread call decomposition."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset_code": {
+                    "type": "string",
+                    "description": "BESS asset identifier, e.g. 'suyou'.",
+                },
+                "as_of_date": {
+                    "type": "string",
+                    "description": "Valuation date (ISO format), e.g. '2026-04-21'.",
+                },
+                "n_days_remaining": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365,
+                    "description": "Number of daily options in the strip (e.g. 252 for ~1 trading year).",
+                },
+                "peak_forward_yuan": {
+                    "type": "number",
+                    "description": "Average daily peak clearing price forward (¥/MWh).",
+                },
+                "offpeak_forward_yuan": {
+                    "type": "number",
+                    "description": "Average daily offpeak clearing price forward (¥/MWh).",
+                },
+                "peak_vol": {
+                    "type": "number",
+                    "description": "Annualised peak price volatility, e.g. 0.30 for 30%.",
+                },
+                "offpeak_vol": {
+                    "type": "number",
+                    "description": "Annualised offpeak price volatility, e.g. 0.25 for 25%.",
+                },
+                "peak_offpeak_corr": {
+                    "type": "number",
+                    "minimum": -1.0,
+                    "maximum": 1.0,
+                    "description": "Correlation between peak and offpeak prices. Default: 0.85.",
+                    "default": 0.85,
+                },
+                "roundtrip_eff": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 1.0,
+                    "description": "BESS roundtrip efficiency η ∈ (0, 1]. Default: 0.85.",
+                    "default": 0.85,
+                },
+                "power_mw": {
+                    "type": "number",
+                    "description": "BESS power rating in MW. Default: 100.",
+                    "default": 100.0,
+                },
+                "duration_h": {
+                    "type": "number",
+                    "description": "BESS storage duration in hours. Default: 2.",
+                    "default": 2.0,
+                },
+                "om_cost_yuan_per_mwh": {
+                    "type": "number",
+                    "description": "O&M cost per MWh discharged (acts as effective strike K). Default: 0.",
+                    "default": 0.0,
+                },
+                "risk_free_rate": {
+                    "type": "number",
+                    "description": "Annualised risk-free rate (CNY). Default: 0.",
+                    "default": 0.0,
+                },
+            },
+            "required": [
+                "asset_code", "as_of_date", "n_days_remaining",
+                "peak_forward_yuan", "offpeak_forward_yuan",
+                "peak_vol", "offpeak_vol",
+            ],
+        },
+    },
 ]
 
 
@@ -765,6 +853,9 @@ def handle_tool_call(tool_name: str, tool_input: Dict[str, Any]) -> str:
             snapshot_date=tool_input.get("snapshot_date"),
             min_level=tool_input.get("min_level", "LOW"),
         )
+
+    elif tool_name == "run_bess_spread_call_strip":
+        result = run("bess_spread_call_strip", tool_input)
 
     elif tool_name == "run_revenue_scenario_engine":
         from datetime import date

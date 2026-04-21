@@ -21,7 +21,7 @@ import streamlit as st
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Mengxi Market Data",
+    page_title="Mengxi Dashboard",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -160,10 +160,15 @@ def make_chart(group_name: str, series_defs: list[dict],
 
 
 # ---------------------------------------------------------------------------
-# Sidebar controls
+# Tab layout
+# ---------------------------------------------------------------------------
+tab_market, tab_cockpit = st.tabs(["Market Data", "Options Cockpit"])
+
+# ---------------------------------------------------------------------------
+# Sidebar controls (market data tab)
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("⚡ Mengxi Market")
+    st.title("⚡ Mengxi Dashboard")
     st.markdown("---")
 
     st.subheader("Date Range")
@@ -212,58 +217,70 @@ with st.sidebar:
     st.caption(f"Data source: `public.hist_mengxi_*_15min`  \nRefresh: every 5 min")
 
 # ---------------------------------------------------------------------------
-# Main area
+# Tab 1: Market Data
 # ---------------------------------------------------------------------------
-st.title("⚡ Mengxi 15-min Market Data Dashboard")
-st.caption(
-    f"Period: **{start_date}** → **{end_date}** | Granularity: **{freq}** | "
-    f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-)
+with tab_market:
+    st.title("⚡ Mengxi 15-min Market Data Dashboard")
+    st.caption(
+        f"Period: **{start_date}** → **{end_date}** | Granularity: **{freq}** | "
+        f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    )
 
-for group_name, series_defs in GROUPS.items():
-    selected = series_toggles.get(group_name, [s["label"] for s in series_defs])
-    if not selected:
-        continue
+    for group_name, series_defs in GROUPS.items():
+        selected = series_toggles.get(group_name, [s["label"] for s in series_defs])
+        if not selected:
+            continue
 
-    with st.expander(f"**{group_name}**", expanded=True):
-        with st.spinner(f"Loading {group_name}..."):
-            fig = make_chart(
-                group_name, series_defs,
-                start_date, end_date, freq,
-                chart_height, selected,
+        with st.expander(f"**{group_name}**", expanded=True):
+            with st.spinner(f"Loading {group_name}..."):
+                fig = make_chart(
+                    group_name, series_defs,
+                    start_date, end_date, freq,
+                    chart_height, selected,
+                )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+
+            # Quick data freshness note
+            freshest = None
+            for s in series_defs:
+                if s["label"] not in selected:
+                    continue
+                df = load_series(s["table"], start_date, end_date, freq)
+                if not df.empty:
+                    mx = df["time"].max()
+                    if freshest is None or mx > freshest:
+                        freshest = mx
+            if freshest is not None:
+                lag = (datetime.now() - pd.Timestamp(freshest)).days
+                badge = "🟢" if lag <= 1 else ("🟡" if lag <= 7 else "🔴")
+                st.caption(f"{badge} Latest data point: **{freshest.strftime('%Y-%m-%d %H:%M')}** ({lag}d ago)")
+
+    st.markdown("---")
+    with st.expander("🗄️ Raw data export", expanded=False):
+        all_labels = [(s["table"], s["label"]) for defs in GROUPS.values() for s in defs]
+        chosen_label = st.selectbox("Series", [lbl for _, lbl in all_labels])
+        chosen_table = next(t for t, lbl in all_labels if lbl == chosen_label)
+        df_raw = load_series(chosen_table, start_date, end_date, "15min")
+        st.dataframe(df_raw, use_container_width=True, height=300)
+        if not df_raw.empty:
+            csv = df_raw.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇ Download CSV",
+                data=csv,
+                file_name=f"{chosen_table}_{start_date}_{end_date}.csv",
+                mime="text/csv",
             )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
-
-        # Quick data freshness note
-        freshest = None
-        for s in series_defs:
-            if s["label"] not in selected:
-                continue
-            df = load_series(s["table"], start_date, end_date, freq)
-            if not df.empty:
-                mx = df["time"].max()
-                if freshest is None or mx > freshest:
-                    freshest = mx
-        if freshest is not None:
-            lag = (datetime.now() - pd.Timestamp(freshest)).days
-            badge = "🟢" if lag <= 1 else ("🟡" if lag <= 7 else "🔴")
-            st.caption(f"{badge} Latest data point: **{freshest.strftime('%Y-%m-%d %H:%M')}** ({lag}d ago)")
 
 # ---------------------------------------------------------------------------
-# Raw data tab
+# Tab 2: Options Cockpit
 # ---------------------------------------------------------------------------
-st.markdown("---")
-with st.expander("🗄️ Raw data export", expanded=False):
-    all_labels = [(s["table"], s["label"]) for defs in GROUPS.values() for s in defs]
-    chosen_label = st.selectbox("Series", [lbl for _, lbl in all_labels])
-    chosen_table = next(t for t, lbl in all_labels if lbl == chosen_label)
-    df_raw = load_series(chosen_table, start_date, end_date, "15min")
-    st.dataframe(df_raw, use_container_width=True, height=300)
-    if not df_raw.empty:
-        csv = df_raw.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇ Download CSV",
-            data=csv,
-            file_name=f"{chosen_table}_{start_date}_{end_date}.csv",
-            mime="text/csv",
-        )
+with tab_cockpit:
+    import sys
+    import os as _os
+    # Ensure repo root is importable when running from apps/mengxi-dashboard/
+    _repo_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+
+    from libs.decision_models.adapters.app.cockpit_page import render_cockpit_page
+    render_cockpit_page()

@@ -27,6 +27,7 @@ import pytest
 # Trigger registration of all known models before running tests
 import libs.decision_models.bess_dispatch_optimization           # noqa: F401
 import libs.decision_models.bess_dispatch_simulation_multiday    # noqa: F401
+import libs.decision_models.bess_spread_call_strip               # noqa: F401
 import libs.decision_models.dispatch_pnl_attribution             # noqa: F401
 import libs.decision_models.price_forecast_dayahead              # noqa: F401
 import libs.decision_models.revenue_scenario_engine              # noqa: F401
@@ -42,6 +43,7 @@ from libs.decision_models.registry import registry
 ALL_MODEL_NAMES = [
     "bess_dispatch_optimization",
     "bess_dispatch_simulation_multiday",
+    "bess_spread_call_strip",
     "dispatch_pnl_attribution",
     "price_forecast_dayahead",
     "revenue_scenario_engine",

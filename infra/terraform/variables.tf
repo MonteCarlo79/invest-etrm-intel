@@ -454,6 +454,18 @@ variable "image_dev_agent" {
   type        = string
 }
 
+variable "image_trading_performance_agent" {
+  description = "Docker image for BESS trading performance agent"
+  type        = string
+}
+
+variable "anthropic_api_key" {
+  description = "Anthropic Claude API key for the trading performance agent"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "scheduler_role_arn" {
   description = "IAM role used by EventBridge Scheduler to trigger ECS tasks"
   type        = string
