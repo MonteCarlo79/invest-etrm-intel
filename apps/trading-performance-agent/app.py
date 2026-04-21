@@ -62,6 +62,15 @@ if "last_review_date" not in st.session_state:
 if "review_running" not in st.session_state:
     st.session_state.review_running = False
 
+if "download_report_key" not in st.session_state:
+    st.session_state.download_report_key = None
+
+if "download_report_bytes" not in st.session_state:
+    st.session_state.download_report_bytes = None
+
+if "download_report_date" not in st.session_state:
+    st.session_state.download_report_date = None
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
@@ -114,6 +123,42 @@ with st.sidebar:
         st.error("ANTHROPIC_API_KEY not set")
     else:
         st.success("API key configured")
+
+    # -----------------------------------------------------------------------
+    # Report History
+    # -----------------------------------------------------------------------
+    st.divider()
+    st.subheader("Report History")
+
+    bucket = os.environ.get("UPLOADS_BUCKET_NAME", "")
+    if not bucket:
+        st.caption("UPLOADS_BUCKET_NAME not configured.")
+    else:
+        reports = _list_s3_reports(bucket)
+        if not reports:
+            st.caption("No reports saved yet.")
+        else:
+            for report in reports[:15]:
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.write(report["date"])
+                with c2:
+                    if st.button("PDF", key=f"fetch_{report['date']}"):
+                        st.session_state.download_report_key = report["key"]
+                        st.session_state.download_report_date = report["date"]
+                        st.session_state.download_report_bytes = _fetch_s3_report(
+                            bucket, report["key"]
+                        )
+
+        if st.session_state.download_report_bytes:
+            dl_date = st.session_state.download_report_date or "report"
+            st.download_button(
+                label=f"Save {dl_date}.pdf",
+                data=st.session_state.download_report_bytes,
+                file_name=f"trading_performance_{dl_date}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
 
 # ---------------------------------------------------------------------------
 # Main area
@@ -243,6 +288,46 @@ def _handle_user_message(
         st.session_state.last_review_date = date
 
     st.rerun()
+
+
+def _list_s3_reports(bucket: str) -> list:
+    """Return list of historical reports from S3 sorted newest first.
+
+    Each entry: {"date": "2026-04-17", "key": "trading-performance/...", "size": int}
+    """
+    try:
+        import boto3
+
+        s3 = boto3.client("s3")
+        resp = s3.list_objects_v2(Bucket=bucket, Prefix="trading-performance/")
+        items = []
+        for obj in resp.get("Contents", []):
+            key = obj["Key"]
+            filename = key.rsplit("/", 1)[-1]
+            # filename pattern: trading_performance_YYYYMMDD.pdf
+            if filename.startswith("trading_performance_") and filename.endswith(".pdf"):
+                raw = filename[len("trading_performance_"):-4]  # "20260417"
+                if len(raw) == 8 and raw.isdigit():
+                    display_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+                else:
+                    display_date = filename
+                items.append({"date": display_date, "key": key, "size": obj["Size"]})
+        items.sort(key=lambda x: x["date"], reverse=True)
+        return items
+    except Exception:
+        return []
+
+
+def _fetch_s3_report(bucket: str, key: str) -> bytes | None:
+    """Download a single report PDF from S3. Returns bytes or None on error."""
+    try:
+        import boto3
+
+        s3 = boto3.client("s3")
+        resp = s3.get_object(Bucket=bucket, Key=key)
+        return resp["Body"].read()
+    except Exception:
+        return None
 
 
 def _send_email_report(date: str) -> None:

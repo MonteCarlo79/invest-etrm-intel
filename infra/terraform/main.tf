@@ -2508,6 +2508,10 @@ resource "aws_ecs_task_definition" "trading_performance_agent" {
         {
           name  = "REPORT_EMAIL_TO"
           value = var.report_email_to
+        },
+        {
+          name  = "UPLOADS_BUCKET_NAME"
+          value = aws_s3_bucket.uploads.bucket
         }
       ]
 

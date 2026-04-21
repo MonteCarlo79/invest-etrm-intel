@@ -176,6 +176,29 @@ def _save_pdf(pdf_bytes: bytes, filename: str) -> str:
     return path
 
 
+def _upload_to_s3(pdf_bytes: bytes, filename: str) -> str | None:
+    """Upload PDF to S3 under trading-performance/ prefix for historical access.
+
+    Returns the S3 URI on success, or None if bucket not configured or upload fails.
+    Requires UPLOADS_BUCKET_NAME env var and an IAM role with s3:PutObject on the bucket.
+    """
+    bucket = os.environ.get("UPLOADS_BUCKET_NAME")
+    if not bucket:
+        return None
+    try:
+        import boto3
+
+        s3 = boto3.client("s3")
+        key = f"trading-performance/{filename}"
+        s3.put_object(Bucket=bucket, Key=key, Body=pdf_bytes, ContentType="application/pdf")
+        uri = f"s3://{bucket}/{key}"
+        print(f"Report uploaded: {uri}")
+        return uri
+    except Exception as exc:
+        print(f"WARNING: S3 upload failed — {exc}", file=sys.stderr)
+        return None
+
+
 def main() -> None:
     args = _parse_args()
     date = args.date
@@ -236,6 +259,8 @@ def main() -> None:
         print(f"\nPDF written: {pdf_path} ({len(pdf_bytes):,} bytes)")
     else:
         print(f"\nPDF fallback (reportlab not installed): {pdf_path}")
+
+    _upload_to_s3(pdf_bytes, filename)
 
     # ------------------------------------------------------------------
     # Email report
