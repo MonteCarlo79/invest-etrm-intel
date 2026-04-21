@@ -513,9 +513,14 @@ def _build_cross_asset_summary(
             "ops_dispatch_available": result.get("ops_dispatch_available", False),
         })
 
-    total_actual = sum(r["actual_pnl"] or 0 for r in rows)
-    total_pf = sum(r["pf_pnl"] or 0 for r in rows)
-    portfolio_capture = total_actual / total_pf if total_pf > 0 else None
+    actual_pnls = [r["actual_pnl"] for r in rows if r["actual_pnl"] is not None]
+    pf_pnls = [r["pf_pnl"] for r in rows if r["pf_pnl"] is not None]
+    total_actual = sum(actual_pnls) if actual_pnls else None
+    total_pf = sum(pf_pnls) if pf_pnls else None
+    portfolio_capture = (
+        total_actual / total_pf if (total_actual is not None and total_pf is not None and total_pf > 0)
+        else None
+    )
 
     return {
         "date": date,

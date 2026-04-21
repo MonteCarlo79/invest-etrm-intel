@@ -555,6 +555,42 @@ class TestRunAllAssetsDailyStrategyAnalysis:
         assert "asset_rows" in summary
         assert len(summary["asset_rows"]) == 4
 
+    def test_summary_portfolio_totals_none_when_all_pnl_none(self):
+        """portfolio_total_actual_pnl/pf_pnl must be None (not 0) when all assets lack P&L data."""
+        def _make_no_pnl_ranking():
+            r = _make_ranking()
+            r["actual_pnl"] = None
+            r["perfect_foresight_pnl"] = None
+            return r
+
+        def _fake_run(asset_code, date, **kwargs):
+            return {
+                "asset_code": asset_code,
+                "date": date,
+                "generated_at": "2026-04-20T00:00:00+00:00",
+                "context": _make_context(asset_code=asset_code),
+                "pf_result": _make_pf_result(),
+                "forecast_suite": _make_forecast_suite(),
+                "ranking": _make_no_pnl_ranking(),
+                "attribution": _make_attribution(),
+                "report": _make_report(asset_code=asset_code),
+                "ops_dispatch_available": True,
+            }
+
+        with patch(
+            "libs.decision_models.workflows.daily_strategy_report.run_bess_daily_strategy_analysis",
+            side_effect=_fake_run,
+        ):
+            result = run_all_assets_daily_strategy_analysis("2026-04-17")
+
+        summary = result["summary"]
+        assert summary["portfolio_total_actual_pnl"] is None, (
+            "Expected None when all actual_pnl values are None, got "
+            f"{summary['portfolio_total_actual_pnl']}"
+        )
+        assert summary["portfolio_total_pf_pnl"] is None
+        assert summary["portfolio_capture_rate"] is None
+
 
 # ---------------------------------------------------------------------------
 # Tests: generate_bess_daily_strategy_report
