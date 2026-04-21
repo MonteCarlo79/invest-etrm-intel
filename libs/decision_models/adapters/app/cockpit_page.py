@@ -583,7 +583,7 @@ def render_cockpit_page() -> None:
             plot_bgcolor="white",
             paper_bgcolor="white",
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, use_container_width=True, key="cockpit_scatter")
 
     with col_right:
         st.subheader("Fragility Status")
@@ -665,7 +665,7 @@ def render_cockpit_page() -> None:
                 plot_bgcolor="white",
                 paper_bgcolor="white",
             )
-            st.plotly_chart(fig_attr, use_container_width=True)
+            st.plotly_chart(fig_attr, use_container_width=True, key="cockpit_attr")
 
     with detail_right:
         st.markdown("**Realization Ratio History (90d)**")
@@ -707,7 +707,7 @@ def render_cockpit_page() -> None:
                 plot_bgcolor="white",
                 paper_bgcolor="white",
             )
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.plotly_chart(fig_hist, use_container_width=True, key="cockpit_hist")
 
     st.markdown("---")
 

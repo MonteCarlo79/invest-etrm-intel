@@ -238,7 +238,7 @@ with tab_market:
                     start_date, end_date, freq,
                     chart_height, selected,
                 )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True}, key=f"chart_{group_name}")
 
             # Quick data freshness note
             freshest = None
