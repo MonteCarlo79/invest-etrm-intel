@@ -252,7 +252,7 @@ with tab_market:
         chosen_label = st.selectbox("Series", [lbl for _, lbl in all_labels])
         chosen_table = next(t for t, lbl in all_labels if lbl == chosen_label)
         df_raw = load_series(chosen_table, start_date, end_date, "15min")
-        st.dataframe(df_raw, use_container_width=True, height=300)
+        st.dataframe(df_raw, width="stretch", height=300)
         if not df_raw.empty:
             csv = df_raw.to_csv(index=False).encode("utf-8")
             st.download_button(

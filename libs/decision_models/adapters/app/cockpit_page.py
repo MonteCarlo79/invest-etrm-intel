@@ -203,11 +203,14 @@ def _load_price_vols(vol_window_days: int = 60) -> pd.DataFrame:
     peak_fwd = float(pivot["peak"].mean())
     offpeak_fwd = float(pivot["offpeak"].mean())
 
-    # Annualised vol from daily log-returns
+    # Annualised vol from daily log-returns (drop non-positive prices before log)
     def _annualised_vol(series: pd.Series) -> float:
-        lr = series.apply(lambda x: math.log(x)).diff().dropna()
-        if len(lr) < 5:
+        s = series[series > 0].dropna()
+        if len(s) < 5:
             return 0.30  # fallback default
+        lr = s.apply(math.log).diff().dropna()
+        if len(lr) < 5:
+            return 0.30
         return float(lr.std() * math.sqrt(252))
 
     peak_vol = _annualised_vol(pivot["peak"])
@@ -528,7 +531,7 @@ def render_cockpit_page() -> None:
     }
 
     styled = table_df.style.apply(_style_row, axis=1).format(float_fmts)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
 
     st.markdown("---")
 
