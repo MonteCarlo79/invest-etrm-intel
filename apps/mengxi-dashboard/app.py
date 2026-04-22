@@ -11,10 +11,11 @@ from __future__ import annotations
 import os
 from datetime import date, timedelta, datetime
 
+import warnings
 import pandas as pd
 import plotly.graph_objects as go
+import psycopg2
 import streamlit as st
-from sqlalchemy import create_engine, text
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -30,16 +31,17 @@ st.set_page_config(
 # DB connection
 # ---------------------------------------------------------------------------
 @st.cache_resource
-def get_engine():
+def get_conn():
     url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
     if not url:
         st.error("PGURL environment variable is not set.")
         st.stop()
-    return create_engine(
+    return psycopg2.connect(
         url,
-        pool_pre_ping=True,
-        connect_args={"keepalives": 1, "keepalives_idle": 60,
-                      "keepalives_interval": 10, "keepalives_count": 5},
+        keepalives=1,
+        keepalives_idle=60,
+        keepalives_interval=10,
+        keepalives_count=5,
     )
 
 
@@ -85,28 +87,38 @@ DASH_MAP = {"solid": None, "dash": "dash", "dot": "dot"}
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_series(table: str, start: date, end: date, freq: str) -> pd.DataFrame:
-    end1 = end + timedelta(days=1)
+    conn = get_conn()
+    try:
+        conn.cursor().execute("SELECT 1")
+    except Exception:
+        get_conn.clear()
+        conn = get_conn()
+
     if freq == "15min":
-        q = text("""
+        q = """
             SELECT time, price
             FROM public.{t}
-            WHERE time >= :start AND time < :end
+            WHERE time >= %s AND time < %s
             ORDER BY time
-        """.format(t=table))
-        params = {"start": start, "end": end1}
+        """.format(t=table)
+        params = (start, end + timedelta(days=1))
     else:
         pg_trunc = "hour" if freq == "hourly" else "day"
-        q = text("""
-            SELECT date_trunc(:trunc, time) AS time, AVG(price) AS price
+        q = """
+            SELECT date_trunc(%s, time) AS time, AVG(price) AS price
             FROM public.{t}
-            WHERE time >= :start AND time < :end
+            WHERE time >= %s AND time < %s
             GROUP BY 1
             ORDER BY 1
-        """.format(t=table))
-        params = {"trunc": pg_trunc, "start": start, "end": end1}
+        """.format(t=table)
+        params = (pg_trunc, start, end + timedelta(days=1))
 
     try:
-        with get_engine().connect() as conn:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="pandas only supports SQLAlchemy connectable",
+            )
             df = pd.read_sql(q, conn, params=params, parse_dates=["time"])
         return df
     except Exception:
