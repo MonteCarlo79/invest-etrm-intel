@@ -373,7 +373,7 @@ def render_cockpit_page() -> None:
             for ac, defaults in _ASSET_SPECS.items():
                 st.markdown(f"**{ac}**")
                 c1, c2, c3 = st.columns(3)
-                power = c1.number_input("MW", min_value=1.0, max_value=500.0,
+                power = c1.number_input("MW", min_value=1.0, max_value=2000.0,
                                         value=defaults["power_mw"], step=10.0,
                                         key=f"pwr_{ac}")
                 dur = c2.number_input("h", min_value=0.5, max_value=8.0,
@@ -583,7 +583,7 @@ def render_cockpit_page() -> None:
             plot_bgcolor="white",
             paper_bgcolor="white",
         )
-        st.plotly_chart(fig_scatter, use_container_width=True, key="cockpit_scatter")
+        st.plotly_chart(fig_scatter, width="stretch", key="cockpit_scatter")
 
     with col_right:
         st.subheader("Fragility Status")
@@ -665,7 +665,7 @@ def render_cockpit_page() -> None:
                 plot_bgcolor="white",
                 paper_bgcolor="white",
             )
-            st.plotly_chart(fig_attr, use_container_width=True, key="cockpit_attr")
+            st.plotly_chart(fig_attr, width="stretch", key="cockpit_attr")
 
     with detail_right:
         st.markdown("**Realization Ratio History (90d)**")
@@ -707,7 +707,7 @@ def render_cockpit_page() -> None:
                 plot_bgcolor="white",
                 paper_bgcolor="white",
             )
-            st.plotly_chart(fig_hist, use_container_width=True, key="cockpit_hist")
+            st.plotly_chart(fig_hist, width="stretch", key="cockpit_hist")
 
     st.markdown("---")
 

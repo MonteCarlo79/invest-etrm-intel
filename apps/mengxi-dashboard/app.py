@@ -13,9 +13,8 @@ from datetime import date, timedelta, datetime
 
 import pandas as pd
 import plotly.graph_objects as go
-import psycopg2
-import psycopg2.extras
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -31,17 +30,16 @@ st.set_page_config(
 # DB connection
 # ---------------------------------------------------------------------------
 @st.cache_resource
-def get_conn():
+def get_engine():
     url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
     if not url:
         st.error("PGURL environment variable is not set.")
         st.stop()
-    return psycopg2.connect(
+    return create_engine(
         url,
-        keepalives=1,
-        keepalives_idle=60,
-        keepalives_interval=10,
-        keepalives_count=5,
+        pool_pre_ping=True,
+        connect_args={"keepalives": 1, "keepalives_idle": 60,
+                      "keepalives_interval": 10, "keepalives_count": 5},
     )
 
 
@@ -87,38 +85,31 @@ DASH_MAP = {"solid": None, "dash": "dash", "dot": "dot"}
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_series(table: str, start: date, end: date, freq: str) -> pd.DataFrame:
-    conn = get_conn()
-    try:
-        conn.cursor().execute("SELECT 1")
-    except Exception:
-        # stale connection — reconnect
-        get_conn.clear()
-        conn = get_conn()
-
+    end1 = end + timedelta(days=1)
     if freq == "15min":
-        q = """
+        q = text("""
             SELECT time, price
             FROM public.{t}
-            WHERE time >= %s AND time < %s
+            WHERE time >= :start AND time < :end
             ORDER BY time
-        """.format(t=table)
-        params = (start, end + timedelta(days=1))
+        """.format(t=table))
+        params = {"start": start, "end": end1}
     else:
-        rule = "1H" if freq == "hourly" else "1D"
         pg_trunc = "hour" if freq == "hourly" else "day"
-        q = """
-            SELECT date_trunc(%s, time) AS time, AVG(price) AS price
+        q = text("""
+            SELECT date_trunc(:trunc, time) AS time, AVG(price) AS price
             FROM public.{t}
-            WHERE time >= %s AND time < %s
+            WHERE time >= :start AND time < :end
             GROUP BY 1
             ORDER BY 1
-        """.format(t=table)
-        params = (pg_trunc, start, end + timedelta(days=1))
+        """.format(t=table))
+        params = {"trunc": pg_trunc, "start": start, "end": end1}
 
     try:
-        df = pd.read_sql(q, conn, params=params, parse_dates=["time"])
+        with get_engine().connect() as conn:
+            df = pd.read_sql(q, conn, params=params, parse_dates=["time"])
         return df
-    except Exception as e:
+    except Exception:
         return pd.DataFrame(columns=["time", "price"])
 
 
@@ -238,7 +229,7 @@ with tab_market:
                     start_date, end_date, freq,
                     chart_height, selected,
                 )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True}, key=f"chart_{group_name}")
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": True}, key=f"chart_{group_name}")
 
             # Quick data freshness note
             freshest = None
