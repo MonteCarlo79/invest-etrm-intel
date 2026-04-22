@@ -162,9 +162,11 @@ def _run(
     intr = max(net_spread_fwd - om_cost_yuan_per_mwh, 0.0) * q_max * n_days_remaining
     time_val = sv - intr
 
-    # Moneyness: (net_spread_fwd - K) / max(|K|, 1) × 100
-    denom = max(abs(om_cost_yuan_per_mwh), 1.0)
-    moneyness = (net_spread_fwd - om_cost_yuan_per_mwh) / denom * 100.0
+    # Moneyness: (F_pk - F2_eff) / F2_eff × 100
+    # Normalised against the effective second forward (always positive) so the
+    # percentage is meaningful regardless of whether om_cost is zero or not.
+    # Positive = ITM (peak price exceeds efficiency-adjusted offpeak + costs).
+    moneyness = (peak_forward_yuan - F2_eff) / max(F2_eff, 1.0) * 100.0
 
     # Greeks — numerical finite differences
     # Delta: bump F_pk by +1 ¥/MWh

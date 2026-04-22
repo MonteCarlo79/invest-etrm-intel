@@ -43,9 +43,14 @@ _ASSET_SPECS: Dict[str, Dict[str, float]] = {
     "wulanchabu":  {"power_mw": 3.35,   "duration_h": 2.0, "roundtrip_eff": 0.85, "subsidy_yuan_per_mwh": 0.0},
 }
 
-# Inner Mongolia RT clearing price peak hours: 08:00–12:00 and 18:00–22:00
-# These are 15-min slot indices (0-based from midnight): 32–47 and 72–87
-_PEAK_SLOTS = set(range(32, 48)) | set(range(72, 88))
+# Inner Mongolia price regime — derived from 60-day average RT clearing prices (2026-Q1/Q2):
+#   Solar offpeak  08:00–16:00  avg  ~70 ¥/MWh  (solar generation suppresses prices)
+#   Peak           00:00–08:00
+#                  17:00–24:00  avg ~250 ¥/MWh  (morning ramp + evening demand)
+#
+# 15-min slot index (0-based from midnight) = hour × 4 + minute / 15
+# Offpeak slots 32–63 correspond to 08:00 (inclusive) → 16:00 (exclusive)
+_OFFPEAK_SLOTS = set(range(32, 64))  # 08:00–16:00
 
 _STATUS_COLOR = {
     "NORMAL": "#2ecc71",
@@ -175,11 +180,9 @@ def _load_price_vols(vol_window_days: int = 60) -> pd.DataFrame:
             time::date AS trade_date,
             CASE
                 WHEN EXTRACT(hour FROM time) * 4 + EXTRACT(minute FROM time) / 15
-                     BETWEEN 32 AND 47
-                  OR EXTRACT(hour FROM time) * 4 + EXTRACT(minute FROM time) / 15
-                     BETWEEN 72 AND 87
-                THEN 'peak'
-                ELSE 'offpeak'
+                     BETWEEN 32 AND 63
+                THEN 'offpeak'   -- 08:00–16:00: solar generation, depressed prices
+                ELSE 'peak'      -- 00:00–08:00 + 17:00–24:00: no solar, demand-driven
             END AS period,
             AVG(price) AS avg_price
         FROM public.hist_mengxi_provincerealtimeclearprice_15min
