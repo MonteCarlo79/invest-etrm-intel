@@ -12,6 +12,7 @@ import os
 from datetime import date, timedelta, datetime
 
 import warnings
+warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy connectable")
 import pandas as pd
 import plotly.graph_objects as go
 import psycopg2
@@ -114,12 +115,7 @@ def load_series(table: str, start: date, end: date, freq: str) -> pd.DataFrame:
         params = (pg_trunc, start, end + timedelta(days=1))
 
     try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="pandas only supports SQLAlchemy connectable",
-            )
-            df = pd.read_sql(q, conn, params=params, parse_dates=["time"])
+        df = pd.read_sql(q, conn, params=params, parse_dates=["time"])
         return df
     except Exception:
         return pd.DataFrame(columns=["time", "price"])
