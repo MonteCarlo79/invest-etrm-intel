@@ -365,7 +365,12 @@ def render_cockpit_page() -> None:
         st.markdown("---")
         st.subheader("Options Cockpit")
 
-        n_days = st.slider("Strip horizon (days remaining)", 30, 365, 252, step=1)
+        n_days = st.slider(
+            "Strip horizon (calendar days)",
+            min_value=30, max_value=365, value=365, step=1,
+            help="Number of calendar days priced into the strip. 365 = full calendar year. "
+                 "Strip value = sum of daily spread call options over this horizon.",
+        )
         vol_window = st.selectbox("Vol window (days)", [30, 60, 90], index=1)
         om_cost = st.number_input("O&M cost (¥/MWh)", min_value=0.0, max_value=200.0,
                                   value=0.0, step=5.0)
@@ -385,16 +390,23 @@ def render_cockpit_page() -> None:
                 eff = c3.number_input("η", min_value=0.50, max_value=1.00,
                                       value=defaults["roundtrip_eff"], step=0.01,
                                       key=f"eff_{ac}")
-                asset_specs[ac] = {"power_mw": power, "duration_h": dur, "roundtrip_eff": eff}
+                asset_specs[ac] = {
+                    "power_mw": power,
+                    "duration_h": dur,
+                    "roundtrip_eff": eff,
+                    "subsidy_yuan_per_mwh": defaults["subsidy_yuan_per_mwh"],
+                }
 
     # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
     st.header("BESS Options Cockpit")
+    horizon_label = f"{n_days}d (~{n_days/365:.1f}yr)"
     st.caption(
         "BESS fleet treated as spread call strips · Kirk/Margrabe pricing · "
-        f"Horizon: {n_days} days · Vol window: {vol_window}d · Corr: {corr:.2f} · "
-        f"O&M: ¥{om_cost:.0f}/MWh"
+        f"Horizon: {horizon_label} · Vol window: {vol_window}d · Corr: {corr:.2f} · "
+        f"O&M: ¥{om_cost:.0f}/MWh  |  "
+        "Strip value = sum of daily spread call options over the horizon (not annualised)"
     )
 
     # ------------------------------------------------------------------
