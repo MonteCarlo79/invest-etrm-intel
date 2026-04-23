@@ -225,6 +225,27 @@ with tab_market:
         f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
 
+    # Data availability check
+    _probe_table = "hist_mengxi_provincerealtimeclearprice_15min"
+    _probe_df = load_series(_probe_table, start_date, end_date, "15min")
+    if _probe_df.empty:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT MAX(time) FROM public.{_probe_table}")
+            latest = cur.fetchone()[0]
+            cur.close()
+        except Exception:
+            latest = None
+        if latest:
+            st.warning(
+                f"No data for {start_date} → {end_date}. "
+                f"Latest row in DB: **{latest.strftime('%Y-%m-%d %H:%M')}**. "
+                f"Try adjusting the date range in the sidebar."
+            )
+        else:
+            st.error(f"Table `{_probe_table}` appears to be empty or unreachable.")
+
     for group_name, series_defs in GROUPS.items():
         selected = series_toggles.get(group_name, [s["label"] for s in series_defs])
         if not selected:
