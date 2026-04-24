@@ -23,7 +23,7 @@ DB_DSN = os.getenv("PGURL") or os.getenv("DB_DSN")
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "").strip()
 ALERT_CONTEXT = os.getenv("ALERT_CONTEXT", "mengxi-ingestion")
 PIPELINE_NAME = os.getenv("PIPELINE_NAME", "bess-mengxi-ingestion")
-DB_CONNECT_TIMEOUT_SECONDS = 5
+DB_CONNECT_TIMEOUT_SECONDS = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "30"))
 
 today = datetime.utcnow().date()
 latest_available = today - timedelta(days=MARKET_LAG_DAYS)
@@ -107,7 +107,7 @@ def wait_for_db(max_attempts=10, delay=10):
         try:
             print(f"Checking DB connectivity (attempt {attempt})...")
 
-            conn = psycopg2.connect(DB_DSN, connect_timeout=5)
+            conn = psycopg2.connect(DB_DSN, connect_timeout=DB_CONNECT_TIMEOUT_SECONDS)
             conn.close()
 
             print("Database connection successful")
