@@ -9,6 +9,20 @@ Created on Tue Mar 24 12:47:32 2026
 from __future__ import annotations
 
 import os
+import sys
+
+# Ensure repo root is on sys.path when run as a script
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+# Set DB_DSN from PGURL if only the latter is provided
+_url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
+if _url:
+    os.environ.setdefault("DB_DSN", _url)
+    os.environ.setdefault("PGURL", _url)
+
 import logging
 from datetime import date, datetime, timedelta
 from typing import Dict
