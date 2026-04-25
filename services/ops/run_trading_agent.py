@@ -109,10 +109,38 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _register_cjk_font() -> str:
+    """
+    Register a CJK-compatible font with reportlab and return the font name.
+
+    Tries Windows system fonts (SimHei, SimSun) then falls back to reportlab's
+    built-in STSong-Light CID font which covers GB2312 Chinese characters.
+    """
+    from reportlab.pdfbase import pdfmetrics
+
+    for font_name, path in [
+        ("SimHei", "C:/Windows/Fonts/simhei.ttf"),
+        ("SimSun", "C:/Windows/Fonts/simsun.ttc"),
+    ]:
+        if os.path.exists(path):
+            try:
+                from reportlab.pdfbase.ttfonts import TTFont
+                pdfmetrics.registerFont(TTFont(font_name, path))
+                return font_name
+            except Exception:
+                continue
+
+    # Built-in CID font — no file needed, covers GB2312 Chinese
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    return "STSong-Light"
+
+
 def _build_portfolio_pdf(narrative: str, date: str) -> bytes:
     """
-    Build a single-page PDF containing the Claude narrative using reportlab.
-    Falls back to encoded UTF-8 bytes with a header note if reportlab absent.
+    Build a PDF containing the Claude narrative using reportlab.
+    Uses a CJK-compatible font so Chinese characters render correctly.
+    Falls back to encoded UTF-8 bytes if reportlab is absent.
     """
     try:
         import io as _io
@@ -120,6 +148,8 @@ def _build_portfolio_pdf(narrative: str, date: str) -> bytes:
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+        cjk_font = _register_cjk_font()
 
         buf = _io.BytesIO()
         doc = SimpleDocTemplate(
@@ -131,12 +161,25 @@ def _build_portfolio_pdf(narrative: str, date: str) -> bytes:
             bottomMargin=20 * mm,
         )
         styles = getSampleStyleSheet()
-        h1 = styles["Heading1"]
-        normal = styles["Normal"]
-        small = ParagraphStyle("small", parent=normal, fontSize=9, leading=12)
+        h1 = ParagraphStyle(
+            "H1Cjk", parent=styles["Heading1"],
+            fontName=cjk_font, fontSize=14, leading=18,
+        )
+        normal = ParagraphStyle(
+            "NormalCjk", parent=styles["Normal"],
+            fontName=cjk_font, fontSize=10, leading=14,
+        )
+        small = ParagraphStyle(
+            "SmallCjk", parent=styles["Normal"],
+            fontName=cjk_font, fontSize=9, leading=12,
+        )
+        h2 = ParagraphStyle(
+            "H2Cjk", parent=styles["Heading2"],
+            fontName=cjk_font, fontSize=12, leading=16,
+        )
 
         story = []
-        story.append(Paragraph(f"BESS Daily Trading Performance Report — {date}", h1))
+        story.append(Paragraph(f"BESS储能每日交易绩效报告 — {date}", h1))
         story.append(Spacer(1, 4 * mm))
 
         for line in narrative.splitlines():
@@ -145,7 +188,7 @@ def _build_portfolio_pdf(narrative: str, date: str) -> bytes:
                 story.append(Spacer(1, 2 * mm))
                 continue
             if stripped.startswith("## "):
-                story.append(Paragraph(stripped[3:], styles["Heading2"]))
+                story.append(Paragraph(stripped[3:], h2))
             elif stripped.startswith("# "):
                 story.append(Paragraph(stripped[2:], h1))
             elif stripped.startswith("- ") or stripped.startswith("* "):

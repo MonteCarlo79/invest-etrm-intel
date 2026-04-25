@@ -292,11 +292,14 @@ def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
         "roundtrip_eff": meta["roundtrip_eff"],
     })
 
-    # Build dispatch_hourly with prices merged in
-    price_map = {rec["datetime"]: rec["price"] for rec in price_records}
+    # Build dispatch_hourly with prices merged in.
+    # Normalise datetime strings: LP outputs ISO-T format ("2026-04-19T00:00:00+00:00")
+    # but price_records were built with str(pd.Timestamp(...)) space format.
+    # Use pd.Timestamp as the canonical form for lookup so both formats match.
+    price_map = {str(pd.Timestamp(rec["datetime"])): rec["price"] for rec in price_records}
     dispatch_hourly = []
     for rec in opt_result.get("dispatch_records", []):
-        dt_str = rec["datetime"]
+        dt_str = str(pd.Timestamp(rec["datetime"]))
         p = price_map.get(dt_str, 0.0)
         dispatch_hourly.append({
             "datetime": dt_str,
