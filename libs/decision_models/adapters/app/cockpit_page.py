@@ -52,6 +52,9 @@ _ASSET_SPECS: Dict[str, Dict[str, float]] = {
 # Offpeak slots 32–63 correspond to 08:00 (inclusive) → 16:00 (exclusive)
 _OFFPEAK_SLOTS = set(range(32, 64))  # 08:00–16:00
 
+# Assets with nodal cleared prices in canon.nodal_rt_price_15min
+_IM_NODAL_ASSETS = frozenset(["suyou", "hangjinqi", "siziwangqi", "gushanliang"])
+
 _STATUS_COLOR = {
     "NORMAL": "#2ecc71",
     "WARN": "#f39c12",
@@ -159,74 +162,111 @@ def _load_fragility_status(snapshot_date: Optional[str] = None) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_price_vols(vol_window_days: int = 60) -> pd.DataFrame:
+def _load_asset_price_vols(vol_window_days: int = 60) -> pd.DataFrame:
     """
-    Compute avg peak/offpeak forwards and annualised daily-spread vol
-    for each asset from hist_mengxi_provincerealtimeclearprice_15min.
+    Compute avg peak/offpeak forwards and annualised daily-spread vol per asset.
 
-    Returns one row per asset with: peak_forward_yuan, offpeak_forward_yuan,
-    peak_vol, offpeak_vol (annualised from daily log-returns over vol_window).
+    For the 4 IM assets (suyou/hangjinqi/siziwangqi/gushanliang) uses
+    canon.nodal_rt_price_15min (asset-level nodal cleared prices).
+    For other assets falls back to hist_mengxi_provincerealtimeclearprice_15min.
 
-    Note: all assets in this dashboard share the same provincial clearing price
-    (Inner Mongolia is a single-price area at the province level). Per-asset
-    differences come from physical specs only.
+    Returns one row per asset with: asset_code, peak_forward_yuan,
+    offpeak_forward_yuan, peak_vol, offpeak_vol, n_price_days.
     """
     from sqlalchemy import text
     import math
 
     cutoff = date.today() - timedelta(days=vol_window_days)
-    sql = text("""
-        SELECT
-            time::date AS trade_date,
-            CASE
-                WHEN EXTRACT(hour FROM time) * 4 + EXTRACT(minute FROM time) / 15
-                     BETWEEN 32 AND 63
-                THEN 'offpeak'   -- 08:00–16:00: solar generation, depressed prices
-                ELSE 'peak'      -- 00:00–08:00 + 17:00–24:00: no solar, demand-driven
-            END AS period,
-            AVG(price) AS avg_price
-        FROM public.hist_mengxi_provincerealtimeclearprice_15min
-        WHERE time >= :cutoff
-        GROUP BY 1, 2
-        ORDER BY 1, 2
-    """)
-    try:
-        df = pd.read_sql(sql, _engine(), params={"cutoff": cutoff}, parse_dates=["trade_date"])
-    except Exception as exc:
-        st.warning(f"Price data unavailable: {exc}")
-        return pd.DataFrame()
 
-    if df.empty:
-        return pd.DataFrame()
+    _PERIOD_CASE = """
+        CASE
+            WHEN EXTRACT(hour FROM time) * 4 + EXTRACT(minute FROM time) / 15
+                 BETWEEN 32 AND 63
+            THEN 'offpeak'
+            ELSE 'peak'
+        END
+    """
 
-    pivot = df.pivot(index="trade_date", columns="period", values="avg_price").dropna()
-    if pivot.empty or "peak" not in pivot.columns or "offpeak" not in pivot.columns:
-        return pd.DataFrame()
-
-    peak_fwd = float(pivot["peak"].mean())
-    offpeak_fwd = float(pivot["offpeak"].mean())
-
-    # Annualised vol from daily log-returns (drop non-positive prices before log)
-    def _annualised_vol(series: pd.Series) -> float:
+    def _ann_vol(series: pd.Series) -> float:
         s = series[series > 0].dropna()
         if len(s) < 5:
-            return 0.30  # fallback default
-        lr = s.apply(math.log).diff().dropna()
-        if len(lr) < 5:
             return 0.30
-        return float(lr.std() * math.sqrt(252))
+        lr = s.apply(math.log).diff().dropna()
+        return float(lr.std() * math.sqrt(252)) if len(lr) >= 5 else 0.30
 
-    peak_vol = _annualised_vol(pivot["peak"])
-    offpeak_vol = _annualised_vol(pivot["offpeak"])
+    def _pivot_to_row(asset_code: str, grp: pd.DataFrame) -> Optional[Dict[str, Any]]:
+        pivot = grp.pivot(index="trade_date", columns="period", values="avg_price").dropna()
+        if pivot.empty or "peak" not in pivot.columns or "offpeak" not in pivot.columns:
+            return None
+        return {
+            "asset_code": asset_code,
+            "peak_forward_yuan": float(pivot["peak"].mean()),
+            "offpeak_forward_yuan": float(pivot["offpeak"].mean()),
+            "peak_vol": _ann_vol(pivot["peak"]),
+            "offpeak_vol": _ann_vol(pivot["offpeak"]),
+            "n_price_days": len(pivot),
+            "vol_source": "nodal",
+        }
 
-    return pd.DataFrame([{
-        "peak_forward_yuan": peak_fwd,
-        "offpeak_forward_yuan": offpeak_fwd,
-        "peak_vol": peak_vol,
-        "offpeak_vol": offpeak_vol,
-        "vol_window_days": vol_window_days,
-        "n_price_days": len(pivot),
-    }])
+    rows: List[Dict[str, Any]] = []
+
+    # ------------------------------------------------------------------
+    # Nodal prices for 4 IM assets from canon.nodal_rt_price_15min
+    # ------------------------------------------------------------------
+    nodal_sql = text(f"""
+        SELECT
+            asset_code,
+            time::date AS trade_date,
+            {_PERIOD_CASE} AS period,
+            AVG(price) AS avg_price
+        FROM canon.nodal_rt_price_15min
+        WHERE time >= :cutoff
+          AND asset_code = ANY(:asset_codes)
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 2, 3
+    """)
+    try:
+        nodal_df = pd.read_sql(
+            nodal_sql, _engine(),
+            params={"cutoff": cutoff, "asset_codes": list(_IM_NODAL_ASSETS)},
+            parse_dates=["trade_date"],
+        )
+        for ac, grp in nodal_df.groupby("asset_code"):
+            row = _pivot_to_row(str(ac), grp)
+            if row:
+                rows.append(row)
+    except Exception as exc:
+        st.warning(f"Nodal price data unavailable ({exc}); falling back to province prices for all assets.")
+
+    # ------------------------------------------------------------------
+    # Province-level fallback for assets not covered by nodal data
+    # ------------------------------------------------------------------
+    covered = {r["asset_code"] for r in rows}
+    fallback_assets = [ac for ac in _ASSET_SPECS if ac not in covered]
+
+    if fallback_assets:
+        prov_sql = text(f"""
+            SELECT
+                time::date AS trade_date,
+                {_PERIOD_CASE} AS period,
+                AVG(price) AS avg_price
+            FROM public.hist_mengxi_provincerealtimeclearprice_15min
+            WHERE time >= :cutoff
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """)
+        try:
+            prov_df = pd.read_sql(prov_sql, _engine(), params={"cutoff": cutoff},
+                                  parse_dates=["trade_date"])
+            if not prov_df.empty:
+                prov_row = _pivot_to_row("_province", prov_df)
+                if prov_row:
+                    for ac in fallback_assets:
+                        rows.append({**prov_row, "asset_code": ac, "vol_source": "province"})
+        except Exception as exc:
+            st.warning(f"Province price data unavailable: {exc}")
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -416,7 +456,7 @@ def render_cockpit_page() -> None:
     # Load market data + monitoring snapshots
     # ------------------------------------------------------------------
     with st.spinner("Loading market data and monitoring snapshots..."):
-        price_df = _load_price_vols(vol_window_days=vol_window)
+        price_df = _load_asset_price_vols(vol_window_days=vol_window)
         real_df = _load_realization_status()
         frag_df = _load_fragility_status()
 
@@ -424,30 +464,37 @@ def render_cockpit_page() -> None:
         st.warning("No market price data available. Ensure DB connection and price history table is populated.")
         return
 
-    peak_fwd = float(price_df["peak_forward_yuan"].iloc[0])
-    offpeak_fwd = float(price_df["offpeak_forward_yuan"].iloc[0])
-    peak_vol_val = float(price_df["peak_vol"].iloc[0])
-    offpeak_vol_val = float(price_df["offpeak_vol"].iloc[0])
-    n_price_days = int(price_df["n_price_days"].iloc[0])
+    vol_by_asset = price_df.set_index("asset_code")
 
+    # Summary caption — show one example IM nodal asset
+    _ex_asset = next(
+        (ac for ac in ["suyou", "hangjinqi", "siziwangqi", "gushanliang"]
+         if ac in vol_by_asset.index),
+        vol_by_asset.index[0],
+    )
+    _ev = vol_by_asset.loc[_ex_asset]
+    _vol_source = "nodal cleared prices" if _ev.get("vol_source") == "nodal" else "province prices"
     st.caption(
-        f"Market inputs ({n_price_days}d avg): "
-        f"Peak fwd ¥{peak_fwd:.1f}/MWh · Offpeak fwd ¥{offpeak_fwd:.1f}/MWh · "
-        f"Peak vol {peak_vol_val:.1%} · Offpeak vol {offpeak_vol_val:.1%}"
+        f"Vol calibrated per-asset from {_vol_source} ({vol_window}d window) · "
+        f"Example [{_ex_asset}]: "
+        f"Peak fwd ¥{_ev['peak_forward_yuan']:.1f}/MWh · "
+        f"Offpeak fwd ¥{_ev['offpeak_forward_yuan']:.1f}/MWh · "
+        f"Peak vol {_ev['peak_vol']:.1%} · Offpeak vol {_ev['offpeak_vol']:.1%}"
     )
 
     # ------------------------------------------------------------------
-    # Price all 8 assets
+    # Price all 8 assets using per-asset vol inputs
     # ------------------------------------------------------------------
     strip_results: List[Dict[str, Any]] = []
     for ac in _ASSET_SPECS:
         spec = asset_specs.get(ac, _ASSET_SPECS[ac])
+        av = vol_by_asset.loc[ac] if ac in vol_by_asset.index else vol_by_asset.iloc[0]
         result = _price_strip(
             asset_code=ac,
-            peak_forward_yuan=peak_fwd,
-            offpeak_forward_yuan=offpeak_fwd,
-            peak_vol=peak_vol_val,
-            offpeak_vol=offpeak_vol_val,
+            peak_forward_yuan=float(av["peak_forward_yuan"]),
+            offpeak_forward_yuan=float(av["offpeak_forward_yuan"]),
+            peak_vol=float(av["peak_vol"]),
+            offpeak_vol=float(av["offpeak_vol"]),
             peak_offpeak_corr=corr,
             n_days_remaining=n_days,
             om_cost_yuan_per_mwh=om_cost,

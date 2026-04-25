@@ -159,9 +159,19 @@ def make_chart(group_name: str, series_defs: list[dict],
 
 
 # ---------------------------------------------------------------------------
+# Ensure repo root is importable for all adapter pages
+# ---------------------------------------------------------------------------
+import sys as _sys
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _repo_root not in _sys.path:
+    _sys.path.insert(0, _repo_root)
+
+# ---------------------------------------------------------------------------
 # Tab layout
 # ---------------------------------------------------------------------------
-tab_market, tab_cockpit = st.tabs(["Market Data", "Options Cockpit"])
+tab_market, tab_daily_ops, tab_strategy, tab_attribution, tab_cockpit = st.tabs(
+    ["Market Data", "Daily Ops", "Strategy & P&L", "Attribution", "Options Cockpit"]
+)
 
 # ---------------------------------------------------------------------------
 # Sidebar controls (market data tab)
@@ -292,15 +302,29 @@ with tab_market:
             )
 
 # ---------------------------------------------------------------------------
-# Tab 2: Options Cockpit
+# Tab 2: Daily Ops — 4-asset IM daily strategy analysis
+# ---------------------------------------------------------------------------
+with tab_daily_ops:
+    from libs.decision_models.adapters.app.daily_ops_page import render_daily_ops_page
+    render_daily_ops_page()
+
+# ---------------------------------------------------------------------------
+# Tab 3: Strategy & P&L — dispatch strategy comparison + P&L breakdown
+# ---------------------------------------------------------------------------
+with tab_strategy:
+    from libs.decision_models.adapters.app.strategy_comparison_page import render_strategy_comparison_page
+    render_strategy_comparison_page()
+
+# ---------------------------------------------------------------------------
+# Tab 4: Attribution — P&L waterfall attribution
+# ---------------------------------------------------------------------------
+with tab_attribution:
+    from libs.decision_models.adapters.app.attribution_page import render_attribution_page
+    render_attribution_page()
+
+# ---------------------------------------------------------------------------
+# Tab 5: Options Cockpit
 # ---------------------------------------------------------------------------
 with tab_cockpit:
-    import sys
-    import os as _os
-    # Ensure repo root is importable when running from apps/mengxi-dashboard/
-    _repo_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
-
     from libs.decision_models.adapters.app.cockpit_page import render_cockpit_page
     render_cockpit_page()
