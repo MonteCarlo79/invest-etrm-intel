@@ -155,6 +155,9 @@ def compute_dispatch_from_hourly_prices(
 
     if not isinstance(s.index, pd.DatetimeIndex):
         s.index = pd.to_datetime(s.index)
+    # Strip timezone so pd.date_range (tz-naive) can reindex each day's group
+    if s.index.tz is not None:
+        s.index = s.index.tz_localize(None)
 
     df = s.to_frame("price")
     df["date"] = df.index.date

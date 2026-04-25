@@ -290,13 +290,17 @@ def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
         )
         return dataclasses.asdict(result)
 
-    # Normalise datetimes
+    # Normalise datetimes — strip tz so the LP engine's tz-naive date_range reindex works
+    def _ts_naive_str(val) -> str:
+        t = pd.Timestamp(val)
+        return str(t.tz_localize(None) if t.tzinfo is not None else t)
+
     price_records = []
     for rec in hourly_prices:
         ts = rec.get("datetime") or rec.get("time")
         price = rec.get("price")
         if ts is not None and price is not None and not (isinstance(price, float) and np.isnan(price)):
-            price_records.append({"datetime": str(pd.Timestamp(ts)), "price": float(price)})
+            price_records.append({"datetime": _ts_naive_str(ts), "price": float(price)})
 
     if not price_records:
         caveats.append("perfect_foresight: hourly prices are all null — returning empty result")
