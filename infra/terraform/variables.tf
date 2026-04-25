@@ -320,6 +320,21 @@ variable "image_model_catalogue" {
 }
 
 #################################################
+# Options Cockpit Image
+#################################################
+variable "image_options_cockpit" {
+  description = "Docker image for Options Cockpit Streamlit app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_options_cockpit" {
+  description = "Desired task count for the options-cockpit ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
 # Mengxi Dashboard Image
 #################################################
 variable "image_mengxi_dashboard" {

@@ -2018,6 +2018,153 @@ resource "aws_ecs_service" "model_catalogue" {
   tags       = local.tags
 }
 
+# ---------------------------------------------------------------------------
+# Options Cockpit — Streamlit app (port 8507)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "options_cockpit" {
+  name                 = "bess-options-cockpit"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_ecr_lifecycle_policy" "options_cockpit" {
+  repository = aws_ecr_repository.options_cockpit.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_lb_target_group" "options_cockpit" {
+  name_prefix = "tgopc-"
+  port        = 8507
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  health_check {
+    path                = "/options-cockpit/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "options_cockpit_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 29
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.options_cockpit.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/options-cockpit", "/options-cockpit/", "/options-cockpit/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "options_cockpit" {
+  family                   = "${var.name}-options-cockpit"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "options-cockpit"
+      image     = var.image_options_cockpit
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8507
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "options-cockpit"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "options_cockpit" {
+  name            = "${var.name}-options-cockpit-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.options_cockpit.arn
+  desired_count   = var.desired_count_options_cockpit
+  launch_type     = "FARGATE"
+
+  health_check_grace_period_seconds = 60
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.options_cockpit.arn
+    container_name   = "options-cockpit"
+    container_port   = 8507
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
 resource "aws_ecs_task_definition" "execution_report" {
   family                   = "${var.name}-execution-report"
   requires_compatibilities = ["FARGATE"]

@@ -37,6 +37,16 @@ APP_CATALOG = [
         "category": "Applications",
     },
     {
+        "name": "Options Cockpit",
+        "path": "/options-cockpit/",
+        "description": (
+            "Standard options pricing: BS/Black-76, structures (straddle, spreads, butterfly, condor), "
+            "SVI smile calibration from market quotes, historical vol, Greeks and hedging."
+        ),
+        "roles": ["Admin", "Trader", "Quant"],
+        "category": "Applications",
+    },
+    {
         "name": "Strategy Agent",
         "path": "/strategy-agent/",
         "description": "Opportunity screening, market structure, and deployment ranking.",
