@@ -465,12 +465,20 @@ def run_forecast_dispatch_suite(
     # Build unified hourly DataFrame (full history + target range in one pass).
     # build_forecast() and bess_dispatch_simulation_multiday both handle multi-day
     # input natively — no per-day loop needed here.
+
+    def _naive_ts(val) -> str:
+        """Return tz-naive ISO string, dropping timezone annotation without converting."""
+        t = pd.Timestamp(val)
+        if t.tzinfo is not None:
+            t = t.tz_localize(None)
+        return str(t)
+
     rt_map: Dict[str, float] = {
-        str(pd.Timestamp(r.get("datetime") or r.get("time"))): float(r.get("price", float("nan")))
+        _naive_ts(r.get("datetime") or r.get("time")): float(r.get("price", float("nan")))
         for r in actual_prices_hourly
     }
     da_map: Dict[str, float] = {
-        str(pd.Timestamp(r["datetime"])): float(r.get("da_price", float("nan")))
+        _naive_ts(r["datetime"]): float(r.get("da_price", float("nan")))
         for r in da_prices_hourly
     }
     all_ts = sorted(set(rt_map.keys()) | set(da_map.keys()))
@@ -487,7 +495,7 @@ def run_forecast_dispatch_suite(
         )
 
     actual_price_map = {
-        str(pd.Timestamp(r.get("datetime") or r.get("time"))): float(r.get("price", 0.0))
+        _naive_ts(r.get("datetime") or r.get("time")): float(r.get("price", 0.0))
         for r in actual_prices_hourly
     }
 
@@ -825,12 +833,16 @@ def _calc_15min_pnl(
     compensation_yuan_per_mwh: float,
 ) -> float:
     """Inline 15-min P&L helper (used when DB pnl_df not available)."""
+    def _nts(val) -> str:
+        t = pd.Timestamp(val)
+        return str(t.tz_localize(None) if t.tzinfo is not None else t)
+
     dispatch_map = {
-        str(pd.Timestamp(r.get("time") or r.get("datetime"))): float(r.get("dispatch_mw", 0.0))
+        _nts(r.get("time") or r.get("datetime")): float(r.get("dispatch_mw", 0.0))
         for r in dispatch_records
     }
     price_map = {
-        str(pd.Timestamp(r.get("time") or r.get("datetime"))): float(r.get("price", 0.0))
+        _nts(r.get("time") or r.get("datetime")): float(r.get("price", 0.0))
         for r in price_records
     }
     market_pnl = 0.0
