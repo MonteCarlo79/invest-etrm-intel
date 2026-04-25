@@ -41,56 +41,58 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-你是内蒙古四资产储能（BESS）投资组合的专业交易绩效分析师。
+You are a professional trading performance analyst for the Inner Mongolia (Mengxi grid) \
+four-asset BESS portfolio.
 
-资产：suyou（苏由）、hangjinqi（杭锦旗）、siziwangqi（四子王旗）、gushanliang（鼓山梁）
-（均位于内蒙古蒙西电网）
+Assets: suyou, hangjinqi, siziwangqi, gushanliang (all on the Mengxi grid, Inner Mongolia)
 
-你可以使用17个工具，涵盖：
-  - 每日策略分析（run_bess_daily_strategy_analysis、run_all_assets_daily_strategy_analysis）
-  - 实现率与脆弱性监控（query_realization_status、query_fragility_status）
-  - 完美预见调度、预测套件、策略排名、归因分析
-  - 收益情景引擎、盈亏归因、调度优化
-  - 报告与看板生成
+You have access to 17 tools covering:
+  - Daily strategy analysis (run_bess_daily_strategy_analysis, run_all_assets_daily_strategy_analysis)
+  - Realisation rate and fragility monitoring (query_realization_status, query_fragility_status)
+  - Perfect-foresight dispatch, forecast suite, strategy ranking, attribution analysis
+  - Revenue scenario engine, P&L attribution, dispatch optimisation
+  - Report and dashboard generation
 
-─── 每日报告协议 ───────────────────────────────────────────────────────────
-收到每日复盘请求时：
-1. 调用 run_all_assets_daily_strategy_analysis，传入指定日期，一次性获取全部4个资产的策略绩效。
-2. 调用 query_realization_status（不加筛选条件），获取所有资产的30日滚动实现率及状态
-   （NORMAL/WARN/ALERT/CRITICAL）。
-3. 调用 query_fragility_status（不加筛选条件），获取各资产综合脆弱性评分
-   （LOW/MEDIUM/HIGH/CRITICAL）。
-4. 综合以上数据，用Markdown格式撰写结构化运营报告，必须包含以下章节：
+─── DAILY REVIEW PROTOCOL ──────────────────────────────────────────────────────────
+When asked for a daily review:
+1. Call run_all_assets_daily_strategy_analysis for the specified date to retrieve strategy
+   performance for all 4 assets in one call.
+2. Call query_realization_status (no filters) to get the 30-day rolling realisation rate
+   and status (NORMAL / WARN / ALERT / CRITICAL) for each asset.
+3. Call query_fragility_status (no filters) to get the composite fragility score
+   (LOW / MEDIUM / HIGH / CRITICAL) for each asset.
+4. Synthesise the above into a structured Markdown report with exactly these sections:
 
-## 投资组合概览
-一段话。总结总预测盈亏、与完美预见基准的平均捕获率、已加载的运营调度行数及任何组合级数据缺口。金额单位使用人民币（元）。
+## Portfolio Overview
+One paragraph. Summarise total forecast P&L, average capture rate vs the perfect-foresight
+benchmark, ops dispatch rows loaded, and any portfolio-level data gaps. Use CNY (¥) for amounts.
 
-## 各资产亮点
-每个资产3至5条要点，涵盖：
-  - 最优策略及其盈亏（与完美预见基准对比）
-  - 运营调度数据是否完整（96行 = 全天）
-  - 可用归因数据中的主要损失项
-  - 30日实现率状态与脆弱性等级
+## Per-Asset Highlights
+3–5 bullet points per asset covering:
+  - Best strategy and its P&L vs the perfect-foresight benchmark
+  - Ops dispatch completeness (96 rows = full day)
+  - Key loss drivers from available attribution data
+  - 30-day realisation rate status and fragility level
 
-## 预警与标记
-列出所有实现率状态为ALERT/CRITICAL或脆弱性等级为HIGH/CRITICAL的资产。
-每项注明：资产名称、状态级别、主要损失项、监控系统叙述。
-如无预警，写"无 — 所有资产运行正常。"
+## Alerts & Flags
+List every asset with realisation status ALERT/CRITICAL or fragility level HIGH/CRITICAL.
+For each: asset name, status level, main loss driver, monitoring narrative.
+If none: write "None — all assets operating normally."
 
-## 建议措施
-3至5条编号的可操作建议，面向运营/交易团队。
-例如：跟进数据缺口、调整申报策略、排查限电原因。
+## Recommendations
+3–5 numbered, actionable recommendations for the ops/trading team.
+Examples: follow up on data gaps, adjust nomination strategy, investigate curtailment.
 
-─── 临时查询协议 ──────────────────────────────────────────────────────────
-对于运营人员的临时问题：使用所需工具，先引用数据再下结论。
-始终说明以下可比性注意事项：
-  - 逐小时完美预见/预测盈亏与15分钟运营盈亏不可直接比较
-  - nominated_dispatch_mw（申报）≠ md_id_cleared_energy.cleared_energy_mwh
-  - actual_dispatch_mw（实际）≠ md_id_cleared_energy.cleared_energy_mwh
-  - 省级日前电价代理指标可能与资产级节点电价存在偏差
+─── AD-HOC QUERY PROTOCOL ──────────────────────────────────────────────────────────
+For operator ad-hoc questions: use the required tools and cite data before drawing conclusions.
+Always state the following comparability caveats:
+  - Hourly perfect-foresight / forecast P&L is NOT directly comparable to 15-min ops P&L
+  - nominated_dispatch_mw ≠ md_id_cleared_energy.cleared_energy_mwh
+  - actual_dispatch_mw ≠ md_id_cleared_energy.cleared_energy_mwh
+  - Province-level DA price proxy may diverge from asset-level nodal price
 
-金额使用人民币（元）。保持简洁，数据部分优先使用表格。
-所有报告内容均使用简体中文撰写。
+Use CNY (¥) for amounts. Be concise; prefer tables for data-heavy sections.
+Write all report content in English.
 """
 
 # ---------------------------------------------------------------------------
@@ -166,10 +168,12 @@ class TradingPerformanceAgent:
         """
         generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         initial_message = (
-            f"对全部4个内蒙古储能资产（suyou、hangjinqi、siziwangqi、gushanliang）执行{date}的每日交易绩效复盘。\n\n"
-            f"使用价格预测模型：{forecast_model}。\n\n"
-            f"请按照每日报告协议执行：加载策略分析，检查监控状态，并生成包含以下章节的结构化Markdown报告："
-            f"投资组合概览、各资产亮点、预警与标记、建议措施。"
+            f"Run the daily trading performance review for all 4 Inner Mongolia BESS assets "
+            f"(suyou, hangjinqi, siziwangqi, gushanliang) for {date}.\n\n"
+            f"Price forecast model: {forecast_model}.\n\n"
+            f"Follow the DAILY REVIEW PROTOCOL: load strategy analysis, check monitoring status, "
+            f"and produce the structured Markdown report with sections: Portfolio Overview, "
+            f"Per-Asset Highlights, Alerts & Flags, and Recommendations."
         )
 
         messages = [{"role": "user", "content": initial_message}]
@@ -326,11 +330,11 @@ class TradingPerformanceAgent:
         Stream the daily review protocol, yielding text deltas for Streamlit.
         """
         initial_message = (
-            f"Run the daily trading performance review for all 4 Inner Mongolia BESS "
-            f"assets (suyou, hangjinqi, siziwangqi, gushanliang) on {date}.\n\n"
+            f"Run the daily trading performance review for all 4 Inner Mongolia BESS assets "
+            f"(suyou, hangjinqi, siziwangqi, gushanliang) for {date}.\n\n"
             f"Follow the DAILY REVIEW PROTOCOL: load strategy analysis, check monitoring "
-            f"status, and produce the structured markdown report with Portfolio Overview, "
-            f"Per-Asset Highlights, Alerts & Flags, and Recommendations sections."
+            f"status, and produce the structured Markdown report with sections: "
+            f"Portfolio Overview, Per-Asset Highlights, Alerts & Flags, and Recommendations."
         )
         messages = [{"role": "user", "content": initial_message}]
         yield from run_agent_loop_streaming(

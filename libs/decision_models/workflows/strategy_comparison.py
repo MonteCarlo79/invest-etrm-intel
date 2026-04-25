@@ -120,6 +120,7 @@ def load_bess_strategy_comparison_context(
         load_curtailment_flags,
         load_da_prices_hourly,
         load_id_cleared_energy,
+        load_ops_dispatch_15min,
         load_outage_flags,
         load_scenario_dispatch_15min,
         resample_15min_to_hourly,
@@ -148,6 +149,8 @@ def load_bess_strategy_comparison_context(
     notes.extend(avail_notes)
 
     # --- Nominated dispatch ---
+    # Primary: canon.scenario_dispatch_15min (populated by P&L refresh pipeline)
+    # Fallback: marketdata.ops_bess_dispatch_15min (direct from Excel ingestion)
     nominated_df, nom_notes = load_scenario_dispatch_15min(
         asset_code, "nominated_dispatch", d_from, d_to
     )
@@ -160,6 +163,31 @@ def load_bess_strategy_comparison_context(
         asset_code, "cleared_actual", d_from, d_to
     )
     notes.extend(act_notes)
+
+    # --- Fallback: read nominated/actual directly from ops Excel ingestion table ---
+    # canon.scenario_dispatch_15min is only populated by the P&L refresh batch job.
+    # For recent dates (before the next batch run) ops data lives only in
+    # marketdata.ops_bess_dispatch_15min — use it when canon is empty.
+    if nominated_df.empty or actual_df.empty:
+        ops_df, ops_notes = load_ops_dispatch_15min(asset_code, d_from, d_to)
+        notes.extend(ops_notes)
+        if not ops_df.empty:
+            if nominated_df.empty and ops_df["nominated_dispatch_mw"].notna().any():
+                nominated_df = ops_df[["interval_start", "nominated_dispatch_mw"]].rename(
+                    columns={"interval_start": "time", "nominated_dispatch_mw": "dispatch_mw"}
+                )
+                notes.append(
+                    "nominated_dispatch: loaded from marketdata.ops_bess_dispatch_15min "
+                    "(fallback — canon.scenario_dispatch_15min had no data)"
+                )
+            if actual_df.empty and ops_df["actual_dispatch_mw"].notna().any():
+                actual_df = ops_df[["interval_start", "actual_dispatch_mw"]].rename(
+                    columns={"interval_start": "time", "actual_dispatch_mw": "dispatch_mw"}
+                )
+                notes.append(
+                    "actual_dispatch: loaded from marketdata.ops_bess_dispatch_15min "
+                    "(fallback — canon.scenario_dispatch_15min had no data)"
+                )
 
     # --- Inner Mongolia DA cleared energy (distinct from actual physical dispatch) ---
     # marketdata.md_id_cleared_energy = DA market-cleared trading energy.
