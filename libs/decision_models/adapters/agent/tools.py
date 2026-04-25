@@ -218,7 +218,7 @@ DECISION_MODEL_TOOLS: List[Dict[str, Any]] = [
                 },
                 "model": {
                     "type": "string",
-                    "enum": ["ols_da_time_v1", "naive_da"],
+                    "enum": ["ols_rt_time_v1", "naive_rt_lag1", "naive_rt_lag7", "ols_da_time_v1", "naive_da"],
                     "description": (
                         "'ols_da_time_v1' (default): rolling OLS with [intercept, da_price, sin(2πh/24), cos(2πh/24)] features. "
                         "'naive_da': RT prediction = DA price."
@@ -573,13 +573,16 @@ STRATEGY_COMPARISON_TOOLS: List[Dict[str, Any]] = [
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["ols_da_time_v1", "naive_da"],
+                        "enum": ["ols_rt_time_v1", "naive_rt_lag1", "naive_rt_lag7", "ols_da_time_v1", "naive_da"],
                     },
                     "description": (
                         "List of forecast model names to run. "
-                        "Defaults to ['ols_da_time_v1'] if omitted. "
-                        "'ols_da_time_v1': rolling OLS with DA price + hour-of-day. "
-                        "'naive_da': RT = DA price."
+                        "Defaults to ['ols_rt_time_v1'] if omitted. "
+                        "RT-only (Inner Mongolia / no DA market): "
+                        "'ols_rt_time_v1' (rolling OLS on RT history + time-of-day, recommended), "
+                        "'naive_rt_lag1' (yesterday same hour), "
+                        "'naive_rt_lag7' (7 days ago same hour). "
+                        "DA-based (legacy): 'ols_da_time_v1', 'naive_da'."
                     ),
                 },
             },
@@ -714,7 +717,7 @@ DAILY_OPS_TOOLS: List[Dict[str, Any]] = [
                 },
                 "forecast_models": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["ols_da_time_v1", "naive_da"]},
+                    "items": {"type": "string", "enum": ["ols_rt_time_v1", "naive_rt_lag1", "naive_rt_lag7", "ols_da_time_v1", "naive_da"]},
                     "description": "Forecast models to run. Default: ['ols_da_time_v1'].",
                 },
                 "use_ops_dispatch": {
@@ -759,7 +762,7 @@ DAILY_OPS_TOOLS: List[Dict[str, Any]] = [
                 },
                 "forecast_models": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["ols_da_time_v1", "naive_da"]},
+                    "items": {"type": "string", "enum": ["ols_rt_time_v1", "naive_rt_lag1", "naive_rt_lag7", "ols_da_time_v1", "naive_da"]},
                     "description": "Forecast models to run. Default: ['ols_da_time_v1'].",
                 },
                 "use_ops_dispatch": {
@@ -794,7 +797,7 @@ DAILY_OPS_TOOLS: List[Dict[str, Any]] = [
                 },
                 "forecast_models": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["ols_da_time_v1", "naive_da"]},
+                    "items": {"type": "string", "enum": ["ols_rt_time_v1", "naive_rt_lag1", "naive_rt_lag7", "ols_da_time_v1", "naive_da"]},
                     "description": "Forecast models to run. Default: ['ols_da_time_v1'].",
                 },
                 "use_ops_dispatch": {

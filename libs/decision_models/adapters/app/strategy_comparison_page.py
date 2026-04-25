@@ -35,7 +35,7 @@ ASSET_DISPLAY = {
     "hangjinqi": "HangJinQi", "siziwangqi": "SiZiWangQi",
     "gushanliang": "GuShanLiang",
 }
-FORECAST_MODELS = ["ols_da_time_v1", "naive_da"]
+FORECAST_MODELS = ["ols_rt_time_v1", "naive_rt_lag1", "naive_rt_lag7", "ols_da_time_v1", "naive_da"]
 
 
 def render_strategy_comparison_page() -> None:
@@ -86,7 +86,7 @@ def render_strategy_comparison_page() -> None:
         forecast_model_choice = st.multiselect(
             "Forecast models to run",
             FORECAST_MODELS,
-            default=["ols_da_time_v1"],
+            default=["ols_rt_time_v1"],
         )
         period_type = st.radio(
             "Report period",

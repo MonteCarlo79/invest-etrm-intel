@@ -148,28 +148,28 @@ class TradingPerformanceAgent:
     # Daily batch review
     # ------------------------------------------------------------------
 
-    def run_daily_review(self, date: str) -> DailyOpsReviewResult:
+    def run_daily_review(
+        self,
+        date: str,
+        forecast_model: str = "ols_rt_time_v1",
+    ) -> DailyOpsReviewResult:
         """
         Run the full daily trading performance review for all 4 IM assets.
 
-        Calls the Claude agentic loop with the daily review protocol,
-        parses the structured narrative, and returns a DailyOpsReviewResult.
-
         Parameters
         ----------
-        date : ISO date string, e.g. "2026-04-17"
-
-        Returns
-        -------
-        DailyOpsReviewResult
+        date           : ISO date string, e.g. "2026-04-17"
+        forecast_model : price forecast model to use; default 'ols_rt_time_v1'
+                         (RT-only, no DA prices required).
+                         Options: ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7,
+                                  ols_da_time_v1, naive_da
         """
         generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         initial_message = (
-            f"Run the daily trading performance review for all 4 Inner Mongolia BESS "
-            f"assets (suyou, hangjinqi, siziwangqi, gushanliang) on {date}.\n\n"
-            f"Follow the DAILY REVIEW PROTOCOL: load strategy analysis, check monitoring "
-            f"status, and produce the structured markdown report with Portfolio Overview, "
-            f"Per-Asset Highlights, Alerts & Flags, and Recommendations sections."
+            f"对全部4个内蒙古储能资产（suyou、hangjinqi、siziwangqi、gushanliang）执行{date}的每日交易绩效复盘。\n\n"
+            f"使用价格预测模型：{forecast_model}。\n\n"
+            f"请按照每日报告协议执行：加载策略分析，检查监控状态，并生成包含以下章节的结构化Markdown报告："
+            f"投资组合概览、各资产亮点、预警与标记、建议措施。"
         )
 
         messages = [{"role": "user", "content": initial_message}]

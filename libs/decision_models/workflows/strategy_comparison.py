@@ -419,11 +419,15 @@ def run_forecast_dispatch_suite(
         ts = str(pd.Timestamp(rec["datetime"]))
         da_map[ts] = float(rec.get("da_price", float("nan")))
 
+    from services.bess_map.forecast_engine import RT_ONLY_MODELS
+
     if not da_map:
         suite_caveats.append(
-            "forecast_suite: no DA prices available — all forecast models will use naive_da fallback"
+            "forecast_suite: no DA prices in DB — only RT-only models "
+            "(naive_rt_lag1, naive_rt_lag7, ols_rt_time_v1) will produce results"
         )
 
+    # RT timestamps drive the forecast; DA timestamps augment for DA-based models
     all_datetimes = sorted(set(rt_map.keys()) | set(da_map.keys()))
 
     strategies: List[ForecastStrategyResult] = []
@@ -431,6 +435,7 @@ def run_forecast_dispatch_suite(
     for model_name in forecast_models:
         model_caveats: List[str] = []
         strategy_name = f"forecast_{model_name}"
+        is_rt_only = model_name in RT_ONLY_MODELS
 
         if not all_datetimes:
             model_caveats.append(f"{strategy_name}: no price data available — skipping")
@@ -448,18 +453,29 @@ def run_forecast_dispatch_suite(
             ))
             continue
 
-        # Build hourly_prices list with rt_price + da_price for each timestamp
+        # Build hourly_prices list.
+        # RT-only models: use rt_map timestamps only, da_price omitted.
+        # DA-based models: skip hours where da_price is absent (unchanged behaviour).
         hourly_prices_input = []
         for ts in all_datetimes:
             rt = rt_map.get(ts)
             da = da_map.get(ts)
-            if da is None or (isinstance(da, float) and np.isnan(da)):
-                continue  # skip hours without DA prices
-            hourly_prices_input.append({
-                "datetime": ts,
-                "rt_price": rt if (rt is not None and not np.isnan(rt)) else None,
-                "da_price": da,
-            })
+            if is_rt_only:
+                if rt is None or (isinstance(rt, float) and np.isnan(rt)):
+                    continue  # need at least an RT price for the history
+                hourly_prices_input.append({
+                    "datetime": ts,
+                    "rt_price": float(rt),
+                    "da_price": None,
+                })
+            else:
+                if da is None or (isinstance(da, float) and np.isnan(da)):
+                    continue  # DA-based model requires da_price
+                hourly_prices_input.append({
+                    "datetime": ts,
+                    "rt_price": rt if (rt is not None and not np.isnan(rt)) else None,
+                    "da_price": da,
+                })
 
         # Group by date to run forecast day by day
         df_input = pd.DataFrame(hourly_prices_input)

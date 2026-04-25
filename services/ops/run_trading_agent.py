@@ -106,6 +106,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print narrative to stdout; skip email and PDF write",
     )
+    p.add_argument(
+        "--forecast-model",
+        choices=["ols_rt_time_v1", "naive_rt_lag1", "naive_rt_lag7", "ols_da_time_v1", "naive_da"],
+        default="ols_rt_time_v1",
+        help="Price forecast model (default: ols_rt_time_v1 — RT-only, recommended for Inner Mongolia)",
+    )
     return p.parse_args()
 
 
@@ -258,12 +264,14 @@ def main() -> None:
     )
 
     agent = TradingPerformanceAgent()
+    forecast_model = args.forecast_model
 
     if args.asset_code:
         # Single-asset mode: use direct tool call via answer_query
         print(f"\nSingle-asset mode: {args.asset_code}")
         question = (
             f"Run a full strategy performance analysis for {args.asset_code} on {date}. "
+            f"Use forecast model: {forecast_model}. "
             f"Include strategy ranking, ops dispatch data availability, attribution if available, "
             f"realization and fragility status, and recommendations."
         )
@@ -273,8 +281,8 @@ def main() -> None:
         tool_calls: list = []
     else:
         # Full 4-asset daily review
-        print("\nRunning full 4-asset daily review via Claude agent loop...")
-        result = agent.run_daily_review(date)
+        print(f"\nRunning full 4-asset daily review (forecast model: {forecast_model})...")
+        result = agent.run_daily_review(date, forecast_model=forecast_model)
         result_narrative = result.narrative
         n_alerts = result.n_alerts
         tool_calls = result.tool_calls

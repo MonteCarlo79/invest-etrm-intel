@@ -26,12 +26,14 @@ class HourlyPriceRecord:
 
     datetime  : ISO8601 string, e.g. '2026-04-15T08:00:00'
     rt_price  : actual RT settlement price (Yuan/MWh). May be None/NaN for the
-                target date (only DA price is available in advance).
-    da_price  : day-ahead clearing price (Yuan/MWh). Required for all hours.
+                target date.
+    da_price  : day-ahead clearing price (Yuan/MWh). Required only for DA-based
+                models (ols_da_time_v1, naive_da). Optional for RT-only models
+                (ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7).
     """
     datetime: str
-    da_price: float
     rt_price: Optional[float] = None
+    da_price: Optional[float] = None
 
 
 @dataclass
@@ -41,21 +43,26 @@ class PriceForecastInput:
 
     hourly_prices  : list of HourlyPriceRecord dicts covering at least the
                      target_date hours plus sufficient lookback history.
-                     - Must include all 24 hours of target_date with da_price.
-                     - For ols_da_time_v1: include at least min_train_days ×24
-                       hours of prior history with both rt_price and da_price.
+                     RT-only models (ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7):
+                       - da_price is not required; only rt_price history needed.
+                     DA-based models (ols_da_time_v1, naive_da):
+                       - Must include all 24 hours of target_date with da_price.
+                       - Include at least min_train_days ×24 hours of prior
+                         history with both rt_price and da_price.
     target_date    : ISO date string (e.g. '2026-04-15'). Must be a date
                      present in hourly_prices.
     model          : forecast model to use:
-                       'ols_da_time_v1' (default) — rolling OLS
-                       'naive_da'                 — RT = DA identity
-    min_train_days : minimum prior complete days required before OLS is used
-                     (falls back to naive_da if fewer). Default: 7.
+                       'ols_rt_time_v1' (default) — rolling OLS on RT history + time-of-day
+                       'naive_rt_lag1'             — yesterday same hour
+                       'naive_rt_lag7'             — 7 days ago same hour
+                       'ols_da_time_v1'            — rolling OLS with DA price (requires DA market)
+                       'naive_da'                  — RT = DA identity (requires DA market)
+    min_train_days : minimum prior complete days required before OLS is used. Default: 7.
     lookback_days  : rolling training window width in days. Default: 60.
     """
     hourly_prices: List[dict]   # list of HourlyPriceRecord dicts
     target_date: str
-    model: str = "ols_da_time_v1"
+    model: str = "ols_rt_time_v1"
     min_train_days: int = 7
     lookback_days: int = 60
 
@@ -69,8 +76,8 @@ class PriceForecastOutput:
     model        : model name used
     datetimes    : list of 24 ISO8601 timestamps (one per hour of target_date)
     rt_pred      : list of 24 predicted RT prices (Yuan/MWh)
-    model_used   : 'ols' if OLS was fitted, 'naive_da' if fell back due to
-                   insufficient training data
+    model_used   : actual model applied — 'ols' (OLS fitted), 'naive_da',
+                   'naive_rt_lag1', or 'naive_rt_lag7' (fallback for RT-only OLS)
     """
     target_date: str
     model: str
