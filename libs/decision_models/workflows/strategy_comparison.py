@@ -510,16 +510,24 @@ def run_forecast_dispatch_suite(
             cutoff = pd.Timestamp(target_date)
             history = df_input[df_input["datetime"] < cutoff].copy()
 
-            target_day_da = df_input[df_input["datetime"].dt.date == target_date].copy()
-            if target_day_da.empty or target_day_da["da_price"].isna().all():
+            target_day_rows = df_input[df_input["datetime"].dt.date == target_date].copy()
+            if target_day_rows.empty:
+                n_missing_da += 1
+                model_caveats.append(
+                    f"{strategy_name}: no rows for {target_date} — day skipped"
+                )
+                continue
+
+            # DA-based models require valid DA prices on the target date
+            if not is_rt_only and target_day_rows["da_price"].isna().all():
                 n_missing_da += 1
                 model_caveats.append(
                     f"{strategy_name}: missing DA prices for {target_date} — day skipped"
                 )
                 continue
 
-            # Build combined input: history + target day (rt_price=None for target)
-            target_day_for_forecast = target_day_da.copy()
+            # Build combined input: history + target day (rt_price=None for target date)
+            target_day_for_forecast = target_day_rows.copy()
             target_day_for_forecast["rt_price"] = None
 
             combined = pd.concat([history, target_day_for_forecast], ignore_index=True)
@@ -528,10 +536,11 @@ def run_forecast_dispatch_suite(
             forecast_input_records = []
             for _, row in combined.iterrows():
                 rt_val = row["rt_price"]
+                da_val = row["da_price"]
                 forecast_input_records.append({
                     "datetime": row["datetime"].isoformat(),
                     "rt_price": float(rt_val) if (rt_val is not None and not pd.isna(rt_val)) else None,
-                    "da_price": float(row["da_price"]),
+                    "da_price": float(da_val) if (da_val is not None and not pd.isna(da_val)) else None,
                 })
 
             try:
