@@ -65,3 +65,8 @@ tfplan_*
 
 # Local runtime copies (uploader Dockerfile mounts services/bess_map here)
 apps/uploader/models/
+# Generated reports and debug artifacts
+reports/
+check_canon.py
+check_output.txt
+overrides.json
