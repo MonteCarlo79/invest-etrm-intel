@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 
 def get_dsn() -> str:
-    dsn = os.getenv("DB_DSN")
+    dsn = os.getenv("DB_DSN") or os.getenv("PGURL")
     if not dsn:
         raise ValueError("DB_DSN is not set")
     return dsn
