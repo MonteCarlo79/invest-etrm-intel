@@ -366,14 +366,21 @@ def run_forecast_dispatch_suite(
     forecast_models: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Run one or more day-ahead forecast models, then optimise dispatch on each
-    forecast, and settle the resulting dispatch on actual prices.
+    Run one or more price forecast models, optimise dispatch on each forecast,
+    and settle the resulting dispatch on actual prices.
+
+    Uses the registered model assets directly:
+      - forecast_engine.build_forecast()      — province-level RT price forecast
+      - run("bess_dispatch_simulation_multiday") — LP dispatch over all target days
+
+    Both engines handle multi-day input natively; no per-day Python loop needed.
 
     Parameters
     ----------
     context         : output of load_bess_strategy_comparison_context()
-    forecast_models : list of model names to run, e.g. ["ols_da_time_v1", "naive_da"]
-                      Defaults to ["ols_da_time_v1"].
+    forecast_models : list of model names. Defaults to ["ols_rt_time_v1"].
+                      RT-only (Inner Mongolia): ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7
+                      DA-based (requires DA market): ols_da_time_v1, naive_da
 
     Returns
     -------
@@ -381,24 +388,20 @@ def run_forecast_dispatch_suite(
 
     Granularity approximation
     -------------------------
-    price_forecast_dayahead produces HOURLY province-level predictions.
-    bess_dispatch_simulation_multiday produces HOURLY dispatch.
-    P&L is settled against hourly mean of actual 15-min nodal prices.
-
-    Province vs nodal gap: forecast prices are province-level (settlement ref);
-    actual prices used for settlement are asset-level nodal.  This introduces
-    a basis risk that is NOT modelled here — treat gaps conservatively.
+    Forecast and dispatch are hourly; P&L settled on hourly mean of actual
+    15-min nodal prices.  Province-level forecast vs asset-level settlement
+    introduces basis risk that is not modelled here.
     """
     import libs.decision_models.bess_dispatch_simulation_multiday  # noqa: F401
-    import libs.decision_models.price_forecast_dayahead             # noqa: F401
     from libs.decision_models.runners.local import run
+    from services.bess_map.forecast_engine import RT_ONLY_MODELS, build_forecast
 
     if forecast_models is None:
-        forecast_models = ["ols_da_time_v1"]
+        forecast_models = ["ols_rt_time_v1"]
 
     suite_caveats: List[str] = [
-        "forecast_suite: price_forecast_dayahead is province-level (not nodal/asset) — "
-        "forecast dispatch is optimised on province prices but settled on asset nodal prices",
+        "forecast_suite: price forecast is province-level (not nodal/asset) — "
+        "dispatch optimised on province prices but settled on asset nodal prices",
         "forecast_suite: hourly granularity — settled on hourly mean of actual 15-min prices",
         "forecast_suite: SOC resets to 0 each day (no cross-day carryover)",
     ]
@@ -406,176 +409,125 @@ def run_forecast_dispatch_suite(
     meta = context["asset_metadata"]
     actual_prices_hourly: List[dict] = context.get("actual_prices_hourly", [])
     da_prices_hourly: List[dict] = context.get("da_prices_hourly", [])
+    d_from = datetime.date.fromisoformat(context["date_from"])
+    d_to = datetime.date.fromisoformat(context["date_to"])
 
-    # Build combined price record list for forecast model
-    # Map: datetime -> {rt_price, da_price}
-    rt_map: Dict[str, float] = {}
-    for rec in actual_prices_hourly:
-        ts = str(pd.Timestamp(rec.get("datetime") or rec.get("time")))
-        rt_map[ts] = float(rec.get("price", float("nan")))
+    def _empty_strategy(model_name: str, notes: List[str]) -> ForecastStrategyResult:
+        return ForecastStrategyResult(
+            model_name=model_name,
+            strategy_name=f"forecast_{model_name}",
+            pnl=StrategyPnLResult(
+                strategy_name=f"forecast_{model_name}",
+                pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+            ),
+            forecast_prices_hourly=[], dispatch_hourly=[], daily_profit=[],
+            n_days_with_forecast=0, n_days_missing_da_prices=0,
+            caveats=notes,
+        )
 
-    da_map: Dict[str, float] = {}
-    for rec in da_prices_hourly:
-        ts = str(pd.Timestamp(rec["datetime"]))
-        da_map[ts] = float(rec.get("da_price", float("nan")))
+    if not actual_prices_hourly:
+        suite_caveats.append("forecast_suite: no actual prices in context — all models skipped")
+        return dataclasses.asdict(ForecastDispatchSuiteResult(
+            strategies=[_empty_strategy(m, ["no actual prices available"]) for m in forecast_models],
+            requested_models=forecast_models,
+            suite_caveats=suite_caveats,
+        ))
 
-    from services.bess_map.forecast_engine import RT_ONLY_MODELS
+    # Build unified hourly DataFrame (full history + target range in one pass).
+    # build_forecast() and bess_dispatch_simulation_multiday both handle multi-day
+    # input natively — no per-day loop needed here.
+    rt_map: Dict[str, float] = {
+        str(pd.Timestamp(r.get("datetime") or r.get("time"))): float(r.get("price", float("nan")))
+        for r in actual_prices_hourly
+    }
+    da_map: Dict[str, float] = {
+        str(pd.Timestamp(r["datetime"])): float(r.get("da_price", float("nan")))
+        for r in da_prices_hourly
+    }
+    all_ts = sorted(set(rt_map.keys()) | set(da_map.keys()))
+    hourly_df = pd.DataFrame({
+        "datetime": [pd.Timestamp(ts) for ts in all_ts],
+        "rt_price": [rt_map.get(ts, float("nan")) for ts in all_ts],
+        "da_price": [da_map.get(ts, float("nan")) for ts in all_ts],
+    }).set_index("datetime").sort_index()
 
     if not da_map:
         suite_caveats.append(
             "forecast_suite: no DA prices in DB — only RT-only models "
-            "(naive_rt_lag1, naive_rt_lag7, ols_rt_time_v1) will produce results"
+            "(ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7) will produce results"
         )
 
-    # RT timestamps drive the forecast; DA timestamps augment for DA-based models
-    all_datetimes = sorted(set(rt_map.keys()) | set(da_map.keys()))
+    actual_price_map = {
+        str(pd.Timestamp(r.get("datetime") or r.get("time"))): float(r.get("price", 0.0))
+        for r in actual_prices_hourly
+    }
 
     strategies: List[ForecastStrategyResult] = []
 
     for model_name in forecast_models:
+        is_rt_only = model_name in RT_ONLY_MODELS
         model_caveats: List[str] = []
         strategy_name = f"forecast_{model_name}"
-        is_rt_only = model_name in RT_ONLY_MODELS
 
-        if not all_datetimes:
-            model_caveats.append(f"{strategy_name}: no price data available — skipping")
-            strategies.append(ForecastStrategyResult(
-                model_name=model_name,
-                strategy_name=strategy_name,
-                pnl=StrategyPnLResult(
-                    strategy_name=strategy_name,
-                    pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
-                    discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
-                ),
-                forecast_prices_hourly=[], dispatch_hourly=[], daily_profit=[],
-                n_days_with_forecast=0, n_days_missing_da_prices=0,
-                caveats=model_caveats,
-            ))
-            continue
-
-        # Build hourly_prices list.
-        # RT-only models: use rt_map timestamps only, da_price omitted.
-        # DA-based models: skip hours where da_price is absent (unchanged behaviour).
-        hourly_prices_input = []
-        for ts in all_datetimes:
-            rt = rt_map.get(ts)
-            da = da_map.get(ts)
-            if is_rt_only:
-                if rt is None or (isinstance(rt, float) and np.isnan(rt)):
-                    continue  # need at least an RT price for the history
-                hourly_prices_input.append({
-                    "datetime": ts,
-                    "rt_price": float(rt),
-                    "da_price": None,
-                })
-            else:
-                if da is None or (isinstance(da, float) and np.isnan(da)):
-                    continue  # DA-based model requires da_price
-                hourly_prices_input.append({
-                    "datetime": ts,
-                    "rt_price": rt if (rt is not None and not np.isnan(rt)) else None,
-                    "da_price": da,
-                })
-
-        # Group by date to run forecast day by day
-        df_input = pd.DataFrame(hourly_prices_input)
-        if df_input.empty:
-            model_caveats.append(f"{strategy_name}: no valid DA prices — cannot run forecast")
-            strategies.append(ForecastStrategyResult(
-                model_name=model_name, strategy_name=strategy_name,
-                pnl=StrategyPnLResult(
-                    strategy_name=strategy_name,
-                    pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
-                    discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
-                ),
-                forecast_prices_hourly=[], dispatch_hourly=[], daily_profit=[],
-                n_days_with_forecast=0, n_days_missing_da_prices=len(all_datetimes) // 24,
-                caveats=model_caveats,
-            ))
-            continue
-
-        df_input["datetime"] = pd.to_datetime(df_input["datetime"])
-        dates_in_range = sorted(df_input["datetime"].dt.date.unique())
-        d_from = datetime.date.fromisoformat(context["date_from"])
-        d_to = datetime.date.fromisoformat(context["date_to"])
-        target_dates = [d for d in dates_in_range if d_from <= d <= d_to]
-
-        all_forecast_records: List[dict] = []
-        model_used_per_day: Dict[str, str] = {}
-        n_missing_da = 0
-        n_forecast = 0
-
-        for target_date in target_dates:
-            # Need lookback history + target day in input
-            cutoff = pd.Timestamp(target_date)
-            history = df_input[df_input["datetime"] < cutoff].copy()
-
-            target_day_rows = df_input[df_input["datetime"].dt.date == target_date].copy()
-            if target_day_rows.empty:
-                n_missing_da += 1
-                model_caveats.append(
-                    f"{strategy_name}: no rows for {target_date} — day skipped"
-                )
-                continue
-
-            # DA-based models require valid DA prices on the target date
-            if not is_rt_only and target_day_rows["da_price"].isna().all():
-                n_missing_da += 1
-                model_caveats.append(
-                    f"{strategy_name}: missing DA prices for {target_date} — day skipped"
-                )
-                continue
-
-            # Build combined input: history + target day (rt_price=None for target date)
-            target_day_for_forecast = target_day_rows.copy()
-            target_day_for_forecast["rt_price"] = None
-
-            combined = pd.concat([history, target_day_for_forecast], ignore_index=True)
-            combined = combined.sort_values("datetime")
-
-            forecast_input_records = []
-            for _, row in combined.iterrows():
-                rt_val = row["rt_price"]
-                da_val = row["da_price"]
-                forecast_input_records.append({
-                    "datetime": row["datetime"].isoformat(),
-                    "rt_price": float(rt_val) if (rt_val is not None and not pd.isna(rt_val)) else None,
-                    "da_price": float(da_val) if (da_val is not None and not pd.isna(da_val)) else None,
-                })
-
-            try:
-                fc_result = run("price_forecast_dayahead", {
-                    "hourly_prices": forecast_input_records,
-                    "target_date": str(target_date),
-                    "model": model_name,
-                })
-                for ts_str, pred in zip(fc_result["datetimes"], fc_result["rt_pred"]):
-                    all_forecast_records.append({"datetime": ts_str, "rt_pred": pred})
-                model_used_per_day[str(target_date)] = fc_result.get("model_used", "unknown")
-                n_forecast += 1
-            except Exception as exc:
-                model_caveats.append(
-                    f"{strategy_name}: forecast failed for {target_date} — {exc}"
-                )
-
-        if not all_forecast_records:
-            model_caveats.append(
-                f"{strategy_name}: no forecast records produced — skipping dispatch"
+        # DA-based models require DA prices for the target period
+        if not is_rt_only:
+            target_da = hourly_df.loc[
+                (hourly_df.index.date >= d_from) & (hourly_df.index.date <= d_to), "da_price"
+            ]
+            n_missing_da = int(
+                target_da.groupby(target_da.index.date)
+                .apply(lambda g: g.isna().all()).sum()
             )
-            strategies.append(ForecastStrategyResult(
-                model_name=model_name, strategy_name=strategy_name,
-                pnl=StrategyPnLResult(
+            if target_da.isna().all():
+                model_caveats.append(
+                    f"{strategy_name}: no DA prices for target period — skipping"
+                )
+                strategies.append(ForecastStrategyResult(
+                    model_name=model_name,
                     strategy_name=strategy_name,
-                    pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
-                    discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
-                ),
-                forecast_prices_hourly=all_forecast_records, dispatch_hourly=[], daily_profit=[],
-                n_days_with_forecast=n_forecast, n_days_missing_da_prices=n_missing_da,
-                model_used_per_day=model_used_per_day, caveats=model_caveats,
-            ))
+                    pnl=StrategyPnLResult(
+                        strategy_name=strategy_name,
+                        pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                        discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+                    ),
+                    forecast_prices_hourly=[], dispatch_hourly=[], daily_profit=[],
+                    n_days_with_forecast=0, n_days_missing_da_prices=n_missing_da,
+                    caveats=model_caveats,
+                ))
+                continue
+        else:
+            n_missing_da = 0
+
+        # Single call: build_forecast handles rolling OLS over all days internally
+        try:
+            rt_pred_series = build_forecast(hourly_df, model=model_name)
+        except Exception as exc:
+            model_caveats.append(f"{strategy_name}: forecast engine failed — {exc}")
+            strategies.append(_empty_strategy(model_name, model_caveats))
             continue
 
-        # Optimise dispatch on forecast prices
+        # Filter predictions to the target date range only
+        target_mask = np.array([d_from <= d <= d_to for d in rt_pred_series.index.date])
+        target_preds = rt_pred_series[target_mask].dropna()
+
+        if target_preds.empty:
+            model_caveats.append(
+                f"{strategy_name}: no forecast output for target dates — check RT price history"
+            )
+            strategies.append(_empty_strategy(model_name, model_caveats))
+            continue
+
+        n_forecast_days = pd.Index(target_preds.index.date).nunique()
+        model_used_per_day: Dict[str, str] = {
+            str(d): model_name for d in pd.Index(target_preds.index.date).unique()
+        }
+        all_forecast_records = [
+            {"datetime": ts.isoformat(), "rt_pred": float(p)}
+            for ts, p in target_preds.items()
+        ]
+
+        # Single call to registered dispatch model over all forecast days at once
         opt_result = run("bess_dispatch_simulation_multiday", {
             "hourly_prices": [
                 {"datetime": r["datetime"], "price": r["rt_pred"]}
@@ -586,22 +538,17 @@ def run_forecast_dispatch_suite(
             "roundtrip_eff": meta["roundtrip_eff"],
         })
 
-        # Settle dispatch on ACTUAL hourly prices
-        actual_price_map = {
-            str(pd.Timestamp(r.get("datetime") or r.get("time"))): float(r.get("price", 0.0))
-            for r in actual_prices_hourly
-        }
+        # Settle dispatch on actual nodal prices
         dispatch_hourly = []
         for rec in opt_result.get("dispatch_records", []):
             dt_str = str(pd.Timestamp(rec["datetime"]))
-            actual_p = actual_price_map.get(dt_str, 0.0)
             dispatch_hourly.append({
                 "datetime": rec["datetime"],
                 "charge_mw": rec["charge_mw"],
                 "discharge_mw": rec["discharge_mw"],
                 "dispatch_grid_mw": rec["dispatch_grid_mw"],
                 "soc_mwh": rec["soc_mwh"],
-                "actual_price": actual_p,
+                "actual_price": actual_price_map.get(dt_str, 0.0),
             })
 
         pnl_market = sum(
@@ -616,7 +563,6 @@ def run_forecast_dispatch_suite(
         )
         pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
 
-        # Daily profit settled on actual prices
         daily_profit = []
         dispatch_df = pd.DataFrame(dispatch_hourly)
         if not dispatch_df.empty:
@@ -628,35 +574,33 @@ def run_forecast_dispatch_suite(
             for d, grp in dispatch_df.groupby("date"):
                 daily_profit.append({"date": d, "profit_actual_prices": float(grp["hourly_pnl"].sum())})
 
-        pnl_obj = StrategyPnLResult(
-            strategy_name=strategy_name,
-            pnl_market_yuan=pnl_market,
-            pnl_compensation_yuan=pnl_comp,
-            pnl_total_yuan=pnl_market + pnl_comp,
-            discharge_mwh=discharge_mwh,
-            charge_mwh=charge_mwh,
-            n_days_solved=opt_result.get("n_days_solved", 0),
-            granularity="hourly",
-        )
         strategies.append(ForecastStrategyResult(
             model_name=model_name,
             strategy_name=strategy_name,
-            pnl=pnl_obj,
+            pnl=StrategyPnLResult(
+                strategy_name=strategy_name,
+                pnl_market_yuan=pnl_market,
+                pnl_compensation_yuan=pnl_comp,
+                pnl_total_yuan=pnl_market + pnl_comp,
+                discharge_mwh=discharge_mwh,
+                charge_mwh=charge_mwh,
+                n_days_solved=opt_result.get("n_days_solved", 0),
+                granularity="hourly",
+            ),
             forecast_prices_hourly=all_forecast_records,
             dispatch_hourly=dispatch_hourly,
             daily_profit=daily_profit,
-            n_days_with_forecast=n_forecast,
+            n_days_with_forecast=n_forecast_days,
             n_days_missing_da_prices=n_missing_da,
             model_used_per_day=model_used_per_day,
             caveats=model_caveats,
         ))
 
-    result = ForecastDispatchSuiteResult(
+    return dataclasses.asdict(ForecastDispatchSuiteResult(
         strategies=strategies,
         requested_models=forecast_models,
         suite_caveats=suite_caveats,
-    )
-    return dataclasses.asdict(result)
+    ))
 
 
 # ===========================================================================
