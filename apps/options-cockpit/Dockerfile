@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY apps/options-cockpit/requirements.txt ./apps/options-cockpit/requirements.txt
-RUN pip install --no-cache-dir -r apps/options-cockpit/requirements.txt
+RUN pip install --no-cache-dir --timeout=120 --retries=5 -r apps/options-cockpit/requirements.txt
 
 COPY libs/options/ ./libs/options/
 COPY apps/options-cockpit/app.py ./apps/options-cockpit/app.py
