@@ -366,7 +366,9 @@ def render_bess_strategy_dashboard_payload(
         strategy_table.append({
             "Rank": row["rank"],
             "Strategy": row["strategy_name"],
-            "P&L (CNY)": _fmt_yuan(row.get("pnl_total_yuan")),
+            "Total P&L (CNY)": _fmt_yuan(row.get("pnl_total_yuan")),
+            "Market P&L (CNY)": _fmt_yuan(row.get("pnl_market_yuan")),
+            "Subsidy (CNY)": _fmt_yuan(row.get("pnl_compensation_yuan")),
             "Gap vs PF (CNY)": _fmt_yuan(row.get("gap_vs_perfect_foresight_yuan")),
             "Capture vs PF": _fmt_pct(row.get("capture_rate_vs_pf")),
             "Granularity": row.get("granularity", "—"),
@@ -374,7 +376,8 @@ def render_bess_strategy_dashboard_payload(
         })
 
     # Dispatch chart data (from ops dispatch or context dispatch)
-    dispatch_chart_data = _build_dispatch_chart_data(context, date)
+    pf_result = analysis.get("pf_result", {})
+    dispatch_chart_data = _build_dispatch_chart_data(context, date, pf_result=pf_result)
 
     # Price chart data
     price_chart_data = _build_price_chart_data(context)
@@ -535,12 +538,14 @@ def _build_cross_asset_summary(
 def _build_dispatch_chart_data(
     context: Dict[str, Any],
     date: str,
+    pf_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Build chart data for the dispatch comparison (nominated vs actual).
+    Build chart data for the dispatch comparison (nominated vs actual vs PF).
 
     Prefers ops_dispatch_15min if available, otherwise uses
     nominated_dispatch_15min and actual_dispatch_15min from context.
+    PF dispatch (hourly) is added as a separate series when pf_result is provided.
     """
     ops_data = context.get("ops_dispatch_15min")
     if ops_data:
@@ -562,10 +567,34 @@ def _build_dispatch_chart_data(
         actual_mw = [act_map.get(ts) for ts in timestamps]
         source = "canon.scenario_dispatch_15min"
 
+    # PF dispatch — hourly LP in MW; divide by 4 to get MWh per 15-min slot for
+    # apples-to-apples comparison with the 15-min ops MWh series.
+    pf_timestamps: list = []
+    pf_dispatch_mwh: list = []
+    if pf_result:
+        for rec in pf_result.get("dispatch_hourly", []):
+            mw_val = rec.get("dispatch_grid_mw")
+            pf_timestamps.append(str(rec.get("datetime", "")))
+            pf_dispatch_mwh.append(mw_val / 4.0 if mw_val is not None else None)
+
+    # DA cleared energy — use cleared_energy_mwh_15min directly (already MWh)
+    id_cleared_timestamps: list = []
+    id_cleared_mwh: list = []
+    id_cleared_records = context.get("id_cleared_energy_15min") or []
+    for rec in id_cleared_records:
+        ts = rec.get("datetime")
+        if ts is not None:
+            id_cleared_timestamps.append(str(ts))
+            id_cleared_mwh.append(rec.get("cleared_energy_mwh_15min"))
+
     return {
         "timestamps": timestamps,
-        "nominated_mw": nominated_mw,
-        "actual_mw": actual_mw,
+        "nominated_mwh": nominated_mw,     # MWh per 15-min interval
+        "actual_mwh": actual_mw,           # MWh per 15-min interval
+        "pf_timestamps": pf_timestamps,
+        "pf_dispatch_mwh": pf_dispatch_mwh,  # hourly MW ÷ 4 → comparable MWh per 15-min
+        "id_cleared_timestamps": id_cleared_timestamps,
+        "id_cleared_mwh": id_cleared_mwh,    # MWh per 15-min interval
         "source": source,
         "date": date,
     }

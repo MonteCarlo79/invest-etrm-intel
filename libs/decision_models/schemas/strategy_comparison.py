@@ -185,6 +185,8 @@ class StrategyRankRow:
     rank: int
     strategy_name: str
     pnl_total_yuan: float
+    pnl_market_yuan: Optional[float]                 # market revenue only (excl. subsidy)
+    pnl_compensation_yuan: Optional[float]           # subsidy / compensation (350 CNY/MWh)
     gap_vs_perfect_foresight_yuan: Optional[float]   # PF_pnl - this_pnl (positive = worse)
     gap_vs_best_forecast_yuan: Optional[float]
     gap_vs_nominated_yuan: Optional[float]

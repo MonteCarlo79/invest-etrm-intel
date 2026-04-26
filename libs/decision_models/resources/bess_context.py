@@ -63,14 +63,14 @@ logger = logging.getLogger(__name__)
 # TODO: replace with DB query when core.asset_master is created.
 # ---------------------------------------------------------------------------
 ASSET_PHYSICAL_PARAMS: dict = {
-    "suyou":       {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
+    "suyou":       {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
     "wulate":      {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
     "wuhai":       {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
     "wulanchabu":  {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
     "hetao":       {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
-    "hangjinqi":   {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
-    "siziwangqi":  {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
-    "gushanliang": {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
+    "hangjinqi":   {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
+    "siziwangqi":  {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
+    "gushanliang": {"power_mw": 500.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
 }
 # TODO: When core.asset_master is available, remove ASSET_PHYSICAL_PARAMS
 # and use load_asset_physical_params() below.

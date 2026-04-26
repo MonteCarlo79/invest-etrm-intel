@@ -70,6 +70,8 @@ def _run(
     roundtrip_eff: float = 0.85,
     max_throughput_mwh: float = None,
     max_cycles_per_day: float = None,
+    compensation_yuan_per_mwh: float = 0.0,
+    window_days: int = 1,
 ) -> Dict[str, Any]:
     """
     Convert the JSON-serializable hourly_prices list into a pd.Series,
@@ -86,6 +88,8 @@ def _run(
         raise ValueError(f"duration_h must be positive, got {duration_h}")
     if not (0 < roundtrip_eff <= 1):
         raise ValueError(f"roundtrip_eff must be in (0, 1], got {roundtrip_eff}")
+    if window_days < 1:
+        raise ValueError(f"window_days must be >= 1, got {window_days}")
 
     # Build pd.Series with DatetimeIndex expected by the engine
     try:
@@ -109,6 +113,8 @@ def _run(
         roundtrip_eff=float(roundtrip_eff),
         max_throughput_mwh=float(max_throughput_mwh) if max_throughput_mwh is not None else None,
         max_cycles_per_day=float(max_cycles_per_day) if max_cycles_per_day is not None else None,
+        compensation_yuan_per_mwh=float(compensation_yuan_per_mwh),
+        window_days=int(window_days),
     )
 
     n_days_solved = len(profit_s)

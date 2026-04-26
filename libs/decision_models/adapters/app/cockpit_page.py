@@ -817,6 +817,58 @@ def render_cockpit_page() -> None:
             and (frag_df.empty or not frag_df["fragility_level"].isin(["HIGH", "CRITICAL"]).any()):
         st.success("No active WARN/ALERT/CRITICAL conditions. Fleet is operating normally.")
 
+    # ── Export ────────────────────────────────────────────────────────────────
+    from libs.decision_models.adapters.app.export_utils import (
+        reportlab_available, to_excel_bytes, to_pdf_bytes_from_tables,
+    )
+    with st.expander("📥 Download data", expanded=False):
+        col_pdf, col_xl = st.columns(2)
+
+        # PDF — valuation + monitoring tables
+        if reportlab_available():
+            try:
+                pdf_bytes = to_pdf_bytes_from_tables(
+                    f"BESS Options Cockpit — {date.today().isoformat()}",
+                    sections=[
+                        {"heading": "Spread Call Strip Valuations", "df": table_df},
+                        {"heading": "Realization Status", "df": real_df.drop(columns=["narrative"], errors="ignore") if not real_df.empty else pd.DataFrame()},
+                        {"heading": "Fragility Status", "df": frag_df.drop(columns=["narrative"], errors="ignore") if not frag_df.empty else pd.DataFrame()},
+                    ],
+                )
+                if pdf_bytes:
+                    col_pdf.download_button(
+                        "⬇ PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"cockpit_{date.today().isoformat()}.pdf",
+                        mime="application/pdf",
+                        key="cockpit_pdf",
+                    )
+            except Exception as exc:
+                col_pdf.caption(f"PDF error: {exc}")
+        else:
+            col_pdf.caption("Install `reportlab` to enable PDF export.")
+
+        # Excel — strip valuations, vol inputs, monitoring
+        try:
+            sheets: dict = {"Strip Valuations": table_df}
+            if not real_df.empty:
+                sheets["Realization Status"] = real_df
+            if not frag_df.empty:
+                sheets["Fragility Status"] = frag_df
+            if not price_df.empty:
+                sheets["Vol Inputs"] = price_df
+
+            xl_bytes = to_excel_bytes(sheets)
+            col_xl.download_button(
+                "⬇ Excel Tables",
+                data=xl_bytes,
+                file_name=f"cockpit_{date.today().isoformat()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="cockpit_xl",
+            )
+        except Exception as exc:
+            col_xl.caption(f"Excel error: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # Standalone dev entrypoint

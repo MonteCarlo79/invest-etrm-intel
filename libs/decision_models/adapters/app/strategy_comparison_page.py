@@ -94,6 +94,19 @@ def render_strategy_comparison_page() -> None:
             index=2,
             horizontal=True,
         )
+        window_days = st.number_input(
+            "LP window (days)",
+            min_value=1,
+            max_value=30,
+            value=1,
+            step=1,
+            help=(
+                "Number of consecutive days to optimise in one LP solve. "
+                "1 = each day independently (SOC resets daily). "
+                ">1 = SOC carries over across day boundaries within each window, "
+                "giving the optimiser cross-day flexibility at the cost of a larger LP."
+            ),
+        )
         run_btn = st.button("Run comparison", type="primary")
 
     if not run_btn:
@@ -118,13 +131,20 @@ def render_strategy_comparison_page() -> None:
         return
 
     # ── Step 2: Perfect foresight ─────────────────────────────────────────────
-    with st.spinner("Running perfect foresight dispatch…"):
-        pf_result = run_perfect_foresight_dispatch(context)
+    pf_label = (
+        "Running perfect foresight dispatch…"
+        if window_days == 1
+        else f"Running perfect foresight dispatch ({window_days}-day windows)…"
+    )
+    with st.spinner(pf_label):
+        pf_result = run_perfect_foresight_dispatch(context, window_days=int(window_days))
 
     # ── Step 3: Forecast suite ─────────────────────────────────────────────────
     if forecast_model_choice:
         with st.spinner(f"Running forecast suite: {forecast_model_choice}…"):
-            forecast_suite = run_forecast_dispatch_suite(context, forecast_model_choice)
+            forecast_suite = run_forecast_dispatch_suite(
+                context, forecast_model_choice, window_days=int(window_days)
+            )
     else:
         forecast_suite = {"strategies": [], "requested_models": [], "suite_caveats": []}
 
@@ -171,7 +191,9 @@ def render_strategy_comparison_page() -> None:
                 {
                     "Rank": r["rank"],
                     "Strategy": r["strategy_name"],
-                    "Realised P&L (CNY)": _fmt_yuan(r["pnl_total_yuan"]),
+                    "Total P&L (CNY)": _fmt_yuan(r["pnl_total_yuan"]),
+                    "Market P&L (CNY)": _fmt_yuan(r.get("pnl_market_yuan")),
+                    "Subsidy (CNY)": _fmt_yuan(r.get("pnl_compensation_yuan")),
                     "Gap vs PF": _fmt_yuan(r["gap_vs_perfect_foresight_yuan"]),
                     "Gap vs Nominated": _fmt_yuan(r["gap_vs_nominated_yuan"]),
                     "Capture vs PF": _fmt_pct(r["capture_rate_vs_pf"]),
@@ -269,6 +291,87 @@ def render_strategy_comparison_page() -> None:
         st.subheader("Report Markdown")
         st.caption("Copy this for Slack / email distribution.")
         st.text_area("Markdown", value=report.get("markdown", ""), height=500)
+
+    # ── Export ────────────────────────────────────────────────────────────────
+    from libs.decision_models.adapters.app.export_utils import (
+        reportlab_available, to_excel_bytes, to_pdf_bytes_from_markdown,
+    )
+    with st.expander("📥 Download report", expanded=False):
+        col_pdf, col_xl = st.columns(2)
+
+        # PDF from report markdown
+        if reportlab_available():
+            md_str = report.get("markdown", "")
+            if md_str:
+                try:
+                    pdf_bytes = to_pdf_bytes_from_markdown(
+                        f"BESS Strategy Report — {asset_code} {date_from}→{date_to}",
+                        md_str,
+                    )
+                    if pdf_bytes:
+                        col_pdf.download_button(
+                            "⬇ PDF Report",
+                            data=pdf_bytes,
+                            file_name=f"strategy_{asset_code}_{date_from}_{date_to}.pdf",
+                            mime="application/pdf",
+                            key=f"sc_pdf_{asset_code}_{date_from}",
+                        )
+                except Exception as exc:
+                    col_pdf.caption(f"PDF error: {exc}")
+            else:
+                col_pdf.caption("No report markdown generated yet.")
+        else:
+            col_pdf.caption("Install `reportlab` to enable PDF export.")
+
+        # Excel — ranking, period rows, attribution
+        try:
+            sheets: dict = {}
+
+            rank_rows = ranking.get("rows", [])
+            if rank_rows:
+                sheets["Strategy Ranking"] = pd.DataFrame([
+                    {
+                        "Rank": r["rank"],
+                        "Strategy": r["strategy_name"],
+                        "Total P&L (CNY)": r["pnl_total_yuan"],
+                        "Market P&L (CNY)": r.get("pnl_market_yuan"),
+                        "Subsidy (CNY)": r.get("pnl_compensation_yuan"),
+                        "Gap vs PF (CNY)": r["gap_vs_perfect_foresight_yuan"],
+                        "Capture vs PF": r["capture_rate_vs_pf"],
+                        "Granularity": r["granularity"],
+                        "Available": r["data_available"],
+                    }
+                    for r in rank_rows
+                ])
+
+            pnl_tbl = report.get("pnl_comparison", {})
+            if pnl_tbl.get("rows"):
+                sheets["P&L Comparison"] = pd.DataFrame(
+                    pnl_tbl["rows"], columns=pnl_tbl["headers"]
+                )
+
+            period_rows_key = f"{period_type}_rows"
+            period_rows = report.get(period_rows_key, [])
+            if period_rows:
+                sheets[f"{period_type.title()} P&L"] = pd.DataFrame(period_rows)
+
+            daily_attr = attribution.get("daily_rows", [])
+            if daily_attr:
+                sheets["Attribution Daily"] = pd.DataFrame(daily_attr)
+
+            if sheets:
+                xl_bytes = to_excel_bytes(sheets)
+                col_xl.download_button(
+                    "⬇ Excel Tables",
+                    data=xl_bytes,
+                    file_name=f"strategy_{asset_code}_{date_from}_{date_to}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"sc_xl_{asset_code}_{date_from}",
+                )
+            else:
+                col_xl.caption("No table data to export.")
+        except Exception as exc:
+            col_xl.caption(f"Excel error: {exc}")
 
 
 # ---------------------------------------------------------------------------

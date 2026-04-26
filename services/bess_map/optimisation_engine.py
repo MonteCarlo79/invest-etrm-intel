@@ -36,52 +36,56 @@ class DispatchResult:
 
 
 # ---------------------------------------------------------------------------
-# Single-day LP optimisation
+# Core LP engine — arbitrary horizon
 # ---------------------------------------------------------------------------
 
-def optimise_day(
+def optimise_window(
     prices: np.ndarray,
     power_mw: float,
     duration_h: float,
     roundtrip_eff: float,
     max_throughput_mwh: Optional[float] = None,
     max_cycles_per_day: Optional[float] = None,
+    compensation_yuan_per_mwh: float = 0.0,
 ) -> DispatchResult:
     """
-    Solve the BESS arbitrage LP for one day of 24 hourly prices.
+    Solve the BESS arbitrage LP for an arbitrary number of hourly intervals T.
+
+    SOC starts at 0 at t=0 and carries over naturally across the full window,
+    enabling cross-day SOC continuity when T > 24.
 
     The round-trip efficiency is applied symmetrically:
         eta_c = eta_d = sqrt(roundtrip_eff)
 
-    Degradation proxies (optional):
-        max_throughput_mwh  — cap on total discharge energy per day
-        max_cycles_per_day  — cap on equivalent full cycles/day
-                              (discharge_energy <= cycles × energy_capacity)
+    The compensation (subsidy) is added to the discharge incentive so the LP
+    dispatches when (market_price + compensation) > 0, not just when price > 0.
+    The reported profit field remains market-only cash flow.
+
+    Degradation proxies (optional) are treated as *per-day* limits and scaled
+    linearly by the window length (T / 24) so the cap is fair across windows
+    of different sizes:
+        max_throughput_mwh  — per-day cap on total discharge energy (MWh)
+        max_cycles_per_day  — per-day cap on equivalent full cycles
 
     Args:
-        prices:              Numpy array of 24 hourly prices.
-        power_mw:            Inverter / power rating (MW).
-        duration_h:          Battery duration (hours), giving energy_capacity = power_mw × duration_h.
-        roundtrip_eff:       Round-trip efficiency, e.g. 0.85.
-        max_throughput_mwh:  Optional daily discharge cap (MWh).
-        max_cycles_per_day:  Optional daily cycle cap.
+        prices:                    Numpy array of T hourly prices (CNY/MWh).
+        power_mw:                  Inverter / power rating (MW).
+        duration_h:                Battery duration (hours), e_cap = power_mw × duration_h.
+        roundtrip_eff:             Round-trip efficiency, e.g. 0.85.
+        max_throughput_mwh:        Optional per-day discharge cap (MWh); scaled by T/24.
+        max_cycles_per_day:        Optional per-day cycle cap; scaled by T/24.
+        compensation_yuan_per_mwh: Discharge subsidy (CNY/MWh) added to LP objective.
 
     Returns:
-        DispatchResult with charge_mw, discharge_mw, soc_mwh arrays (length 24),
-        total profit, and solver status string.
-
-    Raises:
-        ValueError: if prices does not have exactly 24 elements.
+        DispatchResult with charge_mw, discharge_mw, soc_mwh arrays (length T),
+        market-only profit, and solver status string.
     """
     T = len(prices)
-    if T != 24:
-        raise ValueError(f"optimise_day expects 24 hourly prices, got {T}")
-
     eta_c = float(np.sqrt(roundtrip_eff))
     eta_d = float(np.sqrt(roundtrip_eff))
     e_cap = float(power_mw * duration_h)
 
-    prob = pulp.LpProblem("bess_arbitrage", pulp.LpMaximize)
+    prob = pulp.LpProblem("bess_arbitrage_window", pulp.LpMaximize)
 
     ch = pulp.LpVariable.dicts("ch", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
     dis = pulp.LpVariable.dicts("dis", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
@@ -91,7 +95,7 @@ def optimise_day(
     y = pulp.LpVariable.dicts("y", range(T), lowBound=0, upBound=1, cat="Binary")
     M = power_mw
 
-    # Initial SoC = 0 (no cross-day carryover)
+    # Initial SoC = 0 at the start of the window
     prob += soc[0] == 0
 
     for t in range(T):
@@ -99,15 +103,23 @@ def optimise_day(
         prob += ch[t] <= M * y[t]
         prob += dis[t] <= M * (1 - y[t])
 
-    # Optional degradation constraints
+    # Degradation constraints — scale per-day limits by window size
+    n_days_window = T / 24.0
     if max_throughput_mwh is not None:
-        prob += pulp.lpSum(dis[t] for t in range(T)) <= float(max_throughput_mwh)
+        prob += pulp.lpSum(dis[t] for t in range(T)) <= float(max_throughput_mwh) * n_days_window
 
     if max_cycles_per_day is not None:
-        prob += pulp.lpSum(dis[t] for t in range(T)) <= float(max_cycles_per_day) * e_cap
+        prob += (
+            pulp.lpSum(dis[t] for t in range(T))
+            <= float(max_cycles_per_day) * e_cap * n_days_window
+        )
 
-    # Objective: maximise (discharge - charge) revenue
-    prob += pulp.lpSum(float(prices[t]) * (dis[t] - ch[t]) for t in range(T))
+    # Objective: maximise (discharge + subsidy - charge) revenue
+    prob += pulp.lpSum(
+        (float(prices[t]) + float(compensation_yuan_per_mwh)) * dis[t]
+        - float(prices[t]) * ch[t]
+        for t in range(T)
+    )
     prob.solve(pulp.PULP_CBC_CMD(msg=False))
 
     status = pulp.LpStatus.get(prob.status, str(prob.status))
@@ -121,6 +133,46 @@ def optimise_day(
 
 
 # ---------------------------------------------------------------------------
+# Single-day LP optimisation (backward-compatible wrapper)
+# ---------------------------------------------------------------------------
+
+def optimise_day(
+    prices: np.ndarray,
+    power_mw: float,
+    duration_h: float,
+    roundtrip_eff: float,
+    max_throughput_mwh: Optional[float] = None,
+    max_cycles_per_day: Optional[float] = None,
+    compensation_yuan_per_mwh: float = 0.0,
+) -> DispatchResult:
+    """
+    Solve the BESS arbitrage LP for one day of 24 hourly prices.
+
+    Thin wrapper around optimise_window() that enforces the 24-hour constraint.
+    All LP logic lives in optimise_window.
+
+    Returns:
+        DispatchResult with charge_mw, discharge_mw, soc_mwh arrays (length 24),
+        market-only profit, and solver status string.
+
+    Raises:
+        ValueError: if prices does not have exactly 24 elements.
+    """
+    T = len(prices)
+    if T != 24:
+        raise ValueError(f"optimise_day expects 24 hourly prices, got {T}")
+    return optimise_window(
+        prices,
+        power_mw=power_mw,
+        duration_h=duration_h,
+        roundtrip_eff=roundtrip_eff,
+        max_throughput_mwh=max_throughput_mwh,
+        max_cycles_per_day=max_cycles_per_day,
+        compensation_yuan_per_mwh=compensation_yuan_per_mwh,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Multi-day orchestration
 # ---------------------------------------------------------------------------
 
@@ -131,24 +183,43 @@ def compute_dispatch_from_hourly_prices(
     roundtrip_eff: float,
     max_throughput_mwh: Optional[float] = None,
     max_cycles_per_day: Optional[float] = None,
+    compensation_yuan_per_mwh: float = 0.0,
+    window_days: int = 1,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
-    Run optimise_day() for every complete day in hourly_prices.
+    Run the BESS arbitrage LP over every complete day in hourly_prices, grouping
+    consecutive days into windows of ``window_days`` for a single joint LP solve.
+
+    When window_days == 1 (default) behaviour is identical to calling optimise_day
+    independently for each calendar day (SOC resets to 0 each day).
+
+    When window_days > 1, consecutive calendar days are grouped into windows and
+    solved as a single LP via optimise_window().  SOC carries over naturally within
+    each window, giving the optimiser cross-day flexibility.  Days that are not
+    consecutive (gap in the price series) start a new window automatically.
+    Incomplete trailing windows (fewer days than window_days) are solved as-is.
 
     Args:
         hourly_prices:       pd.Series with DatetimeIndex, hourly granularity.
-                             Rows with NaN are dropped (day is skipped if any hour is NaN).
+                             Days with any NaN hour are skipped.
         power_mw:            Inverter power rating (MW).
         duration_h:          Battery duration (hours).
         roundtrip_eff:       Round-trip efficiency.
-        max_throughput_mwh:  Optional daily discharge cap.
-        max_cycles_per_day:  Optional daily cycle cap.
+        max_throughput_mwh:  Optional per-day discharge cap; scaled by window size
+                             inside optimise_window.
+        max_cycles_per_day:  Optional per-day cycle cap; scaled by window size.
+        compensation_yuan_per_mwh: Discharge subsidy (CNY/MWh) added to LP objective.
+        window_days:         Number of consecutive days to optimise in one LP solve.
+                             Default 1 (original per-day behaviour). Must be >= 1.
 
     Returns:
         dispatch_df:  DataFrame indexed by datetime with columns:
                       charge_mw, discharge_mw, dispatch_grid_mw, soc_mwh, solver_status
         profit_s:     pd.Series indexed by date with daily profit values.
     """
+    if window_days < 1:
+        raise ValueError(f"window_days must be >= 1, got {window_days}")
+
     s = hourly_prices.dropna().copy()
     if s.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
@@ -161,39 +232,68 @@ def compute_dispatch_from_hourly_prices(
 
     df = s.to_frame("price")
     df["date"] = df.index.date
-    df["hour"] = df.index.hour
 
-    dispatch_rows: List[pd.DataFrame] = []
-    daily_profit: Dict[dt.date, float] = {}
-
+    # ── Collect complete days (no NaN hours) ─────────────────────────────────
+    complete_days: Dict[dt.date, np.ndarray] = {}
     for d, g in df.groupby("date"):
         idx = pd.date_range(pd.Timestamp(d), periods=24, freq="h")
         g2 = g.reindex(idx)
-        prices = g2["price"].to_numpy(dtype=float)
+        prices_arr = g2["price"].to_numpy(dtype=float)
+        if not np.isnan(prices_arr).any():
+            complete_days[d] = prices_arr
 
-        if np.isnan(prices).any():
-            continue
+    if not complete_days:
+        return pd.DataFrame(), pd.Series(dtype=float)
 
-        res = optimise_day(
-            prices,
+    # ── Group complete days into consecutive windows ──────────────────────────
+    sorted_days = sorted(complete_days.keys())
+    windows: List[List[dt.date]] = []
+    seq: List[dt.date] = [sorted_days[0]]
+    for d in sorted_days[1:]:
+        if (d - seq[-1]).days == 1:
+            seq.append(d)
+        else:
+            # gap — flush current consecutive run into window_days-sized chunks
+            for i in range(0, len(seq), window_days):
+                windows.append(seq[i : i + window_days])
+            seq = [d]
+    for i in range(0, len(seq), window_days):
+        windows.append(seq[i : i + window_days])
+
+    # ── Solve each window, split results back into per-day records ────────────
+    dispatch_rows: List[pd.DataFrame] = []
+    daily_profit: Dict[dt.date, float] = {}
+
+    for window_dates in windows:
+        all_prices = np.concatenate([complete_days[d] for d in window_dates])
+        res = optimise_window(
+            all_prices,
             power_mw=power_mw,
             duration_h=duration_h,
             roundtrip_eff=roundtrip_eff,
             max_throughput_mwh=max_throughput_mwh,
             max_cycles_per_day=max_cycles_per_day,
+            compensation_yuan_per_mwh=compensation_yuan_per_mwh,
         )
 
-        out = pd.DataFrame({
-            "datetime": idx,
-            "charge_mw": res.charge_mw,
-            "discharge_mw": res.discharge_mw,
-            "dispatch_grid_mw": res.discharge_mw - res.charge_mw,
-            "soc_mwh": res.soc_mwh,
-            "solver_status": res.status,
-        }).set_index("datetime")
+        for i, d in enumerate(window_dates):
+            day_slice = slice(i * 24, (i + 1) * 24)
+            idx = pd.date_range(pd.Timestamp(d), periods=24, freq="h")
+            ch_day = res.charge_mw[day_slice]
+            dis_day = res.discharge_mw[day_slice]
+            soc_day = res.soc_mwh[day_slice]
 
-        dispatch_rows.append(out)
-        daily_profit[d] = res.profit
+            out = pd.DataFrame({
+                "datetime": idx,
+                "charge_mw": ch_day,
+                "discharge_mw": dis_day,
+                "dispatch_grid_mw": dis_day - ch_day,
+                "soc_mwh": soc_day,
+                "solver_status": res.status,
+            }).set_index("datetime")
+
+            dispatch_rows.append(out)
+            daily_profit[d] = float(np.nansum(complete_days[d] * (dis_day - ch_day)))
 
     dispatch_df = pd.concat(dispatch_rows).sort_index() if dispatch_rows else pd.DataFrame()
     profit_s = pd.Series(daily_profit).sort_index()

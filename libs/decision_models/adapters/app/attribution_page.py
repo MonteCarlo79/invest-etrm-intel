@@ -168,3 +168,68 @@ def render_attribution_page() -> None:
             )
         else:
             st.info("Realization ratio requires both cleared_actual_pnl and pf_grid_feasible_pnl.")
+
+    # ── Export ────────────────────────────────────────────────────────────────
+    from libs.decision_models.adapters.app.export_utils import (
+        reportlab_available, to_excel_bytes, to_pdf_bytes_from_tables,
+    )
+    with st.expander("📥 Download report", expanded=False):
+        col_pdf, col_xl = st.columns(2)
+
+        asset_label = ASSET_DISPLAY.get(asset_code, asset_code)
+        display_cols = ["trade_date"] + _SCENARIO_COLS + _LOSS_COLS + [
+            "realisation_gap_vs_pf", "realisation_gap_vs_pf_grid"
+        ]
+        available_cols = [c for c in display_cols if c in df.columns]
+        detail_df = df[available_cols].sort_values("trade_date", ascending=False)
+
+        loss_means = df[_LOSS_COLS].mean().dropna()
+        waterfall_df = pd.DataFrame({
+            "Attribution bucket": [c.replace("_", " ").title() for c in loss_means.index],
+            "Average daily loss (¥)": loss_means.values,
+        }) if not loss_means.empty else pd.DataFrame()
+
+        # PDF
+        if reportlab_available():
+            try:
+                pdf_bytes = to_pdf_bytes_from_tables(
+                    f"Attribution Report — {asset_label}  {date_from} → {date_to}",
+                    sections=[
+                        {"heading": "Waterfall Summary (Average Daily)", "df": waterfall_df},
+                        {"heading": "Daily Attribution Detail", "df": detail_df},
+                    ],
+                )
+                if pdf_bytes:
+                    col_pdf.download_button(
+                        "⬇ PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"attribution_{asset_code}_{date_from}_{date_to}.pdf",
+                        mime="application/pdf",
+                        key=f"attr_pdf_{asset_code}",
+                    )
+            except Exception as exc:
+                col_pdf.caption(f"PDF error: {exc}")
+        else:
+            col_pdf.caption("Install `reportlab` to enable PDF export.")
+
+        # Excel
+        try:
+            sheets: dict = {}
+            if not detail_df.empty:
+                sheets["Daily Attribution"] = detail_df.reset_index(drop=True)
+            if not waterfall_df.empty:
+                sheets["Waterfall Summary"] = waterfall_df
+
+            if sheets:
+                xl_bytes = to_excel_bytes(sheets)
+                col_xl.download_button(
+                    "⬇ Excel Tables",
+                    data=xl_bytes,
+                    file_name=f"attribution_{asset_code}_{date_from}_{date_to}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"attr_xl_{asset_code}",
+                )
+            else:
+                col_xl.caption("No data to export.")
+        except Exception as exc:
+            col_xl.caption(f"Excel error: {exc}")

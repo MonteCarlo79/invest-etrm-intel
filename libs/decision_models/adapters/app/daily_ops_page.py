@@ -24,7 +24,7 @@ This file is pure presentation.
 from __future__ import annotations
 
 import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 # The 4 Inner Mongolia assets from the ops ingestion pipeline
 _IM_ASSET_CODES = ["suyou", "hangjinqi", "siziwangqi", "gushanliang"]
@@ -40,11 +40,14 @@ def render_daily_ops_page() -> None:
     import pandas as pd
     import streamlit as st
 
+    from libs.decision_models.adapters.app.export_utils import (
+        reportlab_available, to_excel_bytes, to_pdf_bytes_from_markdown,
+    )
     from libs.decision_models.workflows.daily_strategy_report import (
+        generate_bess_daily_strategy_report,
         render_bess_strategy_dashboard_payload,
         run_all_assets_daily_strategy_analysis,
         run_bess_daily_strategy_analysis,
-        generate_bess_daily_strategy_report,
     )
 
     st.header("Inner Mongolia BESS — Daily Operations Strategy")
@@ -78,27 +81,55 @@ def render_daily_ops_page() -> None:
         use_ops = st.checkbox("Prefer ops dispatch data (recommended)", value=True)
         run_btn = st.button("Run daily analysis", type="primary")
 
-    if not run_btn:
+    # ── Session state: run on button click; keep results until next click ──────
+    _SS_KEY = "daily_ops_cached"
+    if run_btn:
+        # Single-asset mode
+        if asset_mode == "Single asset" and selected_asset:
+            with st.spinner(f"Running analysis for {selected_asset} on {date_str}…"):
+                analysis = run_bess_daily_strategy_analysis(
+                    selected_asset, date_str, use_ops_dispatch=use_ops,
+                )
+                payload = render_bess_strategy_dashboard_payload(
+                    selected_asset, date_str, analysis=analysis,
+                )
+            st.session_state[_SS_KEY] = {
+                "mode": "single",
+                "date_str": date_str,
+                "asset": selected_asset,
+                "analysis": analysis,
+                "payload": payload,
+            }
+        else:
+            # All-assets mode
+            with st.spinner(f"Running analysis for all 4 assets on {date_str}…"):
+                all_results = run_all_assets_daily_strategy_analysis(
+                    date_str, use_ops_dispatch=use_ops,
+                )
+            st.session_state[_SS_KEY] = {
+                "mode": "all",
+                "date_str": date_str,
+                "all_results": all_results,
+            }
+
+    cached = st.session_state.get(_SS_KEY)
+    if not cached:
         st.info(
             "Select a date and click **Run daily analysis** to compare strategies. "
             "Ops data is loaded from `marketdata.ops_bess_dispatch_15min`."
         )
         return
 
-    # ── Single-asset mode ───────────────────────────────────────────────────
-    if asset_mode == "Single asset" and selected_asset:
-        with st.spinner(f"Running analysis for {selected_asset} on {date_str}…"):
-            payload = render_bess_strategy_dashboard_payload(
-                selected_asset, date_str, use_ops_dispatch=use_ops,
-            )
-        _render_single_asset(st, selected_asset, date_str, payload)
+    # ── Render from cached state ─────────────────────────────────────────────
+    if cached["mode"] == "single":
+        _render_single_asset(st, cached["asset"], cached["date_str"], cached["payload"])
+        _render_export_section(st, cached["asset"], cached["date_str"],
+                               cached["analysis"], cached["payload"])
         return
 
-    # ── All-assets mode ──────────────────────────────────────────────────────
-    with st.spinner(f"Running analysis for all 4 assets on {date_str}…"):
-        all_results = run_all_assets_daily_strategy_analysis(
-            date_str, use_ops_dispatch=use_ops,
-        )
+    # All-assets mode
+    all_results = cached["all_results"]
+    date_str = cached["date_str"]
 
     errors = all_results.get("errors", {})
     if errors:
@@ -107,6 +138,7 @@ def render_daily_ops_page() -> None:
 
     summary = all_results.get("summary", {})
     _render_portfolio_summary(st, summary)
+    _render_portfolio_export(st, all_results, date_str)
 
     # Per-asset tabs
     tabs = st.tabs([_IM_ASSET_DISPLAY.get(c, c) for c in _IM_ASSET_CODES])
@@ -116,11 +148,11 @@ def render_daily_ops_page() -> None:
             if result is None:
                 st.warning(f"No result for {asset_code}.")
                 continue
-            # Re-render the payload from the pre-computed analysis
             payload = render_bess_strategy_dashboard_payload(
                 asset_code, date_str, analysis=result,
             )
             _render_single_asset(st, asset_code, date_str, payload)
+            _render_export_section(st, asset_code, date_str, result, payload)
 
 
 def _render_portfolio_summary(st_module, summary: Dict[str, Any]) -> None:
@@ -215,24 +247,53 @@ def _render_single_asset(
 
     # ── Tab: Dispatch Chart ──────────────────────────────────────────────────
     with tabs[1]:
-        st.subheader("Nominated vs Actual Dispatch (MW)")
+        st.subheader("Dispatch Comparison (MWh per 15-min interval)")
         chart_data = payload.get("dispatch_chart_data", {})
         timestamps = chart_data.get("timestamps", [])
-        nominated = chart_data.get("nominated_mw", [])
-        actual = chart_data.get("actual_mw", [])
+        nominated = chart_data.get("nominated_mwh", [])
+        actual = chart_data.get("actual_mwh", [])
+        pf_timestamps = chart_data.get("pf_timestamps", [])
+        pf_dispatch = chart_data.get("pf_dispatch_mwh", [])
         source = chart_data.get("source", "—")
 
-        if timestamps:
+        id_cleared_timestamps = chart_data.get("id_cleared_timestamps", [])
+        id_cleared = chart_data.get("id_cleared_mwh", [])
+
+        if timestamps or pf_timestamps or id_cleared_timestamps:
             try:
-                chart_df = pd.DataFrame({
-                    "time": pd.to_datetime(timestamps),
-                    "Nominated (MW)": nominated,
-                    "Actual (MW)": actual,
-                }).set_index("time")
-                st.line_chart(chart_df)
-            except Exception:
-                st.info("Could not render dispatch chart.")
-            st.caption(f"Source: {source}")
+                def _strip_tz(idx):
+                    # Drop tz info while keeping local wall-clock values
+                    if idx.tz is not None:
+                        return pd.DatetimeIndex([t.replace(tzinfo=None) for t in idx])
+                    return idx
+
+                series = {}
+                if timestamps:
+                    ts_idx = _strip_tz(pd.to_datetime(timestamps))
+                    series["Nominated (MWh)"] = pd.Series(nominated, index=ts_idx)
+                    series["Actual (MWh)"] = pd.Series(actual, index=ts_idx)
+                if pf_timestamps:
+                    pf_idx = _strip_tz(pd.to_datetime(pf_timestamps))
+                    series["PF Dispatch (MWh)"] = pd.Series(pf_dispatch, index=pf_idx)
+                if id_cleared_timestamps:
+                    idc_idx = _strip_tz(pd.to_datetime(id_cleared_timestamps))
+                    series["DA Cleared Energy (MWh)"] = pd.Series(id_cleared, index=idc_idx)
+
+                all_idx = pd.DatetimeIndex(
+                    sorted({t for s in series.values() for t in s.index})
+                )
+                chart_df = pd.DataFrame(index=all_idx)
+                for col, s in series.items():
+                    chart_df[col] = s.reindex(all_idx)
+                st.bar_chart(chart_df)
+            except Exception as _e:
+                st.info(f"Could not render dispatch chart: {_e}")
+            st.caption(
+                f"Source: {source}. "
+                "All series in MWh per 15-min interval. "
+                "PF Dispatch = LP perfect-foresight hourly MW ÷ 4. "
+                "DA Cleared Energy = md_id_cleared_energy (DA market award, not physical dispatch)."
+            )
         else:
             st.info("No dispatch data available for this date.")
 
@@ -311,6 +372,214 @@ def _render_single_asset(
             f"report = generate_bess_daily_strategy_report('{asset_code}', '{date_str}')",
             language="python",
         )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio export section (all-4-assets mode)
+# ---------------------------------------------------------------------------
+
+def _render_portfolio_export(
+    st_module,
+    all_results: Dict[str, Any],
+    date_str: str,
+) -> None:
+    """PDF + Excel download for the 4-asset portfolio view."""
+    import pandas as pd
+    from libs.decision_models.adapters.app.export_utils import (
+        reportlab_available, to_excel_bytes, to_pdf_bytes_from_tables,
+    )
+    st = st_module
+
+    with st.expander("📥 Download portfolio report", expanded=False):
+        col_pdf, col_xl = st.columns(2)
+
+        summary = all_results.get("summary", {})
+        asset_rows = summary.get("asset_rows", [])
+
+        # Build summary DataFrame
+        summary_df = pd.DataFrame([
+            {
+                "Asset": r["asset_code"],
+                "Display": _IM_ASSET_DISPLAY.get(r["asset_code"], r["asset_code"]),
+                "Actual P&L (CNY)": r.get("actual_pnl"),
+                "PF Benchmark (CNY)": r.get("pf_pnl"),
+                "Capture Rate": r.get("capture_rate"),
+                "Ops Data": "Yes" if r.get("ops_dispatch_available") else "No",
+                "Best Strategy": r.get("best_strategy", "—"),
+            }
+            for r in asset_rows
+        ]) if asset_rows else pd.DataFrame()
+
+        # Per-asset strategy tables
+        per_asset_sheets: dict = {}
+        for asset_code in _IM_ASSET_CODES:
+            result = all_results.get("asset_results", {}).get(asset_code)
+            if result is None:
+                continue
+            ranking_rows = result.get("ranking", {}).get("rows", [])
+            if ranking_rows:
+                per_asset_sheets[f"{asset_code[:12]}_ranking"] = pd.DataFrame([
+                    {
+                        "Strategy": r["strategy_name"],
+                        "Total P&L (CNY)": r.get("pnl_total_yuan"),
+                        "Market P&L (CNY)": r.get("pnl_market_yuan"),
+                        "Subsidy (CNY)": r.get("pnl_compensation_yuan"),
+                        "Gap vs PF (CNY)": r.get("gap_vs_perfect_foresight_yuan"),
+                        "Capture vs PF": r.get("capture_rate_vs_pf"),
+                        "Available": r.get("data_available"),
+                    }
+                    for r in ranking_rows
+                ])
+
+        # PDF
+        if reportlab_available():
+            try:
+                sections = []
+                if not summary_df.empty:
+                    sections.append({"heading": "Portfolio Summary", "df": summary_df})
+                for sheet_name, df in per_asset_sheets.items():
+                    sections.append({"heading": sheet_name.replace("_", " ").title(), "df": df})
+                if sections:
+                    from libs.decision_models.adapters.app.export_utils import to_pdf_bytes_from_tables
+                    pdf_bytes = to_pdf_bytes_from_tables(
+                        f"IM BESS Portfolio Daily Report — {date_str}",
+                        sections=sections,
+                    )
+                    if pdf_bytes:
+                        col_pdf.download_button(
+                            "⬇ PDF Portfolio Report",
+                            data=pdf_bytes,
+                            file_name=f"portfolio_{date_str}.pdf",
+                            mime="application/pdf",
+                            key=f"portfolio_pdf_{date_str}",
+                        )
+            except Exception as exc:
+                col_pdf.caption(f"PDF error: {exc}")
+        else:
+            col_pdf.caption("Install `reportlab` to enable PDF export.")
+
+        # Excel
+        try:
+            sheets: dict = {}
+            if not summary_df.empty:
+                sheets["Portfolio Summary"] = summary_df
+            sheets.update(per_asset_sheets)
+            if sheets:
+                xl_bytes = to_excel_bytes(sheets)
+                col_xl.download_button(
+                    "⬇ Excel Portfolio Tables",
+                    data=xl_bytes,
+                    file_name=f"portfolio_{date_str}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"portfolio_xl_{date_str}",
+                )
+            else:
+                col_xl.caption("No data to export.")
+        except Exception as exc:
+            col_xl.caption(f"Excel error: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Export section
+# ---------------------------------------------------------------------------
+
+def _render_export_section(
+    st_module,
+    asset_code: str,
+    date_str: str,
+    analysis: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> None:
+    """Render PDF + Excel download buttons below the strategy view."""
+    import pandas as pd
+    from libs.decision_models.adapters.app.export_utils import (
+        reportlab_available, to_excel_bytes, to_pdf_bytes_from_markdown,
+    )
+    from libs.decision_models.workflows.daily_strategy_report import (
+        generate_bess_daily_strategy_report,
+    )
+
+    st = st_module
+    with st.expander("📥 Download report", expanded=False):
+        col_pdf, col_xl = st.columns(2)
+
+        # ── PDF ──────────────────────────────────────────────────────────
+        if reportlab_available():
+            try:
+                pdf_bytes = generate_bess_daily_strategy_report(
+                    asset_code, date_str,
+                    output_format="pdf",
+                    analysis=analysis,
+                )
+                col_pdf.download_button(
+                    "⬇ PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"daily_ops_{asset_code}_{date_str}.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_{asset_code}_{date_str}",
+                )
+            except Exception as exc:
+                col_pdf.caption(f"PDF error: {exc}")
+        else:
+            col_pdf.caption("Install `reportlab` to enable PDF export.")
+
+        # ── Excel ─────────────────────────────────────────────────────────
+        try:
+            sheets: dict = {}
+
+            if payload.get("strategy_table"):
+                sheets["Strategy Ranking"] = pd.DataFrame(payload["strategy_table"])
+
+            pnl_comp = payload.get("pnl_comparison", {})
+            if pnl_comp.get("rows"):
+                sheets["P&L Comparison"] = pd.DataFrame(
+                    pnl_comp["rows"], columns=pnl_comp["headers"]
+                )
+
+            wf = payload.get("waterfall_data", {})
+            buckets = wf.get("buckets", [])
+            if buckets:
+                sheets["Waterfall"] = pd.DataFrame([
+                    {"Bucket": b["label"], "Value (CNY)": b.get("value_yuan")}
+                    for b in buckets
+                ])
+
+            chart = payload.get("dispatch_chart_data", {})
+            if chart.get("timestamps"):
+                dispatch_dict: dict = {"time": chart["timestamps"]}
+                if chart.get("nominated_mwh"):
+                    dispatch_dict["Nominated (MWh)"] = chart["nominated_mwh"]
+                if chart.get("actual_mwh"):
+                    dispatch_dict["Actual (MWh)"] = chart["actual_mwh"]
+                if chart.get("id_cleared_mwh"):
+                    dispatch_dict["DA Cleared Energy (MWh)"] = chart["id_cleared_mwh"]
+                sheets["Dispatch 15min"] = pd.DataFrame(dispatch_dict)
+            if chart.get("pf_timestamps"):
+                sheets["PF Dispatch Hourly"] = pd.DataFrame({
+                    "time": chart["pf_timestamps"],
+                    "PF Dispatch (MWh per 15min)": chart["pf_dispatch_mwh"],
+                })
+
+            price = payload.get("price_chart_data", {})
+            if price.get("timestamps_15min"):
+                sheets["RT Prices 15min"] = pd.DataFrame({
+                    "time": price["timestamps_15min"],
+                    "RT Price (CNY/MWh)": price["prices_15min"],
+                })
+
+            if sheets:
+                xl_bytes = to_excel_bytes(sheets)
+                col_xl.download_button(
+                    "⬇ Excel Tables",
+                    data=xl_bytes,
+                    file_name=f"daily_ops_{asset_code}_{date_str}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"xl_{asset_code}_{date_str}",
+                )
+            else:
+                col_xl.caption("No table data to export.")
+        except Exception as exc:
+            col_xl.caption(f"Excel error: {exc}")
 
 
 # ---------------------------------------------------------------------------

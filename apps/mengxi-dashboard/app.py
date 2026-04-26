@@ -292,14 +292,47 @@ with tab_market:
         chosen_table = next(t for t, lbl in all_labels if lbl == chosen_label)
         df_raw = load_series(chosen_table, start_date, end_date, "15min")
         st.dataframe(df_raw, width="stretch", height=300)
+        c1, c2 = st.columns(2)
         if not df_raw.empty:
             csv = df_raw.to_csv(index=False).encode("utf-8")
-            st.download_button(
+            c1.download_button(
                 "⬇ Download CSV",
                 data=csv,
                 file_name=f"{chosen_table}_{start_date}_{end_date}.csv",
                 mime="text/csv",
             )
+
+        # Multi-series Excel — one sheet per group (all currently-toggled series)
+        try:
+            import io as _io
+            sheets = {}
+            for group_name, series_defs in GROUPS.items():
+                selected_in_group = series_toggles.get(group_name, [])
+                group_frames = []
+                for s in series_defs:
+                    if s["label"] not in selected_in_group:
+                        continue
+                    sdf = load_series(s["table"], start_date, end_date, "15min")
+                    if not sdf.empty:
+                        group_frames.append(sdf.rename(columns={"price": s["label"]}))
+                if group_frames:
+                    merged = group_frames[0]
+                    for gf in group_frames[1:]:
+                        merged = merged.merge(gf, on="time", how="outer")
+                    sheets[group_name[:31]] = merged.sort_values("time")
+            if sheets:
+                buf = _io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as _writer:
+                    for sname, sdf in sheets.items():
+                        sdf.to_excel(_writer, sheet_name=sname, index=False)
+                c2.download_button(
+                    "⬇ Download All Visible (Excel)",
+                    data=buf.getvalue(),
+                    file_name=f"market_data_{start_date}_{end_date}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+        except Exception as _exc:
+            c2.caption(f"Excel error: {_exc}")
 
 # ---------------------------------------------------------------------------
 # Tab 2: Daily Ops — 4-asset IM daily strategy analysis

@@ -245,11 +245,15 @@ def load_bess_strategy_comparison_context(
 # Skill 2 — Perfect foresight dispatch
 # ===========================================================================
 
-def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_perfect_foresight_dispatch(
+    context: Dict[str, Any],
+    window_days: int = 1,
+) -> Dict[str, Any]:
     """
     Compute perfect-foresight BESS dispatch using actual hourly prices as input.
 
-    Uses bess_dispatch_simulation_multiday (LP over each day independently).
+    Uses bess_dispatch_simulation_multiday (LP over each day independently by
+    default, or jointly over consecutive windows when window_days > 1).
     P&L is settled against hourly mean of actual 15-min prices.
 
     APPROXIMATION: hourly granularity; results not directly comparable to
@@ -257,7 +261,9 @@ def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
 
     Parameters
     ----------
-    context : output dict from load_bess_strategy_comparison_context()
+    context    : output dict from load_bess_strategy_comparison_context()
+    window_days: number of consecutive days to optimise in one LP solve (default 1).
+                 When > 1, SOC carries over across day boundaries within each window.
 
     Returns
     -------
@@ -268,7 +274,9 @@ def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
 
     caveats: List[str] = [
         "perfect_foresight: hourly granularity — P&L settled on hourly mean of actual 15-min prices",
-        "perfect_foresight: SOC resets to 0 each day (no cross-day carryover)",
+        f"perfect_foresight: window_days={window_days} — "
+        + ("SOC resets to 0 each day (no cross-day carryover)" if window_days == 1
+           else f"SOC carries over across {window_days}-day windows"),
         "perfect_foresight: single-asset LP — no portfolio or grid constraints",
     ]
 
@@ -322,6 +330,8 @@ def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
         "power_mw": meta["power_mw"],
         "duration_h": meta["duration_h"],
         "roundtrip_eff": meta["roundtrip_eff"],
+        "compensation_yuan_per_mwh": meta["compensation_yuan_per_mwh"],
+        "window_days": int(window_days),
     })
 
     # Build dispatch_hourly with prices merged in.
@@ -396,6 +406,7 @@ def run_perfect_foresight_dispatch(context: Dict[str, Any]) -> Dict[str, Any]:
 def run_forecast_dispatch_suite(
     context: Dict[str, Any],
     forecast_models: Optional[List[str]] = None,
+    window_days: int = 1,
 ) -> Dict[str, Any]:
     """
     Run one or more price forecast models, optimise dispatch on each forecast,
@@ -413,6 +424,8 @@ def run_forecast_dispatch_suite(
     forecast_models : list of model names. Defaults to ["ols_rt_time_v1"].
                       RT-only (Inner Mongolia): ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7
                       DA-based (requires DA market): ols_da_time_v1, naive_da
+    window_days     : number of consecutive days to optimise in one LP solve (default 1).
+                      When > 1, SOC carries over across day boundaries within each window.
 
     Returns
     -------
@@ -435,7 +448,9 @@ def run_forecast_dispatch_suite(
         "forecast_suite: price forecast is province-level (not nodal/asset) — "
         "dispatch optimised on province prices but settled on asset nodal prices",
         "forecast_suite: hourly granularity — settled on hourly mean of actual 15-min prices",
-        "forecast_suite: SOC resets to 0 each day (no cross-day carryover)",
+        f"forecast_suite: window_days={window_days} — "
+        + ("SOC resets to 0 each day (no cross-day carryover)" if window_days == 1
+           else f"SOC carries over across {window_days}-day windows"),
     ]
 
     meta = context["asset_metadata"]
@@ -498,8 +513,15 @@ def run_forecast_dispatch_suite(
             "(ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7) will produce results"
         )
 
+    def _safe_price(v) -> float:
+        try:
+            f = float(v)
+            return 0.0 if np.isnan(f) else f
+        except (TypeError, ValueError):
+            return 0.0
+
     actual_price_map = {
-        _naive_ts(r.get("datetime") or r.get("time")): float(r.get("price", 0.0))
+        _naive_ts(r.get("datetime") or r.get("time")): _safe_price(r.get("price", 0.0))
         for r in actual_prices_hourly
     }
 
@@ -576,6 +598,8 @@ def run_forecast_dispatch_suite(
             "power_mw": meta["power_mw"],
             "duration_h": meta["duration_h"],
             "roundtrip_eff": meta["roundtrip_eff"],
+            "compensation_yuan_per_mwh": meta["compensation_yuan_per_mwh"],
+            "window_days": int(window_days),
         })
 
         # Settle dispatch on actual nodal prices
@@ -591,16 +615,13 @@ def run_forecast_dispatch_suite(
                 "actual_price": actual_price_map.get(dt_str, 0.0),
             })
 
-        pnl_market = sum(
-            r["dispatch_grid_mw"] * r["actual_price"] * _INTERVAL_HRS_HOURLY
-            for r in dispatch_hourly
-        )
-        discharge_mwh = sum(
-            max(r["discharge_mw"], 0) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
-        )
-        charge_mwh = sum(
-            abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
-        )
+        _dgrid = np.array([r["dispatch_grid_mw"] for r in dispatch_hourly], dtype=float)
+        _aprice = np.array([r["actual_price"] for r in dispatch_hourly], dtype=float)
+        _dmw = np.array([r["discharge_mw"] for r in dispatch_hourly], dtype=float)
+        _cmw = np.array([r["charge_mw"] for r in dispatch_hourly], dtype=float)
+        pnl_market = float(np.nansum(_dgrid * _aprice * _INTERVAL_HRS_HOURLY))
+        discharge_mwh = float(np.nansum(np.maximum(_dmw, 0.0) * _INTERVAL_HRS_HOURLY))
+        charge_mwh = float(np.nansum(np.maximum(-_cmw, 0.0) * _INTERVAL_HRS_HOURLY))
         pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
 
         daily_profit = []
@@ -682,6 +703,8 @@ def rank_dispatch_strategies(
     if pf_pnl.get("n_days_solved", 0) > 0:
         strategies["perfect_foresight_hourly"] = {
             "pnl_total": pf_pnl.get("pnl_total_yuan", 0.0),
+            "pnl_market": pf_pnl.get("pnl_market_yuan"),
+            "pnl_compensation": pf_pnl.get("pnl_compensation_yuan"),
             "granularity": "hourly",
             "available": True,
         }
@@ -696,11 +719,16 @@ def rank_dispatch_strategies(
         if n > 0:
             strategies[name] = {
                 "pnl_total": strat_pnl.get("pnl_total_yuan", 0.0),
+                "pnl_market": strat_pnl.get("pnl_market_yuan"),
+                "pnl_compensation": strat_pnl.get("pnl_compensation_yuan"),
                 "granularity": "hourly",
                 "available": True,
             }
         else:
-            strategies[name] = {"pnl_total": None, "granularity": "hourly", "available": False}
+            strategies[name] = {
+                "pnl_total": None, "pnl_market": None, "pnl_compensation": None,
+                "granularity": "hourly", "available": False,
+            }
             caveats.append(f"ranking: {name} has no forecast days — marked unavailable")
 
     # 3. DB scenarios (15-min P&L from reports table)
@@ -710,16 +738,19 @@ def rank_dispatch_strategies(
             avail_hit = hit[hit["scenario_available"] == True]
             if not avail_hit.empty:
                 total = avail_hit["total_revenue_yuan"].sum()
+                market = avail_hit["market_revenue_yuan"].sum() if "market_revenue_yuan" in avail_hit.columns else None
+                subsidy = avail_hit["subsidy_revenue_yuan"].sum() if "subsidy_revenue_yuan" in avail_hit.columns else None
                 strategies[scenario_name] = {
                     "pnl_total": float(total),
+                    "pnl_market": float(market) if market is not None else None,
+                    "pnl_compensation": float(subsidy) if subsidy is not None else None,
                     "granularity": "15min",
                     "available": True,
                 }
             else:
                 strategies[scenario_name] = {
-                    "pnl_total": None,
-                    "granularity": "15min",
-                    "available": False,
+                    "pnl_total": None, "pnl_market": None, "pnl_compensation": None,
+                    "granularity": "15min", "available": False,
                 }
     else:
         # Fall back to raw dispatch from context + inline P&L calc
@@ -733,18 +764,77 @@ def rank_dispatch_strategies(
                 pnl = _calc_15min_pnl(dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
                 strategies[scenario_name] = {
                     "pnl_total": pnl,
+                    "pnl_market": None,
+                    "pnl_compensation": None,
                     "granularity": "15min",
                     "available": True,
                 }
             else:
                 strategies[scenario_name] = {
-                    "pnl_total": None,
-                    "granularity": "15min",
-                    "available": False,
+                    "pnl_total": None, "pnl_market": None, "pnl_compensation": None,
+                    "granularity": "15min", "available": False,
                 }
         caveats.append(
             "ranking: DB pnl_df not provided — nominated/actual P&L computed from raw dispatch"
         )
+
+    # Secondary fallback: if DB path left nominated/actual unavailable but ops context has data
+    for scenario_name, dispatch_key in [
+        ("nominated_dispatch", "nominated_dispatch_15min"),
+        ("cleared_actual", "actual_dispatch_15min"),
+    ]:
+        if not strategies.get(scenario_name, {}).get("available"):
+            dispatch = context.get(dispatch_key)
+            actual_prices = context.get("actual_prices_15min", [])
+            if dispatch and actual_prices:
+                pnl = _calc_15min_pnl(dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
+                strategies[scenario_name] = {
+                    "pnl_total": pnl,
+                    "pnl_market": None,
+                    "pnl_compensation": None,
+                    "granularity": "15min",
+                    "available": True,
+                }
+                caveats.append(
+                    f"ranking: {scenario_name} P&L computed from ops context dispatch "
+                    "(DB scenario row not available)"
+                )
+
+    # 4. DA cleared energy P&L (md_id_cleared_energy) — Inner Mongolia only
+    id_cleared_records = context.get("id_cleared_energy_15min") or []
+    if id_cleared_records:
+        comp_per_mwh = float(meta.get("compensation_yuan_per_mwh", 0.0) or 0.0)
+        import numpy as _np
+        cleared_mwh = _np.array(
+            [float(r.get("cleared_energy_mwh_15min") or 0.0) for r in id_cleared_records],
+            dtype=float,
+        )
+        cleared_price = _np.array(
+            [float(r.get("cleared_price") or 0.0) for r in id_cleared_records],
+            dtype=float,
+        )
+        # Market P&L: cleared energy * cleared DA price (MWh * CNY/MWh)
+        pnl_market_id = float(_np.nansum(cleared_mwh * cleared_price))
+        # Subsidy: sum of all cleared MWh * compensation rate
+        total_cleared_mwh = float(_np.nansum(cleared_mwh))
+        pnl_comp_id = total_cleared_mwh * comp_per_mwh
+        strategies["id_cleared_energy_da"] = {
+            "pnl_total": pnl_market_id + pnl_comp_id,
+            "pnl_market": pnl_market_id,
+            "pnl_compensation": pnl_comp_id,
+            "granularity": "15min",
+            "available": True,
+        }
+        caveats.append(
+            "ranking: id_cleared_energy_da = DA market-cleared energy P&L "
+            "(cleared_energy_mwh * cleared_price + subsidy); "
+            "this is DA cleared trading revenue, NOT physical dispatch revenue"
+        )
+    else:
+        strategies["id_cleared_energy_da"] = {
+            "pnl_total": None, "pnl_market": None, "pnl_compensation": None,
+            "granularity": "15min", "available": False,
+        }
 
     # Build ranking
     available = {k: v for k, v in strategies.items() if v["available"] and v["pnl_total"] is not None}
@@ -775,6 +865,8 @@ def rank_dispatch_strategies(
             rank=rank,
             strategy_name=name,
             pnl_total_yuan=pnl_val,
+            pnl_market_yuan=info.get("pnl_market"),
+            pnl_compensation_yuan=info.get("pnl_compensation"),
             gap_vs_perfect_foresight_yuan=(
                 pf_pnl_total - pnl_val if pf_pnl_total is not None else None
             ),
@@ -803,6 +895,8 @@ def rank_dispatch_strategies(
                 rank=len(rows) + 1,
                 strategy_name=name,
                 pnl_total_yuan=0.0,
+                pnl_market_yuan=None,
+                pnl_compensation_yuan=None,
                 gap_vs_perfect_foresight_yuan=None,
                 gap_vs_best_forecast_yuan=None,
                 gap_vs_nominated_yuan=None,
@@ -853,8 +947,9 @@ def _calc_15min_pnl(
     discharge_mwh = 0.0
     for ts, dispatch in dispatch_map.items():
         price = price_map.get(ts, 0.0)
-        market_pnl += dispatch * price * _INTERVAL_HRS_15MIN
-        discharge_mwh += max(dispatch, 0) * _INTERVAL_HRS_15MIN
+        # dispatch values from ops_bess_dispatch_15min are already in MWh per interval
+        market_pnl += dispatch * price
+        discharge_mwh += max(dispatch, 0)
     return market_pnl + discharge_mwh * compensation_yuan_per_mwh
 
 
