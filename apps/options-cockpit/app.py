@@ -163,7 +163,7 @@ with tab1:
         m3.metric("Intrinsic Value", f"{max(S - K, 0.0) if flag_code == 'c' else max(K - S, 0.0):.4f}")
 
     st.markdown("##### Greeks")
-    st.dataframe(_greeks_df(g), width="stretch", hide_index=True)
+    st.dataframe(_greeks_df(g), use_container_width=True, hide_index=True)
 
     # Implied vol from market price input
     st.markdown("---")
@@ -216,7 +216,7 @@ with tab1:
         plot_bgcolor="white",
         paper_bgcolor="white",
     )
-    st.plotly_chart(fig_hm, width="stretch", key="heatmap_tab1")
+    st.plotly_chart(fig_hm, use_container_width=True, key="heatmap_tab1")
 
 
 # ============================================================
@@ -337,7 +337,7 @@ with tab2:
             plot_bgcolor="white", paper_bgcolor="white",
             legend=dict(orientation="h"),
         )
-        st.plotly_chart(fig_payoff, width="stretch", key="payoff_chart_tab2")
+        st.plotly_chart(fig_payoff, use_container_width=True, key="payoff_chart_tab2")
 
         # Per-leg table
         st.markdown("##### Leg Detail")
@@ -354,7 +354,7 @@ with tab2:
                 "Delta": f"{g_leg['delta'] * leg.quantity:+.4f}",
                 "Vega/1%": f"{g_leg['vega'] * leg.quantity:+.4f}",
             })
-        st.dataframe(pd.DataFrame(leg_rows), width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(leg_rows), use_container_width=True, hide_index=True)
 
     except Exception as exc:
         st.error(f"Structure error: {exc}")
@@ -421,7 +421,7 @@ with tab3:
                 for col in ["bid_vol", "ask_vol", "mid_vol"]:
                     if col in df_up.columns:
                         df_up[col] = df_up[col] / 100.0
-                st.dataframe(df_up.head(10), width="stretch", hide_index=True)
+                st.dataframe(df_up.head(10), use_container_width=True, hide_index=True)
                 if st.button("Fit SVI", key="fit_svi_upload"):
                     params, aug_df = calibrate_from_quotes(df_up, F_smile, T_smile)
                     svi_result = params
@@ -477,7 +477,7 @@ with tab3:
             plot_bgcolor="white", paper_bgcolor="white",
             legend=dict(orientation="h", yanchor="bottom", y=1.01),
         )
-        st.plotly_chart(fig_smile, width="stretch", key="smile_chart_tab3")
+        st.plotly_chart(fig_smile, use_container_width=True, key="smile_chart_tab3")
 
         # Mispricing table
         st.markdown("##### Mispricing vs SVI Model")
@@ -506,7 +506,7 @@ with tab3:
             return [color] * len(row)
 
         styled = disp_df.style.apply(_style_mispricing, axis=1)
-        st.dataframe(styled, width="stretch", hide_index=True)
+        st.dataframe(styled, use_container_width=True, hide_index=True)
 
         # Download augmented CSV
         csv_bytes = plot_df.to_csv(index=False).encode("utf-8")
@@ -588,7 +588,7 @@ with tab4:
                     legend=dict(orientation="h", yanchor="bottom", y=1.01),
                     hovermode="x unified",
                 )
-                st.plotly_chart(fig_hv, width="stretch", key="hv_chart_tab4")
+                st.plotly_chart(fig_hv, use_container_width=True, key="hv_chart_tab4")
 
                 # Summary table
                 st.markdown("##### HV Summary")
@@ -606,7 +606,7 @@ with tab4:
                         "Mean (%)": f"{series.mean():.2f}",
                         "Max (%)": f"{series.max():.2f}",
                     })
-                st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
+                st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
                 # HV vs IV comparison
                 st.markdown("---")
