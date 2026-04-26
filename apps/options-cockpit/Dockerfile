@@ -15,6 +15,4 @@ EXPOSE 8507
 CMD ["streamlit", "run", "apps/options-cockpit/app.py", \
      "--server.port=8507", \
      "--server.address=0.0.0.0", \
-     "--server.baseUrlPath=options-cockpit", \
-     "--server.enableCORS=false", \
-     "--server.enableXsrfProtection=false"]
+     "--server.baseUrlPath=options-cockpit"]
