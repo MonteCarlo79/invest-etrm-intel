@@ -102,7 +102,7 @@ resource "aws_security_group" "ecs_tasks" {
   ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
-    to_port         = 8506
+    to_port         = 8507
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -2101,8 +2101,8 @@ resource "aws_ecs_task_definition" "options_cockpit" {
   family                   = "${var.name}-options-cockpit"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task_role.arn
 
