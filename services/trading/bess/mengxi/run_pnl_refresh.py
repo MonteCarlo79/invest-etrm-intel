@@ -46,7 +46,7 @@ DB_URL = os.getenv("DB_DSN") or os.getenv("PGURL")
 if not DB_URL:
     raise ValueError("Missing DB_DSN / PGURL")
 
-ENGINE = create_engine(DB_URL)
+ENGINE = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=300)
 DEFAULT_COMPENSATION_YUAN_PER_MWH = float(
     os.getenv("DEFAULT_COMPENSATION_YUAN_PER_MWH", "350"))
 REFRESH_LOOKBACK_DAYS = int(os.getenv("PNL_REFRESH_LOOKBACK_DAYS", "7"))
