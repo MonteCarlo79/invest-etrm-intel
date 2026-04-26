@@ -46,7 +46,17 @@ DB_URL = os.getenv("DB_DSN") or os.getenv("PGURL")
 if not DB_URL:
     raise ValueError("Missing DB_DSN / PGURL")
 
-ENGINE = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=300)
+ENGINE = create_engine(
+    DB_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={
+        "keepalives": 1,
+        "keepalives_idle": 30,       # send first keepalive after 30s idle
+        "keepalives_interval": 10,   # retry every 10s
+        "keepalives_count": 5,       # fail after 5 missed probes
+    },
+)
 DEFAULT_COMPENSATION_YUAN_PER_MWH = float(
     os.getenv("DEFAULT_COMPENSATION_YUAN_PER_MWH", "350"))
 REFRESH_LOOKBACK_DAYS = int(os.getenv("PNL_REFRESH_LOOKBACK_DAYS", "7"))
