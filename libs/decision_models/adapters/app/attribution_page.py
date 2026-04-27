@@ -98,8 +98,17 @@ def render_attribution_page() -> None:
         return
 
     # --- Load data ---
-    with st.spinner("Loading attribution data…"):
+    _asset_label = ASSET_DISPLAY.get(asset_code, asset_code)
+    with st.status("Loading attribution data…", expanded=True) as _s:
+        st.write(
+            f"Querying reports.bess_asset_daily_attribution — "
+            f"{_asset_label} {date_from} → {date_to}…"
+        )
         df = _load_attribution_from_db(asset_code, date_from, date_to)
+        if df.empty:
+            _s.update(label="No attribution data found", state="error")
+        else:
+            _s.update(label=f"Loaded {len(df)} day(s) of attribution data", state="complete")
 
     if df.empty:
         st.info(

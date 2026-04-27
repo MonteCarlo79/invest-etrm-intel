@@ -233,7 +233,7 @@ def run_all_assets_daily_strategy_analysis(
                 logger.exception("Daily analysis failed for %s on %s: %s", code, date, exc)
                 errors[code] = str(exc)
 
-    summary = _build_cross_asset_summary(date, asset_results)
+    summary = build_cross_asset_summary(date, asset_results)
 
     return {
         "date": date,
@@ -580,7 +580,7 @@ def _enrich_context_with_forecast_dispatch(
     return context
 
 
-def _build_cross_asset_summary(
+def build_cross_asset_summary(
     date: str,
     asset_results: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:

@@ -44,9 +44,9 @@ def render_daily_ops_page() -> None:
         reportlab_available, to_excel_bytes, to_pdf_bytes_from_markdown,
     )
     from libs.decision_models.workflows.daily_strategy_report import (
+        build_cross_asset_summary,
         generate_bess_daily_strategy_report,
         render_bess_strategy_dashboard_payload,
-        run_all_assets_daily_strategy_analysis,
         run_bess_daily_strategy_analysis,
     )
 
@@ -86,13 +86,19 @@ def render_daily_ops_page() -> None:
     if run_btn:
         # Single-asset mode
         if asset_mode == "Single asset" and selected_asset:
-            with st.spinner(f"Running analysis for {selected_asset} on {date_str}…"):
+            _display = _IM_ASSET_DISPLAY.get(selected_asset, selected_asset)
+            with st.status(
+                f"Analysing {_display} on {date_str}…", expanded=True
+            ) as _run_status:
+                st.write("Step 1/2 — Running strategy analysis (DB queries + LP benchmark)…")
                 analysis = run_bess_daily_strategy_analysis(
                     selected_asset, date_str, use_ops_dispatch=use_ops,
                 )
+                st.write("Step 2/2 — Building dashboard payload…")
                 payload = render_bess_strategy_dashboard_payload(
                     selected_asset, date_str, analysis=analysis,
                 )
+                _run_status.update(label=f"{_display} — complete", state="complete")
             st.session_state[_SS_KEY] = {
                 "mode": "single",
                 "date_str": date_str,
@@ -101,11 +107,35 @@ def render_daily_ops_page() -> None:
                 "payload": payload,
             }
         else:
-            # All-assets mode
-            with st.spinner(f"Running analysis for all 4 assets on {date_str} (parallel)…"):
-                all_results = run_all_assets_daily_strategy_analysis(
-                    date_str, use_ops_dispatch=use_ops,
+            # All-assets mode — run sequentially so each asset's completion is visible
+            _n = len(_IM_ASSET_CODES)
+            _progress = st.progress(0.0, text="Starting…")
+            _asset_results: dict = {}
+            _errors: dict = {}
+            for _i, _code in enumerate(_IM_ASSET_CODES):
+                _disp = _IM_ASSET_DISPLAY.get(_code, _code)
+                _progress.progress(
+                    _i / _n,
+                    text=f"[{_i + 1}/{_n}] Running {_disp}…",
                 )
+                try:
+                    _asset_results[_code] = run_bess_daily_strategy_analysis(
+                        _code, date_str, use_ops_dispatch=use_ops,
+                    )
+                except Exception as _exc:
+                    _errors[_code] = str(_exc)
+            _progress.progress(
+                1.0,
+                text=f"Done — {len(_asset_results)}/{_n} assets completed"
+                + (f" ({len(_errors)} errors)" if _errors else ""),
+            )
+            all_results = {
+                "date": date_str,
+                "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "asset_results": _asset_results,
+                "summary": build_cross_asset_summary(date_str, _asset_results),
+                "errors": _errors,
+            }
             st.session_state[_SS_KEY] = {
                 "mode": "all",
                 "date_str": date_str,

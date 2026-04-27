@@ -117,61 +117,89 @@ def render_strategy_comparison_page() -> None:
         st.error("Start date must be before end date.")
         return
 
-    # ── Step 1: Load context ──────────────────────────────────────────────────
-    with st.spinner("Loading context from DB…"):
+    # ── Run all steps inside a collapsible status block ───────────────────────
+    _asset_label = ASSET_DISPLAY.get(asset_code, asset_code)
+    _data_quality_notes: list = []
+    _no_prices = False
+
+    with st.status(
+        f"Running strategy comparison — {_asset_label} {date_from} → {date_to}…",
+        expanded=True,
+    ) as _run_status:
+
+        # Step 1
+        st.write("Step 1/6 — Loading context (prices, dispatch, metadata) from DB…")
         context = load_bess_strategy_comparison_context(asset_code, date_from, date_to)
+        _data_quality_notes = context.get("data_quality_notes", [])
 
-    _show_data_quality(st, context.get("data_quality_notes", []))
+        if not context.get("actual_prices_hourly"):
+            _run_status.update(
+                label="No price data — cannot run comparison", state="error"
+            )
+            _no_prices = True
+        else:
+            # Step 2
+            _pf_label = (
+                "Step 2/6 — Perfect foresight LP…"
+                if window_days == 1
+                else f"Step 2/6 — Perfect foresight LP ({window_days}-day windows)…"
+            )
+            st.write(_pf_label)
+            pf_result = run_perfect_foresight_dispatch(context, window_days=int(window_days))
 
-    if not context.get("actual_prices_hourly"):
+            # Step 3
+            if forecast_model_choice:
+                st.write(
+                    f"Step 3/6 — Forecast suite ({', '.join(forecast_model_choice)})…"
+                )
+                forecast_suite = run_forecast_dispatch_suite(
+                    context, forecast_model_choice, window_days=int(window_days)
+                )
+            else:
+                st.write("Step 3/6 — No forecast models selected, skipping.")
+                forecast_suite = {"strategies": [], "requested_models": [], "suite_caveats": []}
+
+            # Step 4
+            st.write("Step 4/6 — Loading pre-computed DB P&L…")
+            db_pnl_df, _ = load_precomputed_scenario_pnl(asset_code, date_from_d, date_to_d)
+            db_attr_df, _ = load_precomputed_attribution(asset_code, date_from_d, date_to_d)
+
+            # Step 5
+            st.write("Step 5/6 — Ranking strategies & attributing discrepancy…")
+            ranking = rank_dispatch_strategies(
+                context, pf_result, forecast_suite,
+                db_pnl_df=db_pnl_df if not db_pnl_df.empty else None,
+            )
+            attribution = attribute_dispatch_discrepancy(
+                context, ranking,
+                attribution_df=db_attr_df if not db_attr_df.empty else None,
+            )
+
+            # Step 6
+            st.write("Step 6/6 — Generating report…")
+            report = generate_asset_strategy_report(
+                asset_code, date_from, date_to,
+                period_type=period_type,
+                context=context,
+                ranking=ranking,
+                attribution=attribution,
+                db_pnl_df=db_pnl_df if not db_pnl_df.empty else None,
+                db_attr_df=db_attr_df if not db_attr_df.empty else None,
+            )
+
+            _n_ranked = len([r for r in ranking.get("rows", []) if r.get("data_available")])
+            _run_status.update(
+                label=f"Complete — {_n_ranked} strategies ranked", state="complete"
+            )
+
+    _show_data_quality(st, _data_quality_notes)
+
+    if _no_prices:
         st.error(
             f"No actual price data for {asset_code} between {date_from} and {date_to}. "
             "Cannot run comparison. Check DB_DSN and canon.nodal_rt_price_15min."
         )
         return
-
-    # ── Step 2: Perfect foresight ─────────────────────────────────────────────
-    pf_label = (
-        "Running perfect foresight dispatch…"
-        if window_days == 1
-        else f"Running perfect foresight dispatch ({window_days}-day windows)…"
-    )
-    with st.spinner(pf_label):
-        pf_result = run_perfect_foresight_dispatch(context, window_days=int(window_days))
-
-    # ── Step 3: Forecast suite ─────────────────────────────────────────────────
-    if forecast_model_choice:
-        with st.spinner(f"Running forecast suite: {forecast_model_choice}…"):
-            forecast_suite = run_forecast_dispatch_suite(
-                context, forecast_model_choice, window_days=int(window_days)
-            )
-    else:
-        forecast_suite = {"strategies": [], "requested_models": [], "suite_caveats": []}
-
-    # ── Load pre-computed DB P&L (best source for nominated / actual) ─────────
-    db_pnl_df, _ = load_precomputed_scenario_pnl(asset_code, date_from_d, date_to_d)
-    db_attr_df, _ = load_precomputed_attribution(asset_code, date_from_d, date_to_d)
-
-    # ── Step 4: Rank ──────────────────────────────────────────────────────────
-    ranking = rank_dispatch_strategies(
-        context, pf_result, forecast_suite,
-        db_pnl_df=db_pnl_df if not db_pnl_df.empty else None,
-    )
-
-    # ── Step 5: Attribution ────────────────────────────────────────────────────
-    attribution = attribute_dispatch_discrepancy(
-        context, ranking,
-        attribution_df=db_attr_df if not db_attr_df.empty else None,
-    )
-
-    # ── Step 6: Report ────────────────────────────────────────────────────────
-    report = generate_asset_strategy_report(
-        asset_code, date_from, date_to,
-        period_type=period_type,
-        context=context,
-        ranking=ranking,
-        attribution=attribution,
-    )
 
     # ── Display ───────────────────────────────────────────────────────────────
     tabs = st.tabs([
