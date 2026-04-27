@@ -561,8 +561,10 @@ def load_id_cleared_energy(
     df["cleared_energy_mwh_15min"] = pd.to_numeric(df["cleared_energy_mwh_15min"], errors="coerce")
     df["cleared_price"] = pd.to_numeric(df["cleared_price"], errors="coerce")
 
-    # Explicit unit derivation: implied power = energy / interval_hours
-    # This is informational — NOT a physical power measurement
+    # DB column cleared_energy_mwh stores hourly-equivalent energy (MW × 1 h = MWh).
+    # Convert to per-15-min-interval energy: energy_15min_mwh = hourly_mwh × 0.25 h.
+    df["cleared_energy_mwh_15min"] = df["cleared_energy_mwh_15min"] * 0.25
+    # Implied power = per-15-min energy / 0.25 h = MW (equals original DB value)
     df["cleared_power_mw_implied_15min"] = df["cleared_energy_mwh_15min"] / 0.25
 
     notes.append(
@@ -658,6 +660,70 @@ def load_ops_dispatch_15min(
         "actual_dispatch_mw is physical output (NOT market-cleared energy)"
     )
     return df, notes
+
+
+# ---------------------------------------------------------------------------
+# Forecast prices — marketdata.hist_mengxi_*_forecast_15min
+# ---------------------------------------------------------------------------
+
+# Asset → forecast table mapping (known tables only; extend as more are confirmed)
+_FORECAST_TABLE_MAP: dict = {
+    "suyou":  "hist_mengxi_suyou_forecast_15min",
+    "wulate": "hist_mengxi_wulate_forecast_15min",
+}
+
+
+def load_forecast_prices_15min(
+    asset_code: str,
+    date_from: date,
+    date_to: date,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Load 15-min forecast prices for assets that have a forecast table.
+
+    Source: marketdata.hist_mengxi_{asset}_forecast_15min
+    Currently known: suyou, wulate.
+
+    Returns
+    -------
+    df    : columns [time (datetime), price (float)]
+    notes : list of data quality / warning strings
+    """
+    notes: List[str] = []
+    table = _FORECAST_TABLE_MAP.get(asset_code)
+    if not table:
+        notes.append(
+            f"forecast_prices_15min: no forecast table configured for {asset_code!r} "
+            f"(known assets: {list(_FORECAST_TABLE_MAP.keys())})"
+        )
+        return pd.DataFrame(columns=["time", "price"]), notes
+
+    sql = f"""
+        SELECT time, price
+        FROM marketdata.{table}
+        WHERE time >= %(start_ts)s
+          AND time < %(end_ts)s
+        ORDER BY time
+    """
+    params = {
+        "start_ts": pd.Timestamp(date_from),
+        "end_ts": pd.Timestamp(date_to) + pd.Timedelta(days=1),
+    }
+    df, err = _run_query_safe(sql, params)
+    if err:
+        notes.append(f"forecast_prices_15min: query failed for {asset_code} ({table}) — {err}")
+        return pd.DataFrame(columns=["time", "price"]), notes
+    if df.empty:
+        notes.append(
+            f"forecast_prices_15min: no data in marketdata.{table} "
+            f"for {date_from} to {date_to}"
+        )
+        return pd.DataFrame(columns=["time", "price"]), notes
+
+    df["time"] = pd.to_datetime(df["time"])
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    notes.append(f"forecast_prices_15min: {len(df)} rows from marketdata.{table}")
+    return df[["time", "price"]], notes
 
 
 def load_precomputed_attribution(

@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level imports of workflow functions (enables test patching via module attribute)
 from libs.decision_models.resources.bess_context import (  # noqa: E402
+    load_forecast_prices_15min,
     load_ops_dispatch_15min,
     load_precomputed_attribution,
     load_precomputed_scenario_pnl,
@@ -125,6 +126,9 @@ def run_bess_daily_strategy_analysis(
     ops_dispatch_available = False
     if use_ops_dispatch:
         context, ops_dispatch_available = _enrich_context_with_ops_dispatch(context, d)
+
+    # Step 2b: Compute tt_forecast_optimal dispatch from forecast price table
+    context = _enrich_context_with_forecast_dispatch(context, d)
 
     # Step 3: Perfect foresight benchmark
     pf_result = run_perfect_foresight_dispatch(context)
@@ -489,6 +493,80 @@ def _enrich_context_with_ops_dispatch(
             )
 
     return context, True
+
+
+def _enrich_context_with_forecast_dispatch(
+    context: dict,
+    d: datetime.date,
+) -> dict:
+    """
+    Load 15-min forecast prices and compute the LP-optimal dispatch on them.
+
+    Injects context["tt_forecast_optimal_dispatch_15min"] as a list of
+    {"time": str, "dispatch_mw": float} records, settled against actual prices
+    in rank_dispatch_strategies via _calc_15min_pnl.
+
+    Returns the enriched context.  Never raises — failures are logged as
+    data_quality_notes.
+    """
+    asset_code = context["asset_code"]
+    meta = context["asset_metadata"]
+    context.setdefault("data_quality_notes", [])
+
+    # Load forecast prices
+    forecast_df, notes = load_forecast_prices_15min(asset_code, d, d)
+    context["data_quality_notes"].extend(notes)
+
+    if forecast_df.empty:
+        context["tt_forecast_optimal_dispatch_15min"] = None
+        return context
+
+    try:
+        from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices
+
+        price_series = forecast_df.set_index("time")["price"].dropna()
+        price_series.index = pd.DatetimeIndex(price_series.index)
+        if price_series.index.tz is not None:
+            price_series.index = price_series.index.tz_localize(None)
+
+        dispatch_df, _ = compute_dispatch_from_15min_prices(
+            price_series,
+            power_mw=meta["power_mw"],
+            duration_h=meta["duration_h"],
+            roundtrip_eff=meta["roundtrip_eff"],
+            compensation_yuan_per_mwh=meta["compensation_yuan_per_mwh"],
+            window_days=1,
+        )
+
+        if dispatch_df.empty:
+            context["tt_forecast_optimal_dispatch_15min"] = None
+            context["data_quality_notes"].append(
+                "tt_forecast_optimal: LP returned empty dispatch — "
+                "check forecast price completeness for this date"
+            )
+            return context
+
+        # Convert to list of {time, dispatch_mw} for _calc_15min_pnl
+        tt_records = [
+            {
+                "time": str(dt_idx),
+                "dispatch_mw": float(row["dispatch_grid_mw"]) * _INTERVAL_HRS_15MIN,
+            }
+            for dt_idx, row in dispatch_df.iterrows()
+        ]
+        context["tt_forecast_optimal_dispatch_15min"] = tt_records
+        context["data_quality_notes"].append(
+            f"tt_forecast_optimal: dispatch computed from forecast prices via 15-min LP "
+            f"({len(tt_records)} intervals for {asset_code} on {d})"
+        )
+    except Exception as exc:
+        logger.exception("tt_forecast_optimal dispatch failed for %s on %s: %s", asset_code, d, exc)
+        context["tt_forecast_optimal_dispatch_15min"] = None
+        context["data_quality_notes"].append(
+            f"tt_forecast_optimal: LP dispatch failed — {exc}"
+        )
+
+    return context
 
 
 def _build_cross_asset_summary(

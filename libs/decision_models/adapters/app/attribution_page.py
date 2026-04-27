@@ -198,6 +198,7 @@ def render_attribution_page() -> None:
                         {"heading": "Waterfall Summary (Average Daily)", "df": waterfall_df},
                         {"heading": "Daily Attribution Detail", "df": detail_df},
                     ],
+                    landscape=True,
                 )
                 if pdf_bytes:
                     col_pdf.download_button(

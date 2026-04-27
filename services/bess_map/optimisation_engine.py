@@ -47,34 +47,38 @@ def optimise_window(
     max_throughput_mwh: Optional[float] = None,
     max_cycles_per_day: Optional[float] = None,
     compensation_yuan_per_mwh: float = 0.0,
+    dt: float = 1.0,
 ) -> DispatchResult:
     """
-    Solve the BESS arbitrage LP for an arbitrary number of hourly intervals T.
+    Solve the BESS arbitrage LP for an arbitrary number of intervals T.
 
     SOC starts at 0 at t=0 and carries over naturally across the full window,
-    enabling cross-day SOC continuity when T > 24.
+    enabling cross-day SOC continuity when T > intervals_per_day.
 
     The round-trip efficiency is applied symmetrically:
         eta_c = eta_d = sqrt(roundtrip_eff)
 
     The compensation (subsidy) is added to the discharge incentive so the LP
     dispatches when (market_price + compensation) > 0, not just when price > 0.
-    The reported profit field remains market-only cash flow.
+    The reported profit field is market-only cash flow.
 
     Degradation proxies (optional) are treated as *per-day* limits and scaled
-    linearly by the window length (T / 24) so the cap is fair across windows
-    of different sizes:
+    linearly by the window length so the cap is fair across windows of different
+    sizes and granularities:
         max_throughput_mwh  — per-day cap on total discharge energy (MWh)
         max_cycles_per_day  — per-day cap on equivalent full cycles
+    Scaling factor: n_days_window = T * dt / 24.0
 
     Args:
-        prices:                    Numpy array of T hourly prices (CNY/MWh).
+        prices:                    Numpy array of T prices (CNY/MWh).
         power_mw:                  Inverter / power rating (MW).
         duration_h:                Battery duration (hours), e_cap = power_mw × duration_h.
         roundtrip_eff:             Round-trip efficiency, e.g. 0.85.
-        max_throughput_mwh:        Optional per-day discharge cap (MWh); scaled by T/24.
-        max_cycles_per_day:        Optional per-day cycle cap; scaled by T/24.
+        max_throughput_mwh:        Optional per-day discharge cap (MWh); scaled by n_days_window.
+        max_cycles_per_day:        Optional per-day cycle cap; scaled by n_days_window.
         compensation_yuan_per_mwh: Discharge subsidy (CNY/MWh) added to LP objective.
+        dt:                        Interval duration in hours (default 1.0 for hourly,
+                                   use 0.25 for 15-min intervals).
 
     Returns:
         DispatchResult with charge_mw, discharge_mw, soc_mwh arrays (length T),
@@ -99,12 +103,14 @@ def optimise_window(
     prob += soc[0] == 0
 
     for t in range(T):
-        prob += soc[t + 1] == soc[t] + ch[t] * eta_c - dis[t] * (1.0 / eta_d)
+        # SOC update: power [MW] × dt [h] = energy [MWh]
+        prob += soc[t + 1] == soc[t] + ch[t] * eta_c * dt - dis[t] * (1.0 / eta_d) * dt
         prob += ch[t] <= M * y[t]
         prob += dis[t] <= M * (1 - y[t])
 
     # Degradation constraints — scale per-day limits by window size
-    n_days_window = T / 24.0
+    # n_days_window = total hours covered / 24 = T * dt / 24
+    n_days_window = T * dt / 24.0
     if max_throughput_mwh is not None:
         prob += pulp.lpSum(dis[t] for t in range(T)) <= float(max_throughput_mwh) * n_days_window
 
@@ -114,10 +120,10 @@ def optimise_window(
             <= float(max_cycles_per_day) * e_cap * n_days_window
         )
 
-    # Objective: maximise (discharge + subsidy - charge) revenue
+    # Objective: maximise (discharge + subsidy - charge) revenue × interval duration
     prob += pulp.lpSum(
-        (float(prices[t]) + float(compensation_yuan_per_mwh)) * dis[t]
-        - float(prices[t]) * ch[t]
+        ((float(prices[t]) + float(compensation_yuan_per_mwh)) * dis[t]
+         - float(prices[t]) * ch[t]) * dt
         for t in range(T)
     )
     prob.solve(pulp.PULP_CBC_CMD(msg=False))
@@ -127,7 +133,7 @@ def optimise_window(
     chv = np.array([pulp.value(ch[t]) for t in range(T)], dtype=float)
     disv = np.array([pulp.value(dis[t]) for t in range(T)], dtype=float)
     socv = np.array([pulp.value(soc[t + 1]) for t in range(T)], dtype=float)
-    profit = float(np.nansum(prices * (disv - chv)))
+    profit = float(np.nansum(prices * (disv - chv) * dt))
 
     return DispatchResult(chv, disv, socv, profit, status)
 
@@ -185,10 +191,13 @@ def compute_dispatch_from_hourly_prices(
     max_cycles_per_day: Optional[float] = None,
     compensation_yuan_per_mwh: float = 0.0,
     window_days: int = 1,
+    dt: float = 1.0,
+    intervals_per_day: int = 24,
+    freq: str = "h",
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
-    Run the BESS arbitrage LP over every complete day in hourly_prices, grouping
-    consecutive days into windows of ``window_days`` for a single joint LP solve.
+    Run the BESS arbitrage LP over every complete day in ``hourly_prices``,
+    grouping consecutive days into windows of ``window_days`` for a single LP solve.
 
     When window_days == 1 (default) behaviour is identical to calling optimise_day
     independently for each calendar day (SOC resets to 0 each day).
@@ -200,17 +209,23 @@ def compute_dispatch_from_hourly_prices(
     Incomplete trailing windows (fewer days than window_days) are solved as-is.
 
     Args:
-        hourly_prices:       pd.Series with DatetimeIndex, hourly granularity.
-                             Days with any NaN hour are skipped.
+        hourly_prices:       pd.Series with DatetimeIndex.  Use any granularity with
+                             matching ``dt``, ``intervals_per_day``, and ``freq``.
+                             Days with any NaN value are skipped.
         power_mw:            Inverter power rating (MW).
         duration_h:          Battery duration (hours).
         roundtrip_eff:       Round-trip efficiency.
-        max_throughput_mwh:  Optional per-day discharge cap; scaled by window size
-                             inside optimise_window.
+        max_throughput_mwh:  Optional per-day discharge cap; scaled by window size.
         max_cycles_per_day:  Optional per-day cycle cap; scaled by window size.
         compensation_yuan_per_mwh: Discharge subsidy (CNY/MWh) added to LP objective.
         window_days:         Number of consecutive days to optimise in one LP solve.
                              Default 1 (original per-day behaviour). Must be >= 1.
+        dt:                  Interval duration in hours (default 1.0 for hourly,
+                             0.25 for 15-min).  Passed to optimise_window.
+        intervals_per_day:   Number of intervals per calendar day (default 24 for hourly,
+                             96 for 15-min).
+        freq:                Pandas frequency string for the DatetimeIndex of each day
+                             (default "h" for hourly, "15min" for quarter-hourly).
 
     Returns:
         dispatch_df:  DataFrame indexed by datetime with columns:
@@ -233,10 +248,10 @@ def compute_dispatch_from_hourly_prices(
     df = s.to_frame("price")
     df["date"] = df.index.date
 
-    # ── Collect complete days (no NaN hours) ─────────────────────────────────
+    # ── Collect complete days (all intervals present, no NaN) ────────────────
     complete_days: Dict[dt.date, np.ndarray] = {}
     for d, g in df.groupby("date"):
-        idx = pd.date_range(pd.Timestamp(d), periods=24, freq="h")
+        idx = pd.date_range(pd.Timestamp(d), periods=intervals_per_day, freq=freq)
         g2 = g.reindex(idx)
         prices_arr = g2["price"].to_numpy(dtype=float)
         if not np.isnan(prices_arr).any():
@@ -274,11 +289,12 @@ def compute_dispatch_from_hourly_prices(
             max_throughput_mwh=max_throughput_mwh,
             max_cycles_per_day=max_cycles_per_day,
             compensation_yuan_per_mwh=compensation_yuan_per_mwh,
+            dt=dt,
         )
 
         for i, d in enumerate(window_dates):
-            day_slice = slice(i * 24, (i + 1) * 24)
-            idx = pd.date_range(pd.Timestamp(d), periods=24, freq="h")
+            day_slice = slice(i * intervals_per_day, (i + 1) * intervals_per_day)
+            idx = pd.date_range(pd.Timestamp(d), periods=intervals_per_day, freq=freq)
             ch_day = res.charge_mw[day_slice]
             dis_day = res.discharge_mw[day_slice]
             soc_day = res.soc_mwh[day_slice]
@@ -293,9 +309,51 @@ def compute_dispatch_from_hourly_prices(
             }).set_index("datetime")
 
             dispatch_rows.append(out)
-            daily_profit[d] = float(np.nansum(complete_days[d] * (dis_day - ch_day)))
+            daily_profit[d] = float(np.nansum(complete_days[d] * (dis_day - ch_day) * dt))
 
     dispatch_df = pd.concat(dispatch_rows).sort_index() if dispatch_rows else pd.DataFrame()
     profit_s = pd.Series(daily_profit).sort_index()
     profit_s.name = "profit"
     return dispatch_df, profit_s
+
+
+def compute_dispatch_from_15min_prices(
+    prices_15min: pd.Series,
+    power_mw: float,
+    duration_h: float,
+    roundtrip_eff: float,
+    max_throughput_mwh: Optional[float] = None,
+    max_cycles_per_day: Optional[float] = None,
+    compensation_yuan_per_mwh: float = 0.0,
+    window_days: int = 1,
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Run the BESS arbitrage LP over 15-min price intervals (96 per day).
+
+    Thin wrapper around compute_dispatch_from_hourly_prices with dt=0.25,
+    intervals_per_day=96, freq="15min".
+
+    Using 15-min prices ensures perfect-foresight P&L is a true upper bound
+    on any 15-min settled strategy (cleared_actual, nominated, etc.).
+
+    Args:
+        prices_15min: pd.Series with 15-min DatetimeIndex.
+        Other args:   same as compute_dispatch_from_hourly_prices.
+
+    Returns:
+        dispatch_df:  DataFrame indexed by 15-min datetime.
+        profit_s:     pd.Series of daily profit (settled at 15-min prices).
+    """
+    return compute_dispatch_from_hourly_prices(
+        hourly_prices=prices_15min,
+        power_mw=power_mw,
+        duration_h=duration_h,
+        roundtrip_eff=roundtrip_eff,
+        max_throughput_mwh=max_throughput_mwh,
+        max_cycles_per_day=max_cycles_per_day,
+        compensation_yuan_per_mwh=compensation_yuan_per_mwh,
+        window_days=window_days,
+        dt=0.25,
+        intervals_per_day=96,
+        freq="15min",
+    )

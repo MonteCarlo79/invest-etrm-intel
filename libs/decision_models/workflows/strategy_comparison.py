@@ -250,14 +250,11 @@ def run_perfect_foresight_dispatch(
     window_days: int = 1,
 ) -> Dict[str, Any]:
     """
-    Compute perfect-foresight BESS dispatch using actual hourly prices as input.
+    Compute perfect-foresight BESS dispatch using actual prices as input.
 
-    Uses bess_dispatch_simulation_multiday (LP over each day independently by
-    default, or jointly over consecutive windows when window_days > 1).
-    P&L is settled against hourly mean of actual 15-min prices.
-
-    APPROXIMATION: hourly granularity; results not directly comparable to
-    15-min DB P&L figures.
+    Preferred: uses 15-min actual prices (96 intervals/day) so that PF P&L is a
+    true upper bound on any 15-min settled strategy (cleared_actual, nominated, etc.).
+    Falls back to hourly LP when 15-min prices are not in context.
 
     Parameters
     ----------
@@ -269,64 +266,152 @@ def run_perfect_foresight_dispatch(
     -------
     JSON-serialisable dict matching PerfectForesightResult schema.
     """
+    meta = context["asset_metadata"]
+    prices_15min: List[dict] = context.get("actual_prices_15min", [])
+    hourly_prices: List[dict] = context.get("actual_prices_hourly", [])
+
+    # ── Helper ────────────────────────────────────────────────────────────────
+    def _ts_naive(val) -> pd.Timestamp:
+        t = pd.Timestamp(val)
+        return t.tz_localize(None) if t.tzinfo is not None else t
+
+    def _empty_result(reason: str, caveats: List[str]) -> Dict[str, Any]:
+        caveats.append(reason)
+        return dataclasses.asdict(PerfectForesightResult(
+            strategy_name="perfect_foresight_hourly",
+            pnl=StrategyPnLResult(
+                strategy_name="perfect_foresight_hourly",
+                pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
+                discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
+                notes=caveats,
+            ),
+            dispatch_hourly=[], daily_profit=[], energy_capacity_mwh=0.0,
+            caveats=caveats,
+        ))
+
+    # ── 15-min branch: true upper bound ───────────────────────────────────────
+    if prices_15min:
+        from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices
+
+        caveats: List[str] = [
+            "perfect_foresight: 15-min granularity — LP optimised and settled at actual 15-min prices; "
+            "true upper bound on all 15-min settled strategies",
+            f"perfect_foresight: window_days={window_days} — "
+            + ("SOC resets to 0 each day" if window_days == 1
+               else f"SOC carries over across {window_days}-day windows"),
+            "perfect_foresight: single-asset LP — no portfolio or grid constraints",
+        ]
+
+        price_records: List[tuple] = []
+        for rec in prices_15min:
+            ts = rec.get("time") or rec.get("datetime")
+            price = rec.get("price")
+            if ts is not None and price is not None:
+                try:
+                    p = float(price)
+                    if not np.isnan(p):
+                        price_records.append((_ts_naive(ts), p))
+                except (TypeError, ValueError):
+                    pass
+
+        if not price_records:
+            return _empty_result("perfect_foresight: 15-min prices are all null — returning empty result", caveats)
+
+        price_series = pd.Series(
+            {ts: p for ts, p in price_records}
+        ).sort_index()
+        price_series.index = pd.DatetimeIndex(price_series.index)
+
+        try:
+            dispatch_df, profit_s = compute_dispatch_from_15min_prices(
+                price_series,
+                power_mw=meta["power_mw"],
+                duration_h=meta["duration_h"],
+                roundtrip_eff=meta["roundtrip_eff"],
+                compensation_yuan_per_mwh=meta["compensation_yuan_per_mwh"],
+                window_days=int(window_days),
+            )
+        except Exception as exc:
+            return _empty_result(f"perfect_foresight: 15-min LP failed — {exc}", caveats)
+
+        n_days_solved = len(profit_s)
+        price_map_15 = {str(ts): p for ts, p in price_records}
+
+        dispatch_records = []
+        if not dispatch_df.empty:
+            for dt_idx, row in dispatch_df.iterrows():
+                dt_str = str(dt_idx)
+                p = price_map_15.get(dt_str, 0.0)
+                dispatch_records.append({
+                    "datetime": dt_idx.isoformat(),
+                    "charge_mw": float(row["charge_mw"]),
+                    "discharge_mw": float(row["discharge_mw"]),
+                    "dispatch_grid_mw": float(row["dispatch_grid_mw"]),
+                    "soc_mwh": float(row["soc_mwh"]),
+                    "price": p,
+                })
+
+        pnl_market = sum(
+            r["dispatch_grid_mw"] * r["price"] * _INTERVAL_HRS_15MIN
+            for r in dispatch_records
+        )
+        discharge_mwh = sum(max(r["discharge_mw"], 0) * _INTERVAL_HRS_15MIN for r in dispatch_records)
+        charge_mwh = sum(abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_15MIN for r in dispatch_records)
+        pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
+
+        daily_profit = [
+            {"date": str(d), "profit_actual_prices": float(p)}
+            for d, p in profit_s.items()
+        ]
+
+        result = PerfectForesightResult(
+            strategy_name="perfect_foresight_hourly",
+            pnl=StrategyPnLResult(
+                strategy_name="perfect_foresight_hourly",
+                pnl_market_yuan=pnl_market,
+                pnl_compensation_yuan=pnl_comp,
+                pnl_total_yuan=pnl_market + pnl_comp,
+                discharge_mwh=discharge_mwh,
+                charge_mwh=charge_mwh,
+                n_days_solved=n_days_solved,
+                granularity="15min",
+            ),
+            dispatch_hourly=dispatch_records,
+            daily_profit=daily_profit,
+            energy_capacity_mwh=meta["power_mw"] * meta["duration_h"],
+            caveats=caveats,
+        )
+        return dataclasses.asdict(result)
+
+    # ── Hourly fallback ───────────────────────────────────────────────────────
     import libs.decision_models.bess_dispatch_simulation_multiday  # noqa: F401
     from libs.decision_models.runners.local import run
 
-    caveats: List[str] = [
-        "perfect_foresight: hourly granularity — P&L settled on hourly mean of actual 15-min prices",
+    caveats = [
+        "perfect_foresight: hourly granularity (15-min prices unavailable) — "
+        "P&L settled on hourly mean of actual prices; "
+        "intra-hour price spikes may allow 15-min strategies to exceed PF",
         f"perfect_foresight: window_days={window_days} — "
-        + ("SOC resets to 0 each day (no cross-day carryover)" if window_days == 1
+        + ("SOC resets to 0 each day" if window_days == 1
            else f"SOC carries over across {window_days}-day windows"),
         "perfect_foresight: single-asset LP — no portfolio or grid constraints",
     ]
 
-    meta = context["asset_metadata"]
-    hourly_prices: List[dict] = context.get("actual_prices_hourly", [])
-
     if not hourly_prices:
-        caveats.append("perfect_foresight: no actual hourly prices available — returning empty result")
-        result = PerfectForesightResult(
-            strategy_name="perfect_foresight_hourly",
-            pnl=StrategyPnLResult(
-                strategy_name="perfect_foresight_hourly",
-                pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
-                discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
-                notes=caveats,
-            ),
-            dispatch_hourly=[], daily_profit=[], energy_capacity_mwh=0.0,
-            caveats=caveats,
-        )
-        return dataclasses.asdict(result)
+        return _empty_result("perfect_foresight: no actual prices available — returning empty result", caveats)
 
-    # Normalise datetimes — strip tz so the LP engine's tz-naive date_range reindex works
-    def _ts_naive_str(val) -> str:
-        t = pd.Timestamp(val)
-        return str(t.tz_localize(None) if t.tzinfo is not None else t)
-
-    price_records = []
+    price_records_h = []
     for rec in hourly_prices:
         ts = rec.get("datetime") or rec.get("time")
         price = rec.get("price")
         if ts is not None and price is not None and not (isinstance(price, float) and np.isnan(price)):
-            price_records.append({"datetime": _ts_naive_str(ts), "price": float(price)})
+            price_records_h.append({"datetime": str(_ts_naive(ts)), "price": float(price)})
 
-    if not price_records:
-        caveats.append("perfect_foresight: hourly prices are all null — returning empty result")
-        result = PerfectForesightResult(
-            strategy_name="perfect_foresight_hourly",
-            pnl=StrategyPnLResult(
-                strategy_name="perfect_foresight_hourly",
-                pnl_market_yuan=0.0, pnl_compensation_yuan=0.0, pnl_total_yuan=0.0,
-                discharge_mwh=0.0, charge_mwh=0.0, n_days_solved=0, granularity="hourly",
-                notes=caveats,
-            ),
-            dispatch_hourly=[], daily_profit=[], energy_capacity_mwh=0.0,
-            caveats=caveats,
-        )
-        return dataclasses.asdict(result)
+    if not price_records_h:
+        return _empty_result("perfect_foresight: hourly prices are all null — returning empty result", caveats)
 
     opt_result = run("bess_dispatch_simulation_multiday", {
-        "hourly_prices": price_records,
+        "hourly_prices": price_records_h,
         "power_mw": meta["power_mw"],
         "duration_h": meta["duration_h"],
         "roundtrip_eff": meta["roundtrip_eff"],
@@ -334,15 +419,11 @@ def run_perfect_foresight_dispatch(
         "window_days": int(window_days),
     })
 
-    # Build dispatch_hourly with prices merged in.
-    # Normalise datetime strings: LP outputs ISO-T format ("2026-04-19T00:00:00+00:00")
-    # but price_records were built with str(pd.Timestamp(...)) space format.
-    # Use pd.Timestamp as the canonical form for lookup so both formats match.
-    price_map = {str(pd.Timestamp(rec["datetime"])): rec["price"] for rec in price_records}
+    price_map_h = {str(pd.Timestamp(rec["datetime"])): rec["price"] for rec in price_records_h}
     dispatch_hourly = []
     for rec in opt_result.get("dispatch_records", []):
         dt_str = str(pd.Timestamp(rec["datetime"]))
-        p = price_map.get(dt_str, 0.0)
+        p = price_map_h.get(dt_str, 0.0)
         dispatch_hourly.append({
             "datetime": dt_str,
             "charge_mw": rec["charge_mw"],
@@ -352,17 +433,12 @@ def run_perfect_foresight_dispatch(
             "price": p,
         })
 
-    # Compute P&L at hourly resolution
     pnl_market = sum(
         r["dispatch_grid_mw"] * r["price"] * _INTERVAL_HRS_HOURLY
         for r in dispatch_hourly
     )
-    discharge_mwh = sum(
-        max(r["discharge_mw"], 0) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
-    )
-    charge_mwh = sum(
-        abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly
-    )
+    discharge_mwh = sum(max(r["discharge_mw"], 0) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly)
+    charge_mwh = sum(abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly)
     pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
 
     solver_statuses = {
@@ -376,20 +452,18 @@ def run_perfect_foresight_dispatch(
         for rec in opt_result.get("daily_profit", [])
     }
 
-    pnl_obj = StrategyPnLResult(
-        strategy_name="perfect_foresight_hourly",
-        pnl_market_yuan=pnl_market,
-        pnl_compensation_yuan=pnl_comp,
-        pnl_total_yuan=pnl_market + pnl_comp,
-        discharge_mwh=discharge_mwh,
-        charge_mwh=charge_mwh,
-        n_days_solved=opt_result.get("n_days_solved", 0),
-        granularity="hourly",
-    )
-
     result = PerfectForesightResult(
         strategy_name="perfect_foresight_hourly",
-        pnl=pnl_obj,
+        pnl=StrategyPnLResult(
+            strategy_name="perfect_foresight_hourly",
+            pnl_market_yuan=pnl_market,
+            pnl_compensation_yuan=pnl_comp,
+            pnl_total_yuan=pnl_market + pnl_comp,
+            discharge_mwh=discharge_mwh,
+            charge_mwh=charge_mwh,
+            n_days_solved=opt_result.get("n_days_solved", 0),
+            granularity="hourly",
+        ),
         dispatch_hourly=dispatch_hourly,
         daily_profit=opt_result.get("daily_profit", []),
         energy_capacity_mwh=opt_result.get("energy_capacity_mwh", 0.0),
@@ -799,6 +873,29 @@ def rank_dispatch_strategies(
                     f"ranking: {scenario_name} P&L computed from ops context dispatch "
                     "(DB scenario row not available)"
                 )
+
+    # tt_forecast_optimal: if DB didn't populate it, compute from context forecast dispatch
+    if not strategies.get("tt_forecast_optimal", {}).get("available"):
+        tt_dispatch = context.get("tt_forecast_optimal_dispatch_15min")
+        actual_prices = context.get("actual_prices_15min", [])
+        if tt_dispatch and actual_prices:
+            pnl = _calc_15min_pnl(tt_dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
+            strategies["tt_forecast_optimal"] = {
+                "pnl_total": pnl,
+                "pnl_market": None,
+                "pnl_compensation": None,
+                "granularity": "15min",
+                "available": True,
+            }
+            caveats.append(
+                "ranking: tt_forecast_optimal P&L computed from forecast dispatch in context "
+                "(settled at actual 15-min prices)"
+            )
+        else:
+            strategies.setdefault("tt_forecast_optimal", {
+                "pnl_total": None, "pnl_market": None, "pnl_compensation": None,
+                "granularity": "15min", "available": False,
+            })
 
     # 4. DA cleared energy P&L (md_id_cleared_energy) — Inner Mongolia only
     id_cleared_records = context.get("id_cleared_energy_15min") or []

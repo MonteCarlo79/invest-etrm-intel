@@ -66,7 +66,7 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
       - # / ## / ### headings
       - Bullet lists (- item)
       - Code blocks (``` ... ```)
-      - Markdown table rows (| col | col |)
+      - Markdown tables (| col | col |) rendered as proper reportlab Tables
       - Bold (**text**) and italic (_text_)
       - Horizontal rules (---)
 
@@ -81,6 +81,7 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
     from reportlab.lib.units import mm
     from reportlab.platypus import (
         HRFlowable, Paragraph, Preformatted, SimpleDocTemplate, Spacer,
+        Table, TableStyle,
     )
 
     buf = io.BytesIO()
@@ -103,6 +104,7 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
     story: list = []
     in_code = False
     code_buf: List[str] = []
+    table_buf: List[str] = []
 
     def _flush_code():
         nonlocal code_buf
@@ -111,10 +113,55 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
             story.append(Spacer(1, 2 * mm))
         code_buf = []
 
+    def _is_md_separator(line: str) -> bool:
+        """Detect separator rows like |---|---| or |:---|---:|."""
+        cells = line.strip().strip("|").split("|")
+        return all(
+            cell.strip().replace(":", "").replace("-", "") == ""
+            for cell in cells
+        )
+
+    def _flush_md_table():
+        nonlocal table_buf
+        if not table_buf:
+            return
+        rows: List[List[str]] = []
+        for tl in table_buf:
+            if _is_md_separator(tl):
+                continue
+            cells = [c.strip() for c in tl.strip().strip("|").split("|")]
+            rows.append(cells)
+        table_buf = []
+        if not rows:
+            return
+        # Pad all rows to the same column count
+        n_cols = max(len(r) for r in rows)
+        for r in rows:
+            while len(r) < n_cols:
+                r.append("")
+        tbl = Table(rows, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#3a3a3a")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("LEADING", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#f7f7f7")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 3 * mm))
+
     for raw in markdown_str.splitlines():
         line = raw.rstrip()
 
         if line.startswith("```"):
+            _flush_md_table()
             if in_code:
                 _flush_code()
                 in_code = False
@@ -126,6 +173,14 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
             code_buf.append(line)
             continue
 
+        # Collect markdown table lines
+        if line.startswith("| ") or (line.startswith("|") and "|" in line[1:]):
+            table_buf.append(line)
+            continue
+
+        # Non-table line: flush any buffered table first
+        _flush_md_table()
+
         if line.startswith("# "):
             story.append(Paragraph(_esc(line[2:]), styles["Heading1"]))
         elif line.startswith("## "):
@@ -133,8 +188,6 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
             story.append(Paragraph(_esc(line[3:]), styles["Heading2"]))
         elif line.startswith("### "):
             story.append(Paragraph(_esc(line[4:]), styles["Heading3"]))
-        elif line.startswith("| "):
-            story.append(Preformatted(line, code_style))
         elif line.startswith("- "):
             content = _inline(line[2:])
             story.append(Paragraph(f"&bull;&nbsp;{content}", bullet_style))
@@ -143,6 +196,7 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
         else:
             story.append(Paragraph(_inline(line) or "&nbsp;", styles["Normal"]))
 
+    _flush_md_table()
     _flush_code()
     doc.build(story)
     return buf.getvalue()
@@ -155,41 +209,61 @@ def to_pdf_bytes_from_markdown(title: str, markdown_str: str) -> Optional[bytes]
 def to_pdf_bytes_from_tables(
     title: str,
     sections: List[Dict],
+    landscape: bool = False,
 ) -> Optional[bytes]:
     """
     Build a simple PDF from a list of titled tables.
 
     Parameters
     ----------
-    title    : Document title shown at the top.
-    sections : list of dicts, each with:
-                 "heading" (str, optional) — section heading
-                 "df"      (pd.DataFrame)  — table data
+    title     : Document title shown at the top.
+    sections  : list of dicts, each with:
+                  "heading" (str, optional) — section heading
+                  "df"      (pd.DataFrame)  — table data
+    landscape : if True, use A4 landscape orientation (wide tables).
 
     Returns None if reportlab is not installed.
     """
     if not reportlab_available():
         return None
 
+    import math
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import landscape as rlab_landscape
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.platypus import (
         Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
     )
 
+    pagesize = rlab_landscape(A4) if landscape else A4
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
-        buf, pagesize=A4,
+        buf, pagesize=pagesize,
         leftMargin=15 * mm, rightMargin=15 * mm,
-        topMargin=20 * mm, bottomMargin=20 * mm,
+        topMargin=15 * mm, bottomMargin=15 * mm,
     )
     styles = getSampleStyleSheet()
     story: list = [
         Paragraph(title, styles["Heading1"]),
         Spacer(1, 4 * mm),
     ]
+
+    def _fmt_cell(v) -> str:
+        """Format cell values: numbers with thousand separators, others as str."""
+        if v is None:
+            return ""
+        if isinstance(v, float):
+            import math as _math
+            if _math.isnan(v):
+                return "—"
+            if v == round(v, 0):
+                return f"{v:,.0f}"
+            return f"{v:,.2f}"
+        if isinstance(v, int):
+            return f"{v:,}"
+        return str(v)
 
     for sec in sections:
         heading = sec.get("heading", "")
@@ -201,10 +275,7 @@ def to_pdf_bytes_from_tables(
             headers = list(df.columns)
             tdata = [headers]
             for _, row in df.iterrows():
-                tdata.append([
-                    "" if v is None else str(v)
-                    for v in row
-                ])
+                tdata.append([_fmt_cell(v) for v in row])
             tbl = Table(tdata, repeatRows=1, hAlign="LEFT")
             tbl.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#3a3a3a")),
