@@ -107,28 +107,45 @@ def render_daily_ops_page() -> None:
                 "payload": payload,
             }
         else:
-            # All-assets mode — run sequentially so each asset's completion is visible
+            # All-assets mode — run all 4 in parallel; update badges as each finishes
+            from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
+
             _n = len(_IM_ASSET_CODES)
-            _progress = st.progress(0.0, text="Starting…")
+            _badge_cols = st.columns(_n)
+            _slots = {
+                code: col.empty()
+                for code, col in zip(_IM_ASSET_CODES, _badge_cols)
+            }
+            for _code in _IM_ASSET_CODES:
+                _slots[_code].info(f"⏳ {_IM_ASSET_DISPLAY.get(_code, _code)}")
+            _progress = st.progress(0.0, text="Running 4 assets in parallel…")
+
             _asset_results: dict = {}
             _errors: dict = {}
-            for _i, _code in enumerate(_IM_ASSET_CODES):
-                _disp = _IM_ASSET_DISPLAY.get(_code, _code)
-                _progress.progress(
-                    _i / _n,
-                    text=f"[{_i + 1}/{_n}] Running {_disp}…",
-                )
-                try:
-                    _asset_results[_code] = run_bess_daily_strategy_analysis(
+            with _TPE(max_workers=_n) as _executor:
+                _future_to_code = {
+                    _executor.submit(
+                        run_bess_daily_strategy_analysis,
                         _code, date_str, use_ops_dispatch=use_ops,
+                    ): _code
+                    for _code in _IM_ASSET_CODES
+                }
+                _n_done = 0
+                for _future in _asc(_future_to_code):
+                    _code = _future_to_code[_future]
+                    _disp = _IM_ASSET_DISPLAY.get(_code, _code)
+                    _n_done += 1
+                    try:
+                        _asset_results[_code] = _future.result()
+                        _slots[_code].success(f"✓ {_disp}")
+                    except Exception as _exc:
+                        _errors[_code] = str(_exc)
+                        _slots[_code].error(f"✗ {_disp}: {_exc}")
+                    _progress.progress(
+                        _n_done / _n,
+                        text=f"{_n_done}/{_n} assets complete"
+                        + (f" ({len(_errors)} errors)" if _errors else ""),
                     )
-                except Exception as _exc:
-                    _errors[_code] = str(_exc)
-            _progress.progress(
-                1.0,
-                text=f"Done — {len(_asset_results)}/{_n} assets completed"
-                + (f" ({len(_errors)} errors)" if _errors else ""),
-            )
             all_results = {
                 "date": date_str,
                 "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),

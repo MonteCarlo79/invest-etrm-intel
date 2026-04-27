@@ -97,6 +97,7 @@ def load_bess_strategy_comparison_context(
     asset_code: str,
     date_from: str,
     date_to: str,
+    skip_ops_fallback: bool = False,
 ) -> Dict[str, Any]:
     """
     Load all data needed to run the strategy comparison workflow.
@@ -168,7 +169,9 @@ def load_bess_strategy_comparison_context(
     # canon.scenario_dispatch_15min is only populated by the P&L refresh batch job.
     # For recent dates (before the next batch run) ops data lives only in
     # marketdata.ops_bess_dispatch_15min — use it when canon is empty.
-    if nominated_df.empty or actual_df.empty:
+    # skip_ops_fallback=True when the caller will load ops data separately
+    # (e.g. _enrich_context_with_ops_dispatch) to avoid a duplicate DB query.
+    if not skip_ops_fallback and (nominated_df.empty or actual_df.empty):
         ops_df, ops_notes = load_ops_dispatch_15min(asset_code, d_from, d_to)
         notes.extend(ops_notes)
         if not ops_df.empty:

@@ -120,8 +120,12 @@ def run_bess_daily_strategy_analysis(
     generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     d = datetime.date.fromisoformat(date)
 
-    # Step 1: Load base context (single-day window)
-    context = load_bess_strategy_comparison_context(asset_code, date, date)
+    # Step 1: Load base context (single-day window).
+    # skip_ops_fallback=use_ops_dispatch: when ops data will be loaded in Step 2
+    # by _enrich_context_with_ops_dispatch, skip the duplicate fallback query here.
+    context = load_bess_strategy_comparison_context(
+        asset_code, date, date, skip_ops_fallback=use_ops_dispatch
+    )
 
     # Step 2: Enrich with ops dispatch if requested
     ops_dispatch_available = False
