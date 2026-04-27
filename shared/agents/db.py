@@ -13,7 +13,11 @@ def get_dsn() -> str:
 
 @contextmanager
 def get_conn():
-    conn = psycopg2.connect(get_dsn())
+    conn = psycopg2.connect(
+        get_dsn(),
+        connect_timeout=10,
+        options="-c statement_timeout=30000",
+    )
     try:
         yield conn
     finally:

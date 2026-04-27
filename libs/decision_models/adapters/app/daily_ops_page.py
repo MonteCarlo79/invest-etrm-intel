@@ -102,7 +102,7 @@ def render_daily_ops_page() -> None:
             }
         else:
             # All-assets mode
-            with st.spinner(f"Running analysis for all 4 assets on {date_str}…"):
+            with st.spinner(f"Running analysis for all 4 assets on {date_str} (parallel)…"):
                 all_results = run_all_assets_daily_strategy_analysis(
                     date_str, use_ops_dispatch=use_ops,
                 )

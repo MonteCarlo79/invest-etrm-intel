@@ -54,6 +54,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
@@ -157,13 +158,15 @@ def run_bess_daily_strategy_analysis(
         attribution_df=db_attr_df if not db_attr_df.empty else None,
     )
 
-    # Step 8: Generate full report
+    # Step 8: Generate full report (pass pre-loaded DB frames to avoid duplicate queries)
     report = generate_asset_strategy_report(
         asset_code, date, date,
         period_type="daily",
         context=context,
         ranking=ranking,
         attribution=attribution,
+        db_pnl_df=db_pnl_df if not db_pnl_df.empty else None,
+        db_attr_df=db_attr_df if not db_attr_df.empty else None,
     )
 
     return {
@@ -210,17 +213,25 @@ def run_all_assets_daily_strategy_analysis(
     asset_results: Dict[str, Any] = {}
     errors: Dict[str, str] = {}
 
-    for code in codes:
-        try:
-            result = run_bess_daily_strategy_analysis(
+    # Run all assets in parallel — each opens its own DB connections, safe for threading.
+    # ThreadPoolExecutor releases the GIL during I/O so 4 assets run concurrently.
+    with ThreadPoolExecutor(max_workers=len(codes)) as executor:
+        future_to_code = {
+            executor.submit(
+                run_bess_daily_strategy_analysis,
                 code, date,
                 forecast_models=forecast_models,
                 use_ops_dispatch=use_ops_dispatch,
-            )
-            asset_results[code] = result
-        except Exception as exc:
-            logger.exception("Daily analysis failed for %s on %s: %s", code, date, exc)
-            errors[code] = str(exc)
+            ): code
+            for code in codes
+        }
+        for future in as_completed(future_to_code):
+            code = future_to_code[future]
+            try:
+                asset_results[code] = future.result()
+            except Exception as exc:
+                logger.exception("Daily analysis failed for %s on %s: %s", code, date, exc)
+                errors[code] = str(exc)
 
     summary = _build_cross_asset_summary(date, asset_results)
 

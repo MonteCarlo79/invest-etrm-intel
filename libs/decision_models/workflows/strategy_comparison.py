@@ -1251,6 +1251,8 @@ def generate_asset_strategy_report(
     context: Optional[Dict[str, Any]] = None,
     ranking: Optional[Dict[str, Any]] = None,
     attribution: Optional[Dict[str, Any]] = None,
+    db_pnl_df: Optional[pd.DataFrame] = None,
+    db_attr_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     """
     Generate a reusable daily / weekly / monthly asset strategy report.
@@ -1284,11 +1286,15 @@ def generate_asset_strategy_report(
     all_caveats.extend(context.get("data_quality_notes", []))
 
     # --- Load pre-computed DB P&L (most accurate for nominated/actual) ---
-    db_pnl_df, db_pnl_notes = load_precomputed_scenario_pnl(asset_code, d_from, d_to)
-    all_caveats.extend(db_pnl_notes)
+    # Accept pre-loaded DataFrames to avoid duplicate DB queries when called from
+    # run_bess_daily_strategy_analysis (which already loaded these in Steps 5-6).
+    if db_pnl_df is None:
+        db_pnl_df, db_pnl_notes = load_precomputed_scenario_pnl(asset_code, d_from, d_to)
+        all_caveats.extend(db_pnl_notes)
 
-    db_attr_df, db_attr_notes = load_precomputed_attribution(asset_code, d_from, d_to)
-    all_caveats.extend(db_attr_notes)
+    if db_attr_df is None:
+        db_attr_df, db_attr_notes = load_precomputed_attribution(asset_code, d_from, d_to)
+        all_caveats.extend(db_attr_notes)
 
     # --- Compute or reuse ranking and attribution ---
     if ranking is None:
