@@ -772,6 +772,40 @@ def rank_dispatch_strategies(
     meta = context["asset_metadata"]
     caveats: List[str] = []
 
+    # --- Pre-compute dispatch stats (cycles + spread) for strategies with dispatch data ---
+    _energy_cap = float(meta.get("power_mw", 100.0)) * float(meta.get("duration_h", 2.0))
+    _n_days = max(1, (
+        datetime.date.fromisoformat(date_to) - datetime.date.fromisoformat(date_from)
+    ).days + 1)
+    _prices_15min = context.get("actual_prices_15min", [])
+    _dstats: Dict[str, dict] = {}
+
+    _pf_hourly = pf_result.get("dispatch_hourly", [])
+    if _pf_hourly:
+        _dstats["perfect_foresight_hourly"] = _calc_hourly_dispatch_stats(
+            _pf_hourly, "price", _energy_cap
+        )
+    for _fs in forecast_suite.get("strategies", []):
+        if _fs.get("dispatch_hourly") and _fs.get("n_days_with_forecast", 0) > 0:
+            _dstats[_fs["strategy_name"]] = _calc_hourly_dispatch_stats(
+                _fs["dispatch_hourly"], "actual_price", _energy_cap
+            )
+    for _sname, _dkey in [
+        ("nominated_dispatch", "nominated_dispatch_15min"),
+        ("cleared_actual", "actual_dispatch_15min"),
+        ("tt_forecast_optimal", "tt_forecast_optimal_dispatch_15min"),
+    ]:
+        _disp = context.get(_dkey)
+        if _disp and _prices_15min:
+            _dstats[_sname] = _calc_15min_dispatch_stats(_disp, _prices_15min, _energy_cap)
+    _id_recs = context.get("id_cleared_energy_15min") or []
+    if _id_recs:
+        _cleared_mwh = sum(float(r.get("cleared_energy_mwh_15min") or 0.0) for r in _id_recs)
+        _dstats["id_cleared_energy_da"] = {
+            "cycles": _cleared_mwh / _energy_cap if _energy_cap > 0 else None,
+            "captured_spread": None,  # no charge price in DA cleared data
+        }
+
     # Collect all strategies as {name -> (pnl_total, granularity, available)}
     strategies: Dict[str, Dict[str, Any]] = {}
 
@@ -961,6 +995,7 @@ def rank_dispatch_strategies(
     for name, info in sorted_strategies:
         rank += 1
         pnl_val = info["pnl_total"]
+        _stats = _dstats.get(name, {})
         rows.append(StrategyRankRow(
             rank=rank,
             strategy_name=name,
@@ -986,6 +1021,9 @@ def rank_dispatch_strategies(
             ),
             granularity=info["granularity"],
             data_available=True,
+            avg_daily_cycles=_stats.get("cycles"),
+            avg_daily_pnl_yuan=pnl_val / _n_days if pnl_val is not None else None,
+            captured_spread_yuan_per_mwh=_stats.get("captured_spread"),
         ))
 
     # Add unavailable strategies at the bottom
@@ -1004,6 +1042,9 @@ def rank_dispatch_strategies(
                 capture_rate_vs_pf=None,
                 granularity=info["granularity"],
                 data_available=False,
+                avg_daily_cycles=None,
+                avg_daily_pnl_yuan=None,
+                captured_spread_yuan_per_mwh=None,
             ))
 
     caveats.append(
@@ -1023,6 +1064,83 @@ def rank_dispatch_strategies(
         caveats=caveats,
     )
     return dataclasses.asdict(result)
+
+
+def _calc_hourly_dispatch_stats(
+    dispatch_records: List[dict],
+    price_key: str,
+    energy_capacity_mwh: float,
+) -> dict:
+    """
+    Cycles and captured price spread from hourly LP dispatch records.
+
+    LP convention: discharge_mw > 0 (discharging), charge_mw < 0 (charging).
+    Returns: {cycles, captured_spread}
+    """
+    discharge_mwh = 0.0
+    charge_mwh = 0.0
+    discharge_revenue = 0.0
+    charge_cost = 0.0
+    for r in dispatch_records:
+        d_mw = float(r.get("discharge_mw") or 0.0)
+        c_mw = float(r.get("charge_mw") or 0.0)
+        price = float(r.get(price_key) or 0.0)
+        if d_mw > 0:
+            mwh = d_mw * _INTERVAL_HRS_HOURLY
+            discharge_mwh += mwh
+            discharge_revenue += mwh * price
+        if c_mw < 0:  # negative = charging
+            mwh = abs(c_mw) * _INTERVAL_HRS_HOURLY
+            charge_mwh += mwh
+            charge_cost += mwh * price
+    cycles = discharge_mwh / energy_capacity_mwh if energy_capacity_mwh > 0 else None
+    spread = (
+        (discharge_revenue / discharge_mwh) - (charge_cost / charge_mwh)
+        if discharge_mwh > 0 and charge_mwh > 0 else None
+    )
+    return {"cycles": cycles, "captured_spread": spread}
+
+
+def _calc_15min_dispatch_stats(
+    dispatch_records: List[dict],
+    price_records: List[dict],
+    energy_capacity_mwh: float,
+) -> dict:
+    """
+    Cycles and captured price spread from 15-min dispatch records.
+
+    dispatch_mw > 0  = discharge (MWh per interval)
+    dispatch_mw < 0  = charging  (MWh per interval, negative)
+    Returns: {cycles, captured_spread}
+    """
+    def _nts(val) -> str:
+        t = pd.Timestamp(val)
+        return str(t.tz_localize(None) if t.tzinfo is not None else t)
+
+    price_map = {
+        _nts(r.get("time") or r.get("datetime")): float(r.get("price") or 0.0)
+        for r in price_records
+    }
+    discharge_mwh = 0.0
+    charge_mwh = 0.0
+    discharge_revenue = 0.0
+    charge_cost = 0.0
+    for r in dispatch_records:
+        ts = _nts(r.get("time") or r.get("datetime"))
+        mwh = float(r.get("dispatch_mw") or 0.0)
+        price = price_map.get(ts, 0.0)
+        if mwh > 0:
+            discharge_mwh += mwh
+            discharge_revenue += mwh * price
+        elif mwh < 0:
+            charge_mwh += abs(mwh)
+            charge_cost += abs(mwh) * price
+    cycles = discharge_mwh / energy_capacity_mwh if energy_capacity_mwh > 0 else None
+    spread = (
+        (discharge_revenue / discharge_mwh) - (charge_cost / charge_mwh)
+        if discharge_mwh > 0 and charge_mwh > 0 else None
+    )
+    return {"cycles": cycles, "captured_spread": spread}
 
 
 def _calc_15min_pnl(

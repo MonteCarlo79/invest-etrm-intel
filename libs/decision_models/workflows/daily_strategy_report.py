@@ -382,14 +382,19 @@ def render_bess_strategy_dashboard_payload(
     # Strategy table
     strategy_table = []
     for row in ranking.get("rows", []):
+        _cycles = row.get("avg_daily_cycles")
+        _spread = row.get("captured_spread_yuan_per_mwh")
         strategy_table.append({
             "Rank": row["rank"],
             "Strategy": row["strategy_name"],
+            "Avg Daily P&L (CNY)": _fmt_yuan(row.get("avg_daily_pnl_yuan")),
             "Total P&L (CNY)": _fmt_yuan(row.get("pnl_total_yuan")),
             "Market P&L (CNY)": _fmt_yuan(row.get("pnl_market_yuan")),
             "Subsidy (CNY)": _fmt_yuan(row.get("pnl_compensation_yuan")),
             "Gap vs PF (CNY)": _fmt_yuan(row.get("gap_vs_perfect_foresight_yuan")),
             "Capture vs PF": _fmt_pct(row.get("capture_rate_vs_pf")),
+            "Avg Daily Cycles": f"{_cycles:.2f}" if _cycles is not None else "—",
+            "Captured Spread (CNY/MWh)": f"{_spread:,.0f}" if _spread is not None else "—",
             "Granularity": row.get("granularity", "—"),
             "Available": row.get("data_available", False),
         })
@@ -594,12 +599,25 @@ def build_cross_asset_summary(
         ranking = result.get("ranking", {})
         attribution = result.get("attribution", {})
         meta = result.get("context", {}).get("asset_metadata", {})
+        # Pull per-day stats for the actual (cleared_actual) strategy from ranking rows
+        _actual_row = next(
+            (r for r in ranking.get("rows", []) if r.get("strategy_name") == "cleared_actual"),
+            None,
+        )
         rows.append({
             "asset_code": asset_code,
             "display_name": meta.get("display_name", asset_code),
             "best_strategy": ranking.get("best_strategy", "—"),
             "pf_pnl": ranking.get("perfect_foresight_pnl"),
             "actual_pnl": ranking.get("actual_pnl"),
+            "avg_daily_pnl": (
+                _actual_row.get("avg_daily_pnl_yuan") if _actual_row
+                else ranking.get("actual_pnl")
+            ),
+            "avg_daily_cycles": _actual_row.get("avg_daily_cycles") if _actual_row else None,
+            "captured_spread_yuan_per_mwh": (
+                _actual_row.get("captured_spread_yuan_per_mwh") if _actual_row else None
+            ),
             "total_gap": attribution.get("total_gap"),
             "capture_rate": (
                 (ranking.get("actual_pnl", 0) or 0) / ranking.get("perfect_foresight_pnl")

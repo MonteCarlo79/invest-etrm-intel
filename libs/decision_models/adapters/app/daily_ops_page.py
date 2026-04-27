@@ -224,11 +224,19 @@ def _render_portfolio_summary(st_module, summary: Dict[str, Any]) -> None:
     if asset_rows:
         df = pd.DataFrame([
             {
-                "Asset": r["asset_code"],
-                "Display": _IM_ASSET_DISPLAY.get(r["asset_code"], r["asset_code"]),
+                "Asset": _IM_ASSET_DISPLAY.get(r["asset_code"], r["asset_code"]),
                 "Actual P&L (CNY)": _fmt_yuan(r.get("actual_pnl")),
+                "Avg Daily P&L (CNY)": _fmt_yuan(r.get("avg_daily_pnl")),
                 "PF Benchmark (CNY)": _fmt_yuan(r.get("pf_pnl")),
                 "Capture Rate": _fmt_pct(r.get("capture_rate")),
+                "Avg Daily Cycles": (
+                    f"{r['avg_daily_cycles']:.2f}"
+                    if r.get("avg_daily_cycles") is not None else "—"
+                ),
+                "Captured Spread (CNY/MWh)": (
+                    f"{r['captured_spread_yuan_per_mwh']:,.0f}"
+                    if r.get("captured_spread_yuan_per_mwh") is not None else "—"
+                ),
                 "Ops Data": "✓" if r.get("ops_dispatch_available") else "—",
                 "Best Strategy": r.get("best_strategy", "—"),
             }
