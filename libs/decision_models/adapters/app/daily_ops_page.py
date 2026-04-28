@@ -107,8 +107,16 @@ def render_daily_ops_page() -> None:
                 "payload": payload,
             }
         else:
-            # All-assets mode — run all 4 in parallel; update badges as each finishes
-            from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
+            # All-assets mode — run all 4 in parallel; update badges as each finishes.
+            # Hard wall-clock limit: _TIMEOUT_S seconds per asset before marking as timed-out.
+            import time as _time
+            from concurrent.futures import (
+                ThreadPoolExecutor as _TPE,
+                wait as _wait,
+                FIRST_COMPLETED as _FIRST_COMPLETED,
+            )
+
+            _TIMEOUT_S = 360  # 6-minute wall-clock limit per asset
 
             _n = len(_IM_ASSET_CODES)
             _badge_cols = st.columns(_n)
@@ -122,6 +130,7 @@ def render_daily_ops_page() -> None:
 
             _asset_results: dict = {}
             _errors: dict = {}
+            _deadline = _time.monotonic() + _TIMEOUT_S
             with _TPE(max_workers=_n) as _executor:
                 _future_to_code = {
                     _executor.submit(
@@ -130,22 +139,48 @@ def render_daily_ops_page() -> None:
                     ): _code
                     for _code in _IM_ASSET_CODES
                 }
+                _pending = set(_future_to_code.keys())
                 _n_done = 0
-                for _future in _asc(_future_to_code):
-                    _code = _future_to_code[_future]
-                    _disp = _IM_ASSET_DISPLAY.get(_code, _code)
-                    _n_done += 1
-                    try:
-                        _asset_results[_code] = _future.result()
-                        _slots[_code].success(f"✓ {_disp}")
-                    except Exception as _exc:
-                        _errors[_code] = str(_exc)
-                        _slots[_code].error(f"✗ {_disp}: {_exc}")
-                    _progress.progress(
-                        _n_done / _n,
-                        text=f"{_n_done}/{_n} assets complete"
-                        + (f" ({len(_errors)} errors)" if _errors else ""),
+                while _pending:
+                    _remaining = max(0.0, _deadline - _time.monotonic())
+                    _done_set, _pending = _wait(
+                        _pending, timeout=_remaining, return_when=_FIRST_COMPLETED
                     )
+                    # Process completed futures
+                    for _future in _done_set:
+                        _code = _future_to_code[_future]
+                        _disp = _IM_ASSET_DISPLAY.get(_code, _code)
+                        _n_done += 1
+                        try:
+                            _asset_results[_code] = _future.result()
+                            _slots[_code].success(f"✓ {_disp}")
+                        except Exception as _exc:
+                            _errors[_code] = str(_exc)
+                            _slots[_code].error(f"✗ {_disp}: {_exc}")
+                        _progress.progress(
+                            _n_done / _n,
+                            text=f"{_n_done}/{_n} assets complete"
+                            + (f" ({len(_errors)} errors)" if _errors else ""),
+                        )
+                    # Deadline exceeded — cancel remaining futures
+                    if _pending and _time.monotonic() >= _deadline:
+                        for _future in _pending:
+                            _future.cancel()
+                            _code = _future_to_code[_future]
+                            _disp = _IM_ASSET_DISPLAY.get(_code, _code)
+                            _errors[_code] = f"timed out after {_TIMEOUT_S}s"
+                            _slots[_code].warning(f"⏱ {_disp}: timed out")
+                            _n_done += 1
+                            _progress.progress(
+                                _n_done / _n,
+                                text=f"{_n_done}/{_n} assets complete ({len(_errors)} errors/timeouts)",
+                            )
+                        _pending.clear()
+                        st.warning(
+                            f"Analysis timed out after {_TIMEOUT_S}s. "
+                            "Some assets were not processed. Check LP solver or DB connection."
+                        )
+                        break
             all_results = {
                 "date": date_str,
                 "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -233,9 +268,13 @@ def _render_portfolio_summary(st_module, summary: Dict[str, Any]) -> None:
                     f"{r['avg_daily_cycles']:.2f}"
                     if r.get("avg_daily_cycles") is not None else "—"
                 ),
-                "Captured Spread (CNY/MWh)": (
+                "Price Spread (CNY/MWh)": (
                     f"{r['captured_spread_yuan_per_mwh']:,.0f}"
                     if r.get("captured_spread_yuan_per_mwh") is not None else "—"
+                ),
+                "Cycle Efficiency": (
+                    f"{r['cycle_efficiency']:.3f}"
+                    if r.get("cycle_efficiency") is not None else "—"
                 ),
                 "Ops Data": "✓" if r.get("ops_dispatch_available") else "—",
                 "Best Strategy": r.get("best_strategy", "—"),
@@ -283,8 +322,8 @@ def _render_single_asset(
             )
     st.markdown("---")
 
-    tabs = st.tabs(["Strategy Ranking", "Dispatch Chart", "Price Chart",
-                    "Discrepancy Waterfall", "P&L Comparison", "Report"])
+    tabs = st.tabs(["Strategy Ranking", "Dispatch Chart",
+                    "Discrepancy Waterfall", "Report"])
 
     # ── Tab: Strategy Ranking ────────────────────────────────────────────────
     with tabs[0]:
@@ -302,7 +341,7 @@ def _render_single_asset(
 
     # ── Tab: Dispatch Chart ──────────────────────────────────────────────────
     with tabs[1]:
-        st.subheader("Dispatch Comparison (MWh per 15-min interval)")
+        st.subheader("Dispatch Comparison (MWh per 15-min interval) + RT Price")
         chart_data = payload.get("dispatch_chart_data", {})
         timestamps = chart_data.get("timestamps", [])
         nominated = chart_data.get("nominated_mwh", [])
@@ -314,64 +353,135 @@ def _render_single_asset(
         id_cleared_timestamps = chart_data.get("id_cleared_timestamps", [])
         id_cleared = chart_data.get("id_cleared_mwh", [])
 
-        if timestamps or pf_timestamps or id_cleared_timestamps:
+        price_data = payload.get("price_chart_data", {})
+        price_ts = price_data.get("timestamps_15min", [])
+        price_vals = price_data.get("prices_15min", [])
+
+        if timestamps or pf_timestamps or id_cleared_timestamps or price_ts:
             try:
+                import matplotlib
+                matplotlib.use("Agg")
+                import matplotlib.pyplot as plt
+                import matplotlib.dates as mdates
+                import numpy as np
+
                 def _strip_tz(idx):
-                    # Drop tz info while keeping local wall-clock values
+                    # Convert to CST (UTC+8) then drop TZ to get naive local timestamps
                     if idx.tz is not None:
-                        return pd.DatetimeIndex([t.replace(tzinfo=None) for t in idx])
+                        return pd.DatetimeIndex(
+                            [t.replace(tzinfo=None) for t in idx.tz_convert("Asia/Shanghai")]
+                        )
                     return idx
 
-                series = {}
+                fig, ax1 = plt.subplots(figsize=(14, 5))
+                ax2 = ax1.twinx()
+
+                bar_width = pd.Timedelta(minutes=3)  # narrower than 15-min interval
+
+                # ── Dispatch bars ──────────────────────────────────────────────
                 if timestamps:
                     ts_idx = _strip_tz(pd.to_datetime(timestamps))
-                    series["Nominated (MWh)"] = pd.Series(nominated, index=ts_idx)
-                    series["Actual (MWh)"] = pd.Series(actual, index=ts_idx)
+                    # stagger bars: nominated shifted left, actual centred, PF shifted right
+                    offsets = {
+                        "Nominated": pd.Timedelta(minutes=-5),
+                        "Actual":    pd.Timedelta(minutes=0),
+                    }
+                    colors_disp = {
+                        "Nominated": "#4C72B0",
+                        "Actual":    "#DD8452",
+                    }
+                    for label, vals, off in [
+                        ("Nominated", nominated, offsets["Nominated"]),
+                        ("Actual",    actual,    offsets["Actual"]),
+                    ]:
+                        xs = [t + off for t in ts_idx]
+                        ax1.bar(
+                            xs, vals,
+                            width=bar_width,
+                            label=label,
+                            color=colors_disp[label],
+                            alpha=0.75,
+                            align="edge",
+                        )
+
                 if pf_timestamps:
                     pf_idx = _strip_tz(pd.to_datetime(pf_timestamps))
-                    series["PF Dispatch (MWh)"] = pd.Series(pf_dispatch, index=pf_idx)
+                    pf_xs = [t + pd.Timedelta(minutes=5) for t in pf_idx]
+                    ax1.bar(
+                        pf_xs, pf_dispatch,
+                        width=bar_width,
+                        label="PF Dispatch",
+                        color="#55A868",
+                        alpha=0.65,
+                        align="edge",
+                    )
+
                 if id_cleared_timestamps:
                     idc_idx = _strip_tz(pd.to_datetime(id_cleared_timestamps))
-                    series["DA Cleared Energy (MWh)"] = pd.Series(id_cleared, index=idc_idx)
+                    idc_xs = [t + pd.Timedelta(minutes=8) for t in idc_idx]
+                    ax1.bar(
+                        idc_xs, id_cleared,
+                        width=bar_width,
+                        label="DA Cleared",
+                        color="#C44E52",
+                        alpha=0.55,
+                        align="edge",
+                    )
 
-                all_idx = pd.DatetimeIndex(
-                    sorted({t for s in series.values() for t in s.index})
+                ax1.axhline(0, color="black", linewidth=0.6)
+                ax1.set_ylabel("MWh per 15-min interval", fontsize=9)
+                ax1.tick_params(axis="y", labelsize=8)
+
+                # ── RT Price line on second y-axis ─────────────────────────────
+                if price_ts:
+                    p_idx = _strip_tz(pd.to_datetime(price_ts))
+                    # Sort by timestamp to ensure line is drawn in order
+                    p_pairs = sorted(zip(p_idx, price_vals), key=lambda x: x[0])
+                    p_times = [p[0] for p in p_pairs]
+                    p_prices = [p[1] for p in p_pairs]
+                    ax2.plot(
+                        p_times, p_prices,
+                        color="#9467BD",
+                        linewidth=1.4,
+                        label="RT Price (CNY/MWh)",
+                        zorder=3,
+                    )
+                    ax2.set_ylabel("RT Price (CNY/MWh)", fontsize=9, color="#9467BD")
+                    ax2.tick_params(axis="y", labelcolor="#9467BD", labelsize=8)
+
+                # ── X-axis formatting ──────────────────────────────────────────
+                ax1.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+                ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+                ax1.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
+                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right", fontsize=8)
+                ax1.set_xlabel("Time (CST)", fontsize=9)
+
+                # ── Legend ─────────────────────────────────────────────────────
+                h1, l1 = ax1.get_legend_handles_labels()
+                h2, l2 = ax2.get_legend_handles_labels()
+                ax1.legend(
+                    h1 + h2, l1 + l2,
+                    loc="upper left", fontsize=8, framealpha=0.7,
                 )
-                chart_df = pd.DataFrame(index=all_idx)
-                for col, s in series.items():
-                    chart_df[col] = s.reindex(all_idx)
-                st.bar_chart(chart_df)
+
+                fig.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
+
             except Exception as _e:
                 st.info(f"Could not render dispatch chart: {_e}")
             st.caption(
                 f"Source: {source}. "
-                "All series in MWh per 15-min interval. "
-                "PF Dispatch = LP perfect-foresight hourly MW ÷ 4. "
-                "DA Cleared Energy = md_id_cleared_energy (DA market award, not physical dispatch)."
+                "Bars: MWh per 15-min interval (positive=discharge, negative=charge). "
+                "PF Dispatch = LP perfect-foresight MW ÷ 4. "
+                "DA Cleared = md_id_cleared_energy (DA market award, not physical dispatch). "
+                "Purple line = RT Price on right axis."
             )
         else:
             st.info("No dispatch data available for this date.")
 
-    # ── Tab: Price Chart ─────────────────────────────────────────────────────
-    with tabs[2]:
-        st.subheader("RT Price (CNY/MWh)")
-        price_data = payload.get("price_chart_data", {})
-        ts_15 = price_data.get("timestamps_15min", [])
-        p_15 = price_data.get("prices_15min", [])
-        if ts_15:
-            try:
-                price_df = pd.DataFrame({
-                    "time": pd.to_datetime(ts_15),
-                    "RT Price 15min (CNY/MWh)": p_15,
-                }).set_index("time")
-                st.line_chart(price_df)
-            except Exception:
-                st.info("Could not render price chart.")
-        else:
-            st.info("No price data available for this date.")
-
     # ── Tab: Discrepancy Waterfall ───────────────────────────────────────────
-    with tabs[3]:
+    with tabs[2]:
         st.subheader("Discrepancy Attribution Waterfall")
         st.caption(
             "Rules-based waterfall — not causal proof. "
@@ -402,18 +512,8 @@ def _render_single_asset(
                 hide_index=True,
             )
 
-    # ── Tab: P&L Comparison ──────────────────────────────────────────────────
-    with tabs[4]:
-        st.subheader("P&L Comparison Table")
-        pnl_comp = payload.get("pnl_comparison", {})
-        if pnl_comp.get("rows"):
-            pnl_df = pd.DataFrame(pnl_comp["rows"], columns=pnl_comp["headers"])
-            st.dataframe(pnl_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No P&L comparison data.")
-
     # ── Tab: Report (markdown) ────────────────────────────────────────────────
-    with tabs[5]:
+    with tabs[3]:
         st.subheader("Report (Markdown)")
         # Regenerate markdown from the stored analysis if needed
         # (payload does not store the full markdown to keep it lean)

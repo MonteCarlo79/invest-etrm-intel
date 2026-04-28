@@ -359,7 +359,7 @@ def run_perfect_foresight_dispatch(
             for r in dispatch_records
         )
         discharge_mwh = sum(max(r["discharge_mw"], 0) * _INTERVAL_HRS_15MIN for r in dispatch_records)
-        charge_mwh = sum(abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_15MIN for r in dispatch_records)
+        charge_mwh = sum(max(r["charge_mw"], 0) * _INTERVAL_HRS_15MIN for r in dispatch_records)
         pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
 
         daily_profit = [
@@ -441,7 +441,7 @@ def run_perfect_foresight_dispatch(
         for r in dispatch_hourly
     )
     discharge_mwh = sum(max(r["discharge_mw"], 0) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly)
-    charge_mwh = sum(abs(min(r["charge_mw"], -0.0)) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly)
+    charge_mwh = sum(max(r["charge_mw"], 0) * _INTERVAL_HRS_HOURLY for r in dispatch_hourly)
     pnl_comp = discharge_mwh * meta["compensation_yuan_per_mwh"]
 
     solver_statuses = {
@@ -782,8 +782,10 @@ def rank_dispatch_strategies(
 
     _pf_hourly = pf_result.get("dispatch_hourly", [])
     if _pf_hourly:
+        _pf_is_15min = pf_result.get("pnl", {}).get("granularity") == "15min"
         _dstats["perfect_foresight_hourly"] = _calc_hourly_dispatch_stats(
-            _pf_hourly, "price", _energy_cap
+            _pf_hourly, "price", _energy_cap,
+            interval_h=_INTERVAL_HRS_15MIN if _pf_is_15min else _INTERVAL_HRS_HOURLY,
         )
     for _fs in forecast_suite.get("strategies", []):
         if _fs.get("dispatch_hourly") and _fs.get("n_days_with_forecast", 0) > 0:
@@ -800,10 +802,12 @@ def rank_dispatch_strategies(
             _dstats[_sname] = _calc_15min_dispatch_stats(_disp, _prices_15min, _energy_cap)
     _id_recs = context.get("id_cleared_energy_15min") or []
     if _id_recs:
-        _cleared_mwh = sum(float(r.get("cleared_energy_mwh_15min") or 0.0) for r in _id_recs)
+        # DA cleared energy: no charge-side data → cycles, spread, efficiency all None.
+        # Cycles are charge-based; id_cleared_energy only has discharge clearing.
         _dstats["id_cleared_energy_da"] = {
-            "cycles": _cleared_mwh / _energy_cap if _energy_cap > 0 else None,
-            "captured_spread": None,  # no charge price in DA cleared data
+            "cycles": None,
+            "captured_spread": None,
+            "cycle_efficiency": None,
         }
 
     # Collect all strategies as {name -> (pnl_total, granularity, available)}
@@ -874,9 +878,9 @@ def rank_dispatch_strategies(
             if dispatch and actual_prices:
                 pnl = _calc_15min_pnl(dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
                 strategies[scenario_name] = {
-                    "pnl_total": pnl,
-                    "pnl_market": None,
-                    "pnl_compensation": None,
+                    "pnl_total": pnl["total"],
+                    "pnl_market": pnl["market"],
+                    "pnl_compensation": pnl["compensation"],
                     "granularity": "15min",
                     "available": True,
                 }
@@ -889,27 +893,38 @@ def rank_dispatch_strategies(
             "ranking: DB pnl_df not provided — nominated/actual P&L computed from raw dispatch"
         )
 
-    # Secondary fallback: if DB path left nominated/actual unavailable but ops context has data
+    # Ops-dispatch P&L override: when ops data is in context, ALWAYS recalculate
+    # nominated_dispatch and cleared_actual from ops dispatch × actual prices.
+    # The DB precomputed P&L for these scenarios may be stale or in wrong units
+    # (raw MW without ×0.25 MWh factor → 4× P&L overcount).
+    _has_ops = bool(context.get("ops_dispatch_15min"))
     for scenario_name, dispatch_key in [
         ("nominated_dispatch", "nominated_dispatch_15min"),
         ("cleared_actual", "actual_dispatch_15min"),
     ]:
-        if not strategies.get(scenario_name, {}).get("available"):
+        _should_calc = _has_ops or not strategies.get(scenario_name, {}).get("available")
+        if _should_calc:
             dispatch = context.get(dispatch_key)
             actual_prices = context.get("actual_prices_15min", [])
             if dispatch and actual_prices:
                 pnl = _calc_15min_pnl(dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
                 strategies[scenario_name] = {
-                    "pnl_total": pnl,
-                    "pnl_market": None,
-                    "pnl_compensation": None,
+                    "pnl_total": pnl["total"],
+                    "pnl_market": pnl["market"],
+                    "pnl_compensation": pnl["compensation"],
                     "granularity": "15min",
                     "available": True,
                 }
-                caveats.append(
-                    f"ranking: {scenario_name} P&L computed from ops context dispatch "
-                    "(DB scenario row not available)"
-                )
+                if _has_ops:
+                    caveats.append(
+                        f"ranking: {scenario_name} P&L computed from ops dispatch "
+                        "(ops data is authoritative; DB precomputed value overridden)"
+                    )
+                else:
+                    caveats.append(
+                        f"ranking: {scenario_name} P&L computed from ops context dispatch "
+                        "(DB scenario row not available)"
+                    )
 
     # tt_forecast_optimal: if DB didn't populate it, compute from context forecast dispatch
     if not strategies.get("tt_forecast_optimal", {}).get("available"):
@@ -918,9 +933,9 @@ def rank_dispatch_strategies(
         if tt_dispatch and actual_prices:
             pnl = _calc_15min_pnl(tt_dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
             strategies["tt_forecast_optimal"] = {
-                "pnl_total": pnl,
-                "pnl_market": None,
-                "pnl_compensation": None,
+                "pnl_total": pnl["total"],
+                "pnl_market": pnl["market"],
+                "pnl_compensation": pnl["compensation"],
                 "granularity": "15min",
                 "available": True,
             }
@@ -948,10 +963,11 @@ def rank_dispatch_strategies(
             dtype=float,
         )
         # Market P&L: cleared energy * cleared DA price (MWh * CNY/MWh)
+        # Negative cleared_mwh = charging (cost); positive = discharging (revenue).
         pnl_market_id = float(_np.nansum(cleared_mwh * cleared_price))
-        # Subsidy: sum of all cleared MWh * compensation rate
-        total_cleared_mwh = float(_np.nansum(cleared_mwh))
-        pnl_comp_id = total_cleared_mwh * comp_per_mwh
+        # Subsidy: 350 CNY/MWh applies only to DISCHARGED energy (positive values).
+        discharge_mwh_id = float(_np.nansum(_np.maximum(cleared_mwh, 0.0)))
+        pnl_comp_id = discharge_mwh_id * comp_per_mwh
         strategies["id_cleared_energy_da"] = {
             "pnl_total": pnl_market_id + pnl_comp_id,
             "pnl_market": pnl_market_id,
@@ -974,7 +990,13 @@ def rank_dispatch_strategies(
     available = {k: v for k, v in strategies.items() if v["available"] and v["pnl_total"] is not None}
     sorted_strategies = sorted(available.items(), key=lambda x: x[1]["pnl_total"], reverse=True)
 
-    pf_pnl_total = strategies.get("perfect_foresight_hourly", {}).get("pnl_total")
+    # PF benchmark: prefer hourly LP result; fall back to DB 15-min scenarios
+    # (used when LP was skipped because DB already had PF data).
+    pf_pnl_total = (
+        strategies.get("perfect_foresight_hourly", {}).get("pnl_total")
+        or strategies.get("perfect_foresight_unrestricted", {}).get("pnl_total")
+        or strategies.get("perfect_foresight_grid_feasible", {}).get("pnl_total")
+    )
     actual_pnl_total = strategies.get("cleared_actual", {}).get("pnl_total")
 
     # Best forecast strategy
@@ -1024,6 +1046,7 @@ def rank_dispatch_strategies(
             avg_daily_cycles=_stats.get("cycles"),
             avg_daily_pnl_yuan=pnl_val / _n_days if pnl_val is not None else None,
             captured_spread_yuan_per_mwh=_stats.get("captured_spread"),
+            cycle_efficiency=_stats.get("cycle_efficiency"),
         ))
 
     # Add unavailable strategies at the bottom
@@ -1045,6 +1068,7 @@ def rank_dispatch_strategies(
                 avg_daily_cycles=None,
                 avg_daily_pnl_yuan=None,
                 captured_spread_yuan_per_mwh=None,
+                cycle_efficiency=None,
             ))
 
     caveats.append(
@@ -1070,12 +1094,21 @@ def _calc_hourly_dispatch_stats(
     dispatch_records: List[dict],
     price_key: str,
     energy_capacity_mwh: float,
+    interval_h: float = _INTERVAL_HRS_HOURLY,
 ) -> dict:
     """
-    Cycles and captured price spread from hourly LP dispatch records.
+    Cycles, captured spread, and cycle efficiency from LP dispatch records.
 
-    LP convention: discharge_mw > 0 (discharging), charge_mw < 0 (charging).
-    Returns: {cycles, captured_spread}
+    LP convention: discharge_mw >= 0 (discharging), charge_mw >= 0 (charging).
+    Use interval_h=_INTERVAL_HRS_15MIN for 15-min records, default 1.0 for hourly.
+
+    Returns
+    -------
+    cycles           : charge_mwh / energy_capacity_mwh
+                       (charge-based — consistent with daily cycling definition)
+    captured_spread  : (discharge_revenue − charge_cost) / charge_mwh  [CNY/MWh]
+                       = market P&L per MWh of charging energy consumed
+    cycle_efficiency : discharge_mwh / charge_mwh  (dimensionless; ≈ round-trip eff)
     """
     discharge_mwh = 0.0
     charge_mwh = 0.0
@@ -1086,19 +1119,18 @@ def _calc_hourly_dispatch_stats(
         c_mw = float(r.get("charge_mw") or 0.0)
         price = float(r.get(price_key) or 0.0)
         if d_mw > 0:
-            mwh = d_mw * _INTERVAL_HRS_HOURLY
+            mwh = d_mw * interval_h
             discharge_mwh += mwh
             discharge_revenue += mwh * price
-        if c_mw < 0:  # negative = charging
-            mwh = abs(c_mw) * _INTERVAL_HRS_HOURLY
+        if c_mw > 0:  # positive = charging (LP stores charge_mw >= 0)
+            mwh = c_mw * interval_h
             charge_mwh += mwh
             charge_cost += mwh * price
-    cycles = discharge_mwh / energy_capacity_mwh if energy_capacity_mwh > 0 else None
-    spread = (
-        (discharge_revenue / discharge_mwh) - (charge_cost / charge_mwh)
-        if discharge_mwh > 0 and charge_mwh > 0 else None
-    )
-    return {"cycles": cycles, "captured_spread": spread}
+    cycles = charge_mwh / energy_capacity_mwh if energy_capacity_mwh > 0 else None
+    market_pnl = discharge_revenue - charge_cost
+    captured_spread = market_pnl / charge_mwh if charge_mwh > 0 else None
+    cycle_efficiency = discharge_mwh / charge_mwh if charge_mwh > 0 else None
+    return {"cycles": cycles, "captured_spread": captured_spread, "cycle_efficiency": cycle_efficiency}
 
 
 def _calc_15min_dispatch_stats(
@@ -1107,11 +1139,18 @@ def _calc_15min_dispatch_stats(
     energy_capacity_mwh: float,
 ) -> dict:
     """
-    Cycles and captured price spread from 15-min dispatch records.
+    Cycles, captured spread, and cycle efficiency from 15-min dispatch records.
 
     dispatch_mw > 0  = discharge (MWh per interval)
     dispatch_mw < 0  = charging  (MWh per interval, negative)
-    Returns: {cycles, captured_spread}
+
+    Returns
+    -------
+    cycles           : charge_mwh / energy_capacity_mwh
+                       (charge-based — consistent with daily cycling definition)
+    captured_spread  : (discharge_revenue − charge_cost) / charge_mwh  [CNY/MWh]
+                       = market P&L per MWh of charging energy consumed
+    cycle_efficiency : discharge_mwh / charge_mwh  (dimensionless; ≈ round-trip eff)
     """
     def _nts(val) -> str:
         t = pd.Timestamp(val)
@@ -1135,20 +1174,23 @@ def _calc_15min_dispatch_stats(
         elif mwh < 0:
             charge_mwh += abs(mwh)
             charge_cost += abs(mwh) * price
-    cycles = discharge_mwh / energy_capacity_mwh if energy_capacity_mwh > 0 else None
-    spread = (
-        (discharge_revenue / discharge_mwh) - (charge_cost / charge_mwh)
-        if discharge_mwh > 0 and charge_mwh > 0 else None
-    )
-    return {"cycles": cycles, "captured_spread": spread}
+    cycles = charge_mwh / energy_capacity_mwh if energy_capacity_mwh > 0 else None
+    market_pnl = discharge_revenue - charge_cost
+    captured_spread = market_pnl / charge_mwh if charge_mwh > 0 else None
+    cycle_efficiency = discharge_mwh / charge_mwh if charge_mwh > 0 else None
+    return {"cycles": cycles, "captured_spread": captured_spread, "cycle_efficiency": cycle_efficiency}
 
 
 def _calc_15min_pnl(
     dispatch_records: List[dict],
     price_records: List[dict],
     compensation_yuan_per_mwh: float,
-) -> float:
-    """Inline 15-min P&L helper (used when DB pnl_df not available)."""
+) -> dict:
+    """
+    Inline 15-min P&L helper (used when DB pnl_df not available).
+
+    Returns dict with keys: total, market, compensation.
+    """
     def _nts(val) -> str:
         t = pd.Timestamp(val)
         return str(t.tz_localize(None) if t.tzinfo is not None else t)
@@ -1165,10 +1207,11 @@ def _calc_15min_pnl(
     discharge_mwh = 0.0
     for ts, dispatch in dispatch_map.items():
         price = price_map.get(ts, 0.0)
-        # dispatch values from ops_bess_dispatch_15min are already in MWh per interval
+        # dispatch values are in MWh per interval (already × 0.25)
         market_pnl += dispatch * price
         discharge_mwh += max(dispatch, 0)
-    return market_pnl + discharge_mwh * compensation_yuan_per_mwh
+    compensation = discharge_mwh * compensation_yuan_per_mwh
+    return {"total": market_pnl + compensation, "market": market_pnl, "compensation": compensation}
 
 
 # ===========================================================================

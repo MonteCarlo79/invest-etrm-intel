@@ -135,20 +135,48 @@ def run_bess_daily_strategy_analysis(
     # Step 2b: Compute tt_forecast_optimal dispatch from forecast price table
     context = _enrich_context_with_forecast_dispatch(context, d)
 
-    # Step 3: Perfect foresight benchmark
-    pf_result = run_perfect_foresight_dispatch(context)
-
-    # Step 4: Forecast-driven dispatch suite
-    if forecast_models is None:
-        forecast_models = ["ols_da_time_v1"]
-    forecast_suite = run_forecast_dispatch_suite(context, forecast_models)
-
-    # Step 5: Load pre-computed DB P&L (most accurate for nominated / actual)
+    # Step 3: Load pre-computed DB P&L early so we can skip LP when DB has PF data.
+    # reports.bess_asset_daily_scenario_pnl has perfect_foresight_unrestricted /
+    # perfect_foresight_grid_feasible at 15-min resolution — better than hourly LP.
     db_pnl_df, db_pnl_notes = load_precomputed_scenario_pnl(asset_code, d, d)
     db_attr_df, db_attr_notes = load_precomputed_attribution(asset_code, d, d)
     context.setdefault("data_quality_notes", [])
     context["data_quality_notes"].extend(db_pnl_notes)
     context["data_quality_notes"].extend(db_attr_notes)
+
+    # Step 3b: Check if DB already has PF scenarios — if so, skip LP to avoid hang.
+    _pf_scenarios = {"perfect_foresight_unrestricted", "perfect_foresight_grid_feasible"}
+    _pf_in_db = (
+        not db_pnl_df.empty
+        and db_pnl_df[
+            db_pnl_df["scenario_name"].isin(_pf_scenarios)
+            & (db_pnl_df["scenario_available"] == True)
+        ].shape[0] > 0
+    )
+
+    # Step 4: Perfect foresight benchmark (LP) — skipped when DB has PF scenarios.
+    if not _pf_in_db:
+        pf_result = run_perfect_foresight_dispatch(context)
+    else:
+        pf_result = {}
+        context["data_quality_notes"].append(
+            "perfect_foresight_hourly LP skipped: DB has perfect_foresight scenarios"
+        )
+
+    # Step 5: Forecast-driven dispatch suite (LP) — skipped when DB has PF scenarios.
+    if forecast_models is None:
+        forecast_models = ["ols_da_time_v1"]
+    if not _pf_in_db:
+        forecast_suite = run_forecast_dispatch_suite(context, forecast_models)
+    else:
+        forecast_suite = {
+            "strategies": [],
+            "requested_models": forecast_models,
+            "suite_caveats": ["forecast LP skipped: DB has perfect_foresight scenarios"],
+        }
+        context["data_quality_notes"].append(
+            "forecast_dispatch_suite LP skipped: DB has perfect_foresight scenarios"
+        )
 
     # Step 6: Rank strategies
     ranking = rank_dispatch_strategies(
@@ -359,7 +387,7 @@ def render_bess_strategy_dashboard_payload(
     summary_cards = [
         {"label": "Best Strategy", "value": best, "delta": None},
         {
-            "label": "PF Benchmark (hourly)",
+            "label": "PF Benchmark",
             "value": f"{pf_pnl:,.0f} CNY" if pf_pnl is not None else "—",
             "delta": None,
         },
@@ -384,6 +412,7 @@ def render_bess_strategy_dashboard_payload(
     for row in ranking.get("rows", []):
         _cycles = row.get("avg_daily_cycles")
         _spread = row.get("captured_spread_yuan_per_mwh")
+        _eff = row.get("cycle_efficiency")
         strategy_table.append({
             "Rank": row["rank"],
             "Strategy": row["strategy_name"],
@@ -394,7 +423,8 @@ def render_bess_strategy_dashboard_payload(
             "Gap vs PF (CNY)": _fmt_yuan(row.get("gap_vs_perfect_foresight_yuan")),
             "Capture vs PF": _fmt_pct(row.get("capture_rate_vs_pf")),
             "Avg Daily Cycles": f"{_cycles:.2f}" if _cycles is not None else "—",
-            "Captured Spread (CNY/MWh)": f"{_spread:,.0f}" if _spread is not None else "—",
+            "Price Spread (CNY/MWh)": f"{_spread:,.0f}" if _spread is not None else "—",
+            "Cycle Efficiency": f"{_eff:.3f}" if _eff is not None else "—",
             "Granularity": row.get("granularity", "—"),
             "Available": row.get("data_available", False),
         })
@@ -455,9 +485,15 @@ def _enrich_context_with_ops_dispatch(
     """
     Load ops dispatch data and enrich the context dict.
 
+    Ops data is authoritative: when ops records are available they ALWAYS
+    overwrite context["nominated_dispatch_15min"] and context["actual_dispatch_15min"],
+    even if canon.scenario_dispatch_15min already populated those keys.
+    Canon data may store raw MW without the ×0.25 MWh factor, which would
+    cause 4× overcount in P&L and cycles (e.g. cycles=21 instead of ~3).
+
     If ops data is available:
-      - Sets context["nominated_dispatch_15min"] if it was None/empty
-      - Sets context["actual_dispatch_15min"] if it was None/empty
+      - Always sets context["nominated_dispatch_15min"] from ops
+      - Always sets context["actual_dispatch_15min"] from ops
       - Always adds context["ops_dispatch_15min"] with the raw ops data
     Adds data quality notes about the source used.
 
@@ -476,41 +512,48 @@ def _enrich_context_with_ops_dispatch(
     ops_records = ops_df.to_dict("records")
     context["ops_dispatch_15min"] = ops_records
 
-    # Nominated: prefer ops over canon when canon is empty
-    if not context.get("nominated_dispatch_15min"):
-        nominated_records = [
-            {
-                "time": str(r["interval_start"]),
-                "dispatch_mw": r["nominated_dispatch_mw"],
-            }
-            for r in ops_records
-            if r["nominated_dispatch_mw"] is not None
-        ]
-        if nominated_records:
-            context["nominated_dispatch_15min"] = nominated_records
-            context["data_quality_notes"].append(
-                "nominated_dispatch: sourced from marketdata.ops_bess_dispatch_15min "
-                "(申报曲线 from Excel ops file) — canon.scenario_dispatch_15min had no data; "
-                "nominated_dispatch_mw is the operator nomination, NOT market-cleared energy"
-            )
+    # Nominated: ops data is always authoritative over canon.scenario_dispatch_15min.
+    # nominated_dispatch_mw in DB is in MW with ops-file sign convention:
+    #   negative = discharge (BESS selling to grid)
+    #   positive = charge    (BESS buying from grid)
+    # Negate and convert MW→MWh so records follow LP convention (positive=discharge)
+    # used by _calc_15min_pnl and _calc_15min_dispatch_stats.
+    # NOTE: Canon dispatch may be in raw MW (not pre-multiplied by 0.25), so always
+    # prefer ops data when available to avoid 4× overcount in P&L and cycles.
+    nominated_records = [
+        {
+            "time": str(r["interval_start"]),
+            "dispatch_mw": -r["nominated_dispatch_mw"] * _INTERVAL_HRS_15MIN,
+        }
+        for r in ops_records
+        if r["nominated_dispatch_mw"] is not None
+    ]
+    if nominated_records:
+        context["nominated_dispatch_15min"] = nominated_records
+        context["data_quality_notes"].append(
+            "nominated_dispatch: sourced from marketdata.ops_bess_dispatch_15min "
+            "(申报曲线 from Excel ops file) — overwrites canon.scenario_dispatch_15min; "
+            "nominated_dispatch_mw is the operator nomination, NOT market-cleared energy"
+        )
 
-    # Actual: prefer ops over canon when canon is empty
-    if not context.get("actual_dispatch_15min"):
-        actual_records = [
-            {
-                "time": str(r["interval_start"]),
-                "dispatch_mw": r["actual_dispatch_mw"],
-            }
-            for r in ops_records
-            if r["actual_dispatch_mw"] is not None
-        ]
-        if actual_records:
-            context["actual_dispatch_15min"] = actual_records
-            context["data_quality_notes"].append(
-                "actual_dispatch: sourced from marketdata.ops_bess_dispatch_15min "
-                "(实际充放曲线 from Excel ops file) — canon.scenario_dispatch_15min had no data; "
-                "actual_dispatch_mw is physical output, NOT market-cleared energy"
-            )
+    # Actual: ops data is always authoritative over canon.scenario_dispatch_15min.
+    # actual_dispatch_mw in DB uses same ops-file sign convention as nominated_dispatch_mw.
+    # Negate and convert MW→MWh for LP convention (positive=discharge).
+    actual_records = [
+        {
+            "time": str(r["interval_start"]),
+            "dispatch_mw": -r["actual_dispatch_mw"] * _INTERVAL_HRS_15MIN,
+        }
+        for r in ops_records
+        if r["actual_dispatch_mw"] is not None
+    ]
+    if actual_records:
+        context["actual_dispatch_15min"] = actual_records
+        context["data_quality_notes"].append(
+            "actual_dispatch: sourced from marketdata.ops_bess_dispatch_15min "
+            "(实际充放曲线 from Excel ops file) — overwrites canon.scenario_dispatch_15min; "
+            "actual_dispatch_mw is physical output, NOT market-cleared energy"
+        )
 
     return context, True
 
@@ -618,6 +661,7 @@ def build_cross_asset_summary(
             "captured_spread_yuan_per_mwh": (
                 _actual_row.get("captured_spread_yuan_per_mwh") if _actual_row else None
             ),
+            "cycle_efficiency": _actual_row.get("cycle_efficiency") if _actual_row else None,
             "total_gap": attribution.get("total_gap"),
             "capture_rate": (
                 (ranking.get("actual_pnl", 0) or 0) / ranking.get("perfect_foresight_pnl")
@@ -661,8 +705,16 @@ def _build_dispatch_chart_data(
     ops_data = context.get("ops_dispatch_15min")
     if ops_data:
         timestamps = [str(r["interval_start"]) for r in ops_data]
-        nominated_mw = [r.get("nominated_dispatch_mw") for r in ops_data]
-        actual_mw = [r.get("actual_dispatch_mw") for r in ops_data]
+        # Convert MW→MWh and flip sign to match LP convention (positive=discharge, negative=charge).
+        # Raw DB values follow ops-file convention where negative=discharge.
+        nominated_mw = [
+            -(r.get("nominated_dispatch_mw") or 0.0) * _INTERVAL_HRS_15MIN
+            for r in ops_data
+        ]
+        actual_mw = [
+            -(r.get("actual_dispatch_mw") or 0.0) * _INTERVAL_HRS_15MIN
+            for r in ops_data
+        ]
         source = "ops_bess_dispatch_15min"
     else:
         nominated = context.get("nominated_dispatch_15min") or []

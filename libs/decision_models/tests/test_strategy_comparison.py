@@ -202,16 +202,18 @@ class TestRunPerfectForesightDispatch:
 
         ctx = _make_context()
         ctx["actual_prices_hourly"] = []
+        ctx["actual_prices_15min"] = []
         result = run_perfect_foresight_dispatch(ctx)
         assert result["pnl"]["n_days_solved"] == 0
 
-    def test_granularity_is_hourly(self):
+    def test_granularity_is_15min_when_prices_available(self):
         import libs.decision_models.bess_dispatch_simulation_multiday  # noqa
         from libs.decision_models.workflows.strategy_comparison import run_perfect_foresight_dispatch
 
         ctx = _make_context()
         result = run_perfect_foresight_dispatch(ctx)
-        assert result["pnl"]["granularity"] == "hourly"
+        # PF prefers 15-min prices (true upper bound) when available
+        assert result["pnl"]["granularity"] == "15min"
 
 
 # ---------------------------------------------------------------------------

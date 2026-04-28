@@ -384,18 +384,24 @@ class TestEnrichContextWithOpsDispatch:
         assert available is True
         assert enriched["nominated_dispatch_15min"] is not None
         assert len(enriched["nominated_dispatch_15min"]) == 2
-        assert enriched["nominated_dispatch_15min"][0]["dispatch_mw"] == 50.0
+        # dispatch_mw = -nominated_dispatch_mw * 0.25 (sign flip + MW→MWh)
+        # 50.0 MW (charging in ops convention) → -50.0 * 0.25 = -12.5 MWh (charging in LP convention)
+        assert enriched["nominated_dispatch_15min"][0]["dispatch_mw"] == pytest.approx(-12.5)
 
         assert enriched["actual_dispatch_15min"] is not None
         assert len(enriched["actual_dispatch_15min"]) == 2
 
         assert enriched["ops_dispatch_15min"] is not None
 
-    def test_ops_data_does_not_overwrite_existing_canon(self):
-        """Canon data is preserved when ops data is also available."""
-        ctx = _make_context(with_nominated=True, with_actual=True)
-        original_nominated = ctx["nominated_dispatch_15min"]
+    def test_ops_data_overwrites_existing_canon(self):
+        """Ops data is authoritative and ALWAYS overwrites canon data when available.
 
+        Canon dispatch (scenario_dispatch_15min) may store values in raw MW without
+        the ×0.25 MWh conversion, which would cause 4× P&L overcount and cycles=21+.
+        Ops data is the direct Excel measurement and must take priority.
+        """
+        ctx = _make_context(with_nominated=True, with_actual=True)
+        # Canon has 16 records at dispatch_mw=50.0; ops has 1 record at -999.0*0.25=-249.75
         ops_df = pd.DataFrame({
             "interval_start": pd.to_datetime(["2026-04-17T08:00:00+08:00"]),
             "nominated_dispatch_mw": [999.0],
@@ -411,8 +417,10 @@ class TestEnrichContextWithOpsDispatch:
                 ctx, date(2026, 4, 17)
             )
 
-        # Canon nominated is preserved (ops should NOT overwrite)
-        assert enriched["nominated_dispatch_15min"] is original_nominated
+        # Ops data must overwrite canon — 1 ops record, not 16 canon records
+        assert len(enriched["nominated_dispatch_15min"]) == 1
+        # dispatch_mw = -999.0 * 0.25 = -249.75 (ops overwrite, not original canon 50.0)
+        assert enriched["nominated_dispatch_15min"][0]["dispatch_mw"] == pytest.approx(-249.75)
 
     def test_empty_ops_df_returns_false(self):
         """Empty ops DataFrame returns available=False and does not modify context."""
@@ -750,8 +758,8 @@ class TestRenderBessStrategyDashboardPayload:
         )
         chart = payload["dispatch_chart_data"]
         assert "timestamps" in chart
-        assert "nominated_mw" in chart
-        assert "actual_mw" in chart
+        assert "nominated_mwh" in chart
+        assert "actual_mwh" in chart
 
 
 # ---------------------------------------------------------------------------
@@ -782,8 +790,10 @@ class TestBuildDispatchChartData:
 
         assert chart["source"] == "ops_bess_dispatch_15min"
         assert len(chart["timestamps"]) == 2
-        assert chart["nominated_mw"][0] == 50.0
-        assert chart["actual_mw"][0] == 45.0
+        # Values are negated and converted MW→MWh: -(50.0) * 0.25 = -12.5, -(45.0) * 0.25 = -11.25
+        # Positive ops values = charging → negative LP convention (positive=discharge)
+        assert chart["nominated_mwh"][0] == pytest.approx(-12.5)
+        assert chart["actual_mwh"][0] == pytest.approx(-11.25)
 
     def test_falls_back_to_canon_when_no_ops(self):
         ctx = _make_context()
