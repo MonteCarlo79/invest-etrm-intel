@@ -1179,7 +1179,11 @@ def _calc_15min_dispatch_stats(
     """
     def _nts(val) -> str:
         t = pd.Timestamp(val)
-        return str(t.tz_localize(None) if t.tzinfo is not None else t)
+        if t.tzinfo is not None:
+            # Convert to CST (UTC+8) first so UTC and +08:00 timestamps
+            # both normalise to the same naive CST wall-clock key.
+            return str(t.tz_convert("Asia/Shanghai").tz_localize(None))
+        return str(t)
 
     price_map = {
         _nts(r.get("time") or r.get("datetime")): float(r.get("price") or 0.0)
@@ -1218,7 +1222,11 @@ def _calc_15min_pnl(
     """
     def _nts(val) -> str:
         t = pd.Timestamp(val)
-        return str(t.tz_localize(None) if t.tzinfo is not None else t)
+        if t.tzinfo is not None:
+            # Convert to CST (UTC+8) first so UTC and +08:00 timestamps
+            # both normalise to the same naive CST wall-clock key.
+            return str(t.tz_convert("Asia/Shanghai").tz_localize(None))
+        return str(t)
 
     dispatch_map = {
         _nts(r.get("time") or r.get("datetime")): float(r.get("dispatch_mw", 0.0))

@@ -115,10 +115,15 @@ def load_actual_prices_15min(
           AND time < %(end_ts)s
         ORDER BY time
     """
+    # Localise boundaries to CST (Asia/Shanghai) so that psycopg2 sends a
+    # TZ-aware parameter and PostgreSQL compares against the TIMESTAMPTZ column
+    # in the correct timezone.  Without this, naive pd.Timestamp is treated as
+    # UTC, shifting the returned price window 8 h forward relative to the CST
+    # dispatch data.
     params = {
         "asset_code": asset_code,
-        "start_ts": pd.Timestamp(date_from),
-        "end_ts": pd.Timestamp(date_to) + pd.Timedelta(days=1),
+        "start_ts": pd.Timestamp(date_from).tz_localize("Asia/Shanghai"),
+        "end_ts": (pd.Timestamp(date_to) + pd.Timedelta(days=1)).tz_localize("Asia/Shanghai"),
     }
     df, err = _run_query_safe(sql, params)
     if err:

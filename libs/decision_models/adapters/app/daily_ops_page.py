@@ -351,7 +351,6 @@ def _render_single_asset(
 
     # ── Tab: Dispatch Chart ──────────────────────────────────────────────────
     with tabs[1]:
-        st.subheader("Dispatch Comparison (MWh per 15-min interval) + RT Price")
         chart_data = payload.get("dispatch_chart_data", {})
         timestamps = chart_data.get("timestamps", [])
         nominated = chart_data.get("nominated_mwh", [])
@@ -373,23 +372,47 @@ def _render_single_asset(
                 from plotly.subplots import make_subplots
 
                 def _strip_tz(idx):
-                    # Convert to CST (UTC+8) then drop TZ to get naive local timestamps
+                    """Convert any TZ-aware index to CST naive. Naive assumed already CST."""
                     if idx.tz is not None:
                         return pd.DatetimeIndex(
                             [t.replace(tzinfo=None) for t in idx.tz_convert("Asia/Shanghai")]
                         )
-                    return idx
+                    # Naive timestamps from DB are UTC — shift to CST (+8h)
+                    return idx + pd.Timedelta(hours=8)
 
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
+                # ── Subplot: row 1 = dispatch, row 2 = RT price ────────────────
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    row_heights=[0.65, 0.35],
+                    vertical_spacing=0.06,
+                    subplot_titles=("Dispatch (MWh per 15-min interval)", "RT Price (CNY/MWh)"),
+                )
 
-                # ── Dispatch step lines ────────────────────────────────────────
-                _dispatch_series = [
+                # ── Actual dispatch: solid semi-transparent bar (row 1) ────────
+                if timestamps and actual:
+                    _act_idx = _strip_tz(pd.to_datetime(timestamps))
+                    # Bar width: 14 min in ms so adjacent bars touch but don't overlap
+                    _bar_width_ms = 14 * 60 * 1000
+                    fig.add_trace(
+                        go.Bar(
+                            x=_act_idx,
+                            y=actual,
+                            name="Actual",
+                            marker=dict(color="#DD8452", opacity=0.45),
+                            width=_bar_width_ms,
+                            hovertemplate="%{y:.3f} MWh<extra>Actual</extra>",
+                        ),
+                        row=1, col=1,
+                    )
+
+                # ── Other dispatch series: step lines on top (row 1) ──────────
+                _step_series = [
                     ("Nominated",   timestamps,            nominated,   "#4C72B0", "solid"),
-                    ("Actual",      timestamps,            actual,      "#DD8452", "solid"),
                     ("PF Dispatch", pf_timestamps,         pf_dispatch, "#55A868", "dash"),
                     ("DA Cleared",  id_cleared_timestamps, id_cleared,  "#C44E52", "dot"),
                 ]
-                for _label, _ts, _vals, _color, _dash in _dispatch_series:
+                for _label, _ts, _vals, _color, _dash in _step_series:
                     if _ts and _vals:
                         _idx = _strip_tz(pd.to_datetime(_ts))
                         fig.add_trace(
@@ -398,13 +421,13 @@ def _render_single_asset(
                                 y=_vals,
                                 mode="lines",
                                 name=_label,
-                                line=dict(color=_color, dash=_dash, width=1.5, shape="hv"),
+                                line=dict(color=_color, dash=_dash, width=1.8, shape="hv"),
                                 hovertemplate="%{y:.3f} MWh<extra>" + _label + "</extra>",
                             ),
-                            secondary_y=False,
+                            row=1, col=1,
                         )
 
-                # ── RT Price step line on secondary y-axis ─────────────────────
+                # ── RT Price line (row 2) ──────────────────────────────────────
                 if price_ts and price_vals:
                     _p_idx = _strip_tz(pd.to_datetime(price_ts))
                     fig.add_trace(
@@ -412,41 +435,39 @@ def _render_single_asset(
                             x=_p_idx,
                             y=price_vals,
                             mode="lines",
-                            name="RT Price (CNY/MWh)",
-                            line=dict(color="#9467BD", width=1.4, shape="hv"),
+                            name="RT Price",
+                            line=dict(color="#9467BD", width=1.5),
                             hovertemplate="%{y:,.0f} CNY/MWh<extra>RT Price</extra>",
+                            showlegend=True,
                         ),
-                        secondary_y=True,
+                        row=2, col=1,
                     )
 
                 fig.update_layout(
-                    height=420,
+                    height=520,
                     hovermode="x unified",
                     legend=dict(
                         orientation="h",
-                        yanchor="bottom", y=1.02,
+                        yanchor="bottom", y=1.04,
                         xanchor="left", x=0,
                     ),
-                    margin=dict(l=60, r=60, t=60, b=60),
-                    xaxis=dict(title="Time (CST)"),
-                    yaxis=dict(title="MWh per 15-min interval"),
+                    margin=dict(l=60, r=20, t=70, b=40),
+                    barmode="overlay",
                 )
-                fig.update_yaxes(
-                    title_text="RT Price (CNY/MWh)",
-                    secondary_y=True,
-                    title_font=dict(color="#9467BD"),
-                    tickfont=dict(color="#9467BD"),
-                )
+                fig.update_yaxes(title_text="MWh / 15-min", row=1, col=1)
+                fig.update_yaxes(title_text="CNY/MWh", title_font=dict(color="#9467BD"),
+                                 tickfont=dict(color="#9467BD"), row=2, col=1)
+                fig.update_xaxes(title_text="Time (CST)", row=2, col=1)
                 st.plotly_chart(fig, use_container_width=True)
 
             except Exception as _e:
                 st.info(f"Could not render dispatch chart: {_e}")
             st.caption(
                 f"Source: {source}. "
-                "Step lines: MWh per 15-min interval (positive=discharge, negative=charge). "
+                "Dispatch: bars=Actual (semi-transparent), step lines=Nominated/PF/DA Cleared. "
+                "Positive=discharge, negative=charge. "
                 "PF Dispatch = LP perfect-foresight MW ÷ 4. "
-                "DA Cleared = md_id_cleared_energy (DA market award, not physical dispatch). "
-                "Purple line = RT Price on right axis."
+                "DA Cleared = md_id_cleared_energy (DA market award, not physical dispatch)."
             )
         else:
             st.info("No dispatch data available for this date.")
