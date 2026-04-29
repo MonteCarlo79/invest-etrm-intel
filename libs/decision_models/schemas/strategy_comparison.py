@@ -194,9 +194,10 @@ class StrategyRankRow:
     capture_rate_vs_pf: Optional[float]              # pnl / pf_pnl; None if PF not available
     granularity: str                                 # "hourly" or "15min"
     data_available: bool
-    avg_daily_cycles: Optional[float] = None         # discharge_mwh / energy_capacity_mwh / n_days
+    avg_daily_cycles: Optional[float] = None         # charge_mwh / energy_capacity_mwh / n_days
     avg_daily_pnl_yuan: Optional[float] = None       # pnl_total / n_days in date range
-    captured_spread_yuan_per_mwh: Optional[float] = None  # avg discharge price − avg charge price
+    captured_spread_yuan_per_mwh: Optional[float] = None  # market_pnl / charge_mwh [CNY/MWh charged]
+    cycle_efficiency: Optional[float] = None         # discharge_mwh / charge_mwh (≈ round-trip eff)
 
 
 @dataclass

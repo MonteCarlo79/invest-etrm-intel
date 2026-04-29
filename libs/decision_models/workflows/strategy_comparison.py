@@ -779,6 +779,9 @@ def rank_dispatch_strategies(
     ).days + 1)
     _prices_15min = context.get("actual_prices_15min", [])
     _dstats: Dict[str, dict] = {}
+    # ops dispatch is already in MWh (×0.25 applied in _enrich_context_with_ops_dispatch).
+    # canon.scenario_dispatch_15min stores raw MW — must apply ×0.25 before stats/P&L calcs.
+    _has_ops = bool(context.get("ops_dispatch_15min"))
 
     _pf_hourly = pf_result.get("dispatch_hourly", [])
     if _pf_hourly:
@@ -799,16 +802,33 @@ def rank_dispatch_strategies(
     ]:
         _disp = context.get(_dkey)
         if _disp and _prices_15min:
+            # tt_forecast_optimal is always MWh (converted in _enrich_context_with_forecast_dispatch).
+            # For non-ops nominated/actual, canon table stores raw MW — convert to MWh for stats.
+            if not _has_ops and _sname != "tt_forecast_optimal":
+                _disp = [
+                    {**r, "dispatch_mw": float(r.get("dispatch_mw") or 0.0) * _INTERVAL_HRS_15MIN}
+                    for r in _disp
+                ]
             _dstats[_sname] = _calc_15min_dispatch_stats(_disp, _prices_15min, _energy_cap)
     _id_recs = context.get("id_cleared_energy_15min") or []
     if _id_recs:
-        # DA cleared energy: no charge-side data → cycles, spread, efficiency all None.
-        # Cycles are charge-based; id_cleared_energy only has discharge clearing.
-        _dstats["id_cleared_energy_da"] = {
-            "cycles": None,
-            "captured_spread": None,
-            "cycle_efficiency": None,
-        }
+        # Compute cycles/spread/efficiency from DA cleared energy records.
+        # cleared_energy_mwh_15min is already in MWh per interval (positive=discharge, negative=charge).
+        # Use cleared_price (DA price) for spread so figures are DA-settled, not RT-settled.
+        _id_dispatch = [
+            {"time": str(r.get("datetime")), "dispatch_mw": float(r.get("cleared_energy_mwh_15min") or 0.0)}
+            for r in _id_recs if r.get("cleared_energy_mwh_15min") is not None
+        ]
+        _id_da_prices = [
+            {"time": str(r.get("datetime")), "price": float(r.get("cleared_price") or 0.0)}
+            for r in _id_recs if r.get("cleared_price") is not None
+        ]
+        if _id_dispatch and _id_da_prices:
+            _dstats["id_cleared_energy_da"] = _calc_15min_dispatch_stats(
+                _id_dispatch, _id_da_prices, _energy_cap
+            )
+        else:
+            _dstats["id_cleared_energy_da"] = {"cycles": None, "captured_spread": None, "cycle_efficiency": None}
 
     # Collect all strategies as {name -> (pnl_total, granularity, available)}
     strategies: Dict[str, Dict[str, Any]] = {}
@@ -893,38 +913,42 @@ def rank_dispatch_strategies(
             "ranking: DB pnl_df not provided — nominated/actual P&L computed from raw dispatch"
         )
 
-    # Ops-dispatch P&L override: when ops data is in context, ALWAYS recalculate
-    # nominated_dispatch and cleared_actual from ops dispatch × actual prices.
-    # The DB precomputed P&L for these scenarios may be stale or in wrong units
-    # (raw MW without ×0.25 MWh factor → 4× P&L overcount).
-    _has_ops = bool(context.get("ops_dispatch_15min"))
+    # Always recalculate nominated_dispatch and cleared_actual P&L from context dispatch.
+    # This corrects DB precomputed values that may have MW/MWh unit errors:
+    #   - canon.scenario_dispatch_15min stores raw MW; ×0.25 must be applied here.
+    #   - ops dispatch is already in MWh (applied in _enrich_context_with_ops_dispatch).
+    # _has_ops is defined above near the stats section.
+    _actual_prices = context.get("actual_prices_15min", [])
     for scenario_name, dispatch_key in [
         ("nominated_dispatch", "nominated_dispatch_15min"),
         ("cleared_actual", "actual_dispatch_15min"),
     ]:
-        _should_calc = _has_ops or not strategies.get(scenario_name, {}).get("available")
-        if _should_calc:
-            dispatch = context.get(dispatch_key)
-            actual_prices = context.get("actual_prices_15min", [])
-            if dispatch and actual_prices:
-                pnl = _calc_15min_pnl(dispatch, actual_prices, meta["compensation_yuan_per_mwh"])
-                strategies[scenario_name] = {
-                    "pnl_total": pnl["total"],
-                    "pnl_market": pnl["market"],
-                    "pnl_compensation": pnl["compensation"],
-                    "granularity": "15min",
-                    "available": True,
-                }
-                if _has_ops:
-                    caveats.append(
-                        f"ranking: {scenario_name} P&L computed from ops dispatch "
-                        "(ops data is authoritative; DB precomputed value overridden)"
-                    )
-                else:
-                    caveats.append(
-                        f"ranking: {scenario_name} P&L computed from ops context dispatch "
-                        "(DB scenario row not available)"
-                    )
+        dispatch = context.get(dispatch_key)
+        if dispatch and _actual_prices:
+            if not _has_ops:
+                # Canon dispatch is in raw MW — convert to MWh per 15-min interval.
+                dispatch = [
+                    {**r, "dispatch_mw": float(r.get("dispatch_mw") or 0.0) * _INTERVAL_HRS_15MIN}
+                    for r in dispatch
+                ]
+            pnl = _calc_15min_pnl(dispatch, _actual_prices, meta["compensation_yuan_per_mwh"])
+            strategies[scenario_name] = {
+                "pnl_total": pnl["total"],
+                "pnl_market": pnl["market"],
+                "pnl_compensation": pnl["compensation"],
+                "granularity": "15min",
+                "available": True,
+            }
+            if _has_ops:
+                caveats.append(
+                    f"ranking: {scenario_name} P&L from ops dispatch "
+                    "(ops is authoritative; DB precomputed value overridden)"
+                )
+            else:
+                caveats.append(
+                    f"ranking: {scenario_name} P&L from canon dispatch "
+                    "(×0.25 MW→MWh applied; DB precomputed value overridden)"
+                )
 
     # tt_forecast_optimal: if DB didn't populate it, compute from context forecast dispatch
     if not strategies.get("tt_forecast_optimal", {}).get("available"):
@@ -992,11 +1016,12 @@ def rank_dispatch_strategies(
 
     # PF benchmark: prefer hourly LP result; fall back to DB 15-min scenarios
     # (used when LP was skipped because DB already had PF data).
-    pf_pnl_total = (
-        strategies.get("perfect_foresight_hourly", {}).get("pnl_total")
-        or strategies.get("perfect_foresight_unrestricted", {}).get("pnl_total")
-        or strategies.get("perfect_foresight_grid_feasible", {}).get("pnl_total")
-    )
+    _pf_candidates = [
+        strategies.get("perfect_foresight_hourly", {}).get("pnl_total"),
+        strategies.get("perfect_foresight_unrestricted", {}).get("pnl_total"),
+        strategies.get("perfect_foresight_grid_feasible", {}).get("pnl_total"),
+    ]
+    pf_pnl_total = next((v for v in _pf_candidates if v is not None), None)
     actual_pnl_total = strategies.get("cleared_actual", {}).get("pnl_total")
 
     # Best forecast strategy
@@ -1055,7 +1080,7 @@ def rank_dispatch_strategies(
             rows.append(StrategyRankRow(
                 rank=len(rows) + 1,
                 strategy_name=name,
-                pnl_total_yuan=0.0,
+                pnl_total_yuan=None,
                 pnl_market_yuan=None,
                 pnl_compensation_yuan=None,
                 gap_vs_perfect_foresight_yuan=None,

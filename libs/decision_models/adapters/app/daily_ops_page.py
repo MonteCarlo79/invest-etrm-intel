@@ -330,8 +330,18 @@ def _render_single_asset(
         st.subheader("Strategy Ranking")
         table = payload.get("strategy_table", [])
         if table:
-            df = pd.DataFrame(table)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            available_rows = [r for r in table if r.get("Available", False)]
+            unavailable_rows = [r for r in table if not r.get("Available", False)]
+            _display_cols = [c for c in table[0].keys() if c != "Available"]
+            if available_rows:
+                df_avail = pd.DataFrame(available_rows)[_display_cols]
+                st.dataframe(df_avail, use_container_width=True, hide_index=True)
+            else:
+                st.info("No strategy ranking data with available results.")
+            if unavailable_rows:
+                with st.expander(f"Unavailable strategies ({len(unavailable_rows)})", expanded=False):
+                    df_unavail = pd.DataFrame(unavailable_rows)[_display_cols]
+                    st.dataframe(df_unavail, use_container_width=True, hide_index=True)
         else:
             st.info("No strategy ranking data.")
         st.caption(
@@ -359,11 +369,8 @@ def _render_single_asset(
 
         if timestamps or pf_timestamps or id_cleared_timestamps or price_ts:
             try:
-                import matplotlib
-                matplotlib.use("Agg")
-                import matplotlib.pyplot as plt
-                import matplotlib.dates as mdates
-                import numpy as np
+                import plotly.graph_objects as go
+                from plotly.subplots import make_subplots
 
                 def _strip_tz(idx):
                     # Convert to CST (UTC+8) then drop TZ to get naive local timestamps
@@ -373,106 +380,70 @@ def _render_single_asset(
                         )
                     return idx
 
-                fig, ax1 = plt.subplots(figsize=(14, 5))
-                ax2 = ax1.twinx()
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-                bar_width = pd.Timedelta(minutes=3)  # narrower than 15-min interval
-
-                # ── Dispatch bars ──────────────────────────────────────────────
-                if timestamps:
-                    ts_idx = _strip_tz(pd.to_datetime(timestamps))
-                    # stagger bars: nominated shifted left, actual centred, PF shifted right
-                    offsets = {
-                        "Nominated": pd.Timedelta(minutes=-5),
-                        "Actual":    pd.Timedelta(minutes=0),
-                    }
-                    colors_disp = {
-                        "Nominated": "#4C72B0",
-                        "Actual":    "#DD8452",
-                    }
-                    for label, vals, off in [
-                        ("Nominated", nominated, offsets["Nominated"]),
-                        ("Actual",    actual,    offsets["Actual"]),
-                    ]:
-                        xs = [t + off for t in ts_idx]
-                        ax1.bar(
-                            xs, vals,
-                            width=bar_width,
-                            label=label,
-                            color=colors_disp[label],
-                            alpha=0.75,
-                            align="edge",
+                # ── Dispatch step lines ────────────────────────────────────────
+                _dispatch_series = [
+                    ("Nominated",   timestamps,            nominated,   "#4C72B0", "solid"),
+                    ("Actual",      timestamps,            actual,      "#DD8452", "solid"),
+                    ("PF Dispatch", pf_timestamps,         pf_dispatch, "#55A868", "dash"),
+                    ("DA Cleared",  id_cleared_timestamps, id_cleared,  "#C44E52", "dot"),
+                ]
+                for _label, _ts, _vals, _color, _dash in _dispatch_series:
+                    if _ts and _vals:
+                        _idx = _strip_tz(pd.to_datetime(_ts))
+                        fig.add_trace(
+                            go.Scatter(
+                                x=_idx,
+                                y=_vals,
+                                mode="lines",
+                                name=_label,
+                                line=dict(color=_color, dash=_dash, width=1.5, shape="hv"),
+                                hovertemplate="%{y:.3f} MWh<extra>" + _label + "</extra>",
+                            ),
+                            secondary_y=False,
                         )
 
-                if pf_timestamps:
-                    pf_idx = _strip_tz(pd.to_datetime(pf_timestamps))
-                    pf_xs = [t + pd.Timedelta(minutes=5) for t in pf_idx]
-                    ax1.bar(
-                        pf_xs, pf_dispatch,
-                        width=bar_width,
-                        label="PF Dispatch",
-                        color="#55A868",
-                        alpha=0.65,
-                        align="edge",
+                # ── RT Price step line on secondary y-axis ─────────────────────
+                if price_ts and price_vals:
+                    _p_idx = _strip_tz(pd.to_datetime(price_ts))
+                    fig.add_trace(
+                        go.Scatter(
+                            x=_p_idx,
+                            y=price_vals,
+                            mode="lines",
+                            name="RT Price (CNY/MWh)",
+                            line=dict(color="#9467BD", width=1.4, shape="hv"),
+                            hovertemplate="%{y:,.0f} CNY/MWh<extra>RT Price</extra>",
+                        ),
+                        secondary_y=True,
                     )
 
-                if id_cleared_timestamps:
-                    idc_idx = _strip_tz(pd.to_datetime(id_cleared_timestamps))
-                    idc_xs = [t + pd.Timedelta(minutes=8) for t in idc_idx]
-                    ax1.bar(
-                        idc_xs, id_cleared,
-                        width=bar_width,
-                        label="DA Cleared",
-                        color="#C44E52",
-                        alpha=0.55,
-                        align="edge",
-                    )
-
-                ax1.axhline(0, color="black", linewidth=0.6)
-                ax1.set_ylabel("MWh per 15-min interval", fontsize=9)
-                ax1.tick_params(axis="y", labelsize=8)
-
-                # ── RT Price line on second y-axis ─────────────────────────────
-                if price_ts:
-                    p_idx = _strip_tz(pd.to_datetime(price_ts))
-                    # Sort by timestamp to ensure line is drawn in order
-                    p_pairs = sorted(zip(p_idx, price_vals), key=lambda x: x[0])
-                    p_times = [p[0] for p in p_pairs]
-                    p_prices = [p[1] for p in p_pairs]
-                    ax2.plot(
-                        p_times, p_prices,
-                        color="#9467BD",
-                        linewidth=1.4,
-                        label="RT Price (CNY/MWh)",
-                        zorder=3,
-                    )
-                    ax2.set_ylabel("RT Price (CNY/MWh)", fontsize=9, color="#9467BD")
-                    ax2.tick_params(axis="y", labelcolor="#9467BD", labelsize=8)
-
-                # ── X-axis formatting ──────────────────────────────────────────
-                ax1.xaxis.set_major_locator(mdates.HourLocator(interval=2))
-                ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-                ax1.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
-                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right", fontsize=8)
-                ax1.set_xlabel("Time (CST)", fontsize=9)
-
-                # ── Legend ─────────────────────────────────────────────────────
-                h1, l1 = ax1.get_legend_handles_labels()
-                h2, l2 = ax2.get_legend_handles_labels()
-                ax1.legend(
-                    h1 + h2, l1 + l2,
-                    loc="upper left", fontsize=8, framealpha=0.7,
+                fig.update_layout(
+                    height=420,
+                    hovermode="x unified",
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom", y=1.02,
+                        xanchor="left", x=0,
+                    ),
+                    margin=dict(l=60, r=60, t=60, b=60),
+                    xaxis=dict(title="Time (CST)"),
+                    yaxis=dict(title="MWh per 15-min interval"),
                 )
-
-                fig.tight_layout()
-                st.pyplot(fig)
-                plt.close(fig)
+                fig.update_yaxes(
+                    title_text="RT Price (CNY/MWh)",
+                    secondary_y=True,
+                    title_font=dict(color="#9467BD"),
+                    tickfont=dict(color="#9467BD"),
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
             except Exception as _e:
                 st.info(f"Could not render dispatch chart: {_e}")
             st.caption(
                 f"Source: {source}. "
-                "Bars: MWh per 15-min interval (positive=discharge, negative=charge). "
+                "Step lines: MWh per 15-min interval (positive=discharge, negative=charge). "
                 "PF Dispatch = LP perfect-foresight MW ÷ 4. "
                 "DA Cleared = md_id_cleared_energy (DA market award, not physical dispatch). "
                 "Purple line = RT Price on right axis."
