@@ -111,12 +111,16 @@ def optimise_window(
     # Degradation constraints — scale per-day limits by window size
     # n_days_window = total hours covered / 24 = T * dt / 24
     n_days_window = T * dt / 24.0
+    # NOTE: dis[t] is in MW; multiply by dt to convert to MWh so the RHS
+    # (which is always in MWh) is dimensionally consistent at any granularity.
+    # Without * dt the constraint is dt-times tighter than intended for sub-hourly
+    # data (e.g. dt=0.25 makes it 4× too tight, capping PF below cleared_actual).
     if max_throughput_mwh is not None:
-        prob += pulp.lpSum(dis[t] for t in range(T)) <= float(max_throughput_mwh) * n_days_window
+        prob += pulp.lpSum(dis[t] * dt for t in range(T)) <= float(max_throughput_mwh) * n_days_window
 
     if max_cycles_per_day is not None:
         prob += (
-            pulp.lpSum(dis[t] for t in range(T))
+            pulp.lpSum(dis[t] * dt for t in range(T))
             <= float(max_cycles_per_day) * e_cap * n_days_window
         )
 
@@ -126,7 +130,7 @@ def optimise_window(
          - float(prices[t]) * ch[t]) * dt
         for t in range(T)
     )
-    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=120))
 
     status = pulp.LpStatus.get(prob.status, str(prob.status))
 
