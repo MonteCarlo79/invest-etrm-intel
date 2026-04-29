@@ -63,14 +63,17 @@ logger = logging.getLogger(__name__)
 # TODO: replace with DB query when core.asset_master is created.
 # ---------------------------------------------------------------------------
 ASSET_PHYSICAL_PARAMS: dict = {
-    "suyou":       {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
+    # 4-hour assets: cap PF LP at 2 full cycles/day to prevent unrealistic churning.
+    # The LP with compensation=350 CNY/MWh would otherwise do many short (~50% DOD)
+    # cycles because every MWh discharged earns the subsidy regardless of cycle depth.
+    "suyou":       {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85, "max_cycles_per_day": 2.0},
     "wulate":      {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
     "wuhai":       {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
     "wulanchabu":  {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
     "hetao":       {"power_mw": 100.0, "duration_h": 2.0, "roundtrip_eff": 0.85},
-    "hangjinqi":   {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
-    "siziwangqi":  {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
-    "gushanliang": {"power_mw": 500.0, "duration_h": 4.0, "roundtrip_eff": 0.85},
+    "hangjinqi":   {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85, "max_cycles_per_day": 2.0},
+    "siziwangqi":  {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85, "max_cycles_per_day": 2.0},
+    "gushanliang": {"power_mw": 500.0, "duration_h": 4.0, "roundtrip_eff": 0.85, "max_cycles_per_day": 2.0},
 }
 # TODO: When core.asset_master is available, remove ASSET_PHYSICAL_PARAMS
 # and use load_asset_physical_params() below.
@@ -374,6 +377,7 @@ def load_asset_metadata(
         "roundtrip_eff": physical["roundtrip_eff"],
         "compensation_yuan_per_mwh": comp_rate,
         "province": province,
+        "max_cycles_per_day": physical.get("max_cycles_per_day"),
         "source": "hardcoded_fallback",
     }, notes
 

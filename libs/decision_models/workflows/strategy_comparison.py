@@ -220,6 +220,7 @@ def load_bess_strategy_comparison_context(
         roundtrip_eff=meta_dict["roundtrip_eff"],
         compensation_yuan_per_mwh=meta_dict["compensation_yuan_per_mwh"],
         province=meta_dict["province"],
+        max_cycles_per_day=meta_dict.get("max_cycles_per_day"),
         source=meta_dict["source"],
     )
 
@@ -332,6 +333,14 @@ def run_perfect_foresight_dispatch(
         ).sort_index()
         price_series.index = pd.DatetimeIndex(price_series.index)
 
+        max_cycles = meta.get("max_cycles_per_day")
+        if max_cycles is not None:
+            caveats.append(
+                f"perfect_foresight: max_cycles_per_day={max_cycles} applied — "
+                "LP discharge capped at max_cycles × energy_capacity_mwh per day; "
+                "prevents unrealistic churning from compensation subsidy"
+            )
+
         try:
             dispatch_df, profit_s = compute_dispatch_from_15min_prices(
                 price_series,
@@ -339,6 +348,7 @@ def run_perfect_foresight_dispatch(
                 duration_h=meta["duration_h"],
                 roundtrip_eff=meta["roundtrip_eff"],
                 compensation_yuan_per_mwh=meta["compensation_yuan_per_mwh"],
+                max_cycles_per_day=max_cycles,
                 window_days=int(window_days),
             )
         except Exception as exc:

@@ -764,7 +764,31 @@ def _build_dispatch_chart_data(
 
 
 def _build_price_chart_data(context: Dict[str, Any]) -> Dict[str, Any]:
-    """Build chart data for the price series."""
+    """Build chart data for the price series.
+
+    Prefers nodal_price_excel (节点电价, column E) from ops_dispatch_15min when
+    available — this is the asset-specific nodal price used for settlement and
+    matches the Excel ops file the user inspects.  Falls back to the canonical
+    DB prices from canon.nodal_rt_price_15min when ops data is not available.
+    """
+    # ── Prefer ops-file nodal price (节点电价) ──────────────────────────────
+    ops_data = context.get("ops_dispatch_15min")
+    if ops_data:
+        nodal_records = [
+            (str(r["interval_start"]), r.get("nodal_price_excel"))
+            for r in ops_data
+            if r.get("nodal_price_excel") is not None
+        ]
+        if nodal_records:
+            return {
+                "timestamps_15min": [ts for ts, _ in nodal_records],
+                "prices_15min": [p for _, p in nodal_records],
+                "timestamps_hourly": [],
+                "prices_hourly": [],
+                "price_source": "nodal_price_excel (ops file 节点电价)",
+            }
+
+    # ── Fallback: canonical DB prices ───────────────────────────────────────
     prices_15min = context.get("actual_prices_15min", [])
     prices_hourly = context.get("actual_prices_hourly", [])
     return {
@@ -772,6 +796,7 @@ def _build_price_chart_data(context: Dict[str, Any]) -> Dict[str, Any]:
         "prices_15min": [r.get("price") for r in prices_15min],
         "timestamps_hourly": [str(r.get("datetime") or r.get("time")) for r in prices_hourly],
         "prices_hourly": [r.get("price") for r in prices_hourly],
+        "price_source": "canon.nodal_rt_price_15min",
     }
 
 

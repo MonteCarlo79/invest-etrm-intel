@@ -47,6 +47,10 @@ class AssetMetadata:
     roundtrip_eff: float              # round-trip efficiency (0, 1]
     compensation_yuan_per_mwh: float  # current-month compensation rate
     province: str
+    # Optional degradation / operational cycle limit for the PF LP.
+    # When set, the LP cannot discharge more than max_cycles_per_day × e_cap MWh/day.
+    # None = unconstrained (LP maximises throughput, may churn excessively).
+    max_cycles_per_day: Optional[float] = None
     # TODO: load from DB when core.asset_master table is available
     source: str = "hardcoded_fallback"
 
