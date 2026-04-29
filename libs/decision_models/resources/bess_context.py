@@ -566,10 +566,13 @@ def load_id_cleared_energy(
     df["cleared_energy_mwh_15min"] = pd.to_numeric(df["cleared_energy_mwh_15min"], errors="coerce")
     df["cleared_price"] = pd.to_numeric(df["cleared_price"], errors="coerce")
 
-    # DB column cleared_energy_mwh stores hourly-equivalent energy (MW × 1 h = MWh).
-    # Convert to per-15-min-interval energy: energy_15min_mwh = hourly_mwh × 0.25 h.
-    df["cleared_energy_mwh_15min"] = df["cleared_energy_mwh_15min"] * 0.25
-    # Implied power = per-15-min energy / 0.25 h = MW (equals original DB value)
+    # DB column cleared_energy_mwh stores hourly-equivalent energy using the
+    # ops-file sign convention (positive = charge, negative = discharge).
+    # 1. Convert to per-15-min-interval energy: × 0.25 h.
+    # 2. Negate so the result follows LP convention (positive = discharge,
+    #    negative = charge) used by all downstream P&L and stats calculations.
+    df["cleared_energy_mwh_15min"] = -df["cleared_energy_mwh_15min"] * 0.25
+    # Implied power = per-15-min energy / 0.25 h = MW (positive = discharge)
     df["cleared_power_mw_implied_15min"] = df["cleared_energy_mwh_15min"] / 0.25
 
     notes.append(

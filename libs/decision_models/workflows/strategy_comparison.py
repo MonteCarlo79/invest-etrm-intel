@@ -276,7 +276,14 @@ def run_perfect_foresight_dispatch(
     # ── Helper ────────────────────────────────────────────────────────────────
     def _ts_naive(val) -> pd.Timestamp:
         t = pd.Timestamp(val)
-        return t.tz_localize(None) if t.tzinfo is not None else t
+        if t.tzinfo is not None:
+            # Convert to CST first so UTC timestamps land on the correct calendar
+            # date (e.g. 2026-04-16 16:00 UTC → 2026-04-17 00:00 CST).
+            # Without this, the date-grouping in compute_dispatch_from_15min_prices
+            # splits a CST day across two UTC dates and finds no complete 96-interval
+            # day → n_days_solved = 0.
+            return t.tz_convert("Asia/Shanghai").replace(tzinfo=None)
+        return t
 
     def _empty_result(reason: str, caveats: List[str]) -> Dict[str, Any]:
         caveats.append(reason)

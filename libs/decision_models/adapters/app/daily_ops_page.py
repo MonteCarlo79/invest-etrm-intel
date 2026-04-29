@@ -372,13 +372,14 @@ def _render_single_asset(
                 from plotly.subplots import make_subplots
 
                 def _strip_tz(idx):
-                    """Convert any TZ-aware index to CST naive. Naive assumed already CST."""
+                    """Convert TZ-aware index to CST naive. Naive assumed already CST."""
                     if idx.tz is not None:
                         return pd.DatetimeIndex(
                             [t.replace(tzinfo=None) for t in idx.tz_convert("Asia/Shanghai")]
                         )
-                    # Naive timestamps from DB are UTC — shift to CST (+8h)
-                    return idx + pd.Timedelta(hours=8)
+                    # Naive timestamps: TIMESTAMP columns from psycopg2 already return
+                    # wall-clock CST, and LP-generated timestamps are also CST-naive.
+                    return idx
 
                 # ── Subplot: row 1 = dispatch, row 2 = RT price ────────────────
                 fig = make_subplots(
