@@ -770,3 +770,241 @@ def load_precomputed_attribution(
             f"for {asset_code} {date_from} to {date_to}"
         )
     return df, notes
+
+
+# ---------------------------------------------------------------------------
+# LP result persistence — write PF / forecast dispatch + P&L to DB
+# ---------------------------------------------------------------------------
+
+def _ensure_dispatch_table(engine) -> None:
+    """Create reports.bess_strategy_dispatch_15min if it doesn't exist."""
+    from sqlalchemy import text
+    ddl = """
+        CREATE TABLE IF NOT EXISTS reports.bess_strategy_dispatch_15min (
+            trade_date        date            NOT NULL,
+            asset_code        text            NOT NULL,
+            scenario_name     text            NOT NULL,
+            interval_start    timestamptz     NOT NULL,
+            dispatch_grid_mw  numeric,
+            charge_mw         numeric,
+            discharge_mw      numeric,
+            soc_mwh           numeric,
+            price             numeric,
+            created_at        timestamptz     NOT NULL DEFAULT now(),
+            updated_at        timestamptz     NOT NULL DEFAULT now(),
+            PRIMARY KEY (trade_date, asset_code, scenario_name, interval_start)
+        )
+    """
+    with engine.begin() as conn:
+        conn.execute(text(ddl))
+
+
+def write_lp_results_to_db(
+    asset_code: str,
+    trade_date: date,
+    pf_result: dict,
+    forecast_suite: dict,
+    energy_capacity_mwh: Optional[float] = None,
+) -> List[str]:
+    """
+    Persist LP results (P&L summary + dispatch time series) to DB so the UI
+    can read them back and skip re-running the CBC solver.
+
+    Writes to:
+      reports.bess_asset_daily_scenario_pnl  — P&L summary per scenario
+      reports.bess_strategy_dispatch_15min   — full 15-min dispatch time series
+
+    Parameters
+    ----------
+    asset_code           : e.g. "suyou"
+    trade_date           : the trading date
+    pf_result            : output of run_perfect_foresight_dispatch()
+    forecast_suite       : output of run_forecast_dispatch_suite()
+    energy_capacity_mwh  : power_mw × duration_h (for avg_daily_cycles calc)
+
+    Returns
+    -------
+    List of warning/error notes.
+    """
+    notes: List[str] = []
+    try:
+        from services.common.db_utils import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+    except Exception as exc:
+        notes.append(f"write_lp_results_to_db: cannot get engine — {exc}")
+        return notes
+
+    try:
+        _ensure_dispatch_table(engine)
+    except Exception as exc:
+        notes.append(f"write_lp_results_to_db: cannot ensure dispatch table — {exc}")
+        return notes
+
+    # ── Collect scenario records ─────────────────────────────────────────────
+    pnl_rows: List[dict] = []
+    dispatch_rows: List[dict] = []
+
+    def _collect(scenario_name: str, result: dict) -> None:
+        pnl = result.get("pnl", {})
+        if not pnl or not pnl.get("n_days_solved", 0):
+            return
+        disch = float(pnl.get("discharge_mwh") or 0.0)
+        cycles = (disch / energy_capacity_mwh) if energy_capacity_mwh else None
+        pnl_rows.append({
+            "trade_date": trade_date,
+            "asset_code": asset_code,
+            "scenario_name": scenario_name,
+            "scenario_available": True,
+            "market_revenue_yuan": float(pnl.get("pnl_market_yuan") or 0.0),
+            "subsidy_revenue_yuan": float(pnl.get("pnl_compensation_yuan") or 0.0),
+            "total_revenue_yuan": float(pnl.get("pnl_total_yuan") or 0.0),
+            "discharge_mwh": disch,
+            "charge_mwh": float(pnl.get("charge_mwh") or 0.0),
+            "avg_daily_cycles": round(cycles, 4) if cycles is not None else None,
+        })
+        for rec in result.get("dispatch_hourly", []):
+            ts = rec.get("datetime")
+            if ts is None:
+                continue
+            dispatch_rows.append({
+                "trade_date": trade_date,
+                "asset_code": asset_code,
+                "scenario_name": scenario_name,
+                "interval_start": pd.Timestamp(ts).isoformat(),
+                "dispatch_grid_mw": rec.get("dispatch_grid_mw"),
+                "charge_mw": rec.get("charge_mw"),
+                "discharge_mw": rec.get("discharge_mw"),
+                "soc_mwh": rec.get("soc_mwh"),
+                "price": rec.get("price"),
+            })
+
+    # PF
+    if pf_result:
+        _collect("perfect_foresight_hourly", pf_result)
+
+    # Forecast strategies
+    for strat in (forecast_suite or {}).get("strategies", []):
+        sname = strat.get("strategy_name") or strat.get("pnl", {}).get("strategy_name")
+        if sname:
+            _collect(sname, strat)
+
+    if not pnl_rows:
+        notes.append(
+            f"write_lp_results_to_db: no solved LP results to write for "
+            f"{asset_code} {trade_date}"
+        )
+        return notes
+
+    # ── Upsert P&L summary ────────────────────────────────────────────────────
+    pnl_upsert = text("""
+        INSERT INTO reports.bess_asset_daily_scenario_pnl
+            (trade_date, asset_code, scenario_name, scenario_available,
+             market_revenue_yuan, subsidy_revenue_yuan, total_revenue_yuan,
+             discharge_mwh, charge_mwh, avg_daily_cycles, updated_at)
+        VALUES
+            (:trade_date, :asset_code, :scenario_name, :scenario_available,
+             :market_revenue_yuan, :subsidy_revenue_yuan, :total_revenue_yuan,
+             :discharge_mwh, :charge_mwh, :avg_daily_cycles, now())
+        ON CONFLICT (trade_date, asset_code, scenario_name) DO UPDATE SET
+            scenario_available   = EXCLUDED.scenario_available,
+            market_revenue_yuan  = EXCLUDED.market_revenue_yuan,
+            subsidy_revenue_yuan = EXCLUDED.subsidy_revenue_yuan,
+            total_revenue_yuan   = EXCLUDED.total_revenue_yuan,
+            discharge_mwh        = EXCLUDED.discharge_mwh,
+            charge_mwh           = EXCLUDED.charge_mwh,
+            avg_daily_cycles     = EXCLUDED.avg_daily_cycles,
+            updated_at           = now()
+    """)
+    try:
+        with engine.begin() as conn:
+            for row in pnl_rows:
+                conn.execute(pnl_upsert, row)
+        notes.append(
+            f"write_lp_results_to_db: wrote {len(pnl_rows)} P&L row(s) for "
+            f"{asset_code} {trade_date}"
+        )
+    except Exception as exc:
+        notes.append(f"write_lp_results_to_db: P&L upsert failed — {exc}")
+        return notes
+
+    # ── Upsert dispatch time series ──────────────────────────────────────────
+    if not dispatch_rows:
+        return notes
+    dispatch_upsert = text("""
+        INSERT INTO reports.bess_strategy_dispatch_15min
+            (trade_date, asset_code, scenario_name, interval_start,
+             dispatch_grid_mw, charge_mw, discharge_mw, soc_mwh, price, updated_at)
+        VALUES
+            (:trade_date, :asset_code, :scenario_name, :interval_start,
+             :dispatch_grid_mw, :charge_mw, :discharge_mw, :soc_mwh, :price, now())
+        ON CONFLICT (trade_date, asset_code, scenario_name, interval_start) DO UPDATE SET
+            dispatch_grid_mw = EXCLUDED.dispatch_grid_mw,
+            charge_mw        = EXCLUDED.charge_mw,
+            discharge_mw     = EXCLUDED.discharge_mw,
+            soc_mwh          = EXCLUDED.soc_mwh,
+            price            = EXCLUDED.price,
+            updated_at       = now()
+    """)
+    try:
+        with engine.begin() as conn:
+            for row in dispatch_rows:
+                conn.execute(dispatch_upsert, row)
+        notes.append(
+            f"write_lp_results_to_db: wrote {len(dispatch_rows)} dispatch row(s) for "
+            f"{asset_code} {trade_date}"
+        )
+    except Exception as exc:
+        notes.append(f"write_lp_results_to_db: dispatch upsert failed — {exc}")
+
+    return notes
+
+
+def load_precomputed_lp_dispatch(
+    asset_code: str,
+    trade_date: date,
+    scenario_name: str,
+) -> List[dict]:
+    """
+    Load pre-computed LP dispatch from reports.bess_strategy_dispatch_15min.
+
+    Returns a list of dicts matching the dispatch_hourly format produced by
+    run_perfect_foresight_dispatch():
+      {"datetime": str, "dispatch_grid_mw": float, "charge_mw": float,
+       "discharge_mw": float, "soc_mwh": float, "price": float}
+
+    Returns [] when the table is empty or the query fails.
+    """
+    sql = """
+        SELECT
+            interval_start  AS datetime,
+            dispatch_grid_mw,
+            charge_mw,
+            discharge_mw,
+            soc_mwh,
+            price
+        FROM reports.bess_strategy_dispatch_15min
+        WHERE asset_code   = %(asset_code)s
+          AND trade_date   = %(trade_date)s
+          AND scenario_name = %(scenario_name)s
+        ORDER BY interval_start
+    """
+    params = {
+        "asset_code": asset_code,
+        "trade_date": trade_date,
+        "scenario_name": scenario_name,
+    }
+    df, err = _run_query_safe(sql, params)
+    if err or df.empty:
+        return []
+    records = []
+    for _, row in df.iterrows():
+        records.append({
+            "datetime": str(row["datetime"]),
+            "dispatch_grid_mw": float(row["dispatch_grid_mw"]) if row["dispatch_grid_mw"] is not None else 0.0,
+            "charge_mw": float(row["charge_mw"]) if row["charge_mw"] is not None else 0.0,
+            "discharge_mw": float(row["discharge_mw"]) if row["discharge_mw"] is not None else 0.0,
+            "soc_mwh": float(row["soc_mwh"]) if row["soc_mwh"] is not None else 0.0,
+            "price": float(row["price"]) if row["price"] is not None else 0.0,
+        })
+    return records

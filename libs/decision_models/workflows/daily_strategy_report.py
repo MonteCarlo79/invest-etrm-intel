@@ -66,7 +66,9 @@ from libs.decision_models.resources.bess_context import (  # noqa: E402
     load_forecast_prices_15min,
     load_ops_dispatch_15min,
     load_precomputed_attribution,
+    load_precomputed_lp_dispatch,
     load_precomputed_scenario_pnl,
+    write_lp_results_to_db,
 )
 from libs.decision_models.workflows.strategy_comparison import (  # noqa: E402
     attribute_dispatch_discrepancy,
@@ -135,48 +137,116 @@ def run_bess_daily_strategy_analysis(
     # Step 2b: Compute tt_forecast_optimal dispatch from forecast price table
     context = _enrich_context_with_forecast_dispatch(context, d)
 
-    # Step 3: Load pre-computed DB P&L early so we can skip LP when DB has PF data.
-    # reports.bess_asset_daily_scenario_pnl has perfect_foresight_unrestricted /
-    # perfect_foresight_grid_feasible at 15-min resolution — better than hourly LP.
+    # Step 3: Load pre-computed DB P&L — populated by run_daily_strategy_batch.py
+    # after actual prices are loaded.  When present, LP is skipped entirely.
     db_pnl_df, db_pnl_notes = load_precomputed_scenario_pnl(asset_code, d, d)
     db_attr_df, db_attr_notes = load_precomputed_attribution(asset_code, d, d)
     context.setdefault("data_quality_notes", [])
     context["data_quality_notes"].extend(db_pnl_notes)
     context["data_quality_notes"].extend(db_attr_notes)
 
-    # Step 3b: Check if DB already has PF scenarios — if so, skip LP to avoid hang.
-    _pf_scenarios = {"perfect_foresight_unrestricted", "perfect_foresight_grid_feasible"}
-    _pf_in_db = (
-        not db_pnl_df.empty
-        and db_pnl_df[
-            db_pnl_df["scenario_name"].isin(_pf_scenarios)
-            & (db_pnl_df["scenario_available"] == True)
-        ].shape[0] > 0
-    )
-
-    # Step 4: Perfect foresight benchmark (LP) — skipped when DB has PF scenarios.
-    if not _pf_in_db:
-        pf_result = run_perfect_foresight_dispatch(context)
-    else:
-        pf_result = {}
-        context["data_quality_notes"].append(
-            "perfect_foresight_hourly LP skipped: DB has perfect_foresight scenarios"
-        )
-
-    # Step 5: Forecast-driven dispatch suite (LP) — skipped when DB has PF scenarios.
+    # Step 3b: Check if DB already has our LP scenario results.
+    # Scenario names written by write_lp_results_to_db:
+    #   perfect_foresight_hourly   — LP solved on actual 15-min prices
+    #   forecast_ols_da_time_v1    — LP solved on OLS-forecasted prices
     if forecast_models is None:
         forecast_models = ["ols_da_time_v1"]
-    if not _pf_in_db:
-        forecast_suite = run_forecast_dispatch_suite(context, forecast_models)
+    _lp_scenarios_needed = {"perfect_foresight_hourly"} | {
+        f"forecast_{m}" for m in forecast_models
+    }
+    _lp_in_db = (
+        not db_pnl_df.empty
+        and db_pnl_df[
+            db_pnl_df["scenario_name"].isin(_lp_scenarios_needed)
+            & (db_pnl_df["scenario_available"] == True)
+        ]["scenario_name"].nunique() == len(_lp_scenarios_needed)
+    )
+
+    # Step 4: Perfect foresight benchmark (LP).
+    if not _lp_in_db:
+        pf_result = run_perfect_foresight_dispatch(context)
     else:
-        forecast_suite = {
-            "strategies": [],
-            "requested_models": forecast_models,
-            "suite_caveats": ["forecast LP skipped: DB has perfect_foresight scenarios"],
+        # Reload dispatch time series from DB to serve the dispatch chart.
+        _pf_dispatch = load_precomputed_lp_dispatch(
+            asset_code, d, "perfect_foresight_hourly"
+        )
+        _pf_pnl_row = db_pnl_df[
+            db_pnl_df["scenario_name"] == "perfect_foresight_hourly"
+        ].iloc[0] if not db_pnl_df.empty else {}
+        pf_result = {
+            "strategy_name": "perfect_foresight_hourly",
+            "pnl": {
+                "strategy_name": "perfect_foresight_hourly",
+                "pnl_market_yuan": float(_pf_pnl_row.get("market_revenue_yuan") or 0),
+                "pnl_compensation_yuan": float(_pf_pnl_row.get("subsidy_revenue_yuan") or 0),
+                "pnl_total_yuan": float(_pf_pnl_row.get("total_revenue_yuan") or 0),
+                "discharge_mwh": float(_pf_pnl_row.get("discharge_mwh") or 0),
+                "charge_mwh": float(_pf_pnl_row.get("charge_mwh") or 0),
+                "n_days_solved": 1,
+                "granularity": "15min",
+                "notes": ["loaded from DB (run_daily_strategy_batch pre-compute)"],
+            },
+            "dispatch_hourly": _pf_dispatch,
+            "daily_profit": [],
+            "energy_capacity_mwh": (
+                context["asset_metadata"].get("power_mw", 0)
+                * context["asset_metadata"].get("duration_h", 0)
+            ),
+            "caveats": ["loaded from DB (run_daily_strategy_batch pre-compute)"],
         }
         context["data_quality_notes"].append(
-            "forecast_dispatch_suite LP skipped: DB has perfect_foresight scenarios"
+            "perfect_foresight_hourly LP skipped: loaded from DB "
+            "(run_daily_strategy_batch pre-compute)"
         )
+
+    # Step 5: Forecast-driven dispatch suite (LP).
+    if not _lp_in_db:
+        forecast_suite = run_forecast_dispatch_suite(context, forecast_models)
+    else:
+        # Reload forecast dispatch from DB.
+        fc_strategies = []
+        for model in forecast_models:
+            sname = f"forecast_{model}"
+            _fc_dispatch = load_precomputed_lp_dispatch(asset_code, d, sname)
+            _fc_rows = db_pnl_df[db_pnl_df["scenario_name"] == sname]
+            if _fc_rows.empty:
+                continue
+            _fc_row = _fc_rows.iloc[0]
+            fc_strategies.append({
+                "strategy_name": sname,
+                "pnl": {
+                    "strategy_name": sname,
+                    "pnl_market_yuan": float(_fc_row.get("market_revenue_yuan") or 0),
+                    "pnl_compensation_yuan": float(_fc_row.get("subsidy_revenue_yuan") or 0),
+                    "pnl_total_yuan": float(_fc_row.get("total_revenue_yuan") or 0),
+                    "discharge_mwh": float(_fc_row.get("discharge_mwh") or 0),
+                    "charge_mwh": float(_fc_row.get("charge_mwh") or 0),
+                    "n_days_solved": 1,
+                    "granularity": "15min",
+                    "notes": ["loaded from DB (run_daily_strategy_batch pre-compute)"],
+                },
+                "dispatch_hourly": _fc_dispatch,
+                "caveats": ["loaded from DB"],
+            })
+        forecast_suite = {
+            "strategies": fc_strategies,
+            "requested_models": forecast_models,
+            "suite_caveats": ["forecast LP skipped: loaded from DB "
+                              "(run_daily_strategy_batch pre-compute)"],
+        }
+        context["data_quality_notes"].append(
+            "forecast_dispatch_suite LP skipped: loaded from DB "
+            "(run_daily_strategy_batch pre-compute)"
+        )
+
+    # Step 5b: Write LP results to DB when freshly computed (not loaded from DB).
+    if not _lp_in_db:
+        meta = context.get("asset_metadata", {})
+        e_cap = meta.get("power_mw", 0) * meta.get("duration_h", 0) or None
+        write_notes = write_lp_results_to_db(
+            asset_code, d, pf_result, forecast_suite, e_cap
+        )
+        context["data_quality_notes"].extend(write_notes)
 
     # Step 6: Rank strategies
     ranking = rank_dispatch_strategies(
