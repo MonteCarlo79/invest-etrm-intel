@@ -73,7 +73,7 @@ def _ensure_dispatch_table() -> None:
             _ROOT, "db", "ddl", "reports", "bess_strategy_dispatch_15min.sql"
         )
         if os.path.exists(ddl_path):
-            with open(ddl_path) as f:
+            with open(ddl_path, encoding="utf-8") as f:
                 ddl = f.read()
             with engine.begin() as conn:
                 # Execute statement-by-statement, skipping comments
@@ -84,6 +84,30 @@ def _ensure_dispatch_table() -> None:
         logger.debug("Dispatch table ensured")
     except Exception as exc:
         logger.warning("Could not ensure dispatch table: %s", exc)
+
+
+def _has_prices(asset_code: str, trade_date: date) -> bool:
+    """Return True if canon.nodal_rt_price_15min has at least one row for this asset/date."""
+    try:
+        from libs.decision_models.resources.bess_context import _run_query_safe
+        import pandas as pd
+        sql = """
+            SELECT 1
+            FROM canon.nodal_rt_price_15min
+            WHERE asset_code = %(asset_code)s
+              AND time >= %(start_ts)s
+              AND time < %(end_ts)s
+            LIMIT 1
+        """
+        params = {
+            "asset_code": asset_code,
+            "start_ts": pd.Timestamp(trade_date).tz_localize("Asia/Shanghai"),
+            "end_ts": (pd.Timestamp(trade_date) + pd.Timedelta(days=1)).tz_localize("Asia/Shanghai"),
+        }
+        df, err = _run_query_safe(sql, params)
+        return not df.empty
+    except Exception:
+        return True  # can't check → let the LP attempt proceed
 
 
 def _already_computed(asset_code: str, trade_date: date) -> bool:
@@ -127,6 +151,15 @@ def run_for_date(
         if not force and _already_computed(asset_code, trade_date):
             logger.info(
                 "SKIP %s %s — LP results already in DB (use --force to recompute)",
+                asset_code, trade_date,
+            )
+            continue
+
+        # Quick price availability check before starting a multi-minute LP solve.
+        if not _has_prices(asset_code, trade_date):
+            logger.info(
+                "SKIP %s %s — no rows in canon.nodal_rt_price_15min; "
+                "run Canon ETL first",
                 asset_code, trade_date,
             )
             continue
