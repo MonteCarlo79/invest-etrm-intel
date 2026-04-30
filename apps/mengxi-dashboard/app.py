@@ -88,12 +88,18 @@ DASH_MAP = {"solid": None, "dash": "dash", "dot": "dot"}
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_series(table: str, start: date, end: date, freq: str) -> pd.DataFrame:
-    conn = get_conn()
+    try:
+        conn = get_conn()
+    except Exception:
+        return pd.DataFrame(columns=["time", "price"])
     try:
         conn.cursor().execute("SELECT 1")
     except Exception:
         get_conn.clear()
-        conn = get_conn()
+        try:
+            conn = get_conn()
+        except Exception:
+            return pd.DataFrame(columns=["time", "price"])
 
     if freq == "15min":
         q = """
@@ -235,26 +241,39 @@ with tab_market:
         f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
 
-    # Data availability check
+    # Data availability check — test connectivity first so a DB outage shows
+    # a clean error banner rather than crashing the page and hiding the sidebar.
     _probe_table = "hist_mengxi_provincerealtimeclearprice_15min"
-    _probe_df = load_series(_probe_table, start_date, end_date, "15min")
-    if _probe_df.empty:
-        conn = get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(f"SELECT MAX(time) FROM public.{_probe_table}")
-            latest = cur.fetchone()[0]
-            cur.close()
-        except Exception:
-            latest = None
-        if latest:
-            st.warning(
-                f"No data for {start_date} → {end_date}. "
-                f"Latest row in DB: **{latest.strftime('%Y-%m-%d %H:%M')}**. "
-                f"Try adjusting the date range in the sidebar."
-            )
-        else:
-            st.error(f"Table `{_probe_table}` appears to be empty or unreachable.")
+    _db_error: str | None = None
+    try:
+        get_conn()
+    except Exception as _e:
+        _db_error = str(_e)
+
+    if _db_error:
+        st.error(
+            "**Database unreachable.** Check your network connection or VPN, "
+            "then refresh the page.\n\n"
+            f"```\n{_db_error}\n```"
+        )
+    else:
+        _probe_df = load_series(_probe_table, start_date, end_date, "15min")
+        if _probe_df.empty:
+            try:
+                _cur = get_conn().cursor()
+                _cur.execute(f"SELECT MAX(time) FROM public.{_probe_table}")
+                _latest = _cur.fetchone()[0]
+                _cur.close()
+            except Exception:
+                _latest = None
+            if _latest:
+                st.warning(
+                    f"No data for {start_date} → {end_date}. "
+                    f"Latest row in DB: **{_latest.strftime('%Y-%m-%d %H:%M')}**. "
+                    f"Try adjusting the date range in the sidebar."
+                )
+            else:
+                st.error(f"Table `{_probe_table}` appears to be empty or unreachable.")
 
     for group_name, series_defs in GROUPS.items():
         selected = series_toggles.get(group_name, [s["label"] for s in series_defs])
