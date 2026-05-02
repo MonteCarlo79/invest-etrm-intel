@@ -9,7 +9,7 @@
 --
 -- Covered scenarios:
 --   perfect_foresight_hourly    — LP solved on actual 15-min prices
---   forecast_ols_da_time_v1     — LP solved on OLS-forecasted prices
+--   forecast_ols_rt_time_v1     — LP solved on RT-OLS-forecasted prices (no DA market in IM)
 --
 -- Sign convention: same as LP output (positive = discharge / net injection,
 -- negative = charge / net absorption).
@@ -37,4 +37,4 @@ CREATE INDEX IF NOT EXISTS idx_bess_strategy_dispatch_scenario
 
 COMMENT ON TABLE reports.bess_strategy_dispatch_15min IS
     'Pre-computed 15-min dispatch for LP strategies (PF + forecast). '
-    'Populated by run_daily_strategy_batch.py; read by daily-ops UI to skip LP.';
+    'Populated by run_daily_strategy_batch.py, read by daily-ops UI to skip LP.';

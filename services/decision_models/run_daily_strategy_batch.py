@@ -76,10 +76,12 @@ def _ensure_dispatch_table() -> None:
             with open(ddl_path, encoding="utf-8") as f:
                 ddl = f.read()
             with engine.begin() as conn:
-                # Execute statement-by-statement, skipping comments
+                # Execute statement-by-statement, skipping SQL comments and
+                # COMMENT ON statements (which may contain semicolons inside
+                # string literals and break naive semicolon-splitting).
                 for stmt in ddl.split(";"):
                     sql = stmt.strip()
-                    if sql and not sql.startswith("--"):
+                    if sql and not sql.startswith("--") and not sql.upper().startswith("COMMENT"):
                         conn.execute(text(sql))
         logger.debug("Dispatch table ensured")
     except Exception as exc:
@@ -122,7 +124,7 @@ def _already_computed(asset_code: str, trade_date: date) -> bool:
         df, _ = load_precomputed_scenario_pnl(asset_code, trade_date, trade_date)
         if df.empty:
             return False
-        lp_names = {"perfect_foresight_hourly", "forecast_ols_da_time_v1"}
+        lp_names = {"perfect_foresight_hourly", "forecast_ols_rt_time_v1"}
         present = set(
             df.loc[df["scenario_available"] == True, "scenario_name"].tolist()
         )
@@ -143,8 +145,10 @@ def run_for_date(
     Returns the number of assets successfully written to DB.
     """
     assets = asset_codes or _IM_ASSETS
+    # Inner Mongolia Mengxi is a pure RT spot market — no DA prices exist.
+    # Use ols_rt_time_v1 (rolling OLS on RT price history + time features).
     if forecast_models is None:
-        forecast_models = ["ols_da_time_v1"]
+        forecast_models = ["ols_rt_time_v1"]
     written = 0
 
     for asset_code in assets:

@@ -443,12 +443,12 @@ def load_precomputed_scenario_pnl(
         SELECT
             trade_date,
             scenario_name,
-            total_revenue_yuan,
-            market_revenue_yuan,
-            subsidy_revenue_yuan,
+            total_pnl               AS total_revenue_yuan,
+            market_revenue          AS market_revenue_yuan,
+            compensation_revenue    AS subsidy_revenue_yuan,
             discharge_mwh,
             charge_mwh,
-            scenario_available
+            COALESCE(scenario_available, TRUE) AS scenario_available
         FROM reports.bess_asset_daily_scenario_pnl
         WHERE asset_code = %(asset_code)s
           AND trade_date >= %(date_from)s
@@ -776,6 +776,34 @@ def load_precomputed_attribution(
 # LP result persistence — write PF / forecast dispatch + P&L to DB
 # ---------------------------------------------------------------------------
 
+def _ensure_pnl_columns(engine) -> None:
+    """
+    Add all columns required by write_lp_results_to_db to
+    reports.bess_asset_daily_scenario_pnl.
+
+    The table was created by an early migration with a partial schema; the LP
+    pre-compute batch needs additional revenue/metadata columns.  Each ALTER is
+    idempotent (IF NOT EXISTS).
+    """
+    from sqlalchemy import text
+    cols = [
+        ("market_revenue",      "numeric"),
+        ("compensation_revenue","numeric"),
+        ("total_pnl",           "numeric"),
+        ("discharge_mwh",       "numeric"),
+        ("charge_mwh",          "numeric"),
+        ("scenario_available",  "boolean DEFAULT true"),
+        ("avg_daily_cycles",    "numeric"),
+        ("source_system",       "text"),
+    ]
+    with engine.begin() as conn:
+        for col, col_type in cols:
+            conn.execute(text(
+                f"ALTER TABLE reports.bess_asset_daily_scenario_pnl "
+                f"ADD COLUMN IF NOT EXISTS {col} {col_type}"
+            ))
+
+
 def _ensure_dispatch_table(engine) -> None:
     """Create reports.bess_strategy_dispatch_15min if it doesn't exist."""
     from sqlalchemy import text
@@ -836,9 +864,10 @@ def write_lp_results_to_db(
         return notes
 
     try:
+        _ensure_pnl_columns(engine)
         _ensure_dispatch_table(engine)
     except Exception as exc:
-        notes.append(f"write_lp_results_to_db: cannot ensure dispatch table — {exc}")
+        notes.append(f"write_lp_results_to_db: cannot ensure tables — {exc}")
         return notes
 
     # ── Collect scenario records ─────────────────────────────────────────────
@@ -867,11 +896,20 @@ def write_lp_results_to_db(
             ts = rec.get("datetime")
             if ts is None:
                 continue
+            # LP generates CST-naive timestamps (e.g. "2026-04-17T00:00:00").
+            # Must localize to Asia/Shanghai before inserting into timestamptz column.
+            # Without this, PostgreSQL (session TZ=UTC) treats them as UTC midnight,
+            # so when read back they appear 8 hours ahead on the CST dispatch chart.
+            _t = pd.Timestamp(ts)
+            if _t.tzinfo is None:
+                _t = _t.tz_localize("Asia/Shanghai")
+            else:
+                _t = _t.tz_convert("Asia/Shanghai")
             dispatch_rows.append({
                 "trade_date": trade_date,
                 "asset_code": asset_code,
                 "scenario_name": scenario_name,
-                "interval_start": pd.Timestamp(ts).isoformat(),
+                "interval_start": _t.isoformat(),
                 "dispatch_grid_mw": rec.get("dispatch_grid_mw"),
                 "charge_mw": rec.get("charge_mw"),
                 "discharge_mw": rec.get("discharge_mw"),
@@ -897,23 +935,28 @@ def write_lp_results_to_db(
         return notes
 
     # ── Upsert P&L summary ────────────────────────────────────────────────────
+    # Column names match the actual table schema in reports.bess_asset_daily_scenario_pnl
+    # (market_revenue / compensation_revenue / total_pnl — not the _yuan aliases).
+    # scenario_available + avg_daily_cycles added by migration 001_add_lp_scenario_columns.sql
+    # and also auto-created by _ensure_pnl_columns() above.
     pnl_upsert = text("""
         INSERT INTO reports.bess_asset_daily_scenario_pnl
             (trade_date, asset_code, scenario_name, scenario_available,
-             market_revenue_yuan, subsidy_revenue_yuan, total_revenue_yuan,
-             discharge_mwh, charge_mwh, avg_daily_cycles, updated_at)
+             market_revenue, compensation_revenue, total_pnl,
+             discharge_mwh, charge_mwh, avg_daily_cycles, source_system, updated_at)
         VALUES
             (:trade_date, :asset_code, :scenario_name, :scenario_available,
              :market_revenue_yuan, :subsidy_revenue_yuan, :total_revenue_yuan,
-             :discharge_mwh, :charge_mwh, :avg_daily_cycles, now())
-        ON CONFLICT (trade_date, asset_code, scenario_name) DO UPDATE SET
+             :discharge_mwh, :charge_mwh, :avg_daily_cycles, 'lp_precompute', now())
+        ON CONFLICT (asset_code, trade_date, scenario_name) DO UPDATE SET
             scenario_available   = EXCLUDED.scenario_available,
-            market_revenue_yuan  = EXCLUDED.market_revenue_yuan,
-            subsidy_revenue_yuan = EXCLUDED.subsidy_revenue_yuan,
-            total_revenue_yuan   = EXCLUDED.total_revenue_yuan,
+            market_revenue       = EXCLUDED.market_revenue,
+            compensation_revenue = EXCLUDED.compensation_revenue,
+            total_pnl            = EXCLUDED.total_pnl,
             discharge_mwh        = EXCLUDED.discharge_mwh,
             charge_mwh           = EXCLUDED.charge_mwh,
             avg_daily_cycles     = EXCLUDED.avg_daily_cycles,
+            source_system        = EXCLUDED.source_system,
             updated_at           = now()
     """)
     try:

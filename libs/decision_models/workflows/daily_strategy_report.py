@@ -102,7 +102,9 @@ def run_bess_daily_strategy_analysis(
     ----------
     asset_code      : e.g. "suyou", "hangjinqi", "siziwangqi", "gushanliang"
     date            : ISO date string, e.g. "2026-04-17"
-    forecast_models : list of forecast model names; defaults to ["ols_da_time_v1"]
+    forecast_models : list of forecast model names; defaults to ["ols_rt_time_v1"]
+                      Inner Mongolia Mengxi is a pure RT spot market — no DA price.
+                      Use RT-only models: ols_rt_time_v1, naive_rt_lag1, naive_rt_lag7.
     use_ops_dispatch: when True, load ops dispatch from
                       marketdata.ops_bess_dispatch_15min and prefer it over
                       canon.scenario_dispatch_15min for nominated/actual strategies
@@ -148,9 +150,11 @@ def run_bess_daily_strategy_analysis(
     # Step 3b: Check if DB already has our LP scenario results.
     # Scenario names written by write_lp_results_to_db:
     #   perfect_foresight_hourly   — LP solved on actual 15-min prices
-    #   forecast_ols_da_time_v1    — LP solved on OLS-forecasted prices
+    #   forecast_ols_rt_time_v1    — LP solved on RT-OLS-forecasted prices
+    # Inner Mongolia Mengxi is a pure RT spot market — ols_rt_time_v1 is the
+    # correct default.  ols_da_time_v1 requires DA prices that do not exist here.
     if forecast_models is None:
-        forecast_models = ["ols_da_time_v1"]
+        forecast_models = ["ols_rt_time_v1"]
     _lp_scenarios_needed = {"perfect_foresight_hourly"} | {
         f"forecast_{m}" for m in forecast_models
     }
@@ -226,6 +230,9 @@ def run_bess_daily_strategy_analysis(
                     "notes": ["loaded from DB (run_daily_strategy_batch pre-compute)"],
                 },
                 "dispatch_hourly": _fc_dispatch,
+                # n_days_with_forecast=1 required by rank_dispatch_strategies to mark
+                # this strategy as available=True (strat.get("n_days_with_forecast", 0) > 0).
+                "n_days_with_forecast": 1,
                 "caveats": ["loaded from DB"],
             })
         forecast_suite = {
@@ -298,7 +305,8 @@ def run_all_assets_daily_strategy_analysis(
     ----------
     date         : ISO date string, e.g. "2026-04-17"
     asset_codes  : subset of assets to run; defaults to all 4 IM assets
-    forecast_models : list of forecast models; defaults to ["ols_da_time_v1"]
+    forecast_models : list of forecast models; defaults to ["ols_rt_time_v1"]
+                      Inner Mongolia is a pure RT spot market — no DA prices.
     use_ops_dispatch : prefer ops dispatch data when available
 
     Returns
