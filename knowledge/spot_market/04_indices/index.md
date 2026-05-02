@@ -1,7 +1,7 @@
 ---
 title: Spot Market Knowledge Pool — Index
 note_type: index
-generated_at: 2026-04-15
+generated_at: 2026-05-01
 tags:
   - spot-market
   - index
@@ -11,11 +11,11 @@ tags:
 
 ## Statistics
 
-- **PDFs ingested**: 350
+- **PDFs ingested**: 379
 - **Daily report notes**: 860
 - **Date range**: 2024-08-08 → 2026-12-31
-- **Text chunks**: 15,728
-- **Total facts**: 2,606  (bridge: 0 · pdf-regex: 2,606)
+- **Text chunks**: 17,515
+- **Total facts**: 2,764  (bridge: 0 · pdf-regex: 2,764)
 - **Province notes**: 27
 - **Concept notes**: 7
 
