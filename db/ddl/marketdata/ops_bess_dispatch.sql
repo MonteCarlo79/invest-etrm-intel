@@ -138,12 +138,15 @@ CREATE TABLE IF NOT EXISTS marketdata.ops_bess_dispatch_15min (
     -- Normalized operational values
     nominated_dispatch_mw NUMERIC(10,3),
     -- 申报曲线 (nominated dispatch schedule) in MW.
-    -- Positive = discharge, negative = charge.
+    -- Sign convention (grid-operator / ops-file convention):
+    --   Negative = discharge (BESS outputting power to grid, shown as negative load).
+    --   Positive = charge    (BESS consuming power from grid, shown as positive load).
     -- NOTE: this is the BESS operator's nomination to the grid operator.
     -- It is NOT the same as md_id_cleared_energy.cleared_energy_mwh (DA market-cleared trading energy).
     actual_dispatch_mw    NUMERIC(10,3),
     -- 实际充放曲线 (actual dispatch / physical output) in MW.
-    -- Positive = discharge, negative = charge.
+    -- Sign convention same as nominated_dispatch_mw:
+    --   Negative = discharge (BESS outputting), positive = charge (BESS consuming).
     -- NOTE: this is the physical output as reported in the operations file.
     -- It is NOT the same as md_id_cleared_energy.cleared_energy_mwh (DA market-cleared trading energy).
     nodal_price_excel     NUMERIC(10,3),
@@ -183,13 +186,16 @@ COMMENT ON COLUMN marketdata.ops_bess_dispatch_15min.interval_start IS
     'Excel times are naive local; +08:00 offset is applied by the parser.';
 
 COMMENT ON COLUMN marketdata.ops_bess_dispatch_15min.nominated_dispatch_mw IS
-    'MW from 申报曲线 (nominated dispatch schedule). Positive=discharge, negative=charge. '
+    'MW from 申报曲线 (nominated dispatch schedule). '
+    'Sign convention (ops-file / grid-operator perspective): '
+    'Negative=discharge (BESS outputting power), positive=charge (BESS consuming power). '
     'This is the BESS operator nomination to the grid operator — NOT the same as '
     'md_id_cleared_energy.cleared_energy_mwh (DA market-cleared trading energy).';
 
 COMMENT ON COLUMN marketdata.ops_bess_dispatch_15min.actual_dispatch_mw IS
     'MW from 实际充放曲线 (actual dispatch). Physical output as reported in operations file. '
-    'Positive=discharge, negative=charge. NOT the same as '
+    'Sign convention same as nominated_dispatch_mw: '
+    'Negative=discharge (BESS outputting), positive=charge (BESS consuming). NOT the same as '
     'md_id_cleared_energy.cleared_energy_mwh (DA market-cleared trading energy). '
     'Actual output may differ from cleared energy due to asset constraints or grid intervention.';
 

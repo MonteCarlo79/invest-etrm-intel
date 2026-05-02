@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-
 from pathlib import Path
 
 try:
@@ -14,30 +13,9 @@ try:
 except Exception:
     pass
 
+import anthropic
 
-# --- Robust OpenAI client compatibility (new + legacy) ---
-_USE_V1 = False
-client = None
-openai_legacy = None
-
-try:
-    from openai import OpenAI  # new SDK
-    client = OpenAI()
-    _USE_V1 = True
-except Exception:
-    try:
-        import openai as openai_legacy  # legacy SDK
-        openai_legacy.api_key = os.environ.get("OPENAI_API_KEY")
-        _USE_V1 = False
-    except Exception as e:
-        raise RuntimeError(
-            "OpenAI SDK not available. Install openai>=1.x or configure legacy openai package."
-        ) from e
-
-
-# Choose a model you have access to
-# More widely available default than gpt-4.1-mini
-DEFAULT_MODEL = os.getenv("SPOT_HI_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = os.getenv("SPOT_HI_MODEL", "claude-opus-4-6")
 
 SYSTEM_PROMPT = (
     "你是电力现货日报的分析助手。"
@@ -50,12 +28,17 @@ SYSTEM_PROMPT = (
     "4) 用简短中文总结（不超过 50 字），不要加引号、不要加前缀。"
 )
 
+
 def audit_price_row(province_cn: str, report_date: str, extracted: dict, source_row_text: str) -> str:
     """
     Ask LLM to sanity check if extracted numbers match the row text.
     Return short warning only if mismatch is likely.
     """
     if not source_row_text:
+        return ""
+
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        print("[WARN] ANTHROPIC_API_KEY not set; audit will be skipped")
         return ""
 
     user_prompt = f"""
@@ -73,7 +56,18 @@ PDF 行文本：
 - 若可能有错：用一句话说明哪个字段可能不对。
 """
 
-    # call your chat completion like summarize_highlights
+    try:
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model=DEFAULT_MODEL,
+            max_tokens=120,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return (resp.content[0].text or "").strip()
+    except Exception as e:
+        print(f"[WARN] LLM audit failed for {province_cn} {report_date}: {e}")
+        return ""
 
 
 def summarize_highlights(
@@ -90,9 +84,8 @@ def summarize_highlights(
     :param raw_text:    extracted narrative text block (may contain many provinces)
     :return: short Chinese summary (<= ~50 chars)
     """
-
-    if not os.getenv("OPENAI_API_KEY"):
-        print("[WARN] OPENAI_API_KEY not set; highlights will be empty")
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        print("[WARN] ANTHROPIC_API_KEY not set; highlights will be empty")
         return ""
 
     if not raw_text or raw_text.strip() == "":
@@ -111,30 +104,14 @@ def summarize_highlights(
     )
 
     try:
-        if _USE_V1:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.1,
-                max_tokens=120,
-            )
-            return (resp.choices[0].message.content or "").strip()
-        else:
-            # legacy fallback
-            resp = openai_legacy.ChatCompletion.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.1,
-                max_tokens=120,
-            )
-            return (resp["choices"][0]["message"]["content"] or "").strip()
-
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model=model,
+            max_tokens=120,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return (resp.content[0].text or "").strip()
     except Exception as e:
         print(f"[WARN] LLM highlight summarization failed for {province_cn} {report_date}: {e}")
         return ""

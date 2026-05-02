@@ -2119,6 +2119,18 @@ resource "aws_ecs_task_definition" "options_cockpit" {
         }
       ]
 
+      command = [
+        "streamlit",
+        "run",
+        "apps/options-cockpit/app.py",
+        "--server.port=8507",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=options-cockpit",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
+        "--server.headless=true"
+      ]
+
       environment = [
         {
           name  = "AWS_REGION"
