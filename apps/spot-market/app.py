@@ -17,7 +17,20 @@ import requests
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.font_manager as _mfm
 from matplotlib.patches import Polygon as MplPolygon
+
+# Pick the first CJK-capable font available on this system
+_CJK_FONTS = ["Microsoft YaHei", "SimHei", "SimSun", "STHeiti",
+               "WenQuanYi Micro Hei", "Noto Sans CJK SC", "Arial Unicode MS"]
+_CJK_FONT: str | None = None
+for _f in _CJK_FONTS:
+    try:
+        if _mfm.findfont(_mfm.FontProperties(family=_f), fallback_to_default=False):
+            _CJK_FONT = _f
+            break
+    except (ValueError, OSError):
+        pass
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -809,6 +822,10 @@ def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Fi
     agg = _geo_agg(df, metric)
     title_key = "geo_title_da" if metric == "da" else "geo_title_rt"
 
+    # Use a CJK-capable font for Chinese labels when one is available
+    _lang = st.session_state.get("lang_radio", "English")
+    _rc_font = ({"font.family": _CJK_FONT} if _lang == "中文" and _CJK_FONT else {})
+
     cmap = _make_china_cmap()
     norm = mcolors.Normalize(vmin=_GEO_ZMIN, vmax=_GEO_ZMAX)
 
@@ -820,52 +837,53 @@ def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Fi
             except (ValueError, TypeError):
                 pass
 
-    fig, ax = plt.subplots(figsize=(9, 6), facecolor="white")
-    ax.set_facecolor("#b8d4f0")
+    with plt.rc_context(_rc_font):
+        fig, ax = plt.subplots(figsize=(9, 6), facecolor="white")
+        ax.set_facecolor("#b8d4f0")
 
-    if geojson:
-        for feat in geojson.get("features", []):
-            adcode_int = feat.get("properties", {}).get("adcode")
-            price = price_map.get(adcode_int)
-            fc = cmap(norm(price)) if price is not None else "#d0d0d0"
+        if geojson:
+            for feat in geojson.get("features", []):
+                adcode_int = feat.get("properties", {}).get("adcode")
+                price = price_map.get(adcode_int)
+                fc = cmap(norm(price)) if price is not None else "#d0d0d0"
 
-            geom = feat.get("geometry", {})
-            rings: list = []
-            if geom.get("type") == "Polygon":
-                rings = [geom["coordinates"][0]]
-            elif geom.get("type") == "MultiPolygon":
-                rings = [p[0] for p in geom["coordinates"]]
+                geom = feat.get("geometry", {})
+                rings: list = []
+                if geom.get("type") == "Polygon":
+                    rings = [geom["coordinates"][0]]
+                elif geom.get("type") == "MultiPolygon":
+                    rings = [p[0] for p in geom["coordinates"]]
 
-            for ring in rings:
-                coords = np.array(ring)
-                ax.add_patch(MplPolygon(
-                    coords, closed=True,
-                    facecolor=fc, edgecolor="white", linewidth=0.8,
-                ))
+                for ring in rings:
+                    coords = np.array(ring)
+                    ax.add_patch(MplPolygon(
+                        coords, closed=True,
+                        facecolor=fc, edgecolor="white", linewidth=0.8,
+                    ))
 
-    if not agg.empty:
-        for _, row in agg.iterrows():
-            coord = _PROV_CENTROIDS.get(row["adcode"])
-            if coord:
-                lat, lon = coord
-                ax.text(lon, lat, row["price_str"], ha="center", va="center",
-                        fontsize=7, fontweight="bold", color="black")
+        if not agg.empty:
+            for _, row in agg.iterrows():
+                coord = _PROV_CENTROIDS.get(row["adcode"])
+                if coord:
+                    lat, lon = coord
+                    ax.text(lon, lat, row["price_str"], ha="center", va="center",
+                            fontsize=7, fontweight="bold", color="black")
 
-    ax.set_xlim(72, 137)
-    ax.set_ylim(16, 54)
-    ax.set_aspect("equal")
-    ax.axis("off")
+        ax.set_xlim(72, 137)
+        ax.set_ylim(16, 54)
+        ax.set_aspect("equal")
+        ax.axis("off")
 
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, orientation="vertical", fraction=0.025, pad=0.01, aspect=25)
-    cbar.set_label(_t("price_unit"), fontsize=9)
-    cbar.set_ticks([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
-    cbar.set_ticklabels(["0.0", "0.1", "0.2", "0.3", "0.4", "0.5+"])
-    cbar.ax.tick_params(labelsize=8)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, orientation="vertical", fraction=0.025, pad=0.01, aspect=25)
+        cbar.set_label(_t("price_unit"), fontsize=9)
+        cbar.set_ticks([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+        cbar.set_ticklabels(["0.0", "0.1", "0.2", "0.3", "0.4", "0.5+"])
+        cbar.ax.tick_params(labelsize=8)
 
-    ax.set_title(_t(title_key), fontsize=11, pad=10)
-    plt.tight_layout(pad=0.5)
+        ax.set_title(_t(title_key), fontsize=11, pad=10)
+        plt.tight_layout(pad=0.5)
     return fig
 
 
