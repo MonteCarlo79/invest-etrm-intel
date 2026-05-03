@@ -184,6 +184,21 @@ _T: dict[str, dict[str, str]] = {
         "rt_heatmap_title":     "Real-Time Average Clearing Price — Province × Date Heatmap",
         "geo_title_da":         "Day-Ahead (DA) — Average Price by Province (¥/kWh)",
         "geo_title_rt":         "Real-Time (RT) — Average Price by Province (¥/kWh)",
+        # geo animation
+        "anim_title":           "Monthly RT Price Animation",
+        "anim_range":           "Animation period",
+        "anim_slider":          "Select month",
+        "anim_no_data":         "No data for this month.",
+        "anim_map_title":       "RT Avg Price — {month}",
+        # geo comparison
+        "cmp_title":            "Period Comparison",
+        "cmp_metric":           "Metric",
+        "cmp_period_a":         "Period A",
+        "cmp_period_b":         "Period B",
+        "cmp_start":            "Start",
+        "cmp_end":              "End",
+        "cmp_no_data":          "No data for this period.",
+        "cmp_map_title":        "{metric} Avg — {start} → {end}",
     },
     "zh": {
         # app
@@ -316,6 +331,21 @@ _T: dict[str, dict[str, str]] = {
         "rt_heatmap_title":     "实时平均出清价格 — 省份 × 日期热力图",
         "geo_title_da":         "日前（DA）— 各省平均价格（元/千瓦时）",
         "geo_title_rt":         "实时（RT）— 各省平均价格（元/千瓦时）",
+        # geo animation
+        "anim_title":           "各月实时价格动画",
+        "anim_range":           "动画时段",
+        "anim_slider":          "选择月份",
+        "anim_no_data":         "该月无数据。",
+        "anim_map_title":       "实时均价 — {month}",
+        # geo comparison
+        "cmp_title":            "时段对比",
+        "cmp_metric":           "指标",
+        "cmp_period_a":         "时段 A",
+        "cmp_period_b":         "时段 B",
+        "cmp_start":            "开始日期",
+        "cmp_end":              "结束日期",
+        "cmp_no_data":          "该时段无数据。",
+        "cmp_map_title":        "{metric} 均价 — {start} → {end}",
     },
 }
 
@@ -818,9 +848,11 @@ def _make_china_cmap() -> mcolors.LinearSegmentedColormap:
     return mcolors.LinearSegmentedColormap.from_list("china_price", stops)
 
 
-def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Figure:
+def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None,
+                  title: str | None = None) -> plt.Figure:
     agg = _geo_agg(df, metric)
     title_key = "geo_title_da" if metric == "da" else "geo_title_rt"
+    display_title = title if title is not None else _t(title_key)
 
     # Use a CJK-capable font for Chinese labels when one is available
     _lang = st.session_state.get("lang_radio", "English")
@@ -882,7 +914,7 @@ def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Fi
         cbar.set_ticklabels(["0.0", "0.1", "0.2", "0.3", "0.4", "0.5+"])
         cbar.ax.tick_params(labelsize=8)
 
-        ax.set_title(_t(title_key), fontsize=11, pad=10)
+        ax.set_title(display_title, fontsize=11, pad=10)
         plt.tight_layout(pad=0.5)
     return fig
 
@@ -1157,6 +1189,92 @@ with tab_geo:
             fig_rt = chart_geo_map(df_geo, "rt", _geojson)
             st.pyplot(fig_rt, use_container_width=True)
             plt.close(fig_rt)
+
+        # ── Section: Monthly RT Animation ────────────────────────────────────
+        st.divider()
+        st.subheader(_t("anim_title"))
+
+        anim_c1, anim_c2 = st.columns(2)
+        with anim_c1:
+            anim_start = st.date_input(
+                f"{_t('anim_range')} — {_t('cmp_start')}",
+                value=date(d_start.year, d_start.month, 1),
+                key="anim_start",
+            )
+        with anim_c2:
+            anim_end = st.date_input(
+                f"{_t('anim_range')} — {_t('cmp_end')}",
+                value=d_end,
+                key="anim_end",
+            )
+
+        # Build ordered list of month start dates
+        _anim_months: list[date] = []
+        _m = date(anim_start.year, anim_start.month, 1)
+        while _m <= anim_end:
+            _anim_months.append(_m)
+            _m = (_m.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+        if _anim_months:
+            _month_labels = [m.strftime("%Y-%m") for m in _anim_months]
+            _sel_label = st.select_slider(
+                _t("anim_slider"), options=_month_labels, key="anim_month"
+            )
+            _sel_m = _anim_months[_month_labels.index(_sel_label)]
+            _sel_m_end = (_sel_m.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+
+            df_anim = load_all(_sel_m, _sel_m_end, quality_filter)
+            if df_anim.empty:
+                st.info(_t("anim_no_data"))
+            else:
+                _anim_title = _t("anim_map_title", month=_sel_label)
+                fig_anim = chart_geo_map(df_anim, "rt", _geojson, title=_anim_title)
+                st.pyplot(fig_anim, use_container_width=True)
+                plt.close(fig_anim)
+
+        # ── Section: Period Comparison ────────────────────────────────────────
+        st.divider()
+        st.subheader(_t("cmp_title"))
+
+        _cmp_metric_opt = st.radio(
+            _t("cmp_metric"), ["DA", "RT"], horizontal=True, key="cmp_metric"
+        )
+        _cmp_m = _cmp_metric_opt.lower()
+
+        cmp_a_col, cmp_b_col = st.columns(2)
+        with cmp_a_col:
+            st.markdown(f"**{_t('cmp_period_a')}**")
+            cmp_a_start = st.date_input(_t("cmp_start"), value=d_start, key="cmp_a_start")
+            cmp_a_end   = st.date_input(_t("cmp_end"),   value=d_end,   key="cmp_a_end")
+        with cmp_b_col:
+            st.markdown(f"**{_t('cmp_period_b')}**")
+            _b_default_end   = d_end - timedelta(days=365)
+            _b_default_start = d_start - timedelta(days=365)
+            cmp_b_start = st.date_input(_t("cmp_start"), value=_b_default_start, key="cmp_b_start")
+            cmp_b_end   = st.date_input(_t("cmp_end"),   value=_b_default_end,   key="cmp_b_end")
+
+        df_cmp_a = load_all(cmp_a_start, cmp_a_end, quality_filter)
+        df_cmp_b = load_all(cmp_b_start, cmp_b_end, quality_filter)
+
+        cmp_map_a, cmp_map_b = st.columns(2)
+        with cmp_map_a:
+            _title_a = _t("cmp_map_title",
+                          metric=_cmp_metric_opt, start=cmp_a_start, end=cmp_a_end)
+            if df_cmp_a.empty:
+                st.info(_t("cmp_no_data"))
+            else:
+                fig_cmp_a = chart_geo_map(df_cmp_a, _cmp_m, _geojson, title=_title_a)
+                st.pyplot(fig_cmp_a, use_container_width=True)
+                plt.close(fig_cmp_a)
+        with cmp_map_b:
+            _title_b = _t("cmp_map_title",
+                          metric=_cmp_metric_opt, start=cmp_b_start, end=cmp_b_end)
+            if df_cmp_b.empty:
+                st.info(_t("cmp_no_data"))
+            else:
+                fig_cmp_b = chart_geo_map(df_cmp_b, _cmp_m, _geojson, title=_title_b)
+                st.pyplot(fig_cmp_b, use_container_width=True)
+                plt.close(fig_cmp_b)
 
 # ── Tab 7: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
