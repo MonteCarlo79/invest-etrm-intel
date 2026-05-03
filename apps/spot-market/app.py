@@ -36,7 +36,281 @@ for _env in [_REPO / "config" / ".env", _REPO / ".env"]:
         load_dotenv(_env)
 _spot_env = _REPO / "apps" / "spot-agent" / ".env"
 if _spot_env.exists():
-    load_dotenv(_spot_env)  # sets DB_URL=postgresql://...5433/marketdata
+    load_dotenv(_spot_env)
+
+# ── translations ──────────────────────────────────────────────────────────────
+_T: dict[str, dict[str, str]] = {
+    "en": {
+        # app
+        "app_title":            "⚡ China Spot Market Price Cockpit",
+        # sidebar
+        "lang_label":           "🌐 Language",
+        "filters":              "Filters",
+        "date_range":           "Date range",
+        "provinces":            "Provinces (multi-select)",
+        "show_band":            "Show min/max band",
+        "filter_bad_data":      "Filter bad data",
+        "filter_bad_data_help": "Exclude rows where avg is outside [min, max] bounds — caused by early-Jan PDF format differences",
+        "data_caption":         "Data: spot_daily · units: ¥/kWh",
+        "select_prov_info":     "Select at least one province in the sidebar.",
+        # KPIs
+        "latest_date":          "Latest Date",
+        "dates_in_db":          "Dates in DB",
+        "provinces_kpi":        "Provinces",
+        "complete_rows":        "Complete Rows",
+        "coverage":             "Coverage",
+        # tabs
+        "tab_overview":         "Overview",
+        "tab_spread":           "DA−RT Spread",
+        "tab_heatmap":          "Heatmap",
+        "tab_province":         "Province Deep-Dive",
+        "tab_dist":             "Distributions",
+        "tab_geo":              "Geo Map",
+        "tab_mgmt":             "Data Management",
+        # overview
+        "latest_prices":        "Latest prices",
+        "col_province":         "Province",
+        "col_date":             "Date",
+        # spread
+        "spread_stats":         "Spread statistics (¥/kWh)",
+        "col_mean":             "Mean",
+        "col_std":              "Std",
+        "col_min":              "Min",
+        "col_max":              "Max",
+        "col_da_gt_rt":         "DA > RT (%)",
+        "col_days":             "Days",
+        # heatmap
+        "metric_label":         "Metric",
+        # province
+        "select_province":      "Select province",
+        "raw_data":             "raw data",
+        # distributions
+        "market_label":         "Market",
+        "hist_bins":            "Histogram bins",
+        "kde_label":            "Overlay KDE curve",
+        "both_label":           "Both",
+        "desc_stats":           "Descriptive statistics (¥/kWh)",
+        "col_n":                "N",
+        "col_median":           "Median",
+        "col_p10":              "P10",
+        "col_p25":              "P25",
+        "col_p75":              "P75",
+        "col_p90":              "P90",
+        # geo
+        "avg_by_province":      "Average Prices by Province",
+        "geo_color_caption":    "Green = Low (<0.20 ¥/kWh) · Yellow = Medium (0.20–0.30) · Red = High (>0.30)",
+        "geo_maps_title":       "Geographic Price Maps",
+        "geo_color_scale":      "Color scale: 🟢 **< 0.20 ¥/kWh** (low) · 🟡 **0.20–0.30** (medium) · 🔴 **> 0.30 ¥/kWh** (high)",
+        "geo_unavailable":      "Province boundaries unavailable — showing bubble fallback.",
+        "da_caption":           "Day-Ahead (DA)",
+        "rt_caption":           "Real-Time (RT)",
+        "col_avg_da":           "Avg DA (¥/kWh)",
+        "col_da_level":         "DA Level",
+        "col_avg_rt":           "Avg RT (¥/kWh)",
+        "col_rt_level":         "RT Level",
+        "col_days_da":          "Days (DA)",
+        "col_days_rt":          "Days (RT)",
+        "level_low":            "Low",
+        "level_medium":         "Medium",
+        "level_high":           "High",
+        # data management
+        "data_mgmt_title":      "Data Management",
+        "report_year":          "Report year",
+        "mode_label":           "Mode",
+        "mode_fill_gaps":       "Fill gaps (ingest missing dates only)",
+        "mode_backfill":        "Backfill date range (ingest all PDFs covering the range)",
+        "additional_steps":     "Additional steps",
+        "chk_interprov":        "Parse 省间现货交易 data",
+        "chk_interprov_help":   "Extract inter-provincial trading data and save to staging.spot_interprov_flow",
+        "chk_ai":               "Generate AI summaries",
+        "chk_ai_help":          "Generate Claude daily market summaries (requires ANTHROPIC_API_KEY)",
+        "start_date":           "Start date",
+        "end_date":             "End date",
+        "col_pdf":              "PDF",
+        "col_covers":           "Covers",
+        "col_dates_range":      "Dates in range",
+        "col_missing":          "Missing from DB",
+        "col_partial":          "Partial (DA or RT=0)",
+        "col_status":           "Status",
+        "status_missing":       "Missing",
+        "status_partial":       "Partial",
+        "status_ok":            "OK",
+        "btn_fill_gaps":        "Backfill {n} PDF(s) with missing dates",
+        "btn_reingest":         "Re-ingest all {n} PDF(s) in range",
+        "warn_partial":         "{n} PDF(s) have partial data (DA or RT missing). Switch to 'Backfill date range' mode to re-ingest them.",
+        "all_present":          "All dates in range are present in DB.",
+        "no_pdfs":              "No PDFs found in the selected date range.",
+        "prog_starting":        "Starting…",
+        "prog_parsing":         "Parsing {fname}…",
+        "prog_interprov":       "省间 data: {fname}…",
+        "prog_ai":              "AI summary {rdate}…",
+        "prog_done":            "Done.",
+        "backfill_complete":    "Backfill complete — processed {n} PDF(s).",
+        "col_dates":            "Dates",
+        "col_rows":             "Rows upserted",
+        "col_interprov":        "Interprov rows",
+        "col_ai":               "AI summaries",
+        "col_error":            "Error",
+        # chart labels
+        "da_label":             "Day-Ahead (DA)",
+        "rt_label":             "Real-Time (RT)",
+        "da_avg_label":         "DA avg",
+        "rt_avg_label":         "RT avg",
+        "price_unit":           "¥/kWh",
+        "prob_density":         "Probability density",
+        "price_axis":           "Price (¥/kWh)",
+        "spread_title":         "DA − RT Spread  (¥/kWh)  |  +ve = DA premium, −ve = RT spike",
+        "da_clearing":          "Day-Ahead (DA) Clearing Price  (¥/kWh)",
+        "rt_clearing":          "Real-Time (RT) Clearing Price  (¥/kWh)",
+        "da_dist_title":        "Day-Ahead (DA) Price Distribution  (¥/kWh)",
+        "rt_dist_title":        "Real-Time (RT) Price Distribution  (¥/kWh)",
+        "da_violin_title":      "Day-Ahead (DA) — Violin / Box Plot  (¥/kWh)",
+        "rt_violin_title":      "Real-Time (RT) — Violin / Box Plot  (¥/kWh)",
+        "da_heatmap_title":     "Day-Ahead Average Clearing Price — Province × Date Heatmap",
+        "rt_heatmap_title":     "Real-Time Average Clearing Price — Province × Date Heatmap",
+        "geo_title_da":         "Day-Ahead (DA) — Average Price by Province (¥/kWh)",
+        "geo_title_rt":         "Real-Time (RT) — Average Price by Province (¥/kWh)",
+    },
+    "zh": {
+        # app
+        "app_title":            "⚡ 中国电力现货市场价格驾驶舱",
+        # sidebar
+        "lang_label":           "🌐 语言",
+        "filters":              "筛选条件",
+        "date_range":           "日期范围",
+        "provinces":            "省份（多选）",
+        "show_band":            "显示最大/最小区间",
+        "filter_bad_data":      "过滤异常数据",
+        "filter_bad_data_help": "排除均值不在最大/最小区间内的行——由1月初PDF格式差异引起",
+        "data_caption":         "数据来源：spot_daily · 单位：元/千瓦时",
+        "select_prov_info":     "请在侧边栏选择至少一个省份。",
+        # KPIs
+        "latest_date":          "最新日期",
+        "dates_in_db":          "数据库日期数",
+        "provinces_kpi":        "省份数",
+        "complete_rows":        "完整行数",
+        "coverage":             "覆盖率",
+        # tabs
+        "tab_overview":         "总览",
+        "tab_spread":           "日前-实时价差",
+        "tab_heatmap":          "热力图",
+        "tab_province":         "省份深度分析",
+        "tab_dist":             "价格分布",
+        "tab_geo":              "地理分布图",
+        "tab_mgmt":             "数据管理",
+        # overview
+        "latest_prices":        "最新价格",
+        "col_province":         "省份",
+        "col_date":             "日期",
+        # spread
+        "spread_stats":         "价差统计（元/千瓦时）",
+        "col_mean":             "均值",
+        "col_std":              "标准差",
+        "col_min":              "最小值",
+        "col_max":              "最大值",
+        "col_da_gt_rt":         "日前>实时（%）",
+        "col_days":             "天数",
+        # heatmap
+        "metric_label":         "指标",
+        # province
+        "select_province":      "选择省份",
+        "raw_data":             "原始数据",
+        # distributions
+        "market_label":         "市场",
+        "hist_bins":            "直方图组数",
+        "kde_label":            "叠加KDE曲线",
+        "both_label":           "两者",
+        "desc_stats":           "描述性统计（元/千瓦时）",
+        "col_n":                "N",
+        "col_median":           "中位数",
+        "col_p10":              "P10",
+        "col_p25":              "P25",
+        "col_p75":              "P75",
+        "col_p90":              "P90",
+        # geo
+        "avg_by_province":      "各省平均价格",
+        "geo_color_caption":    "绿色 = 低价（<0.20元/千瓦时）· 黄色 = 中等（0.20–0.30）· 红色 = 高价（>0.30）",
+        "geo_maps_title":       "地理价格分布图",
+        "geo_color_scale":      "色阶：🟢 **< 0.20 元/千瓦时**（低）· 🟡 **0.20–0.30**（中）· 🔴 **> 0.30 元/千瓦时**（高）",
+        "geo_unavailable":      "省级边界数据不可用——显示气泡图替代。",
+        "da_caption":           "日前（DA）",
+        "rt_caption":           "实时（RT）",
+        "col_avg_da":           "日前均价（元/千瓦时）",
+        "col_da_level":         "日前价格水平",
+        "col_avg_rt":           "实时均价（元/千瓦时）",
+        "col_rt_level":         "实时价格水平",
+        "col_days_da":          "日前天数",
+        "col_days_rt":          "实时天数",
+        "level_low":            "低",
+        "level_medium":         "中",
+        "level_high":           "高",
+        # data management
+        "data_mgmt_title":      "数据管理",
+        "report_year":          "报告年份",
+        "mode_label":           "模式",
+        "mode_fill_gaps":       "补全缺口（仅录入缺失日期）",
+        "mode_backfill":        "回填日期范围（录入覆盖该范围的所有PDF）",
+        "additional_steps":     "附加步骤",
+        "chk_interprov":        "解析省间现货交易数据",
+        "chk_interprov_help":   "提取省间交易数据并保存至 staging.spot_interprov_flow",
+        "chk_ai":               "生成AI摘要",
+        "chk_ai_help":          "生成Claude每日市场摘要（需设置 ANTHROPIC_API_KEY）",
+        "start_date":           "开始日期",
+        "end_date":             "结束日期",
+        "col_pdf":              "PDF文件",
+        "col_covers":           "覆盖日期",
+        "col_dates_range":      "范围内日期数",
+        "col_missing":          "数据库缺失",
+        "col_partial":          "部分缺失（日前或实时=0）",
+        "col_status":           "状态",
+        "status_missing":       "缺失",
+        "status_partial":       "部分",
+        "status_ok":            "正常",
+        "btn_fill_gaps":        "回填 {n} 个PDF（含缺失日期）",
+        "btn_reingest":         "重新录入范围内全部 {n} 个PDF",
+        "warn_partial":         "{n} 个PDF存在部分数据（日前或实时缺失）。切换至"回填日期范围"模式可重新录入。",
+        "all_present":          "所选范围内所有日期均已存在于数据库中。",
+        "no_pdfs":              "所选日期范围内未找到PDF文件。",
+        "prog_starting":        "启动中…",
+        "prog_parsing":         "解析 {fname}…",
+        "prog_interprov":       "省间数据：{fname}…",
+        "prog_ai":              "AI摘要 {rdate}…",
+        "prog_done":            "完成。",
+        "backfill_complete":    "回填完成——已处理 {n} 个PDF。",
+        "col_dates":            "日期",
+        "col_rows":             "已写入行数",
+        "col_interprov":        "省间行数",
+        "col_ai":               "AI摘要数",
+        "col_error":            "错误",
+        # chart labels
+        "da_label":             "日前（DA）",
+        "rt_label":             "实时（RT）",
+        "da_avg_label":         "日前均价",
+        "rt_avg_label":         "实时均价",
+        "price_unit":           "元/千瓦时",
+        "prob_density":         "概率密度",
+        "price_axis":           "价格（元/千瓦时）",
+        "spread_title":         "日前−实时价差（元/千瓦时）| 正值=日前溢价，负值=实时峰值",
+        "da_clearing":          "日前（DA）出清价格（元/千瓦时）",
+        "rt_clearing":          "实时（RT）出清价格（元/千瓦时）",
+        "da_dist_title":        "日前（DA）价格分布（元/千瓦时）",
+        "rt_dist_title":        "实时（RT）价格分布（元/千瓦时）",
+        "da_violin_title":      "日前（DA）— 小提琴/箱线图（元/千瓦时）",
+        "rt_violin_title":      "实时（RT）— 小提琴/箱线图（元/千瓦时）",
+        "da_heatmap_title":     "日前平均出清价格 — 省份 × 日期热力图",
+        "rt_heatmap_title":     "实时平均出清价格 — 省份 × 日期热力图",
+        "geo_title_da":         "日前（DA）— 各省平均价格（元/千瓦时）",
+        "geo_title_rt":         "实时（RT）— 各省平均价格（元/千瓦时）",
+    },
+}
+
+
+def _t(key: str, **kwargs) -> str:
+    """Return translated string for the current language selection."""
+    lang = "zh" if st.session_state.get("lang_radio") == "中文" else "en"
+    s = _T[lang].get(key, _T["en"].get(key, key))
+    return s.format(**kwargs) if kwargs else s
+
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -50,7 +324,7 @@ st.set_page_config(
 @st.cache_resource
 def _get_conn():
     url = (
-        os.environ.get("PGURL")          # RDS — set by config/.env
+        os.environ.get("PGURL")
         or os.environ.get("DATABASE_URL")
         or os.environ.get("DB_URL")
         or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
@@ -68,21 +342,15 @@ def _conn():
     return conn
 
 # ── data quality filter ───────────────────────────────────────────────────────
-# Rows from early-January PDFs have da_avg extracted from the wrong column
-# (picks da_min position instead of da_avg), producing avg < min.
-# Filter these out so they don't distort charts and distributions.
 def _apply_quality_filter(df: pd.DataFrame) -> pd.DataFrame:
     mask = pd.Series(True, index=df.index)
     for m in ("da", "rt"):
         avg, mx, mn = f"{m}_avg", f"{m}_max", f"{m}_min"
-        # Drop rows where avg is outside [min, max] by more than a rounding tolerance
         bad_lo = df[avg].notna() & df[mn].notna() & (df[avg] < df[mn] - 0.001)
         bad_hi = df[avg].notna() & df[mx].notna() & (df[avg] > df[mx] + 0.001)
-        # Also drop physically implausible values (outside ±2 ¥/kWh)
         bad_range = df[avg].notna() & ((df[avg] < -0.5) | (df[avg] > 2.0))
         mask &= ~(bad_lo | bad_hi | bad_range)
     df = df[mask].copy()
-    # Null out implausible max/min values (parsing artefacts where avg is absent)
     for m in ("da", "rt"):
         for col in (f"{m}_max", f"{m}_min"):
             df.loc[df[col].notna() & ((df[col] > 2.0) | (df[col] < -1.0)), col] = None
@@ -179,10 +447,10 @@ def chart_timeseries(df: pd.DataFrame, provinces: list[str],
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.4f} ¥/kWh<extra>" + prov + "</extra>",
         ))
 
-    label = "Day-Ahead (DA)" if metric == "da" else "Real-Time (RT)"
+    title_key = "da_clearing" if metric == "da" else "rt_clearing"
     fig.update_layout(
         height=430,
-        title=dict(text=f"{label} Clearing Price  (¥/kWh)", font=dict(size=14)),
+        title=dict(text=_t(title_key), font=dict(size=14)),
         margin=dict(l=10, r=10, t=45, b=90),
         legend=dict(orientation="h", yanchor="top", y=-0.18,
                     xanchor="center", x=0.5, font=dict(size=11)),
@@ -198,10 +466,14 @@ def chart_da_rt_overlay(df: pd.DataFrame, province: str) -> go.Figure:
     sub = df[df["province_en"] == province].sort_values("report_date")
     fig = go.Figure()
 
-    for metric, label, colour in [("da", "DA avg", "#1f77b4"), ("rt", "RT avg", "#ff7f0e")]:
+    for metric, label_key, colour in [
+        ("da", "da_avg_label", "#1f77b4"),
+        ("rt", "rt_avg_label", "#ff7f0e"),
+    ]:
         avg_col, max_col, min_col = f"{metric}_avg", f"{metric}_max", f"{metric}_min"
         if sub[avg_col].isna().all():
             continue
+        label = _t(label_key)
         if sub[max_col].notna().any():
             fig.add_trace(go.Scatter(
                 x=pd.concat([sub["report_date"], sub["report_date"].iloc[::-1]]),
@@ -218,7 +490,8 @@ def chart_da_rt_overlay(df: pd.DataFrame, province: str) -> go.Figure:
 
     fig.update_layout(
         height=390,
-        title=dict(text=f"{province} — DA vs RT  (¥/kWh)", font=dict(size=13)),
+        title=dict(text=f"{province} — {_t('da_avg_label')} vs {_t('rt_avg_label')}  ({_t('price_unit')})",
+                   font=dict(size=13)),
         margin=dict(l=10, r=10, t=45, b=60),
         legend=dict(orientation="h", yanchor="top", y=-0.15,
                     xanchor="center", x=0.5, font=dict(size=11)),
@@ -248,8 +521,7 @@ def chart_spread(df: pd.DataFrame, provinces: list[str]) -> go.Figure:
     fig.add_hline(y=0, line_width=1, line_color="black", opacity=0.5)
     fig.update_layout(
         height=360, barmode="group",
-        title=dict(text="DA − RT Spread  (¥/kWh)  |  +ve = DA premium, −ve = RT spike",
-                   font=dict(size=13)),
+        title=dict(text=_t("spread_title"), font=dict(size=13)),
         margin=dict(l=10, r=10, t=45, b=90),
         legend=dict(orientation="h", yanchor="top", y=-0.22,
                     xanchor="center", x=0.5, font=dict(size=11)),
@@ -271,20 +543,19 @@ def chart_heatmap(df: pd.DataFrame, metric: str) -> go.Figure:
     if pivot.empty:
         return go.Figure()
 
+    title_key = "da_heatmap_title" if metric == "da" else "rt_heatmap_title"
     fig = go.Figure(go.Heatmap(
         z=pivot.values,
         x=pivot.columns.strftime("%m-%d"),
         y=pivot.index.tolist(),
         colorscale="RdYlGn_r",
-        colorbar=dict(title="¥/kWh", thickness=12),
+        colorbar=dict(title=_t("price_unit"), thickness=12),
         hoverongaps=False,
         hovertemplate="Date: %{x}<br>Province: %{y}<br>Price: %{z:.4f} ¥/kWh<extra></extra>",
     ))
-    label = "Day-Ahead" if metric == "da" else "Real-Time"
     fig.update_layout(
         height=max(350, len(pivot) * 24),
-        title=dict(text=f"{label} Average Clearing Price — Province × Date Heatmap",
-                   font=dict(size=13)),
+        title=dict(text=_t(title_key), font=dict(size=13)),
         margin=dict(l=120, r=20, t=45, b=60),
         xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
         yaxis=dict(tickfont=dict(size=11)),
@@ -294,10 +565,6 @@ def chart_heatmap(df: pd.DataFrame, metric: str) -> go.Figure:
 
 def chart_distributions(df: pd.DataFrame, provinces: list[str],
                          metric: str, nbins: int, show_kde: bool) -> go.Figure:
-    """
-    Overlapping histogram + optional KDE for DA or RT avg prices.
-    One trace per province, semi-transparent fill so all are visible.
-    """
     avg_col = f"{metric}_avg"
     colours = _prov_colour(provinces)
     fig = go.Figure()
@@ -319,10 +586,9 @@ def chart_distributions(df: pd.DataFrame, provinces: list[str],
         ))
 
         if show_kde and len(vals) >= 5:
-            # Gaussian KDE via numpy
             std = vals.std()
             if std > 0:
-                bw = 1.06 * std * len(vals) ** (-0.2)  # Silverman's rule
+                bw = 1.06 * std * len(vals) ** (-0.2)
                 x_grid = np.linspace(vals.min() - 2 * bw, vals.max() + 2 * bw, 300)
                 kde = np.zeros_like(x_grid)
                 for v in vals:
@@ -337,23 +603,22 @@ def chart_distributions(df: pd.DataFrame, provinces: list[str],
                     hovertemplate="%{x:.4f} ¥/kWh<br>KDE: %{y:.3f}<extra>" + prov + "</extra>",
                 ))
 
-    label = "Day-Ahead (DA)" if metric == "da" else "Real-Time (RT)"
+    title_key = "da_dist_title" if metric == "da" else "rt_dist_title"
     fig.update_layout(
         height=430,
         barmode="overlay",
-        title=dict(text=f"{label} Price Distribution  (¥/kWh)", font=dict(size=14)),
+        title=dict(text=_t(title_key), font=dict(size=14)),
         margin=dict(l=10, r=10, t=45, b=90),
         legend=dict(orientation="h", yanchor="top", y=-0.18,
                     xanchor="center", x=0.5, font=dict(size=11)),
-        xaxis=dict(title="Price (¥/kWh)", showgrid=True, gridcolor="#f0f0f0"),
-        yaxis=dict(title="Probability density", showgrid=True, gridcolor="#f0f0f0"),
+        xaxis=dict(title=_t("price_axis"), showgrid=True, gridcolor="#f0f0f0"),
+        yaxis=dict(title=_t("prob_density"), showgrid=True, gridcolor="#f0f0f0"),
         plot_bgcolor="white", paper_bgcolor="white",
     )
     return fig
 
 
 def chart_violin(df: pd.DataFrame, provinces: list[str], metric: str) -> go.Figure:
-    """Violin + box plot per province, DA and RT side-by-side."""
     avg_col = f"{metric}_avg"
     colours = _prov_colour(provinces)
     fig = go.Figure()
@@ -372,14 +637,14 @@ def chart_violin(df: pd.DataFrame, provinces: list[str], metric: str) -> go.Figu
             hoverinfo="y+name",
         ))
 
-    label = "Day-Ahead (DA)" if metric == "da" else "Real-Time (RT)"
+    title_key = "da_violin_title" if metric == "da" else "rt_violin_title"
     fig.update_layout(
         height=430,
-        title=dict(text=f"{label} — Violin / Box Plot  (¥/kWh)", font=dict(size=14)),
+        title=dict(text=_t(title_key), font=dict(size=14)),
         margin=dict(l=10, r=10, t=45, b=90),
         legend=dict(orientation="h", yanchor="top", y=-0.18,
                     xanchor="center", x=0.5, font=dict(size=11)),
-        yaxis=dict(title="Price (¥/kWh)", showgrid=True, gridcolor="#f0f0f0", tickformat=".3f"),
+        yaxis=dict(title=_t("price_axis"), showgrid=True, gridcolor="#f0f0f0", tickformat=".3f"),
         plot_bgcolor="white", paper_bgcolor="white",
         violinmode="group",
     )
@@ -394,24 +659,23 @@ def _dist_stats(df: pd.DataFrame, provinces: list[str], metric: str) -> pd.DataF
         if vals.empty:
             continue
         rows.append({
-            "Province": prov,
-            "N": len(vals),
-            "Mean":   f"{vals.mean():.4f}",
-            "Median": f"{vals.median():.4f}",
-            "Std":    f"{vals.std():.4f}",
-            "P10":    f"{vals.quantile(0.10):.4f}",
-            "P25":    f"{vals.quantile(0.25):.4f}",
-            "P75":    f"{vals.quantile(0.75):.4f}",
-            "P90":    f"{vals.quantile(0.90):.4f}",
-            "Min":    f"{vals.min():.4f}",
-            "Max":    f"{vals.max():.4f}",
+            _t("col_province"): prov,
+            _t("col_n"):        len(vals),
+            _t("col_mean"):     f"{vals.mean():.4f}",
+            _t("col_median"):   f"{vals.median():.4f}",
+            _t("col_std"):      f"{vals.std():.4f}",
+            _t("col_p10"):      f"{vals.quantile(0.10):.4f}",
+            _t("col_p25"):      f"{vals.quantile(0.25):.4f}",
+            _t("col_p75"):      f"{vals.quantile(0.75):.4f}",
+            _t("col_p90"):      f"{vals.quantile(0.90):.4f}",
+            _t("col_min"):      f"{vals.min():.4f}",
+            _t("col_max"):      f"{vals.max():.4f}",
         })
     return pd.DataFrame(rows)
 
 
 # ── Geo map helpers ───────────────────────────────────────────────────────────
 
-# Maps province_en → 6-digit adcode string
 _PROV_ADCODE: dict[str, str] = {
     "Beijing":      "110000", "Tianjin":     "120000",
     "Hebei":        "130000", "Hebei-North": "130000", "Hebei-South": "130000",
@@ -428,7 +692,6 @@ _PROV_ADCODE: dict[str, str] = {
     "Ningxia":      "640000", "Xinjiang":    "650000",
 }
 
-# Province centroid (lat, lon) — for price-label scatter overlay
 _PROV_CENTROIDS: dict[str, tuple[float, float]] = {
     "110000": (39.90, 116.40), "120000": (39.13, 117.20),
     "130000": (38.04, 114.47), "140000": (37.87, 112.56),
@@ -465,14 +728,11 @@ _ADCODE_LABEL: dict[str, str] = {
     "640000": "Ningxia",        "650000": "Xinjiang",
 }
 
-# Price level thresholds (¥/kWh)
 _LOW_PRICE  = 0.20
 _HIGH_PRICE = 0.30
 
-# Local cache path for the downloaded GeoJSON
 _GEO_FILE = Path(__file__).parent / "data" / "china_provinces.geojson"
 
-# Colorscale: green (<0.2) → yellow (0.2–0.3) → red (>0.3), range 0–0.5
 _GEO_COLORSCALE = [
     [0.00, "#00aa44"],
     [0.40, "#ffe000"],
@@ -486,28 +746,27 @@ def _price_level(v: float | None) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return "—"
     if v < _LOW_PRICE:
-        return "Low"
+        return _t("level_low")
     if v <= _HIGH_PRICE:
-        return "Medium"
-    return "High"
+        return _t("level_medium")
+    return _t("level_high")
 
 
 def _level_bg(level: str) -> str:
-    return {"Low": "#d4edda", "Medium": "#fff3cd", "High": "#ffe0e0"}.get(level, "")
+    return {
+        "Low": "#d4edda", "低": "#d4edda",
+        "Medium": "#fff3cd", "中": "#fff3cd",
+        "High": "#ffe0e0", "高": "#ffe0e0",
+    }.get(level, "")
 
 
 @st.cache_data(ttl=None, show_spinner=False)
 def _load_china_geojson() -> tuple[dict | None, str | None]:
-    """Load China province boundary GeoJSON (DataV CDN, cached to disk).
-
-    We rely on featureidkey='properties.adcode' so no id-field normalisation
-    is needed — DataV features always have properties.adcode as an integer.
-    """
     if _GEO_FILE.exists():
         try:
             return json.loads(_GEO_FILE.read_text(encoding="utf-8")), None
         except Exception:
-            pass  # corrupted — re-download
+            pass
 
     try:
         resp = requests.get(
@@ -526,7 +785,6 @@ def _load_china_geojson() -> tuple[dict | None, str | None]:
 
 
 def _geo_agg(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """Aggregate daily prices to adcode-level for the map."""
     avg_col = f"{metric}_avg"
     df2 = df.copy()
     df2["adcode"] = df2["province_en"].map(_PROV_ADCODE)
@@ -541,24 +799,17 @@ def _geo_agg(df: pd.DataFrame, metric: str) -> pd.DataFrame:
 
 
 def _make_china_cmap() -> mcolors.LinearSegmentedColormap:
-    """Build a matplotlib colormap from _GEO_COLORSCALE stop points."""
     stops = [(pos, mcolors.to_rgb(hex_col)) for pos, hex_col in _GEO_COLORSCALE]
     return mcolors.LinearSegmentedColormap.from_list("china_price", stops)
 
 
 def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Figure:
-    """Matplotlib choropleth: draw each province polygon directly from GeoJSON.
-
-    Uses properties.adcode (integer) from each feature — no ID-matching step.
-    Falls back to a blank map with a warning if geojson is None.
-    """
     agg = _geo_agg(df, metric)
-    label = "Day-Ahead (DA)" if metric == "da" else "Real-Time (RT)"
+    title_key = "geo_title_da" if metric == "da" else "geo_title_rt"
 
     cmap = _make_china_cmap()
     norm = mcolors.Normalize(vmin=_GEO_ZMIN, vmax=_GEO_ZMAX)
 
-    # integer adcode → avg price
     price_map: dict[int, float] = {}
     if not agg.empty:
         for _, row in agg.iterrows():
@@ -568,7 +819,7 @@ def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Fi
                 pass
 
     fig, ax = plt.subplots(figsize=(9, 6), facecolor="white")
-    ax.set_facecolor("#b8d4f0")   # ocean-blue background
+    ax.set_facecolor("#b8d4f0")
 
     if geojson:
         for feat in geojson.get("features", []):
@@ -584,20 +835,18 @@ def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Fi
                 rings = [p[0] for p in geom["coordinates"]]
 
             for ring in rings:
-                coords = np.array(ring)   # [[lon, lat], …]
+                coords = np.array(ring)
                 ax.add_patch(MplPolygon(
                     coords, closed=True,
                     facecolor=fc, edgecolor="white", linewidth=0.8,
                 ))
 
-    # price labels at province centroids
     if not agg.empty:
         for _, row in agg.iterrows():
             coord = _PROV_CENTROIDS.get(row["adcode"])
             if coord:
                 lat, lon = coord
-                ax.text(lon, lat, row["price_str"],
-                        ha="center", va="center",
+                ax.text(lon, lat, row["price_str"], ha="center", va="center",
                         fontsize=7, fontweight="bold", color="black")
 
     ax.set_xlim(72, 137)
@@ -607,15 +856,13 @@ def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Fi
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, orientation="vertical",
-                        fraction=0.025, pad=0.01, aspect=25)
-    cbar.set_label("¥/kWh", fontsize=9)
+    cbar = fig.colorbar(sm, ax=ax, orientation="vertical", fraction=0.025, pad=0.01, aspect=25)
+    cbar.set_label(_t("price_unit"), fontsize=9)
     cbar.set_ticks([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
     cbar.set_ticklabels(["0.0", "0.1", "0.2", "0.3", "0.4", "0.5+"])
     cbar.ax.tick_params(labelsize=8)
 
-    ax.set_title(f"{label} — Average Price by Province (¥/kWh)",
-                 fontsize=11, pad=10)
+    ax.set_title(_t(title_key), fontsize=11, pad=10)
     plt.tight_layout(pad=0.5)
     return fig
 
@@ -624,7 +871,7 @@ def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Fi
 # LAYOUT
 # ─────────────────────────────────────────────────────────────────────────────
 
-st.title("⚡ China Spot Market Price Cockpit")
+st.title(_t("app_title"))
 
 # ── KPI strip ────────────────────────────────────────────────────────────────
 with st.spinner("Loading…"):
@@ -636,11 +883,15 @@ with st.spinner("Loading…"):
 
 # ── Sidebar controls ──────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Filters")
+    # Language toggle — must come first so _t() works for everything below
+    st.radio("🌐", ["English", "中文"], horizontal=True,
+             key="lang_radio", label_visibility="collapsed")
+
+    st.header(_t("filters"))
 
     _today = date.today()
     date_range = st.date_input(
-        "Date range",
+        _t("date_range"),
         value=(date(2026, 1, 1), _today),
         min_value=date(2024, 1, 1),
         max_value=_today,
@@ -654,24 +905,24 @@ with st.sidebar:
     default_provs = [p for p in ["Shandong", "Shanxi", "Mengxi", "Guangdong", "Sichuan"]
                      if p in prov_options] or prov_options[:5]
     selected_provs = st.multiselect(
-        "Provinces (multi-select)",
+        _t("provinces"),
         prov_options,
         default=default_provs,
         help="Select one or more provinces to compare",
     )
 
-    show_band = st.checkbox("Show min/max band", value=True)
+    show_band = st.checkbox(_t("show_band"), value=True)
     quality_filter = st.checkbox(
-        "Filter bad data",
+        _t("filter_bad_data"),
         value=True,
-        help="Exclude rows where avg is outside [min, max] bounds — caused by early-Jan PDF format differences",
+        help=_t("filter_bad_data_help"),
     )
 
     st.divider()
-    st.caption("Data: spot_daily · units: ¥/kWh")
+    st.caption(_t("data_caption"))
 
 if not selected_provs:
-    st.info("Select at least one province in the sidebar.")
+    st.info(_t("select_prov_info"))
     st.stop()
 
 # ── Load data ─────────────────────────────────────────────────────────────────
@@ -681,27 +932,28 @@ df_sel = df[df["province_en"].isin(selected_provs)]
 
 # ── KPI strip ─────────────────────────────────────────────────────────────────
 k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Latest Date",   str(kpis["latest_date"]) if kpis["latest_date"] else "—")
-k2.metric("Dates in DB",   kpis["total_dates"])
-k3.metric("Provinces",     kpis["total_provinces"])
-k4.metric("Complete Rows", kpis["complete_rows"],
+k1.metric(_t("latest_date"),   str(kpis["latest_date"]) if kpis["latest_date"] else "—")
+k2.metric(_t("dates_in_db"),   kpis["total_dates"])
+k3.metric(_t("provinces_kpi"), kpis["total_provinces"])
+k4.metric(_t("complete_rows"), kpis["complete_rows"],
           delta=f"/ {kpis['total_rows']} total", delta_color="off")
-k5.metric("Coverage",
+k5.metric(_t("coverage"),
           f"{100*kpis['complete_rows']/kpis['total_rows']:.0f}%" if kpis["total_rows"] else "—")
 
 if quality_filter:
     n_bad = load_kpis(False)["total_rows"] - kpis["total_rows"]
     if n_bad > 0:
-        st.caption(f"ℹ️ {n_bad} rows with invalid avg/min/max values hidden (toggle 'Filter bad data' in sidebar to include)")
+        st.caption(f"ℹ️ {n_bad} rows with invalid avg/min/max values hidden (toggle '{_t('filter_bad_data')}' in sidebar to include)")
 
 st.divider()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_mgmt = st.tabs(
-    ["Overview", "DA−RT Spread", "Heatmap", "Province Deep-Dive", "Distributions", "Geo Map", "Data Management"]
-)
+tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_mgmt = st.tabs([
+    _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"),
+    _t("tab_province"), _t("tab_dist"), _t("tab_geo"), _t("tab_mgmt"),
+])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
 with tab_overview:
@@ -713,7 +965,7 @@ with tab_overview:
         st.plotly_chart(chart_timeseries(df_sel, selected_provs, "rt", show_band),
                         use_container_width=True)
 
-    st.subheader("Latest prices")
+    st.subheader(_t("latest_prices"))
     latest = (
         df[df["province_en"].isin(selected_provs)]
         .sort_values("report_date", ascending=False)
@@ -723,11 +975,14 @@ with tab_overview:
         [["province_en", "province_cn", "report_date",
           "da_avg", "da_max", "da_min",
           "rt_avg", "rt_max", "rt_min"]]
-        .rename(columns={"province_en": "Province", "province_cn": "省份",
-                         "report_date": "Date"})
-        .sort_values("Province")
+        .rename(columns={
+            "province_en": _t("col_province"),
+            "province_cn": "省份",
+            "report_date": _t("col_date"),
+        })
+        .sort_values(_t("col_province"))
     )
-    latest["Date"] = pd.to_datetime(latest["Date"]).dt.date  # remove timestamp
+    latest[_t("col_date")] = pd.to_datetime(latest[_t("col_date")]).dt.date
     for c in ["da_avg","da_max","da_min","rt_avg","rt_max","rt_min"]:
         latest[c] = latest[c].map(lambda v: f"{v:.4f}" if pd.notna(v) else "—")
     st.dataframe(latest, use_container_width=True, hide_index=True)
@@ -736,7 +991,7 @@ with tab_overview:
 with tab_spread:
     st.plotly_chart(chart_spread(df_sel, selected_provs), use_container_width=True)
 
-    st.subheader("Spread statistics (¥/kWh)")
+    st.subheader(_t("spread_stats"))
     spread_rows = []
     for prov in sorted(selected_provs):
         sub = df_sel[df_sel["province_en"] == prov].dropna(subset=["da_avg", "rt_avg"])
@@ -744,20 +999,20 @@ with tab_spread:
             continue
         s = sub["da_avg"] - sub["rt_avg"]
         spread_rows.append({
-            "Province":    prov,
-            "Mean":        f"{s.mean():.4f}",
-            "Std":         f"{s.std():.4f}",
-            "Min":         f"{s.min():.4f}",
-            "Max":         f"{s.max():.4f}",
-            "DA > RT (%)": f"{(s > 0).mean()*100:.0f}%",
-            "Days":        len(s),
+            _t("col_province"): prov,
+            _t("col_mean"):     f"{s.mean():.4f}",
+            _t("col_std"):      f"{s.std():.4f}",
+            _t("col_min"):      f"{s.min():.4f}",
+            _t("col_max"):      f"{s.max():.4f}",
+            _t("col_da_gt_rt"): f"{(s > 0).mean()*100:.0f}%",
+            _t("col_days"):     len(s),
         })
     if spread_rows:
         st.dataframe(pd.DataFrame(spread_rows), use_container_width=True, hide_index=True)
 
 # ── Tab 3: Heatmap ────────────────────────────────────────────────────────────
 with tab_heatmap:
-    hm_metric = st.radio("Metric", ["DA", "RT"], horizontal=True)
+    hm_metric = st.radio(_t("metric_label"), ["DA", "RT"], horizontal=True)
     fig_hm = chart_heatmap(df[df["province_en"].isin(selected_provs)], hm_metric.lower())
     if fig_hm.data:
         st.plotly_chart(fig_hm, use_container_width=True)
@@ -766,16 +1021,16 @@ with tab_heatmap:
 
 # ── Tab 4: Province Deep-Dive ────────────────────────────────────────────────
 with tab_province:
-    dive_prov = st.selectbox("Select province", sorted(selected_provs))
+    dive_prov = st.selectbox(_t("select_province"), sorted(selected_provs))
     if dive_prov:
         st.plotly_chart(chart_da_rt_overlay(df_sel, dive_prov), use_container_width=True)
 
         sub = df_sel[df_sel["province_en"] == dive_prov].sort_values("report_date").copy()
         sub["report_date"] = pd.to_datetime(sub["report_date"]).dt.date
-        st.subheader(f"{dive_prov} — raw data")
+        st.subheader(f"{dive_prov} — {_t('raw_data')}")
         st.dataframe(
             sub[["report_date","da_avg","da_max","da_min","rt_avg","rt_max","rt_min"]]
-            .rename(columns={"report_date": "Date"})
+            .rename(columns={"report_date": _t("col_date")})
             .style.format(
                 {c: "{:.4f}" for c in ["da_avg","da_max","da_min","rt_avg","rt_max","rt_min"]},
                 na_rep="—",
@@ -787,16 +1042,15 @@ with tab_province:
 with tab_dist:
     dc1, dc2, dc3 = st.columns([2, 1, 1])
     with dc1:
-        dist_metric = st.radio("Market", ["DA", "RT", "Both"], horizontal=True, key="dist_metric")
+        both_opt = _t("both_label")
+        dist_metric = st.radio(_t("market_label"), ["DA", "RT", both_opt],
+                               horizontal=True, key="dist_metric")
     with dc2:
-        nbins = st.slider("Histogram bins", 10, 80, 30, key="dist_bins")
+        nbins = st.slider(_t("hist_bins"), 10, 80, 30, key="dist_bins")
     with dc3:
-        show_kde = st.checkbox("Overlay KDE curve", value=True, key="dist_kde")
+        show_kde = st.checkbox(_t("kde_label"), value=True, key="dist_kde")
 
-    metrics_to_show = (
-        ["da", "rt"] if dist_metric == "Both"
-        else [dist_metric.lower()]
-    )
+    metrics_to_show = ["da", "rt"] if dist_metric == both_opt else [dist_metric.lower()]
 
     for m in metrics_to_show:
         st.plotly_chart(
@@ -807,28 +1061,25 @@ with tab_dist:
             chart_violin(df_sel, selected_provs, m),
             use_container_width=True,
         )
-        st.subheader(f"{'DA' if m == 'da' else 'RT'} — Descriptive statistics (¥/kWh)")
+        st.subheader(f"{'DA' if m == 'da' else 'RT'} — {_t('desc_stats')}")
         stats_df = _dist_stats(df_sel, selected_provs, m)
         if not stats_df.empty:
             st.dataframe(stats_df, use_container_width=True, hide_index=True)
-        if dist_metric == "Both" and m == "da":
+        if dist_metric == both_opt and m == "da":
             st.divider()
 
 # ── Tab 6: Geo Map ────────────────────────────────────────────────────────────
 with tab_geo:
-    st.caption(f"Showing averages for **{d_start}** → **{d_end}** (all provinces, sidebar date range)")
+    st.caption(f"{_t('avg_by_province')} · **{d_start}** → **{d_end}**")
 
-    # ── All-province data for the selected period ─────────────────────────────
     df_geo = load_all(d_start, d_end, quality_filter)
 
     if df_geo.empty:
         st.info("No data for selected period.")
     else:
-        # ── Summary table ─────────────────────────────────────────────────────
-        st.subheader("Average Prices by Province")
-        st.caption("Green = Low (<0.20 ¥/kWh) · Yellow = Medium (0.20–0.30) · Red = High (>0.30)")
+        st.subheader(_t("avg_by_province"))
+        st.caption(_t("geo_color_caption"))
 
-        # Build per-province summary
         tbl_rows = []
         for prov_en in sorted(df_geo["province_en"].unique()):
             sub = df_geo[df_geo["province_en"] == prov_en]
@@ -837,50 +1088,52 @@ with tab_geo:
             da_avg  = da_vals.mean() if not da_vals.empty else None
             rt_avg  = rt_vals.mean() if not rt_vals.empty else None
             tbl_rows.append({
-                "Province":    prov_en,
-                "Avg DA (¥/kWh)":  round(da_avg, 4) if da_avg is not None else None,
-                "DA Level":    _price_level(da_avg),
-                "Avg RT (¥/kWh)":  round(rt_avg, 4) if rt_avg is not None else None,
-                "RT Level":    _price_level(rt_avg),
-                "Days (DA)":   len(da_vals),
-                "Days (RT)":   len(rt_vals),
+                _t("col_province"):  prov_en,
+                _t("col_avg_da"):    round(da_avg, 4) if da_avg is not None else None,
+                _t("col_da_level"):  _price_level(da_avg),
+                _t("col_avg_rt"):    round(rt_avg, 4) if rt_avg is not None else None,
+                _t("col_rt_level"):  _price_level(rt_avg),
+                _t("col_days_da"):   len(da_vals),
+                _t("col_days_rt"):   len(rt_vals),
             })
 
         tbl_df = pd.DataFrame(tbl_rows)
+        da_level_col = _t("col_da_level")
+        rt_level_col = _t("col_rt_level")
+        avg_da_col   = _t("col_avg_da")
+        avg_rt_col   = _t("col_avg_rt")
 
         def _style_level(col: pd.Series) -> list[str]:
             return [f"background-color: {_level_bg(v)}" for v in col]
 
         styled = (
             tbl_df.style
-            .apply(_style_level, subset=["DA Level"])
-            .apply(_style_level, subset=["RT Level"])
-            .format({"Avg DA (¥/kWh)": lambda v: f"{v:.4f}" if pd.notna(v) else "—",
-                     "Avg RT (¥/kWh)": lambda v: f"{v:.4f}" if pd.notna(v) else "—"})
+            .apply(_style_level, subset=[da_level_col])
+            .apply(_style_level, subset=[rt_level_col])
+            .format({
+                avg_da_col: lambda v: f"{v:.4f}" if pd.notna(v) else "—",
+                avg_rt_col: lambda v: f"{v:.4f}" if pd.notna(v) else "—",
+            })
         )
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
         st.divider()
 
-        # ── Maps ──────────────────────────────────────────────────────────────
-        st.subheader("Geographic Price Maps")
-        st.caption(
-            "Color scale: "
-            "🟢 **< 0.20 ¥/kWh** (low) · 🟡 **0.20–0.30** (medium) · 🔴 **> 0.30 ¥/kWh** (high)"
-        )
+        st.subheader(_t("geo_maps_title"))
+        st.caption(_t("geo_color_scale"))
 
         _geojson, _geo_err = _load_china_geojson()
         if _geo_err:
-            st.warning(f"Province boundaries unavailable — showing bubble fallback. ({_geo_err})")
+            st.warning(f"{_t('geo_unavailable')} ({_geo_err})")
 
         col_map_da, col_map_rt = st.columns(2)
         with col_map_da:
-            st.caption(f"**Day-Ahead (DA)** · {d_start} → {d_end}")
+            st.caption(f"**{_t('da_caption')}** · {d_start} → {d_end}")
             fig_da = chart_geo_map(df_geo, "da", _geojson)
             st.pyplot(fig_da, use_container_width=True)
             plt.close(fig_da)
         with col_map_rt:
-            st.caption(f"**Real-Time (RT)** · {d_start} → {d_end}")
+            st.caption(f"**{_t('rt_caption')}** · {d_start} → {d_end}")
             fig_rt = chart_geo_map(df_geo, "rt", _geojson)
             st.pyplot(fig_rt, use_container_width=True)
             plt.close(fig_rt)
@@ -904,16 +1157,8 @@ with tab_mgmt:
     }
 
     def _parse_pdf_date_range(stem: str, year: int = 2026):
-        """
-        Parse date range from PDF stem.  Handles three filename styles:
-          • M.D  /  M.D-M.D     e.g. "2.14", "2.7-2.9", "1.31-2.2"  (2025/2026)
-          • MMDD / MMDD-MMDD    e.g. "0731", "0816-0818", "1001-1009" (mid-2025)
-        Full-width vs half-width parens are handled by the caller regex.
-        Returns (start_date, end_date) or None.
-        """
         stem = stem.strip().rstrip("）)） ")
 
-        # Pattern 1: MMDD no-dot  (4 digits, no separator between MM and DD)
         m = _re.fullmatch(r"(\d{2})(\d{2})(?:-(\d{2})(\d{2}))?", stem)
         if m:
             try:
@@ -924,17 +1169,14 @@ with tab_mgmt:
             except ValueError:
                 pass
 
-        # Pattern 2: M.D  /  M.D-D (same month)  /  M.D-M.D
-        # e.g. "2.14", "10.19-21", "2.7-2.9", "1.31-2.2", "12.30-1.2"
         m = _re.search(r"(\d{1,2})\.(\d{1,2})(?:-(?:(\d{1,2})\.)?(\d{1,2}))?", stem)
         if m:
             try:
                 m1, d1 = int(m.group(1)), int(m.group(2))
                 start  = date(year, m1, d1)
-                if m.group(4):  # end day present
-                    m2 = int(m.group(3)) if m.group(3) else m1  # same month if omitted
+                if m.group(4):
+                    m2 = int(m.group(3)) if m.group(3) else m1
                     d2 = int(m.group(4))
-                    # Handle Dec→Jan year-boundary in filename (e.g. 12.30-1.2)
                     end_year = year + 1 if m2 < m1 else year
                     end = date(end_year, m2, d2)
                 else:
@@ -947,25 +1189,22 @@ with tab_mgmt:
 
     @st.cache_data(ttl=60, show_spinner=False)
     def _scan_pdf_inventory(year: int = 2026):
-        """Scan PDF folder and return list of (filename, start_date, end_date, path)."""
         data_dir = _REPO / "data" / "spot reports" / str(year)
         pdfs = []
         if not data_dir.exists():
             return pdfs
         for p in sorted(data_dir.glob("*.pdf")):
             stem = p.stem
-            # Match both full-width （…） and half-width (…) parentheses
             m = _re.search(r"[（(]([^)）]+)[）)]", stem)
             if not m:
                 continue
-            date_range = _parse_pdf_date_range(m.group(1).strip(), year)
-            if date_range:
-                pdfs.append((p.name, date_range[0], date_range[1], p))
+            date_range_result = _parse_pdf_date_range(m.group(1).strip(), year)
+            if date_range_result:
+                pdfs.append((p.name, date_range_result[0], date_range_result[1], p))
         return pdfs
 
     @st.cache_data(ttl=30, show_spinner=False)
     def _db_coverage(year: int = 2026):
-        """Return set of report_dates that have at least one row in DB."""
         cur = _conn().cursor()
         cur.execute(
             "SELECT DISTINCT report_date FROM spot_daily "
@@ -976,7 +1215,6 @@ with tab_mgmt:
 
     @st.cache_data(ttl=30, show_spinner=False)
     def _db_coverage_detail(year: int = 2026):
-        """Return dict date → (da_count, rt_count) for the year."""
         cur = _conn().cursor()
         cur.execute(
             """SELECT report_date::date, COUNT(da_avg), COUNT(rt_avg)
@@ -988,40 +1226,39 @@ with tab_mgmt:
         return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
 
     # ── Layout ────────────────────────────────────────────────────────────────
-    st.subheader("Data Management")
+    st.subheader(_t("data_mgmt_title"))
 
     col_yr, _, _ = st.columns([1, 2, 1])
     with col_yr:
-        sel_year = st.selectbox("Report year", [2026, 2025, 2024], key="mgmt_year")
+        sel_year = st.selectbox(_t("report_year"), [2026, 2025, 2024], key="mgmt_year")
 
     c_left, c_right = st.columns([2, 1])
 
     with c_left:
         mgmt_mode = st.radio(
-            "Mode",
-            ["Fill gaps (ingest missing dates only)",
-             "Backfill date range (ingest all PDFs covering the range)"],
+            _t("mode_label"),
+            [_t("mode_fill_gaps"), _t("mode_backfill")],
             horizontal=False,
             key="mgmt_mode",
         )
-        st.caption("Additional steps")
+        st.caption(_t("additional_steps"))
         run_interprov = st.checkbox(
-            "Parse 省间现货交易 data",
+            _t("chk_interprov"),
             value=True,
             key="mgmt_interprov",
-            help="Extract inter-provincial trading data and save to staging.spot_interprov_flow",
+            help=_t("chk_interprov_help"),
         )
         run_ai = st.checkbox(
-            "Generate AI summaries",
+            _t("chk_ai"),
             value=False,
             key="mgmt_ai",
-            help="Generate Claude daily market summaries (requires ANTHROPIC_API_KEY)",
+            help=_t("chk_ai_help"),
         )
 
     with c_right:
         _yr_end = date(sel_year, 12, 31) if sel_year < date.today().year else date.today() - timedelta(days=1)
-        bf_start = st.date_input("Start date", date(sel_year, 1, 1), key=f"bf_start_{sel_year}")
-        bf_end   = st.date_input("End date",   _yr_end,              key=f"bf_end_{sel_year}")
+        bf_start = st.date_input(_t("start_date"), date(sel_year, 1, 1), key=f"bf_start_{sel_year}")
+        bf_end   = st.date_input(_t("end_date"),   _yr_end,              key=f"bf_end_{sel_year}")
 
     st.divider()
 
@@ -1030,14 +1267,12 @@ with tab_mgmt:
     coverage = _db_coverage_detail(sel_year)
     existing_dates = set(coverage.keys())
 
-    # Filter PDFs that overlap with [bf_start, bf_end]
     relevant_pdfs = [
         (fname, s, e, path)
         for fname, s, e, path in inventory
         if s <= bf_end and e >= bf_start
     ]
 
-    # Build summary table
     inv_rows = []
     for fname, s, e, path in relevant_pdfs:
         dates_in_range = [
@@ -1051,30 +1286,33 @@ with tab_mgmt:
             if d in existing_dates and (coverage[d][0] == 0 or coverage[d][1] == 0)
         ]
         inv_rows.append({
-            "PDF": fname,
-            "Covers": f"{s} → {e}",
-            "Dates in range": len(dates_in_range),
-            "Missing from DB": len(missing),
-            "Partial (DA or RT=0)": len(partial),
-            "Status": "Missing" if missing else ("Partial" if partial else "OK"),
+            _t("col_pdf"):          fname,
+            _t("col_covers"):       f"{s} → {e}",
+            _t("col_dates_range"):  len(dates_in_range),
+            _t("col_missing"):      len(missing),
+            _t("col_partial"):      len(partial),
+            _t("col_status"):       _t("status_missing") if missing else (
+                                        _t("status_partial") if partial else _t("status_ok")
+                                    ),
         })
 
     if inv_rows:
         inv_df = pd.DataFrame(inv_rows)
+        status_col = _t("col_status")
         st.dataframe(
             inv_df.style.apply(
                 lambda col: [
-                    "background-color: #ffe0e0" if v == "Missing"
-                    else "background-color: #fff3cd" if v == "Partial"
+                    "background-color: #ffe0e0" if v == _t("status_missing")
+                    else "background-color: #fff3cd" if v == _t("status_partial")
                     else "background-color: #d4edda"
                     for v in col
                 ],
-                subset=["Status"],
+                subset=[status_col],
             ),
             use_container_width=True, hide_index=True,
         )
     else:
-        st.info("No PDFs found in the selected date range.")
+        st.info(_t("no_pdfs"))
 
     if relevant_pdfs:
         needs_work = [
@@ -1098,24 +1336,21 @@ with tab_mgmt:
             )
         ]
 
-        if mgmt_mode.startswith("Fill gaps"):
+        if mgmt_mode == _t("mode_fill_gaps"):
             pdfs_to_run = needs_work
-            label = f"Backfill {len(pdfs_to_run)} PDF(s) with missing dates"
+            btn_label = _t("btn_fill_gaps", n=len(pdfs_to_run))
         else:
             pdfs_to_run = relevant_pdfs
-            label = f"Re-ingest all {len(pdfs_to_run)} PDF(s) in range"
+            btn_label = _t("btn_reingest", n=len(pdfs_to_run))
 
         col_btn, col_info = st.columns([1, 3])
         with col_btn:
-            run_backfill = st.button(label, type="primary", disabled=len(pdfs_to_run) == 0)
+            run_backfill = st.button(btn_label, type="primary", disabled=len(pdfs_to_run) == 0)
         with col_info:
-            if mgmt_mode.startswith("Fill gaps") and not needs_work and partial_pdfs:
-                st.warning(
-                    f"{len(partial_pdfs)} PDF(s) have partial data (DA or RT missing). "
-                    "Switch to 'Backfill date range' mode to re-ingest them."
-                )
+            if mgmt_mode == _t("mode_fill_gaps") and not needs_work and partial_pdfs:
+                st.warning(_t("warn_partial", n=len(partial_pdfs)))
             elif not pdfs_to_run:
-                st.success("All dates in range are present in DB.")
+                st.success(_t("all_present"))
 
         if run_backfill:
             from services.spot_ingest.pdf_parser import parse_pdf as _parse_pdf
@@ -1129,11 +1364,11 @@ with tab_mgmt:
 
             provinces_cn = list(PROVINCES_MAP.keys())
             total = len(pdfs_to_run)
-            progress = st.progress(0, text="Starting…")
+            progress = st.progress(0, text=_t("prog_starting"))
             results = []
 
             for i, (fname, s, e, path) in enumerate(pdfs_to_run):
-                progress.progress(i / total, text=f"Parsing {fname}…")
+                progress.progress(i / total, text=_t("prog_parsing", fname=fname))
                 pdf_year = int(path.parent.name) if path.parent.name.isdigit() else sel_year
                 interprov_count = 0
                 ai_count = 0
@@ -1152,14 +1387,16 @@ with tab_mgmt:
 
                     interprov_rows: list = []
                     if run_interprov:
-                        progress.progress((i + 0.5) / total, text=f"省间 data: {fname}…")
+                        progress.progress((i + 0.5) / total,
+                                          text=_t("prog_interprov", fname=fname))
                         interprov_rows = _parse_interprov(path, pdf_year)
                         if interprov_rows:
                             interprov_count = _upsert_interprov_rows(interprov_rows)
 
                     if run_ai:
                         for rdate in sorted(parsed.keys()):
-                            progress.progress((i + 0.7) / total, text=f"AI summary {rdate}…")
+                            progress.progress((i + 0.7) / total,
+                                              text=_t("prog_ai", rdate=rdate))
                             day_prices = [
                                 {
                                     "province_en": r.get("province_en", r.get("province_cn", "")),
@@ -1176,28 +1413,27 @@ with tab_mgmt:
                                 ai_count += 1
 
                     results.append({
-                        "PDF": fname,
-                        "Dates": str(sorted(parsed.keys())),
-                        "Rows upserted": n,
-                        "Interprov rows": interprov_count,
-                        "AI summaries": ai_count,
-                        "Error": "",
+                        _t("col_pdf"):       fname,
+                        _t("col_dates"):     str(sorted(parsed.keys())),
+                        _t("col_rows"):      n,
+                        _t("col_interprov"): interprov_count,
+                        _t("col_ai"):        ai_count,
+                        _t("col_error"):     "",
                     })
                 except Exception as exc:
                     results.append({
-                        "PDF": fname,
-                        "Dates": "",
-                        "Rows upserted": 0,
-                        "Interprov rows": 0,
-                        "AI summaries": 0,
-                        "Error": str(exc)[:120],
+                        _t("col_pdf"):       fname,
+                        _t("col_dates"):     "",
+                        _t("col_rows"):      0,
+                        _t("col_interprov"): 0,
+                        _t("col_ai"):        0,
+                        _t("col_error"):     str(exc)[:120],
                     })
 
-            progress.progress(1.0, text="Done.")
-            st.success(f"Backfill complete — processed {total} PDF(s).")
+            progress.progress(1.0, text=_t("prog_done"))
+            st.success(_t("backfill_complete", n=total))
             st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
 
-            # Clear cached data so charts refresh
             load_all.clear()
             load_kpis.clear()
             _db_coverage.clear()
