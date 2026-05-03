@@ -188,6 +188,10 @@ _T: dict[str, dict[str, str]] = {
         # geo animation
         "anim_title":           "Monthly RT Price Animation",
         "anim_range":           "Animation period",
+        "anim_start_year":      "Start year",
+        "anim_start_month":     "Start month",
+        "anim_end_year":        "End year",
+        "anim_end_month":       "End month",
         "anim_play":            "▶ Play",
         "anim_pause":           "⏸ Pause",
         "anim_speed":           "Seconds per frame",
@@ -338,6 +342,10 @@ _T: dict[str, dict[str, str]] = {
         # geo animation
         "anim_title":           "各月实时价格动画",
         "anim_range":           "动画时段",
+        "anim_start_year":      "起始年",
+        "anim_start_month":     "起始月",
+        "anim_end_year":        "结束年",
+        "anim_end_month":       "结束月",
         "anim_play":            "▶ 播放",
         "anim_pause":           "⏸ 暂停",
         "anim_speed":           "每帧秒数",
@@ -1201,24 +1209,40 @@ with tab_geo:
         st.divider()
         st.subheader(_t("anim_title"))
 
-        anim_c1, anim_c2 = st.columns(2)
+        _all_years = list(range(2020, date.today().year + 2))
+        anim_c1, anim_c2, anim_c3, anim_c4 = st.columns(4)
         with anim_c1:
-            anim_start = st.date_input(
-                f"{_t('anim_range')} — {_t('cmp_start')}",
-                value=date(d_start.year, d_start.month, 1),
-                key="anim_start",
+            _anim_sy = st.selectbox(
+                _t("anim_start_year"), _all_years,
+                index=_all_years.index(min(d_start.year, _all_years[-1])),
+                key="anim_sy",
             )
         with anim_c2:
-            anim_end = st.date_input(
-                f"{_t('anim_range')} — {_t('cmp_end')}",
-                value=d_end,
-                key="anim_end",
+            _anim_sm = st.selectbox(
+                _t("anim_start_month"), list(range(1, 13)),
+                index=d_start.month - 1, key="anim_sm",
+                format_func=lambda m: f"{m:02d}",
             )
+        with anim_c3:
+            _anim_ey = st.selectbox(
+                _t("anim_end_year"), _all_years,
+                index=_all_years.index(min(d_end.year, _all_years[-1])),
+                key="anim_ey",
+            )
+        with anim_c4:
+            _anim_em = st.selectbox(
+                _t("anim_end_month"), list(range(1, 13)),
+                index=d_end.month - 1, key="anim_em",
+                format_func=lambda m: f"{m:02d}",
+            )
+
+        _anim_period_start = date(_anim_sy, _anim_sm, 1)
+        _anim_period_end   = date(_anim_ey, _anim_em, 1)
 
         # Build ordered list of month start dates
         _anim_months: list[date] = []
-        _m = date(anim_start.year, anim_start.month, 1)
-        while _m <= anim_end:
+        _m = _anim_period_start
+        while _m <= _anim_period_end:
             _anim_months.append(_m)
             _m = (_m.replace(day=28) + timedelta(days=4)).replace(day=1)
 
@@ -1250,35 +1274,38 @@ with tab_geo:
                     value=5, step=1, key="anim_speed",
                 )
 
-            # Manual scrub slider — value is synced to session state
-            _cur_label = _month_labels[st.session_state["anim_frame_idx"]]
+            # Manual scrub slider — keep in sync with auto-play frame index
+            _cur_idx = st.session_state["anim_frame_idx"]
+            st.session_state["anim_month"] = _month_labels[_cur_idx]
             _sel_label = st.select_slider(
                 _t("anim_slider"), options=_month_labels,
-                value=_cur_label, key="anim_month",
+                key="anim_month",
             )
-            # If user moved the slider manually, update the index and stop playing
+            # Detect manual scrub: slider value diverged from what we set above
             _slider_idx = _month_labels.index(_sel_label)
-            if _slider_idx != st.session_state["anim_frame_idx"]:
+            if _slider_idx != _cur_idx:
                 st.session_state["anim_frame_idx"] = _slider_idx
                 st.session_state["anim_playing"] = False
+                _cur_idx = _slider_idx
 
-            _idx = st.session_state["anim_frame_idx"]
-            _sel_m = _anim_months[_idx]
+            _sel_m = _anim_months[_cur_idx]
             _sel_m_end = (_sel_m.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
             df_anim = load_all(_sel_m, _sel_m_end, quality_filter)
             if df_anim.empty:
                 st.info(_t("anim_no_data"))
             else:
-                _anim_title = _t("anim_map_title", month=_month_labels[_idx])
+                _anim_title = _t("anim_map_title", month=_month_labels[_cur_idx])
                 fig_anim = chart_geo_map(df_anim, "rt", _geojson, title=_anim_title)
                 st.pyplot(fig_anim, use_container_width=True)
                 plt.close(fig_anim)
 
-            # Auto-advance: sleep then advance index and rerun
+            # Auto-advance: sleep, then sync both state keys and rerun
             if st.session_state["anim_playing"]:
                 time.sleep(anim_speed)
-                st.session_state["anim_frame_idx"] = (_idx + 1) % _n_frames
+                _next_idx = (_cur_idx + 1) % _n_frames
+                st.session_state["anim_frame_idx"] = _next_idx
+                st.session_state["anim_month"] = _month_labels[_next_idx]
                 st.rerun()
 
         # ── Section: Period Comparison ────────────────────────────────────────
