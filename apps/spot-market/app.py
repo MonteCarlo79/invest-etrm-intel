@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -187,6 +188,9 @@ _T: dict[str, dict[str, str]] = {
         # geo animation
         "anim_title":           "Monthly RT Price Animation",
         "anim_range":           "Animation period",
+        "anim_play":            "▶ Play",
+        "anim_pause":           "⏸ Pause",
+        "anim_speed":           "Seconds per frame",
         "anim_slider":          "Select month",
         "anim_no_data":         "No data for this month.",
         "anim_map_title":       "RT Avg Price — {month}",
@@ -334,6 +338,9 @@ _T: dict[str, dict[str, str]] = {
         # geo animation
         "anim_title":           "各月实时价格动画",
         "anim_range":           "动画时段",
+        "anim_play":            "▶ 播放",
+        "anim_pause":           "⏸ 暂停",
+        "anim_speed":           "每帧秒数",
         "anim_slider":          "选择月份",
         "anim_no_data":         "该月无数据。",
         "anim_map_title":       "实时均价 — {month}",
@@ -1217,20 +1224,62 @@ with tab_geo:
 
         if _anim_months:
             _month_labels = [m.strftime("%Y-%m") for m in _anim_months]
-            _sel_label = st.select_slider(
-                _t("anim_slider"), options=_month_labels, key="anim_month"
+            _n_frames = len(_anim_months)
+
+            # Initialise session state for animation
+            if "anim_playing" not in st.session_state:
+                st.session_state["anim_playing"] = False
+            if "anim_frame_idx" not in st.session_state:
+                st.session_state["anim_frame_idx"] = 0
+            # Clamp index in case period changed
+            st.session_state["anim_frame_idx"] = (
+                st.session_state["anim_frame_idx"] % _n_frames
             )
-            _sel_m = _anim_months[_month_labels.index(_sel_label)]
+
+            # Controls row
+            ctrl_c1, ctrl_c2, ctrl_c3 = st.columns([1, 1, 3])
+            with ctrl_c1:
+                if st.button(_t("anim_play"), key="anim_play_btn"):
+                    st.session_state["anim_playing"] = True
+            with ctrl_c2:
+                if st.button(_t("anim_pause"), key="anim_pause_btn"):
+                    st.session_state["anim_playing"] = False
+            with ctrl_c3:
+                anim_speed = st.slider(
+                    _t("anim_speed"), min_value=1, max_value=10,
+                    value=5, step=1, key="anim_speed",
+                )
+
+            # Manual scrub slider — value is synced to session state
+            _cur_label = _month_labels[st.session_state["anim_frame_idx"]]
+            _sel_label = st.select_slider(
+                _t("anim_slider"), options=_month_labels,
+                value=_cur_label, key="anim_month",
+            )
+            # If user moved the slider manually, update the index and stop playing
+            _slider_idx = _month_labels.index(_sel_label)
+            if _slider_idx != st.session_state["anim_frame_idx"]:
+                st.session_state["anim_frame_idx"] = _slider_idx
+                st.session_state["anim_playing"] = False
+
+            _idx = st.session_state["anim_frame_idx"]
+            _sel_m = _anim_months[_idx]
             _sel_m_end = (_sel_m.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
             df_anim = load_all(_sel_m, _sel_m_end, quality_filter)
             if df_anim.empty:
                 st.info(_t("anim_no_data"))
             else:
-                _anim_title = _t("anim_map_title", month=_sel_label)
+                _anim_title = _t("anim_map_title", month=_month_labels[_idx])
                 fig_anim = chart_geo_map(df_anim, "rt", _geojson, title=_anim_title)
                 st.pyplot(fig_anim, use_container_width=True)
                 plt.close(fig_anim)
+
+            # Auto-advance: sleep then advance index and rerun
+            if st.session_state["anim_playing"]:
+                time.sleep(anim_speed)
+                st.session_state["anim_frame_idx"] = (_idx + 1) % _n_frames
+                st.rerun()
 
         # ── Section: Period Comparison ────────────────────────────────────────
         st.divider()
