@@ -11,14 +11,13 @@
             "id": "7f80d6a8afbbe39d",
             "type": "leaf",
             "state": {
-              "type": "markdown",
+              "type": "bases",
               "state": {
-                "file": "03_concepts/检修.md",
-                "mode": "source",
-                "source": false
+                "file": "Untitled.base",
+                "viewName": "Table"
               },
-              "icon": "lucide-file",
-              "title": "检修"
+              "icon": "lucide-table",
+              "title": "Untitled"
             }
           }
         ]
@@ -94,7 +93,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "03_concepts/检修.md",
+                "file": "Untitled.base",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +103,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for 检修"
+              "title": "Backlinks for Untitled"
             }
           },
           {
@@ -169,8 +168,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 300
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -183,8 +181,15 @@
       "bases:Create new base": false
     }
   },
-  "active": "7f80d6a8afbbe39d",
+  "active": "798a7c917d1d26b0",
   "lastOpenFiles": [
+    "Untitled.base",
+    "03_concepts/水电.md",
+    "03_concepts/新能源消纳.md",
+    "01_daily_reports/2026-04-20.md",
+    "spot-markets/创建链接.md",
+    "01_daily_reports/2026-12-12.md",
+    "03_concepts/检修.md",
     "02_provinces/黑龙江.md",
     "02_provinces/海南.md",
     "02_provinces/广东.md",

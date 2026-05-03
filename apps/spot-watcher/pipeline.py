@@ -209,7 +209,11 @@ def run(pdf_path: Path, dry_run: bool = False) -> dict:
         else:
             _log.warning("[PIPELINE] Excel file not found at %s; skipping Excel sync", excel_path)
 
-    # ── Steps 6-7: Knowledge-pool ingestion + Obsidian notes ─────────────────
+    # ── Step 6: Parse 跨省数据 + generate AI summaries ───────────────────────
+    if not dry_run:
+        _run_interprov_and_summaries(pdf_path, year, summary["dates"], db_rows)
+
+    # ── Step 7: Knowledge-pool ingestion + Obsidian notes ────────────────────
     if not dry_run:
         _run_knowledge_pool(pdf_path)
 
@@ -304,6 +308,66 @@ def _run_knowledge_pool(pdf_path: Path) -> None:
     except Exception as e:
         set_document_status(doc_id, "error", parse_error=str(e)[:500])
         _log.error("[KP] knowledge pool ingestion failed: %s", e)
+
+
+def _run_interprov_and_summaries(
+    pdf_path: Path,
+    year: int,
+    report_dates: list,
+    price_rows: list[dict],
+) -> None:
+    """
+    Step 6: Parse 省间现货交易情况 tables, upsert to staging.spot_interprov_flow,
+    then generate and save AI summaries to staging.spot_report_summaries.
+
+    price_rows: the db_rows list already assembled in run() — used to build
+                the province price context for the AI prompt without an extra
+                DB round-trip.
+    """
+    try:
+        from services.spot_ingest.interprov_parser import parse_interprov
+        from services.spot_ingest.interprov_upsert import upsert_interprov_rows, upsert_summary
+        from services.spot_ingest.ai_summary import generate_summary
+    except ImportError as exc:
+        _log.warning("[INTERPROV] imports unavailable (%s); skipping step 6", exc)
+        return
+
+    # ── 6a: Parse and upsert 跨省数据 ─────────────────────────────────────────
+    interprov_rows: list[dict] = []
+    try:
+        interprov_rows = parse_interprov(pdf_path, year)
+        if interprov_rows:
+            n = upsert_interprov_rows(interprov_rows)
+            _log.info("[INTERPROV] Upserted %d 跨省 rows from %s", n, pdf_path.name)
+        else:
+            _log.info("[INTERPROV] No 省间交易 table found in %s", pdf_path.name)
+    except Exception as exc:
+        _log.error("[INTERPROV] 跨省 parse/upsert failed: %s", exc)
+
+    # ── 6b: Generate AI summary per date ──────────────────────────────────────
+    for report_date in report_dates:
+        try:
+            # Province prices for this date from the already-built db_rows list
+            day_prices = [
+                {
+                    "province_en": r.get("province_en", r.get("province_cn", "")),
+                    "da_avg": r.get("da_avg"),
+                    "rt_avg": r.get("rt_avg"),
+                }
+                for r in price_rows
+                if r.get("report_date") == report_date
+            ]
+            day_interprov = [r for r in interprov_rows if r["report_date"] == report_date]
+
+            result = generate_summary(report_date, day_prices, day_interprov, pdf_path.name)
+            if result:
+                upsert_summary(result)
+                _log.info(
+                    "[AI] Summary saved for %s (%d prompt + %d completion tokens)",
+                    report_date, result["prompt_tokens"], result["completion_tokens"],
+                )
+        except Exception as exc:
+            _log.error("[AI] Summary step failed for %s: %s", report_date, exc)
 
 
 if __name__ == "__main__":

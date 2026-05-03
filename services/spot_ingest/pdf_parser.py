@@ -134,8 +134,12 @@ def _detect_table_mode(header_row: List[str]) -> Optional[str]:
     primary section type will have many more keyword instances than the
     companion column.  Returns None only when counts are equal (true mixed
     table) so the page-level mode can take precedence.
+
+    Note: merged cells with vertical text (e.g. 南方区域（实时）) are extracted
+    by pdfplumber with a newline between each character.  We strip newlines
+    before keyword matching so that "实\n时" is recognised as "实时".
     """
-    combined = " ".join((c or "") for c in header_row)
+    combined = " ".join((c or "") for c in header_row).replace("\n", "")
     has_da = "日前" in combined
     has_rt = "实时" in combined
     if has_da and has_rt:
@@ -256,12 +260,34 @@ def _parse_combined_table(
 
 # ── Page-level table parsing ──────────────────────────────────────────────────
 
+_RE_DATE_QUALIFIER = re.compile(r"（(\d{1,2})日[）\s]*$")
+
+
+def _match_province(cell: str, provinces_cn: List[str]) -> Tuple[Optional[str], Optional[int]]:
+    """Try to match a table cell to a province name.
+
+    Returns (province_cn, day_qualifier) where day_qualifier is an integer
+    day number if the cell contains a date qualifier like '上海（26日）', or
+    None for an exact match.  Returns (None, None) if no match.
+    """
+    # Exact match
+    if cell in provinces_cn:
+        return cell, None
+    # Match with date qualifier, e.g. '上海（26日）'
+    m = _RE_DATE_QUALIFIER.search(cell)
+    if m:
+        base = cell[: m.start()].strip()
+        if base in provinces_cn:
+            return base, int(m.group(1))
+    return None, None
+
+
 def _parse_tables_from_page(
     page,
     provinces_cn: List[str],
     page_mode: Optional[str],
     year: int,
-) -> Tuple[List[dict], List[dict]]:
+) -> Tuple[List[dict], List[dict], Optional[str]]:
     """
     Parse DA and RT rows from all tables on a page.
 
@@ -272,12 +298,17 @@ def _parse_tables_from_page(
          a. Determine mode from table header keywords (日前/实时).
          b. Fall back to page_mode.
 
-    Returns (da_rows, rt_rows). Each row dict may include an optional 'date'
-    key (set only for combined-table rows); callers fall back to page_date
-    when the key is absent.
+    Returns (da_rows, rt_rows, last_detected_mode). Each row dict may include
+    an optional 'date' key (set only for combined-table rows or rows with a
+    date qualifier in the province cell); callers fall back to page_date when
+    the key is absent.  last_detected_mode is the most recently explicitly
+    detected table mode (via table-level header keyword scan); None if no
+    table on this page had a detectable header.  The caller uses this to
+    carry mode forward to continuation pages.
     """
     da_rows: List[dict] = []
     rt_rows: List[dict] = []
+    last_detected_mode: Optional[str] = None
 
     tables = page.extract_tables() or []
     header_markers = {"省份", "均价", "最高价", "最低价", "出清均价", "环比", "地区"}
@@ -297,6 +328,7 @@ def _parse_tables_from_page(
                 detected = _detect_table_mode([(c or "") for c in candidate_row])
                 if detected:
                     combined_mode = detected
+                    last_detected_mode = detected
                     break
             if combined_mode is None:
                 continue  # can't determine mode even with table-level detection
@@ -308,13 +340,17 @@ def _parse_tables_from_page(
         # ── Standard single-date table ────────────────────────────────────────
         table_mode = page_mode
 
-        # Scan first two rows for header keywords that reveal DA/RT
-        for candidate_row in tbl[:3]:
+        # Scan first few rows for header keywords that reveal DA/RT.
+        # Note: merged cells with vertical text (e.g. 南方区域（实时）) appear
+        # as '区\n域\n︵\n实\n时\n︶' — newlines are stripped inside
+        # _detect_table_mode so these are correctly detected.
+        for candidate_row in tbl[:4]:
             if not candidate_row:
                 continue
             detected = _detect_table_mode([(c or "") for c in candidate_row])
             if detected:
                 table_mode = detected
+                last_detected_mode = detected
                 break
 
         if table_mode is None:
@@ -330,16 +366,16 @@ def _parse_tables_from_page(
             if any(cell in header_markers for cell in row):
                 continue
 
-            # Find province cell
+            # Find province cell — try exact match first, then date-qualified
             prov_idx = None
             prov_cn = None
+            day_qualifier: Optional[int] = None
             for i, cell in enumerate(row):
-                for p in provinces_cn:
-                    if cell == p:
-                        prov_idx = i
-                        prov_cn = p
-                        break
-                if prov_idx is not None:
+                p, dq = _match_province(cell, provinces_cn)
+                if p is not None:
+                    prov_idx = i
+                    prov_cn = p
+                    day_qualifier = dq
                     break
 
             if prov_idx is None or prov_cn is None:
@@ -354,22 +390,16 @@ def _parse_tables_from_page(
                 tail = tail[1:]
             avg, mx, mn = _pick_triplet_from_tail(tail)
 
-            if table_mode == "DA":
-                da_rows.append({
-                    "province_cn": prov_cn,
-                    "da_avg": avg,
-                    "da_max": mx,
-                    "da_min": mn,
-                })
-            else:  # RT
-                rt_rows.append({
-                    "province_cn": prov_cn,
-                    "rt_avg": avg,
-                    "rt_max": mx,
-                    "rt_min": mn,
-                })
+            row_dict: dict = {"province_cn": prov_cn}
+            if day_qualifier is not None:
+                row_dict["day_qualifier"] = day_qualifier
 
-    return da_rows, rt_rows
+            if table_mode == "DA":
+                da_rows.append({**row_dict, "da_avg": avg, "da_max": mx, "da_min": mn})
+            else:  # RT
+                rt_rows.append({**row_dict, "rt_avg": avg, "rt_max": mx, "rt_min": mn})
+
+    return da_rows, rt_rows, last_detected_mode
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -429,12 +459,37 @@ def parse_pdf(
             # that via table-level keyword detection, so we proceed regardless.
 
             # ── Parse tables ─────────────────────────────────────────────────
-            da_rows, rt_rows = _parse_tables_from_page(page, provinces_cn, mode, year)
+            da_rows, rt_rows, page_detected_mode = _parse_tables_from_page(
+                page, provinces_cn, mode, year
+            )
+
+            # Carry table-detected mode forward so that the next continuation
+            # page (which has no section header) inherits the correct mode.
+            if page_detected_mode is not None:
+                mode = page_detected_mode
+
+            def _resolve_date(row: dict, fallback: dt.date) -> dt.date:
+                """Resolve the delivery date for a parsed row.
+
+                Combined-table rows carry a 'date' key.  Rows with a day
+                qualifier in the province cell (e.g. '上海（26日）') have a
+                'day_qualifier' integer — build the date from effective_date's
+                year/month and the qualifier day, adjusting for month boundary
+                if necessary.  Everything else falls back to effective_date.
+                """
+                if "date" in row:
+                    return row["date"]
+                dq = row.get("day_qualifier")
+                if dq is not None:
+                    try:
+                        return dt.date(fallback.year, fallback.month, dq)
+                    except ValueError:
+                        pass  # invalid day → fall back
+                return fallback
 
             for r in da_rows:
                 pcn = r["province_cn"]
-                # Combined tables carry their own date; single-date tables use effective_date
-                da_date = r.get("date", effective_date)
+                da_date = _resolve_date(r, effective_date)
                 prov = result.setdefault(da_date, {}).setdefault(pcn, {
                     "da_avg": None, "da_max": None, "da_min": None,
                     "rt_avg": None, "rt_max": None, "rt_min": None,
@@ -445,7 +500,7 @@ def parse_pdf(
 
             for r in rt_rows:
                 pcn = r["province_cn"]
-                rt_date = r.get("date", effective_date)
+                rt_date = _resolve_date(r, effective_date)
                 prov = result.setdefault(rt_date, {}).setdefault(pcn, {
                     "da_avg": None, "da_max": None, "da_min": None,
                     "rt_avg": None, "rt_max": None, "rt_min": None,

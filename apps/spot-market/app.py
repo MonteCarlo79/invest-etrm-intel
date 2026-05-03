@@ -12,6 +12,12 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+import json
+import requests
+
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.patches import Polygon as MplPolygon
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -75,7 +81,12 @@ def _apply_quality_filter(df: pd.DataFrame) -> pd.DataFrame:
         # Also drop physically implausible values (outside ±2 ¥/kWh)
         bad_range = df[avg].notna() & ((df[avg] < -0.5) | (df[avg] > 2.0))
         mask &= ~(bad_lo | bad_hi | bad_range)
-    return df[mask].copy()
+    df = df[mask].copy()
+    # Null out implausible max/min values (parsing artefacts where avg is absent)
+    for m in ("da", "rt"):
+        for col in (f"{m}_max", f"{m}_min"):
+            df.loc[df[col].notna() & ((df[col] > 2.0) | (df[col] < -1.0)), col] = None
+    return df
 
 # ── data loaders ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
@@ -151,9 +162,10 @@ def chart_timeseries(df: pd.DataFrame, provinces: list[str],
             continue
         col = colours[prov]
 
-        if show_band and sub[max_col].notna().any():
-            x_band = pd.concat([sub["report_date"], sub["report_date"].iloc[::-1]])
-            y_band = pd.concat([sub[max_col], sub[min_col].iloc[::-1]])
+        sub_band = sub[sub[avg_col].notna()]
+        if show_band and sub_band[max_col].notna().any():
+            x_band = pd.concat([sub_band["report_date"], sub_band["report_date"].iloc[::-1]])
+            y_band = pd.concat([sub_band[max_col], sub_band[min_col].iloc[::-1]])
             fig.add_trace(go.Scatter(
                 x=x_band, y=y_band,
                 fill="toself", fillcolor=col, opacity=0.10,
@@ -397,6 +409,217 @@ def _dist_stats(df: pd.DataFrame, provinces: list[str], metric: str) -> pd.DataF
     return pd.DataFrame(rows)
 
 
+# ── Geo map helpers ───────────────────────────────────────────────────────────
+
+# Maps province_en → 6-digit adcode string
+_PROV_ADCODE: dict[str, str] = {
+    "Beijing":      "110000", "Tianjin":     "120000",
+    "Hebei":        "130000", "Hebei-North": "130000", "Hebei-South": "130000",
+    "Shanxi":       "140000",
+    "Mengxi":       "150000", "Mengdong":    "150000",
+    "Liaoning":     "210000", "Jilin":       "220000", "Heilongjiang": "230000",
+    "Shanghai":     "310000", "Jiangsu":     "320000", "Zhejiang":     "330000",
+    "Anhui":        "340000", "Fujian":      "350000", "Jiangxi":      "360000",
+    "Shandong":     "370000", "Henan":       "410000", "Hubei":        "420000",
+    "Hunan":        "430000", "Guangdong":   "440000", "Guangxi":      "450000",
+    "Hainan":       "460000", "Chongqing":   "500000", "Sichuan":      "510000",
+    "Guizhou":      "520000", "Yunnan":      "530000",
+    "Shaanxi":      "610000", "Gansu":       "620000", "Qinghai":      "630000",
+    "Ningxia":      "640000", "Xinjiang":    "650000",
+}
+
+# Province centroid (lat, lon) — for price-label scatter overlay
+_PROV_CENTROIDS: dict[str, tuple[float, float]] = {
+    "110000": (39.90, 116.40), "120000": (39.13, 117.20),
+    "130000": (38.04, 114.47), "140000": (37.87, 112.56),
+    "150000": (44.09, 113.09), "210000": (41.80, 123.43),
+    "220000": (43.89, 125.32), "230000": (47.85, 127.57),
+    "310000": (31.23, 121.47), "320000": (32.06, 119.59),
+    "330000": (30.27, 120.15), "340000": (31.86, 117.29),
+    "350000": (26.10, 118.31), "360000": (27.62, 115.70),
+    "370000": (36.67, 117.02), "410000": (34.76, 113.75),
+    "420000": (30.60, 114.30), "430000": (28.23, 112.94),
+    "440000": (23.37, 113.50), "450000": (23.73, 108.38),
+    "460000": (20.02, 110.35), "500000": (29.56, 106.54),
+    "510000": (30.57, 103.99), "520000": (26.82, 106.83),
+    "530000": (25.05, 101.71), "610000": (34.27, 108.95),
+    "620000": (36.06, 103.83), "630000": (36.62, 101.74),
+    "640000": (38.47, 106.26), "650000": (41.17,  85.29),
+}
+
+_ADCODE_LABEL: dict[str, str] = {
+    "110000": "Beijing",        "120000": "Tianjin",
+    "130000": "Hebei",          "140000": "Shanxi",
+    "150000": "Inner Mongolia", "210000": "Liaoning",
+    "220000": "Jilin",          "230000": "Heilongjiang",
+    "310000": "Shanghai",       "320000": "Jiangsu",
+    "330000": "Zhejiang",       "340000": "Anhui",
+    "350000": "Fujian",         "360000": "Jiangxi",
+    "370000": "Shandong",       "410000": "Henan",
+    "420000": "Hubei",          "430000": "Hunan",
+    "440000": "Guangdong",      "450000": "Guangxi",
+    "460000": "Hainan",         "500000": "Chongqing",
+    "510000": "Sichuan",        "520000": "Guizhou",
+    "530000": "Yunnan",         "610000": "Shaanxi",
+    "620000": "Gansu",          "630000": "Qinghai",
+    "640000": "Ningxia",        "650000": "Xinjiang",
+}
+
+# Price level thresholds (¥/kWh)
+_LOW_PRICE  = 0.20
+_HIGH_PRICE = 0.30
+
+# Local cache path for the downloaded GeoJSON
+_GEO_FILE = Path(__file__).parent / "data" / "china_provinces.geojson"
+
+# Colorscale: green (<0.2) → yellow (0.2–0.3) → red (>0.3), range 0–0.5
+_GEO_COLORSCALE = [
+    [0.00, "#00aa44"],
+    [0.40, "#ffe000"],
+    [0.60, "#ff6600"],
+    [1.00, "#cc0000"],
+]
+_GEO_ZMIN, _GEO_ZMAX = 0.0, 0.5
+
+
+def _price_level(v: float | None) -> str:
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "—"
+    if v < _LOW_PRICE:
+        return "Low"
+    if v <= _HIGH_PRICE:
+        return "Medium"
+    return "High"
+
+
+def _level_bg(level: str) -> str:
+    return {"Low": "#d4edda", "Medium": "#fff3cd", "High": "#ffe0e0"}.get(level, "")
+
+
+@st.cache_data(ttl=None, show_spinner=False)
+def _load_china_geojson() -> tuple[dict | None, str | None]:
+    """Load China province boundary GeoJSON (DataV CDN, cached to disk).
+
+    We rely on featureidkey='properties.adcode' so no id-field normalisation
+    is needed — DataV features always have properties.adcode as an integer.
+    """
+    if _GEO_FILE.exists():
+        try:
+            return json.loads(_GEO_FILE.read_text(encoding="utf-8")), None
+        except Exception:
+            pass  # corrupted — re-download
+
+    try:
+        resp = requests.get(
+            "https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json",
+            timeout=20,
+        )
+        resp.raise_for_status()
+        gj = resp.json()
+        if len(gj.get("features", [])) < 10:
+            return None, "GeoJSON has too few features — unexpected format"
+        _GEO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _GEO_FILE.write_text(json.dumps(gj), encoding="utf-8")
+        return gj, None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _geo_agg(df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    """Aggregate daily prices to adcode-level for the map."""
+    avg_col = f"{metric}_avg"
+    df2 = df.copy()
+    df2["adcode"] = df2["province_en"].map(_PROV_ADCODE)
+    df2 = df2.dropna(subset=["adcode", avg_col])
+    if df2.empty:
+        return pd.DataFrame(columns=["adcode", "avg", "label", "price_str"])
+    agg = df2.groupby("adcode", as_index=False)[avg_col].mean()
+    agg.columns = ["adcode", "avg"]
+    agg["label"]     = agg["adcode"].map(_ADCODE_LABEL)
+    agg["price_str"] = agg["avg"].map(lambda v: f"{v:.2f}")
+    return agg
+
+
+def _make_china_cmap() -> mcolors.LinearSegmentedColormap:
+    """Build a matplotlib colormap from _GEO_COLORSCALE stop points."""
+    stops = [(pos, mcolors.to_rgb(hex_col)) for pos, hex_col in _GEO_COLORSCALE]
+    return mcolors.LinearSegmentedColormap.from_list("china_price", stops)
+
+
+def chart_geo_map(df: pd.DataFrame, metric: str, geojson: dict | None) -> plt.Figure:
+    """Matplotlib choropleth: draw each province polygon directly from GeoJSON.
+
+    Uses properties.adcode (integer) from each feature — no ID-matching step.
+    Falls back to a blank map with a warning if geojson is None.
+    """
+    agg = _geo_agg(df, metric)
+    label = "Day-Ahead (DA)" if metric == "da" else "Real-Time (RT)"
+
+    cmap = _make_china_cmap()
+    norm = mcolors.Normalize(vmin=_GEO_ZMIN, vmax=_GEO_ZMAX)
+
+    # integer adcode → avg price
+    price_map: dict[int, float] = {}
+    if not agg.empty:
+        for _, row in agg.iterrows():
+            try:
+                price_map[int(row["adcode"])] = float(row["avg"])
+            except (ValueError, TypeError):
+                pass
+
+    fig, ax = plt.subplots(figsize=(9, 6), facecolor="white")
+    ax.set_facecolor("#b8d4f0")   # ocean-blue background
+
+    if geojson:
+        for feat in geojson.get("features", []):
+            adcode_int = feat.get("properties", {}).get("adcode")
+            price = price_map.get(adcode_int)
+            fc = cmap(norm(price)) if price is not None else "#d0d0d0"
+
+            geom = feat.get("geometry", {})
+            rings: list = []
+            if geom.get("type") == "Polygon":
+                rings = [geom["coordinates"][0]]
+            elif geom.get("type") == "MultiPolygon":
+                rings = [p[0] for p in geom["coordinates"]]
+
+            for ring in rings:
+                coords = np.array(ring)   # [[lon, lat], …]
+                ax.add_patch(MplPolygon(
+                    coords, closed=True,
+                    facecolor=fc, edgecolor="white", linewidth=0.8,
+                ))
+
+    # price labels at province centroids
+    if not agg.empty:
+        for _, row in agg.iterrows():
+            coord = _PROV_CENTROIDS.get(row["adcode"])
+            if coord:
+                lat, lon = coord
+                ax.text(lon, lat, row["price_str"],
+                        ha="center", va="center",
+                        fontsize=7, fontweight="bold", color="black")
+
+    ax.set_xlim(72, 137)
+    ax.set_ylim(16, 54)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, orientation="vertical",
+                        fraction=0.025, pad=0.01, aspect=25)
+    cbar.set_label("¥/kWh", fontsize=9)
+    cbar.set_ticks([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+    cbar.set_ticklabels(["0.0", "0.1", "0.2", "0.3", "0.4", "0.5+"])
+    cbar.ax.tick_params(labelsize=8)
+
+    ax.set_title(f"{label} — Average Price by Province (¥/kWh)",
+                 fontsize=11, pad=10)
+    plt.tight_layout(pad=0.5)
+    return fig
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LAYOUT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -419,7 +642,7 @@ with st.sidebar:
     date_range = st.date_input(
         "Date range",
         value=(date(2026, 1, 1), _today),
-        min_value=date(2026, 1, 1),
+        min_value=date(2024, 1, 1),
         max_value=_today,
     )
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
@@ -476,8 +699,8 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_mgmt = st.tabs(
-    ["Overview", "DA−RT Spread", "Heatmap", "Province Deep-Dive", "Distributions", "Data Management"]
+tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_mgmt = st.tabs(
+    ["Overview", "DA−RT Spread", "Heatmap", "Province Deep-Dive", "Distributions", "Geo Map", "Data Management"]
 )
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -591,7 +814,78 @@ with tab_dist:
         if dist_metric == "Both" and m == "da":
             st.divider()
 
-# ── Tab 6: Data Management ────────────────────────────────────────────────────
+# ── Tab 6: Geo Map ────────────────────────────────────────────────────────────
+with tab_geo:
+    st.caption(f"Showing averages for **{d_start}** → **{d_end}** (all provinces, sidebar date range)")
+
+    # ── All-province data for the selected period ─────────────────────────────
+    df_geo = load_all(d_start, d_end, quality_filter)
+
+    if df_geo.empty:
+        st.info("No data for selected period.")
+    else:
+        # ── Summary table ─────────────────────────────────────────────────────
+        st.subheader("Average Prices by Province")
+        st.caption("Green = Low (<0.20 ¥/kWh) · Yellow = Medium (0.20–0.30) · Red = High (>0.30)")
+
+        # Build per-province summary
+        tbl_rows = []
+        for prov_en in sorted(df_geo["province_en"].unique()):
+            sub = df_geo[df_geo["province_en"] == prov_en]
+            da_vals = sub["da_avg"].dropna()
+            rt_vals = sub["rt_avg"].dropna()
+            da_avg  = da_vals.mean() if not da_vals.empty else None
+            rt_avg  = rt_vals.mean() if not rt_vals.empty else None
+            tbl_rows.append({
+                "Province":    prov_en,
+                "Avg DA (¥/kWh)":  round(da_avg, 4) if da_avg is not None else None,
+                "DA Level":    _price_level(da_avg),
+                "Avg RT (¥/kWh)":  round(rt_avg, 4) if rt_avg is not None else None,
+                "RT Level":    _price_level(rt_avg),
+                "Days (DA)":   len(da_vals),
+                "Days (RT)":   len(rt_vals),
+            })
+
+        tbl_df = pd.DataFrame(tbl_rows)
+
+        def _style_level(col: pd.Series) -> list[str]:
+            return [f"background-color: {_level_bg(v)}" for v in col]
+
+        styled = (
+            tbl_df.style
+            .apply(_style_level, subset=["DA Level"])
+            .apply(_style_level, subset=["RT Level"])
+            .format({"Avg DA (¥/kWh)": lambda v: f"{v:.4f}" if pd.notna(v) else "—",
+                     "Avg RT (¥/kWh)": lambda v: f"{v:.4f}" if pd.notna(v) else "—"})
+        )
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ── Maps ──────────────────────────────────────────────────────────────
+        st.subheader("Geographic Price Maps")
+        st.caption(
+            "Color scale: "
+            "🟢 **< 0.20 ¥/kWh** (low) · 🟡 **0.20–0.30** (medium) · 🔴 **> 0.30 ¥/kWh** (high)"
+        )
+
+        _geojson, _geo_err = _load_china_geojson()
+        if _geo_err:
+            st.warning(f"Province boundaries unavailable — showing bubble fallback. ({_geo_err})")
+
+        col_map_da, col_map_rt = st.columns(2)
+        with col_map_da:
+            st.caption(f"**Day-Ahead (DA)** · {d_start} → {d_end}")
+            fig_da = chart_geo_map(df_geo, "da", _geojson)
+            st.pyplot(fig_da, use_container_width=True)
+            plt.close(fig_da)
+        with col_map_rt:
+            st.caption(f"**Real-Time (RT)** · {d_start} → {d_end}")
+            fig_rt = chart_geo_map(df_geo, "rt", _geojson)
+            st.pyplot(fig_rt, use_container_width=True)
+            plt.close(fig_rt)
+
+# ── Tab 7: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
     import re as _re
     from pathlib import Path as _Path
@@ -603,7 +897,8 @@ with tab_mgmt:
         "安徽": "Anhui", "浙江": "Zhejiang", "江苏": "Jiangsu", "福建": "Fujian",
         "河南": "Henan", "陕西": "Shaanxi", "宁夏": "Ningxia", "新疆": "Xinjiang",
         "辽宁": "Liaoning", "吉林": "Jilin", "黑龙江": "Heilongjiang", "蒙东": "Mengdong",
-        "河北": "Hebei", "冀北": "Hebei-North", "冀南": "Hebei-South", "青海": "Qinghai",
+        "河北": "Hebei", "冀北": "Hebei-North", "冀南": "Hebei-South",
+        "河北南网": "Hebei-South", "青海": "Qinghai",
         "江西": "Jiangxi", "海南": "Hainan", "重庆": "Chongqing", "上海": "Shanghai",
         "北京": "Beijing", "天津": "Tianjin",
     }
@@ -709,6 +1004,19 @@ with tab_mgmt:
             horizontal=False,
             key="mgmt_mode",
         )
+        st.caption("Additional steps")
+        run_interprov = st.checkbox(
+            "Parse 省间现货交易 data",
+            value=True,
+            key="mgmt_interprov",
+            help="Extract inter-provincial trading data and save to staging.spot_interprov_flow",
+        )
+        run_ai = st.checkbox(
+            "Generate AI summaries",
+            value=False,
+            key="mgmt_ai",
+            help="Generate Claude daily market summaries (requires ANTHROPIC_API_KEY)",
+        )
 
     with c_right:
         _yr_end = date(sel_year, 12, 31) if sel_year < date.today().year else date.today() - timedelta(days=1)
@@ -812,17 +1120,25 @@ with tab_mgmt:
         if run_backfill:
             from services.spot_ingest.pdf_parser import parse_pdf as _parse_pdf
             from services.spot_ingest.db_upsert import upsert_rows as _upsert_rows
+            if run_interprov:
+                from services.spot_ingest.interprov_parser import parse_interprov as _parse_interprov
+                from services.spot_ingest.interprov_upsert import upsert_interprov_rows as _upsert_interprov_rows
+            if run_ai:
+                from services.spot_ingest.ai_summary import generate_summary as _gen_summary
+                from services.spot_ingest.interprov_upsert import upsert_summary as _upsert_summary
 
             provinces_cn = list(PROVINCES_MAP.keys())
             total = len(pdfs_to_run)
             progress = st.progress(0, text="Starting…")
-            log_area = st.empty()
             results = []
 
             for i, (fname, s, e, path) in enumerate(pdfs_to_run):
-                progress.progress((i) / total, text=f"Parsing {fname}…")
+                progress.progress(i / total, text=f"Parsing {fname}…")
+                pdf_year = int(path.parent.name) if path.parent.name.isdigit() else sel_year
+                interprov_count = 0
+                ai_count = 0
                 try:
-                    parsed = _parse_pdf(path, int(path.parent.name) if path.parent.name.isdigit() else 2026, provinces_cn)
+                    parsed = _parse_pdf(path, pdf_year, provinces_cn)
                     rows = []
                     for rdate, provs in parsed.items():
                         for pcn, vals in provs.items():
@@ -833,9 +1149,49 @@ with tab_mgmt:
                                 **vals,
                             })
                     n = _upsert_rows(rows)
-                    results.append({"PDF": fname, "Dates": str(sorted(parsed.keys())), "Rows upserted": n, "Error": ""})
+
+                    interprov_rows: list = []
+                    if run_interprov:
+                        progress.progress((i + 0.5) / total, text=f"省间 data: {fname}…")
+                        interprov_rows = _parse_interprov(path, pdf_year)
+                        if interprov_rows:
+                            interprov_count = _upsert_interprov_rows(interprov_rows)
+
+                    if run_ai:
+                        for rdate in sorted(parsed.keys()):
+                            progress.progress((i + 0.7) / total, text=f"AI summary {rdate}…")
+                            day_prices = [
+                                {
+                                    "province_en": r.get("province_en", r.get("province_cn", "")),
+                                    "da_avg": r.get("da_avg"),
+                                    "rt_avg": r.get("rt_avg"),
+                                }
+                                for r in rows
+                                if r.get("report_date") == rdate
+                            ]
+                            day_interprov = [r for r in interprov_rows if r["report_date"] == rdate]
+                            summary = _gen_summary(rdate, day_prices, day_interprov, fname)
+                            if summary:
+                                _upsert_summary(summary)
+                                ai_count += 1
+
+                    results.append({
+                        "PDF": fname,
+                        "Dates": str(sorted(parsed.keys())),
+                        "Rows upserted": n,
+                        "Interprov rows": interprov_count,
+                        "AI summaries": ai_count,
+                        "Error": "",
+                    })
                 except Exception as exc:
-                    results.append({"PDF": fname, "Dates": "", "Rows upserted": 0, "Error": str(exc)[:120]})
+                    results.append({
+                        "PDF": fname,
+                        "Dates": "",
+                        "Rows upserted": 0,
+                        "Interprov rows": 0,
+                        "AI summaries": 0,
+                        "Error": str(exc)[:120],
+                    })
 
             progress.progress(1.0, text="Done.")
             st.success(f"Backfill complete — processed {total} PDF(s).")
