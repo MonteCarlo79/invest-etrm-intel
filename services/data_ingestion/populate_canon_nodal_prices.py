@@ -102,6 +102,7 @@ def load_id_cleared(engine, start_date: date, end_date: date) -> pd.DataFrame:
         FROM marketdata.md_id_cleared_energy
         WHERE dispatch_unit_name = ANY(:units)
           AND data_date BETWEEN :start_date AND :end_date
+          AND cleared_price IS NOT NULL
         ORDER BY datetime
     """)
     df = pd.read_sql(sql, engine, params={
