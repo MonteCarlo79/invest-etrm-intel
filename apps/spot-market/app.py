@@ -70,6 +70,7 @@ _T: dict[str, dict[str, str]] = {
         # overview
         "latest_prices":        "Latest prices",
         "col_province":         "Province",
+        "col_province_cn":      "CN Name",
         "col_date":             "Date",
         # spread
         "spread_stats":         "Spread statistics (¥/kWh)",
@@ -201,6 +202,7 @@ _T: dict[str, dict[str, str]] = {
         # overview
         "latest_prices":        "最新价格",
         "col_province":         "省份",
+        "col_province_cn":      "中文名",
         "col_date":             "日期",
         # spread
         "spread_stats":         "价差统计（元/千瓦时）",
@@ -268,7 +270,7 @@ _T: dict[str, dict[str, str]] = {
         "status_ok":            "正常",
         "btn_fill_gaps":        "回填 {n} 个PDF（含缺失日期）",
         "btn_reingest":         "重新录入范围内全部 {n} 个PDF",
-        "warn_partial":         "{n} 个PDF存在部分数据（日前或实时缺失）。切换至"回填日期范围"模式可重新录入。",
+        "warn_partial":         "{n} 个PDF存在部分数据（日前或实时缺失）。切换至「回填日期范围」模式可重新录入。",
         "all_present":          "所选范围内所有日期均已存在于数据库中。",
         "no_pdfs":              "所选日期范围内未找到PDF文件。",
         "prog_starting":        "启动中…",
@@ -977,7 +979,7 @@ with tab_overview:
           "rt_avg", "rt_max", "rt_min"]]
         .rename(columns={
             "province_en": _t("col_province"),
-            "province_cn": "省份",
+            "province_cn": _t("col_province_cn"),
             "report_date": _t("col_date"),
         })
         .sort_values(_t("col_province"))
