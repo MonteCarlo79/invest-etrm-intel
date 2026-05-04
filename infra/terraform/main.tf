@@ -1433,15 +1433,20 @@ resource "aws_ecs_task_definition" "spot_markets" {
       command = [
         "streamlit",
         "run",
-        "apps/spot-agent/ui/spot_dashboard.py",
+        "apps/spot-market/app.py",
         "--server.port=8505",
         "--server.address=0.0.0.0",
         "--server.baseUrlPath=spot-markets",
         "--server.enableCORS=false",
-        "--server.enableXsrfProtection=false"
+        "--server.enableXsrfProtection=false",
+        "--server.headless=true"
       ]
 
       environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
         {
           name  = "DB_URL"
           value = var.db_dsn
@@ -1449,6 +1454,10 @@ resource "aws_ecs_task_definition" "spot_markets" {
         {
           name  = "AWS_REGION"
           value = var.region
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
         }
       ]
 
