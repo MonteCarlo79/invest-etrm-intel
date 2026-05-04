@@ -15,6 +15,7 @@ import json
 import logging
 import sys
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +33,11 @@ def _rows_to_dicts(cur) -> list[dict]:
 
 
 def _serial(obj: Any) -> Any:
-    """JSON-serialise date/datetime objects."""
+    """JSON-serialise date/datetime and Decimal objects."""
     if isinstance(obj, (date, datetime)):
         return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
     raise TypeError(f"Object of type {type(obj)} is not JSON serialisable")
 
 
