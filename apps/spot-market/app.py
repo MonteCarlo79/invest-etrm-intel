@@ -80,6 +80,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_province":         "Province Deep-Dive",
         "tab_dist":             "Distributions",
         "tab_geo":              "Geo Map",
+        "tab_interprov":        "Inter-Provincial Flow",
         "tab_mgmt":             "Data Management",
         # overview
         "latest_prices":        "Latest prices",
@@ -128,6 +129,25 @@ _T: dict[str, dict[str, str]] = {
         "level_low":            "Low",
         "level_medium":         "Medium",
         "level_high":           "High",
+        # inter-provincial flow
+        "interprov_title":      "Inter-Provincial Spot Trading (省间现货交易)",
+        "interprov_no_data":    "No inter-provincial data for the selected period.",
+        "interprov_price_trend":"Inter-Provincial Clearing Price Trend (¥/kWh)",
+        "interprov_vol_trend":  "Total Inter-Provincial Volume (亿kWh)",
+        "direction_export":     "Exporting (送端)",
+        "direction_import":     "Importing (受端)",
+        "col_direction":        "Direction",
+        "col_metric_type":      "Metric",
+        "col_share":            "Share (%)",
+        "col_price_kwh":        "Price (¥/kWh)",
+        "col_price_chg":        "Day-on-day (%)",
+        "col_time_period":      "Active period",
+        "col_volume_gwh":       "Volume (亿kWh)",
+        "col_source":           "Source PDF",
+        # province summaries
+        "summaries_title":      "Market Summaries",
+        "summaries_no_data":    "No summaries available for this period.",
+        "summary_label":        "{date}",
         # data management
         "data_mgmt_title":      "Data Management",
         "report_year":          "Report year",
@@ -234,6 +254,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_province":         "省份深度分析",
         "tab_dist":             "价格分布",
         "tab_geo":              "地理分布图",
+        "tab_interprov":        "省间现货交易",
         "tab_mgmt":             "数据管理",
         # overview
         "latest_prices":        "最新价格",
@@ -282,6 +303,25 @@ _T: dict[str, dict[str, str]] = {
         "level_low":            "低",
         "level_medium":         "中",
         "level_high":           "高",
+        # inter-provincial flow
+        "interprov_title":      "省间现货交易情况",
+        "interprov_no_data":    "所选时段内无省间交易数据。",
+        "interprov_price_trend":"省间出清价格走势（元/千瓦时）",
+        "interprov_vol_trend":  "省间总交易量（亿kWh）",
+        "direction_export":     "送端（出力）",
+        "direction_import":     "受端（受入）",
+        "col_direction":        "方向",
+        "col_metric_type":      "指标类型",
+        "col_share":            "占比（%）",
+        "col_price_kwh":        "价格（元/千瓦时）",
+        "col_price_chg":        "日环比（%）",
+        "col_time_period":      "活跃时段",
+        "col_volume_gwh":       "电量（亿kWh）",
+        "col_source":           "数据来源",
+        # province summaries
+        "summaries_title":      "市场日报摘要",
+        "summaries_no_data":    "所选时段内暂无市场摘要。",
+        "summary_label":        "{date}",
         # data management
         "data_mgmt_title":      "数据管理",
         "report_year":          "报告年份",
@@ -468,6 +508,44 @@ def load_kpis(quality_filter: bool) -> dict:
         "complete_rows":   r[3],
         "total_rows":      r[4],
     }
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_interprov(start: date, end: date) -> pd.DataFrame:
+    try:
+        cur = _conn().cursor()
+        cur.execute("""
+            SELECT report_date::date, direction, metric_type,
+                   province_cn, province_share,
+                   price_yuan_kwh, price_chg_pct,
+                   time_period, total_vol_100gwh, source_pdf
+            FROM staging.spot_interprov_flow
+            WHERE report_date BETWEEN %s AND %s
+            ORDER BY report_date, direction, metric_type
+        """, (start, end))
+        cols = [d[0] for d in cur.description]
+        df = pd.DataFrame(cur.fetchall(), columns=cols)
+        for c in ["price_yuan_kwh", "price_chg_pct", "total_vol_100gwh", "province_share"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_summaries(start: date, end: date) -> pd.DataFrame:
+    try:
+        cur = _conn().cursor()
+        cur.execute("""
+            SELECT report_date::date, summary_text, model, source_pdf
+            FROM staging.spot_report_summaries
+            WHERE report_date BETWEEN %s AND %s
+            ORDER BY report_date DESC
+        """, (start, end))
+        cols = [d[0] for d in cur.description]
+        return pd.DataFrame(cur.fetchall(), columns=cols)
+    except Exception:
+        return pd.DataFrame()
 
 
 # ── colour helpers ────────────────────────────────────────────────────────────
@@ -1017,9 +1095,10 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_mgmt = st.tabs([
+tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_interprov, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"),
-    _t("tab_province"), _t("tab_dist"), _t("tab_geo"), _t("tab_mgmt"),
+    _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
+    _t("tab_interprov"), _t("tab_mgmt"),
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1104,6 +1183,21 @@ with tab_province:
             ),
             use_container_width=True, hide_index=True,
         )
+
+        # ── Market summaries for the selected period ──────────────────────────
+        st.divider()
+        st.subheader(_t("summaries_title"))
+        df_summ = load_summaries(d_start, d_end)
+        # Filter to dates where this province has data
+        prov_dates = set(sub["report_date"].astype(str))
+        df_summ_prov = df_summ[df_summ["report_date"].astype(str).isin(prov_dates)]
+        if df_summ_prov.empty:
+            st.info(_t("summaries_no_data"))
+        else:
+            for _, row in df_summ_prov.iterrows():
+                with st.expander(_t("summary_label", date=str(row["report_date"]))):
+                    st.markdown(row["summary_text"])
+                    st.caption(f"{row['model']} · {row['source_pdf']}")
 
 # ── Tab 5: Distributions ─────────────────────────────────────────────────────
 with tab_dist:
@@ -1352,7 +1446,97 @@ with tab_geo:
                 st.pyplot(fig_cmp_b, use_container_width=True)
                 plt.close(fig_cmp_b)
 
-# ── Tab 7: Data Management ────────────────────────────────────────────────────
+# ── Tab 7: Inter-Provincial Flow ─────────────────────────────────────────────
+with tab_interprov:
+    st.subheader(_t("interprov_title"))
+    st.caption(f"**{d_start}** → **{d_end}**")
+
+    df_ip = load_interprov(d_start, d_end)
+
+    if df_ip.empty:
+        st.info(_t("interprov_no_data"))
+    else:
+        _dir_export = "送端"
+        _dir_import = "受端"
+
+        # ── Price trend chart (最高均价 for each direction) ───────────────────
+        _price_rows = df_ip[df_ip["metric_type"] == "最高均价"].copy()
+        if not _price_rows.empty:
+            fig_ip_price = go.Figure()
+            for _dir, _label in [(_dir_export, _t("direction_export")),
+                                  (_dir_import, _t("direction_import"))]:
+                _s = _price_rows[_price_rows["direction"] == _dir].sort_values("report_date")
+                if not _s.empty:
+                    fig_ip_price.add_trace(go.Scatter(
+                        x=_s["report_date"], y=_s["price_yuan_kwh"],
+                        mode="lines+markers", name=_label,
+                        hovertemplate="%{x}<br>%{y:.4f} ¥/kWh<extra></extra>",
+                    ))
+            fig_ip_price.update_layout(
+                title=_t("interprov_price_trend"),
+                xaxis_title="", yaxis_title="¥/kWh",
+                height=320, margin=dict(l=40, r=20, t=40, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig_ip_price, use_container_width=True)
+
+        # ── Volume trend chart (total_vol_100gwh, one bar per direction/date) ─
+        _vol_rows = df_ip[df_ip["total_vol_100gwh"].notna()].copy()
+        if not _vol_rows.empty:
+            fig_ip_vol = go.Figure()
+            for _dir, _label in [(_dir_export, _t("direction_export")),
+                                  (_dir_import, _t("direction_import"))]:
+                _sv = _vol_rows[_vol_rows["direction"] == _dir].sort_values("report_date")
+                if not _sv.empty:
+                    fig_ip_vol.add_trace(go.Bar(
+                        x=_sv["report_date"], y=_sv["total_vol_100gwh"],
+                        name=_label,
+                        hovertemplate="%{x}<br>%{y:.2f} 亿kWh<extra></extra>",
+                    ))
+            fig_ip_vol.update_layout(
+                title=_t("interprov_vol_trend"),
+                xaxis_title="", yaxis_title="亿kWh",
+                barmode="group", height=280,
+                margin=dict(l=40, r=20, t=40, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig_ip_vol, use_container_width=True)
+
+        # ── Detail tables per direction ───────────────────────────────────────
+        st.divider()
+        _col_map = {
+            "report_date":      _t("col_date"),
+            "metric_type":      _t("col_metric_type"),
+            "province_cn":      _t("col_province_cn"),
+            "province_share":   _t("col_share"),
+            "price_yuan_kwh":   _t("col_price_kwh"),
+            "price_chg_pct":    _t("col_price_chg"),
+            "time_period":      _t("col_time_period"),
+            "total_vol_100gwh": _t("col_volume_gwh"),
+            "source_pdf":       _t("col_source"),
+        }
+        _display_cols = list(_col_map.keys())
+
+        for _dir, _label in [(_dir_export, _t("direction_export")),
+                              (_dir_import, _t("direction_import"))]:
+            _sub = (df_ip[df_ip["direction"] == _dir][_display_cols]
+                    .rename(columns=_col_map)
+                    .sort_values(_t("col_date"), ascending=False))
+            if not _sub.empty:
+                st.subheader(_label)
+                _fmt = {
+                    _t("col_price_kwh"):   "{:.4f}",
+                    _t("col_price_chg"):   "{:.2f}",
+                    _t("col_volume_gwh"):  "{:.4f}",
+                    _t("col_share"):       "{:.2f}",
+                }
+                st.dataframe(
+                    _sub.style.format(_fmt, na_rep="—"),
+                    use_container_width=True, hide_index=True,
+                )
+
+
+# ── Tab 8: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
     import re as _re
     from pathlib import Path as _Path
