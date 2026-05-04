@@ -1274,14 +1274,15 @@ with tab_geo:
                     value=5, step=1, key="anim_speed",
                 )
 
-            # Manual scrub slider — keep in sync with auto-play frame index
+            # Manual scrub slider — value= drives position; no key so Streamlit
+            # always uses the value we pass (avoids stale session-state reads)
             _cur_idx = st.session_state["anim_frame_idx"]
-            st.session_state["anim_month"] = _month_labels[_cur_idx]
             _sel_label = st.select_slider(
                 _t("anim_slider"), options=_month_labels,
-                key="anim_month",
+                value=_month_labels[_cur_idx],
             )
-            # Detect manual scrub: slider value diverged from what we set above
+            # Detect manual scrub: slider returned something different from
+            # what we passed in (user dragged it) → jump and stop auto-play
             _slider_idx = _month_labels.index(_sel_label)
             if _slider_idx != _cur_idx:
                 st.session_state["anim_frame_idx"] = _slider_idx
@@ -1300,12 +1301,11 @@ with tab_geo:
                 st.pyplot(fig_anim, use_container_width=True)
                 plt.close(fig_anim)
 
-            # Auto-advance: sleep, then sync both state keys and rerun
+            # Auto-advance: sleep then advance index and rerun
             if st.session_state["anim_playing"]:
                 time.sleep(anim_speed)
                 _next_idx = (_cur_idx + 1) % _n_frames
                 st.session_state["anim_frame_idx"] = _next_idx
-                st.session_state["anim_month"] = _month_labels[_next_idx]
                 st.rerun()
 
         # ── Section: Period Comparison ────────────────────────────────────────
