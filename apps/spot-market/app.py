@@ -1190,7 +1190,10 @@ with tab_province:
         df_summ = load_summaries(d_start, d_end)
         # Filter to dates where this province has data
         prov_dates = set(sub["report_date"].astype(str))
-        df_summ_prov = df_summ[df_summ["report_date"].astype(str).isin(prov_dates)]
+        if df_summ.empty or "report_date" not in df_summ.columns:
+            df_summ_prov = pd.DataFrame()
+        else:
+            df_summ_prov = df_summ[df_summ["report_date"].astype(str).isin(prov_dates)]
         if df_summ_prov.empty:
             st.info(_t("summaries_no_data"))
         else:
