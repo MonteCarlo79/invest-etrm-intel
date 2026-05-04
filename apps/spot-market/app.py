@@ -144,6 +144,14 @@ _T: dict[str, dict[str, str]] = {
         "col_time_period":      "Active period",
         "col_volume_gwh":       "Volume (亿kWh)",
         "col_source":           "Source PDF",
+        "interprov_price_hi":   "Peak Avg (最高均价)",
+        "interprov_price_lo":   "Floor Avg (最低均价)",
+        "interprov_prov_leaders":"Province Leaders — Peak Avg Price",
+        "hover_province":       "Province",
+        "hover_chg":            "Day-on-day",
+        "hover_period":         "Active period",
+        "hover_share":          "Market share",
+        "hover_volume":         "Volume",
         # province summaries
         "summaries_title":      "Market Summaries",
         "summaries_no_data":    "No summaries available for this period.",
@@ -318,6 +326,14 @@ _T: dict[str, dict[str, str]] = {
         "col_time_period":      "活跃时段",
         "col_volume_gwh":       "电量（亿kWh）",
         "col_source":           "数据来源",
+        "interprov_price_hi":   "最高均价",
+        "interprov_price_lo":   "最低均价",
+        "interprov_prov_leaders":"每日最高均价省份",
+        "hover_province":       "省份",
+        "hover_chg":            "日环比",
+        "hover_period":         "活跃时段",
+        "hover_share":          "市场占比",
+        "hover_volume":         "电量",
         # province summaries
         "summaries_title":      "市场日报摘要",
         "summaries_no_data":    "所选时段内暂无市场摘要。",
@@ -1466,26 +1482,114 @@ with tab_interprov:
         _dir_export = "送端"
         _dir_import = "受端"
 
-        # ── Price trend chart (最高均价 for each direction) ───────────────────
-        _price_rows = df_ip[df_ip["metric_type"] == "最高均价"].copy()
-        if not _price_rows.empty:
+        # ── Clearing price chart: 最高均价 (solid) + 最低均价 (dashed) ──────────
+        _hi_rows  = df_ip[df_ip["metric_type"] == "最高均价"].copy()
+        _lo_rows  = df_ip[df_ip["metric_type"] == "最低均价"].copy()
+        _has_price = not _hi_rows.empty or not _lo_rows.empty
+
+        if _has_price:
             fig_ip_price = go.Figure()
-            for _dir, _label in [(_dir_export, _t("direction_export")),
-                                  (_dir_import, _t("direction_import"))]:
-                _s = _price_rows[_price_rows["direction"] == _dir].sort_values("report_date")
-                if not _s.empty:
+            _dir_colors = {_dir_export: "#1f77b4", _dir_import: "#ff7f0e"}
+
+            for _dir, _dlabel, _dshort in [
+                (_dir_export, _t("direction_export"), "送端"),
+                (_dir_import, _t("direction_import"), "受端"),
+            ]:
+                _clr = _dir_colors[_dir]
+                # ── Peak avg (solid) ────────────────────────────────────────
+                _sh = _hi_rows[_hi_rows["direction"] == _dir].sort_values("report_date")
+                if not _sh.empty:
+                    _cd = _sh[["province_cn", "price_chg_pct", "time_period"]].values
                     fig_ip_price.add_trace(go.Scatter(
-                        x=_s["report_date"], y=_s["price_yuan_kwh"],
-                        mode="lines+markers", name=_label,
-                        hovertemplate="%{x}<br>%{y:.4f} ¥/kWh<extra></extra>",
+                        x=_sh["report_date"], y=_sh["price_yuan_kwh"],
+                        mode="lines+markers", name=f"{_dlabel} — {_t('interprov_price_hi')}",
+                        line=dict(color=_clr, width=2),
+                        marker=dict(size=6),
+                        customdata=_cd,
+                        hovertemplate=(
+                            "<b>%{x}</b><br>"
+                            f"{_t('hover_province')}: %{{customdata[0]}}<br>"
+                            f"{_t('interprov_price_hi')}: %{{y:.4f}} ¥/kWh<br>"
+                            f"{_t('hover_chg')}: %{{customdata[1]:.2f}}%<br>"
+                            f"{_t('hover_period')}: %{{customdata[2]}}"
+                            "<extra></extra>"
+                        ),
                     ))
+                # ── Floor avg (dashed) ──────────────────────────────────────
+                _sl = _lo_rows[_lo_rows["direction"] == _dir].sort_values("report_date")
+                if not _sl.empty:
+                    _cd2 = _sl[["province_cn", "price_chg_pct", "time_period"]].values
+                    fig_ip_price.add_trace(go.Scatter(
+                        x=_sl["report_date"], y=_sl["price_yuan_kwh"],
+                        mode="lines+markers", name=f"{_dlabel} — {_t('interprov_price_lo')}",
+                        line=dict(color=_clr, width=2, dash="dash"),
+                        marker=dict(size=5, symbol="diamond"),
+                        customdata=_cd2,
+                        hovertemplate=(
+                            "<b>%{x}</b><br>"
+                            f"{_t('hover_province')}: %{{customdata[0]}}<br>"
+                            f"{_t('interprov_price_lo')}: %{{y:.4f}} ¥/kWh<br>"
+                            f"{_t('hover_chg')}: %{{customdata[1]:.2f}}%<br>"
+                            f"{_t('hover_period')}: %{{customdata[2]}}"
+                            "<extra></extra>"
+                        ),
+                    ))
+
             fig_ip_price.update_layout(
-                title=_t("interprov_price_trend"),
+                title=dict(text=_t("interprov_price_trend"), x=0, xanchor="left"),
                 xaxis_title="", yaxis_title="¥/kWh",
-                height=320, margin=dict(l=40, r=20, t=40, b=30),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                height=380,
+                margin=dict(l=50, r=20, t=55, b=110),
+                legend=dict(
+                    orientation="h", xanchor="center", x=0.5,
+                    yanchor="top", y=-0.18,
+                    font=dict(size=11),
+                ),
             )
             st.plotly_chart(fig_ip_price, use_container_width=True)
+
+        # ── Province leaders: which province had the peak avg price each day ─
+        if not _hi_rows.empty:
+            st.subheader(_t("interprov_prov_leaders"))
+            _c1, _c2 = st.columns(2)
+            for _col_widget, _dir, _dlabel in [
+                (_c1, _dir_export, _t("direction_export")),
+                (_c2, _dir_import, _t("direction_import")),
+            ]:
+                _spl = _hi_rows[_hi_rows["direction"] == _dir].sort_values("report_date")
+                if _spl.empty:
+                    _col_widget.info(_dlabel + ": —")
+                    continue
+                _cd_pl = _spl[["price_yuan_kwh", "province_share", "time_period"]].values
+                fig_pl = go.Figure(go.Scatter(
+                    x=_spl["report_date"],
+                    y=_spl["province_cn"],
+                    mode="markers",
+                    marker=dict(
+                        size=10,
+                        color=_spl["price_yuan_kwh"],
+                        colorscale="RdYlGn_r",
+                        showscale=True,
+                        colorbar=dict(title="¥/kWh", thickness=10, len=0.8),
+                    ),
+                    customdata=_cd_pl,
+                    hovertemplate=(
+                        "<b>%{x}</b> · %{y}<br>"
+                        f"{_t('interprov_price_hi')}: %{{customdata[0]:.4f}} ¥/kWh<br>"
+                        f"{_t('hover_share')}: %{{customdata[1]:.1f}}%<br>"
+                        f"{_t('hover_period')}: %{{customdata[2]}}"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False,
+                ))
+                fig_pl.update_layout(
+                    title=dict(text=_dlabel, x=0, xanchor="left"),
+                    xaxis_title="", yaxis_title="",
+                    height=300,
+                    margin=dict(l=90, r=60, t=45, b=30),
+                    yaxis=dict(categoryorder="total ascending"),
+                )
+                _col_widget.plotly_chart(fig_pl, use_container_width=True)
 
         # ── Volume trend chart (total_vol_100gwh, one bar per direction/date) ─
         _vol_rows = df_ip[df_ip["total_vol_100gwh"].notna()].copy()
@@ -1495,17 +1599,29 @@ with tab_interprov:
                                   (_dir_import, _t("direction_import"))]:
                 _sv = _vol_rows[_vol_rows["direction"] == _dir].sort_values("report_date")
                 if not _sv.empty:
+                    # attach province name from 最高均价 row for that date (if available)
+                    _sv_cd = _sv[["province_cn"]].values
                     fig_ip_vol.add_trace(go.Bar(
                         x=_sv["report_date"], y=_sv["total_vol_100gwh"],
                         name=_label,
-                        hovertemplate="%{x}<br>%{y:.2f} 亿kWh<extra></extra>",
+                        customdata=_sv_cd,
+                        hovertemplate=(
+                            "<b>%{x}</b><br>"
+                            f"{_t('hover_volume')}: %{{y:.2f}} 亿kWh<br>"
+                            f"{_t('hover_province')}: %{{customdata[0]}}"
+                            "<extra></extra>"
+                        ),
                     ))
             fig_ip_vol.update_layout(
-                title=_t("interprov_vol_trend"),
+                title=dict(text=_t("interprov_vol_trend"), x=0, xanchor="left"),
                 xaxis_title="", yaxis_title="亿kWh",
-                barmode="group", height=280,
-                margin=dict(l=40, r=20, t=40, b=30),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                barmode="group", height=300,
+                margin=dict(l=50, r=20, t=55, b=90),
+                legend=dict(
+                    orientation="h", xanchor="center", x=0.5,
+                    yanchor="top", y=-0.2,
+                    font=dict(size=11),
+                ),
             )
             st.plotly_chart(fig_ip_vol, use_container_width=True)
 
