@@ -511,7 +511,7 @@ def load_kpis(quality_filter: bool) -> dict:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_interprov(start: date, end: date) -> pd.DataFrame:
+def load_interprov(start: date, end: date) -> tuple[pd.DataFrame, str]:
     try:
         cur = _conn().cursor()
         cur.execute("""
@@ -527,13 +527,13 @@ def load_interprov(start: date, end: date) -> pd.DataFrame:
         df = pd.DataFrame(cur.fetchall(), columns=cols)
         for c in ["price_yuan_kwh", "price_chg_pct", "total_vol_100gwh", "province_share"]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-        return df
-    except Exception:
-        return pd.DataFrame()
+        return df, ""
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_summaries(start: date, end: date) -> pd.DataFrame:
+def load_summaries(start: date, end: date) -> tuple[pd.DataFrame, str]:
     try:
         cur = _conn().cursor()
         cur.execute("""
@@ -543,9 +543,9 @@ def load_summaries(start: date, end: date) -> pd.DataFrame:
             ORDER BY report_date DESC
         """, (start, end))
         cols = [d[0] for d in cur.description]
-        return pd.DataFrame(cur.fetchall(), columns=cols)
-    except Exception:
-        return pd.DataFrame()
+        return pd.DataFrame(cur.fetchall(), columns=cols), ""
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
 
 # ── colour helpers ────────────────────────────────────────────────────────────
@@ -1187,7 +1187,9 @@ with tab_province:
         # ── Market summaries for the selected period ──────────────────────────
         st.divider()
         st.subheader(_t("summaries_title"))
-        df_summ = load_summaries(d_start, d_end)
+        df_summ, _summ_err = load_summaries(d_start, d_end)
+        if _summ_err:
+            st.warning(f"summaries query failed: {_summ_err}")
         # Filter to dates where this province has data
         prov_dates = set(sub["report_date"].astype(str))
         if df_summ.empty or "report_date" not in df_summ.columns:
@@ -1454,9 +1456,11 @@ with tab_interprov:
     st.subheader(_t("interprov_title"))
     st.caption(f"**{d_start}** → **{d_end}**")
 
-    df_ip = load_interprov(d_start, d_end)
+    df_ip, _ip_err = load_interprov(d_start, d_end)
 
-    if df_ip.empty:
+    if _ip_err:
+        st.error(f"Query failed: {_ip_err}")
+    elif df_ip.empty:
         st.info(_t("interprov_no_data"))
     else:
         _dir_export = "送端"
