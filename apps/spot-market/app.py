@@ -81,7 +81,19 @@ _T: dict[str, dict[str, str]] = {
         "tab_dist":             "Distributions",
         "tab_geo":              "Geo Map",
         "tab_interprov":        "Inter-Provincial Flow",
+        "tab_agent":            "Agent",
         "tab_mgmt":             "Data Management",
+        # agent
+        "agent_title":          "Spot Market AI Agent",
+        "agent_caption":        "Ask questions about prices, trends, inter-provincial flows, or trigger ingestion.",
+        "agent_welcome":        "Hi! I can query spot market prices, inter-provincial flows, and daily summaries from the database, and run the ingestion pipeline for new PDFs. What would you like to know?",
+        "agent_placeholder":    "e.g. What were Shandong DA prices in April 2026?",
+        "agent_thinking":       "Thinking...",
+        "agent_tool_call":      "Tool call: {tool}",
+        "agent_tool_result":    "Result ({n} rows)",
+        "agent_no_key":         "ANTHROPIC_API_KEY is not set. Please add it to your .env file.",
+        "agent_clear":          "Clear chat",
+        "agent_error":          "Agent error: {err}",
         # overview
         "latest_prices":        "Latest prices",
         "col_province":         "Province",
@@ -263,7 +275,19 @@ _T: dict[str, dict[str, str]] = {
         "tab_dist":             "价格分布",
         "tab_geo":              "地理分布图",
         "tab_interprov":        "省间现货交易",
+        "tab_agent":            "智能助手",
         "tab_mgmt":             "数据管理",
+        # agent
+        "agent_title":          "现货市场智能助手",
+        "agent_caption":        "查询价格、走势、省间交易数据，或触发PDF导入流程。",
+        "agent_welcome":        "您好！我可以查询现货市场价格、省间交易数据及每日市场摘要，也可以为新PDF运行导入流程。请问您想了解什么？",
+        "agent_placeholder":    "例如：2026年4月山东日前价格是多少？",
+        "agent_thinking":       "思考中…",
+        "agent_tool_call":      "工具调用：{tool}",
+        "agent_tool_result":    "结果（{n} 行）",
+        "agent_no_key":         "未设置 ANTHROPIC_API_KEY，请在 .env 文件中添加。",
+        "agent_clear":          "清除对话",
+        "agent_error":          "助手出错：{err}",
         # overview
         "latest_prices":        "最新价格",
         "col_province":         "省份",
@@ -1111,10 +1135,10 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_interprov, tab_mgmt = st.tabs([
+tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_interprov, tab_agent, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
-    _t("tab_interprov"), _t("tab_mgmt"),
+    _t("tab_interprov"), _t("tab_agent"), _t("tab_mgmt"),
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1659,7 +1683,247 @@ with tab_interprov:
                 )
 
 
-# ── Tab 8: Data Management ────────────────────────────────────────────────────
+# ── Tab 8: Agent ─────────────────────────────────────────────────────────────
+with tab_agent:
+    import os as _os
+    import json as _json
+    import anthropic as _anthropic
+
+    st.subheader(_t("agent_title"))
+    st.caption(_t("agent_caption"))
+
+    # ── Tool definitions (mirrors services/spot_mcp/tools.py) ─────────────────
+    _AGENT_TOOLS = [
+        {
+            "name": "get_spot_prices",
+            "description": (
+                "Fetch day-ahead (DA) and real-time (RT) spot electricity clearing "
+                "prices from public.spot_daily. Prices in ¥/kWh."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "ISO date, e.g. '2026-01-01'"},
+                    "end_date":   {"type": "string", "description": "ISO date, e.g. '2026-04-30'"},
+                    "provinces":  {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Optional list of province_en names, e.g. ['Shandong','Guangdong']",
+                    },
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "get_interprov_flow",
+            "description": (
+                "Fetch inter-provincial spot trading data (省间现货交易情况). "
+                "Returns daily peak/floor average prices and volumes for exporting "
+                "(送端) and importing (受端) provinces."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "ISO date"},
+                    "end_date":   {"type": "string", "description": "ISO date"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "get_market_summaries",
+            "description": (
+                "Fetch AI-generated daily market narrative summaries. Each summary "
+                "covers price levels, key drivers, inter-provincial flows, and "
+                "notable events for that trading day."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "ISO date"},
+                    "end_date":   {"type": "string", "description": "ISO date"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "run_pipeline",
+            "description": (
+                "Run the full spot-market ingestion pipeline for one PDF report. "
+                "Parses DA/RT prices, inter-provincial data, generates AI summary, "
+                "and populates the knowledge pool."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pdf_path": {"type": "string", "description": "Absolute or repo-relative path to the PDF"},
+                    "dry_run":  {"type": "boolean", "description": "If true, parse only — no DB writes"},
+                },
+                "required": ["pdf_path"],
+            },
+        },
+    ]
+
+    _AGENT_SYSTEM = (
+        "You are a specialist analyst for China's spot electricity market. "
+        "You have access to real-time market data via tools. "
+        "Always cite date ranges and province names when reporting prices. "
+        "Prices are in ¥/kWh. Province names are in English "
+        "(e.g. Shandong, Guangdong, Mengxi, Shanxi). "
+        "Direction 送端 = exporting province; 受端 = importing province. "
+        "When asked to compare periods or provinces, call get_spot_prices with the "
+        "appropriate date range and compute statistics from the returned rows. "
+        "Be concise. Use markdown tables for price comparisons."
+    )
+
+    # ── Tool dispatcher ────────────────────────────────────────────────────────
+    def _dispatch_tool(name: str, inputs: dict) -> str:
+        from services.spot_mcp.tools import (
+            get_spot_prices as _gsp,
+            get_interprov_flow as _gif,
+            get_market_summaries as _gms,
+            run_pipeline as _rp,
+        )
+        try:
+            if name == "get_spot_prices":
+                result = _gsp(**inputs)
+            elif name == "get_interprov_flow":
+                result = _gif(**inputs)
+            elif name == "get_market_summaries":
+                result = _gms(**inputs)
+            elif name == "run_pipeline":
+                result = _rp(**inputs)
+            else:
+                result = {"error": f"Unknown tool: {name}"}
+        except Exception as _e:
+            result = {"error": str(_e)}
+        return _json.dumps(result, default=str)
+
+    # ── Agent turn (handles multi-step tool-use loop) ──────────────────────────
+    def _run_agent_turn(messages: list) -> tuple[str, list, list]:
+        """
+        Run one user turn through Claude with tools until stop_reason == end_turn.
+
+        Returns:
+            (final_text, updated_messages, tool_events)
+            tool_events: list of {"tool": str, "result": str} for display
+        """
+        _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _api_key:
+            return _t("agent_no_key"), messages, []
+
+        client = _anthropic.Anthropic(api_key=_api_key)
+        tool_events: list[dict] = []
+
+        while True:
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                system=_AGENT_SYSTEM,
+                tools=_AGENT_TOOLS,
+                messages=messages,
+            )
+
+            messages = messages + [{"role": "assistant", "content": response.content}]
+
+            if response.stop_reason == "end_turn":
+                text = next(
+                    (b.text for b in response.content if hasattr(b, "text")), ""
+                )
+                return text, messages, tool_events
+
+            if response.stop_reason != "tool_use":
+                return f"Unexpected stop_reason: {response.stop_reason}", messages, tool_events
+
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result_str = _dispatch_tool(block.name, block.input)
+                    tool_events.append({"tool": block.name, "result": result_str})
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    })
+
+            messages = messages + [{"role": "user", "content": tool_results}]
+
+    # ── Session state ──────────────────────────────────────────────────────────
+    if "agent_messages" not in st.session_state:
+        st.session_state["agent_messages"] = []
+    if "agent_display" not in st.session_state:
+        # Display log: list of {"role": "user"|"assistant"|"tool", "content": str, "tool": str}
+        st.session_state["agent_display"] = [
+            {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
+        ]
+
+    # ── Clear button ───────────────────────────────────────────────────────────
+    if st.button(_t("agent_clear"), key="agent_clear_btn"):
+        st.session_state["agent_messages"] = []
+        st.session_state["agent_display"] = [
+            {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
+        ]
+        st.rerun()
+
+    # ── Render existing chat history ───────────────────────────────────────────
+    for _msg in st.session_state["agent_display"]:
+        if _msg["role"] == "tool":
+            with st.expander(_t("agent_tool_call", tool=_msg["tool"]), expanded=False):
+                try:
+                    _parsed = _json.loads(_msg["content"])
+                    _n = _parsed.get("count", _parsed.get("rows", _parsed.get("summaries", "")))
+                    _n = len(_n) if isinstance(_n, list) else _n
+                    st.caption(_t("agent_tool_result", n=_n) if isinstance(_n, int) else "")
+                    st.json(_parsed, expanded=1)
+                except Exception:
+                    st.code(_msg["content"], language="json")
+        else:
+            with st.chat_message(_msg["role"]):
+                st.markdown(_msg["content"])
+
+    # ── Chat input ─────────────────────────────────────────────────────────────
+    _user_input = st.chat_input(_t("agent_placeholder"), key="agent_input")
+
+    if _user_input:
+        # Show user message immediately
+        st.session_state["agent_display"].append(
+            {"role": "user", "content": _user_input, "tool": None}
+        )
+        with st.chat_message("user"):
+            st.markdown(_user_input)
+
+        # Append to API message history
+        st.session_state["agent_messages"].append(
+            {"role": "user", "content": _user_input}
+        )
+
+        # Run agent
+        with st.chat_message("assistant"):
+            with st.spinner(_t("agent_thinking")):
+                try:
+                    _reply, _new_msgs, _tool_events = _run_agent_turn(
+                        st.session_state["agent_messages"]
+                    )
+                except Exception as _exc:
+                    _reply = _t("agent_error", err=str(_exc))
+                    _new_msgs = st.session_state["agent_messages"]
+                    _tool_events = []
+
+            # Record tool calls in display log
+            for _ev in _tool_events:
+                st.session_state["agent_display"].append({
+                    "role": "tool",
+                    "content": _ev["result"],
+                    "tool": _ev["tool"],
+                })
+
+            st.session_state["agent_messages"] = _new_msgs
+            st.session_state["agent_display"].append(
+                {"role": "assistant", "content": _reply, "tool": None}
+            )
+            st.markdown(_reply)
+
+
+# ── Tab 9: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
     import re as _re
     from pathlib import Path as _Path
