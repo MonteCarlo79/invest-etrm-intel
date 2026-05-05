@@ -1051,3 +1051,150 @@ def load_precomputed_lp_dispatch(
             "price": float(row["price"]) if row["price"] is not None else 0.0,
         })
     return records
+
+
+def write_ops_pnl_to_db(
+    asset_code: str,
+    trade_date: date,
+    analysis_result: dict,
+    energy_capacity_mwh: Optional[float] = None,
+) -> List[str]:
+    """
+    Persist ops-derived scenario P&L to reports.bess_asset_daily_scenario_pnl.
+
+    Writes three scenarios using P&L values from the strategy ranking and
+    dispatch MWh from the context:
+      nominated_dispatch  — ops nominated dispatch × nodal_price_excel
+      cleared_actual      — ops actual dispatch × nodal_price_excel
+      trading_cleared     — id_cleared_energy × cleared_price (renamed from
+                            id_cleared_energy_da for clarity)
+
+    Called by run_daily_strategy_batch.py after write_lp_results_to_db.
+
+    Parameters
+    ----------
+    asset_code          : e.g. "suyou"
+    trade_date          : the trading date
+    analysis_result     : full dict returned by run_bess_daily_strategy_analysis()
+    energy_capacity_mwh : power_mw × duration_h (for avg_daily_cycles calc)
+
+    Returns
+    -------
+    List of warning/error notes.
+    """
+    notes: List[str] = []
+
+    ranking_rows = analysis_result.get("ranking", {}).get("rows", [])
+    context = analysis_result.get("context", {})
+
+    # Build lookup: ranking_name → row dict (only available rows)
+    row_by_name = {
+        r["strategy_name"]: r
+        for r in ranking_rows
+        if r.get("data_available") and r.get("pnl_total_yuan") is not None
+    }
+
+    def _mwh_from_dispatch(dispatch_records: list) -> tuple:
+        """Sum discharge and charge MWh from LP-convention dispatch records.
+        Records have dispatch_mw (already in MWh per 15-min, positive=discharge)."""
+        if not dispatch_records:
+            return 0.0, 0.0
+        disch = sum(max(0.0, float(r.get("dispatch_mw") or 0.0)) for r in dispatch_records)
+        chrg  = sum(max(0.0, -float(r.get("dispatch_mw") or 0.0)) for r in dispatch_records)
+        return disch, chrg
+
+    # (db_scenario_name, source_system, context_dispatch_key, ranking_name)
+    _SCENARIO_MAP = [
+        ("nominated_dispatch", "ops_excel",         "nominated_dispatch_15min", "nominated_dispatch"),
+        ("cleared_actual",     "ops_excel",         "actual_dispatch_15min",    "cleared_actual"),
+        ("trading_cleared",    "md_id_cleared_energy", None,                    "id_cleared_energy_da"),
+    ]
+
+    pnl_rows: List[dict] = []
+    for db_name, source_sys, dispatch_key, ranking_name in _SCENARIO_MAP:
+        row = row_by_name.get(ranking_name)
+        if row is None:
+            continue
+
+        pnl_total  = row.get("pnl_total_yuan")
+        pnl_market = row.get("pnl_market_yuan")
+        pnl_comp   = row.get("pnl_compensation_yuan")
+        if pnl_total is None:
+            continue
+
+        # Discharge / charge MWh
+        if dispatch_key and context.get(dispatch_key):
+            disch, chrg = _mwh_from_dispatch(context[dispatch_key])
+        elif db_name == "trading_cleared":
+            id_recs = context.get("id_cleared_energy_15min") or []
+            disch = sum(max(0.0, float(r.get("cleared_energy_mwh_15min") or 0.0))
+                        for r in id_recs)
+            chrg  = sum(max(0.0, -float(r.get("cleared_energy_mwh_15min") or 0.0))
+                        for r in id_recs)
+        else:
+            disch, chrg = 0.0, 0.0
+
+        cycles = (disch / energy_capacity_mwh) if energy_capacity_mwh and energy_capacity_mwh > 0 else None
+        pnl_rows.append({
+            "trade_date":           trade_date,
+            "asset_code":           asset_code,
+            "scenario_name":        db_name,
+            "scenario_available":   True,
+            "market_revenue_yuan":  float(pnl_market or 0.0),
+            "subsidy_revenue_yuan": float(pnl_comp or 0.0),
+            "total_revenue_yuan":   float(pnl_total),
+            "discharge_mwh":        disch,
+            "charge_mwh":           chrg,
+            "avg_daily_cycles":     round(cycles, 4) if cycles is not None else None,
+            "source_system":        source_sys,
+        })
+
+    if not pnl_rows:
+        notes.append(
+            f"write_ops_pnl_to_db: no available ops scenarios to write for "
+            f"{asset_code} {trade_date}"
+        )
+        return notes
+
+    try:
+        from services.common.db_utils import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+    except Exception as exc:
+        notes.append(f"write_ops_pnl_to_db: cannot get engine — {exc}")
+        return notes
+
+    # Same upsert SQL as write_lp_results_to_db
+    pnl_upsert = text("""
+        INSERT INTO reports.bess_asset_daily_scenario_pnl
+            (trade_date, asset_code, scenario_name, scenario_available,
+             market_revenue, compensation_revenue, total_pnl,
+             discharge_mwh, charge_mwh, avg_daily_cycles, source_system, updated_at)
+        VALUES
+            (:trade_date, :asset_code, :scenario_name, :scenario_available,
+             :market_revenue_yuan, :subsidy_revenue_yuan, :total_revenue_yuan,
+             :discharge_mwh, :charge_mwh, :avg_daily_cycles, :source_system, now())
+        ON CONFLICT (asset_code, trade_date, scenario_name) DO UPDATE SET
+            scenario_available   = EXCLUDED.scenario_available,
+            market_revenue       = EXCLUDED.market_revenue,
+            compensation_revenue = EXCLUDED.compensation_revenue,
+            total_pnl            = EXCLUDED.total_pnl,
+            discharge_mwh        = EXCLUDED.discharge_mwh,
+            charge_mwh           = EXCLUDED.charge_mwh,
+            avg_daily_cycles     = EXCLUDED.avg_daily_cycles,
+            source_system        = EXCLUDED.source_system,
+            updated_at           = now()
+    """)
+    try:
+        with engine.begin() as conn:
+            for row in pnl_rows:
+                conn.execute(pnl_upsert, row)
+        notes.append(
+            f"write_ops_pnl_to_db: wrote {len(pnl_rows)} ops P&L row(s) for "
+            f"{asset_code} {trade_date} "
+            f"({[r['scenario_name'] for r in pnl_rows]})"
+        )
+    except Exception as exc:
+        notes.append(f"write_ops_pnl_to_db: upsert failed — {exc}")
+
+    return notes

@@ -34,8 +34,13 @@ import argparse
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
 from datetime import date, timedelta
 from typing import List, Optional
+
+# Wall-clock limit per asset per date — CBC can hang indefinitely on some inputs.
+# 8 minutes is enough for a full PF + forecast solve; hangs are typically infinite.
+_ASSET_TIMEOUT_S: int = int(os.getenv("STRATEGY_BATCH_ASSET_TIMEOUT_S", "480"))
 
 # Ensure repo root is on sys.path when run as a script
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -168,18 +173,27 @@ def run_for_date(
             )
             continue
 
-        logger.info("START %s %s", asset_code, trade_date)
+        logger.info("START %s %s (timeout=%ds)", asset_code, trade_date, _ASSET_TIMEOUT_S)
         try:
-            result = run_bess_daily_strategy_analysis(
-                asset_code=asset_code,
-                date=str(trade_date),
-                forecast_models=forecast_models,
-                use_ops_dispatch=True,
-            )
+            # Run in a separate thread so we can enforce a wall-clock timeout.
+            # CBC can hang indefinitely on certain price series; the timeout lets
+            # the batch continue to the next asset rather than blocking forever.
+            # Note: Python threads cannot be forcibly killed, so the hung thread
+            # continues running in the background, but the main loop moves on.
+            with ThreadPoolExecutor(max_workers=1) as _pool:
+                _future = _pool.submit(
+                    run_bess_daily_strategy_analysis,
+                    asset_code=asset_code,
+                    date=str(trade_date),
+                    forecast_models=forecast_models,
+                    use_ops_dispatch=True,
+                )
+                result = _future.result(timeout=_ASSET_TIMEOUT_S)
+
             # Check write notes in context
             write_notes = [
                 n for n in result.get("context", {}).get("data_quality_notes", [])
-                if "write_lp_results_to_db" in n
+                if "write_lp_results_to_db" in n or "write_ops_pnl_to_db" in n
             ]
             for note in write_notes:
                 logger.info("%s %s — %s", asset_code, trade_date, note)
@@ -194,6 +208,12 @@ def run_for_date(
             )
             written += 1
 
+        except _FuturesTimeout:
+            logger.warning(
+                "TIMEOUT %s %s — LP solve exceeded %ds; skipping. "
+                "Re-run this date with a higher STRATEGY_BATCH_ASSET_TIMEOUT_S or investigate CBC.",
+                asset_code, trade_date, _ASSET_TIMEOUT_S,
+            )
         except Exception as exc:
             logger.error("FAIL %s %s — %s", asset_code, trade_date, exc, exc_info=True)
 

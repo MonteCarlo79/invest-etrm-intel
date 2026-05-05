@@ -69,6 +69,7 @@ from libs.decision_models.resources.bess_context import (  # noqa: E402
     load_precomputed_lp_dispatch,
     load_precomputed_scenario_pnl,
     write_lp_results_to_db,
+    write_ops_pnl_to_db,
 )
 from libs.decision_models.workflows.strategy_comparison import (  # noqa: E402
     attribute_dispatch_discrepancy,
@@ -260,6 +261,20 @@ def run_bess_daily_strategy_analysis(
         context, pf_result, forecast_suite,
         db_pnl_df=db_pnl_df if not db_pnl_df.empty else None,
     )
+
+    # Step 6b: Persist ops-derived P&L (nominated, actual, trading_cleared) to DB.
+    # Always called so that ops P&L stays current even when LP was loaded from DB.
+    try:
+        _ops_meta = context.get("asset_metadata", {})
+        _ops_ecap = _ops_meta.get("power_mw", 0) * _ops_meta.get("duration_h", 0) or None
+        _ops_notes = write_ops_pnl_to_db(
+            asset_code, d,
+            {"ranking": ranking, "context": context},
+            _ops_ecap,
+        )
+        context["data_quality_notes"].extend(_ops_notes)
+    except Exception as _exc:
+        logger.warning("write_ops_pnl_to_db failed for %s %s: %s", asset_code, d, _exc)
 
     # Step 7: Attribute discrepancy
     attribution = attribute_dispatch_discrepancy(
@@ -509,7 +524,10 @@ def render_bess_strategy_dashboard_payload(
 
     # Dispatch chart data (from ops dispatch or context dispatch)
     pf_result = analysis.get("pf_result", {})
-    dispatch_chart_data = _build_dispatch_chart_data(context, date, pf_result=pf_result)
+    forecast_suite_data = analysis.get("forecast_suite", {})
+    dispatch_chart_data = _build_dispatch_chart_data(
+        context, date, pf_result=pf_result, forecast_suite=forecast_suite_data
+    )
 
     # Price chart data
     price_chart_data = _build_price_chart_data(context)
@@ -537,6 +555,20 @@ def render_bess_strategy_dashboard_payload(
         + attribution.get("caveats", [])
     ))
 
+    # Portfolio P&L table — all strategies from ranking for the Portfolio P&L tab
+    portfolio_pnl_table = [
+        {
+            "strategy": row.get("strategy_name"),
+            "total_pnl": row.get("pnl_total_yuan"),
+            "market_revenue": row.get("pnl_market_yuan"),
+            "compensation": row.get("pnl_compensation_yuan"),
+            "discharge_mwh": row.get("discharge_mwh"),
+            "charge_mwh": row.get("charge_mwh"),
+            "available": row.get("data_available", False),
+        }
+        for row in ranking.get("rows", [])
+    ]
+
     return {
         "asset_code": asset_code,
         "date": date,
@@ -549,6 +581,7 @@ def render_bess_strategy_dashboard_payload(
         "pnl_comparison": pnl_comparison,
         "caveats": caveats,
         "ops_dispatch_available": analysis.get("ops_dispatch_available", False),
+        "portfolio_pnl_table": portfolio_pnl_table,
     }
 
 
@@ -772,13 +805,15 @@ def _build_dispatch_chart_data(
     context: Dict[str, Any],
     date: str,
     pf_result: Optional[Dict[str, Any]] = None,
+    forecast_suite: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Build chart data for the dispatch comparison (nominated vs actual vs PF).
+    Build chart data for the dispatch comparison (nominated vs actual vs PF vs forecast).
 
     Prefers ops_dispatch_15min if available, otherwise uses
     nominated_dispatch_15min and actual_dispatch_15min from context.
     PF dispatch (hourly) is added as a separate series when pf_result is provided.
+    Forecast dispatch (first strategy in forecast_suite) added when forecast_suite is provided.
     """
     ops_data = context.get("ops_dispatch_15min")
     if ops_data:
@@ -828,14 +863,27 @@ def _build_dispatch_chart_data(
             id_cleared_timestamps.append(str(ts))
             id_cleared_mwh.append(rec.get("cleared_energy_mwh_15min"))
 
+    # Forecast dispatch — first strategy in forecast_suite (e.g. forecast_ols_rt_time_v1)
+    forecast_timestamps: list = []
+    forecast_dispatch_mwh: list = []
+    if forecast_suite:
+        fc_strategies = forecast_suite.get("strategies", [])
+        if fc_strategies:
+            for rec in fc_strategies[0].get("dispatch_hourly", []):
+                mw_val = rec.get("dispatch_grid_mw")
+                forecast_timestamps.append(str(rec.get("datetime", "")))
+                forecast_dispatch_mwh.append(mw_val / 4.0 if mw_val is not None else None)
+
     return {
         "timestamps": timestamps,
-        "nominated_mwh": nominated_mw,     # MWh per 15-min interval
-        "actual_mwh": actual_mw,           # MWh per 15-min interval
+        "nominated_mwh": nominated_mw,         # MWh per 15-min interval
+        "actual_mwh": actual_mw,               # MWh per 15-min interval
         "pf_timestamps": pf_timestamps,
-        "pf_dispatch_mwh": pf_dispatch_mwh,  # hourly MW ÷ 4 → comparable MWh per 15-min
+        "pf_dispatch_mwh": pf_dispatch_mwh,    # hourly MW ÷ 4 → comparable MWh per 15-min
+        "forecast_timestamps": forecast_timestamps,
+        "forecast_dispatch_mwh": forecast_dispatch_mwh,  # hourly MW ÷ 4 → comparable MWh per 15-min
         "id_cleared_timestamps": id_cleared_timestamps,
-        "id_cleared_mwh": id_cleared_mwh,    # MWh per 15-min interval
+        "id_cleared_mwh": id_cleared_mwh,      # MWh per 15-min interval
         "source": source,
         "date": date,
     }

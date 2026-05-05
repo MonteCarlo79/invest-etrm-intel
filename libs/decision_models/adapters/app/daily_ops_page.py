@@ -323,7 +323,7 @@ def _render_single_asset(
     st.markdown("---")
 
     tabs = st.tabs(["Strategy Ranking", "Dispatch Chart",
-                    "Discrepancy Waterfall", "Report"])
+                    "Portfolio P&L", "Discrepancy Waterfall", "Report"])
 
     # ── Tab: Strategy Ranking ────────────────────────────────────────────────
     with tabs[0]:
@@ -361,6 +361,8 @@ def _render_single_asset(
 
         id_cleared_timestamps = chart_data.get("id_cleared_timestamps", [])
         id_cleared = chart_data.get("id_cleared_mwh", [])
+        forecast_timestamps = chart_data.get("forecast_timestamps", [])
+        forecast_dispatch = chart_data.get("forecast_dispatch_mwh", [])
 
         price_data = payload.get("price_chart_data", {})
         price_ts = price_data.get("timestamps_15min", [])
@@ -409,9 +411,10 @@ def _render_single_asset(
 
                 # ── Other dispatch series: step lines on top (row 1) ──────────
                 _step_series = [
-                    ("Nominated",   timestamps,            nominated,   "#4C72B0", "solid"),
-                    ("PF Dispatch", pf_timestamps,         pf_dispatch, "#55A868", "dash"),
-                    ("DA Cleared",  id_cleared_timestamps, id_cleared,  "#C44E52", "dot"),
+                    ("Nominated",    timestamps,            nominated,         "#4C72B0", "solid"),
+                    ("PF Dispatch",  pf_timestamps,         pf_dispatch,       "#55A868", "dash"),
+                    ("Forecast Opt", forecast_timestamps,   forecast_dispatch, "#E69F00", "dashdot"),
+                    ("DA Cleared",   id_cleared_timestamps, id_cleared,        "#C44E52", "dot"),
                 ]
                 for _label, _ts, _vals, _color, _dash in _step_series:
                     if _ts and _vals:
@@ -465,16 +468,21 @@ def _render_single_asset(
                 st.info(f"Could not render dispatch chart: {_e}")
             st.caption(
                 f"Source: {source}. "
-                "Dispatch: bars=Actual (semi-transparent), step lines=Nominated/PF/DA Cleared. "
+                "Dispatch: bars=Actual (semi-transparent), step lines=Nominated/PF/Forecast/DA Cleared. "
                 "Positive=discharge, negative=charge. "
-                "PF Dispatch = LP perfect-foresight MW ÷ 4. "
-                "DA Cleared = md_id_cleared_energy (DA market award, not physical dispatch)."
+                "PF Dispatch = LP on actual RT prices (÷4 → MWh/15min). "
+                "Forecast Opt = LP on forecast RT prices (÷4 → MWh/15min). "
+                "DA Cleared = md_id_cleared_energy (market award, not physical dispatch)."
             )
         else:
             st.info("No dispatch data available for this date.")
 
-    # ── Tab: Discrepancy Waterfall ───────────────────────────────────────────
+    # ── Tab: Portfolio P&L ───────────────────────────────────────────────────
     with tabs[2]:
+        _render_portfolio_pnl_tab(st, payload)
+
+    # ── Tab: Discrepancy Waterfall ───────────────────────────────────────────
+    with tabs[3]:
         st.subheader("Discrepancy Attribution Waterfall")
         st.caption(
             "Rules-based waterfall — not causal proof. "
@@ -506,7 +514,7 @@ def _render_single_asset(
             )
 
     # ── Tab: Report (markdown) ────────────────────────────────────────────────
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Report (Markdown)")
         # Regenerate markdown from the stored analysis if needed
         # (payload does not store the full markdown to keep it lean)
@@ -520,6 +528,106 @@ def _render_single_asset(
             f"report = generate_bess_daily_strategy_report('{asset_code}', '{date_str}')",
             language="python",
         )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio P&L tab
+# ---------------------------------------------------------------------------
+
+def _render_portfolio_pnl_tab(st_module, payload: Dict[str, Any]) -> None:
+    """Render the 5-strategy Portfolio P&L comparison tab."""
+    import pandas as pd
+    st = st_module
+
+    portfolio_rows = payload.get("portfolio_pnl_table", [])
+
+    st.subheader("5-Strategy Portfolio P&L")
+    st.caption(
+        "All strategies compared against the PF benchmark. "
+        "PF = upper bound (LP on actual RT prices). "
+        "Forecast Opt = LP on forecast RT prices. "
+        "Nominated/Actual = ops dispatch × nodal price (Excel). "
+        "Trading Cleared = market-cleared energy × cleared price (md_id_cleared_energy)."
+    )
+
+    if not portfolio_rows:
+        st.info("No portfolio P&L data available. Run analysis first.")
+        return
+
+    _labels = {
+        "perfect_foresight_hourly": "PF (Actual Prices)",
+        "forecast_ols_rt_time_v1":  "Forecast Opt",
+        "nominated_dispatch":       "Nominated",
+        "cleared_actual":           "Actual Dispatch",
+        "trading_cleared":          "Trading Cleared",
+    }
+
+    # Identify PF benchmark for relative comparisons
+    pf_pnl = next(
+        (r["total_pnl"] for r in portfolio_rows
+         if r.get("strategy") == "perfect_foresight_hourly" and r.get("available")),
+        None,
+    )
+
+    table_data = []
+    for row in portfolio_rows:
+        strat = row.get("strategy", "")
+        total = row.get("total_pnl")
+        vs_pf = (total - pf_pnl) if (total is not None and pf_pnl is not None) else None
+        capture = (
+            total / pf_pnl
+            if (total is not None and pf_pnl is not None and pf_pnl > 0)
+            else None
+        )
+        disch = row.get("discharge_mwh")
+        chrg = row.get("charge_mwh")
+        table_data.append({
+            "Strategy": _labels.get(strat, strat),
+            "Total P&L (CNY)": _fmt_yuan(total),
+            "Market Revenue (CNY)": _fmt_yuan(row.get("market_revenue")),
+            "Compensation (CNY)": _fmt_yuan(row.get("compensation")),
+            "Discharge (MWh)": f"{disch:.2f}" if disch is not None else "—",
+            "Charge (MWh)": f"{chrg:.2f}" if chrg is not None else "—",
+            "vs PF (CNY)": _fmt_yuan(vs_pf),
+            "Capture vs PF": _fmt_pct(capture),
+            "Available": "✓" if row.get("available") else "—",
+        })
+
+    st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+
+    # Horizontal bar chart comparing all available strategies
+    try:
+        import plotly.graph_objects as go
+
+        avail = [r for r in portfolio_rows if r.get("available") and r.get("total_pnl") is not None]
+        if avail:
+            y_labels = [_labels.get(r["strategy"], r["strategy"]) for r in avail]
+            x_vals = [r["total_pnl"] for r in avail]
+            bar_colors = ["#55A868" if v >= 0 else "#C44E52" for v in x_vals]
+
+            fig = go.Figure(go.Bar(
+                y=y_labels,
+                x=x_vals,
+                orientation="h",
+                marker_color=bar_colors,
+                hovertemplate="%{x:,.0f} CNY<extra>%{y}</extra>",
+            ))
+            if pf_pnl is not None:
+                fig.add_vline(
+                    x=pf_pnl,
+                    line=dict(color="#55A868", dash="dash", width=1.5),
+                    annotation_text="PF benchmark",
+                    annotation_position="top right",
+                )
+            fig.update_layout(
+                height=260,
+                margin=dict(l=160, r=30, t=20, b=40),
+                xaxis_title="Total P&L (CNY)",
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    except Exception as _e:
+        st.caption(f"Chart unavailable: {_e}")
 
 
 # ---------------------------------------------------------------------------
