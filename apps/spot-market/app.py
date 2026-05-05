@@ -195,6 +195,9 @@ _T: dict[str, dict[str, str]] = {
         "warn_partial":         "{n} PDF(s) have partial data (DA or RT missing). Switch to 'Backfill date range' mode to re-ingest them.",
         "all_present":          "All dates in range are present in DB.",
         "no_pdfs":              "No PDFs found in the selected date range.",
+        "upload_pdf":           "Upload PDF report(s)",
+        "upload_help":          "Upload PDFs here when running on AWS (no local data folder). Files are stored in S3 and immediately available for ingestion.",
+        "upload_success":       "Uploaded {n} file(s) to S3.",
         "prog_starting":        "Starting…",
         "prog_parsing":         "Parsing {fname}…",
         "prog_interprov":       "省间 data: {fname}…",
@@ -389,6 +392,9 @@ _T: dict[str, dict[str, str]] = {
         "warn_partial":         "{n} 个PDF存在部分数据（日前或实时缺失）。切换至「回填日期范围」模式可重新录入。",
         "all_present":          "所选范围内所有日期均已存在于数据库中。",
         "no_pdfs":              "所选日期范围内未找到PDF文件。",
+        "upload_pdf":           "上传PDF报告",
+        "upload_help":          "在AWS环境下（无本地数据文件夹时）上传PDF。文件保存至S3后即可导入。",
+        "upload_success":       "已上传 {n} 个文件至S3。",
         "prog_starting":        "启动中…",
         "prog_parsing":         "解析 {fname}…",
         "prog_interprov":       "省间数据：{fname}…",
@@ -1972,20 +1978,47 @@ with tab_mgmt:
 
         return None
 
+    _S3_BUCKET = _os.environ.get("UPLOADS_BUCKET", "bess-uploader-data-chen-singp-2026")
+    _S3_PREFIX = "spot-reports"
+
     @st.cache_data(ttl=60, show_spinner=False)
     def _scan_pdf_inventory(year: int = 2026):
         data_dir = _REPO / "data" / "spot reports" / str(year)
         pdfs = []
-        if not data_dir.exists():
+
+        if data_dir.exists():
+            for p in sorted(data_dir.glob("*.pdf")):
+                stem = p.stem
+                m = _re.search(r"[（(]([^)）]+)[）)]", stem)
+                if not m:
+                    continue
+                date_range_result = _parse_pdf_date_range(m.group(1).strip(), year)
+                if date_range_result:
+                    pdfs.append((p.name, date_range_result[0], date_range_result[1], p))
             return pdfs
-        for p in sorted(data_dir.glob("*.pdf")):
-            stem = p.stem
-            m = _re.search(r"[（(]([^)）]+)[）)]", stem)
-            if not m:
-                continue
-            date_range_result = _parse_pdf_date_range(m.group(1).strip(), year)
-            if date_range_result:
-                pdfs.append((p.name, date_range_result[0], date_range_result[1], p))
+
+        # AWS: no local data dir — scan S3
+        import boto3 as _boto3
+        s3 = _boto3.client("s3")
+        prefix = f"{_S3_PREFIX}/{year}/"
+        try:
+            paginator = s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=_S3_BUCKET, Prefix=prefix):
+                for obj in sorted(page.get("Contents", []), key=lambda o: o["Key"]):
+                    key = obj["Key"]
+                    fname = key.split("/")[-1]
+                    if not fname.lower().endswith(".pdf"):
+                        continue
+                    stem = _Path(fname).stem
+                    m = _re.search(r"[（(]([^)）]+)[）)]", stem)
+                    if not m:
+                        continue
+                    date_range_result = _parse_pdf_date_range(m.group(1).strip(), year)
+                    if date_range_result:
+                        # path stored as str (S3 key) — distinguished from local Path
+                        pdfs.append((fname, date_range_result[0], date_range_result[1], key))
+        except Exception:
+            pass
         return pdfs
 
     @st.cache_data(ttl=30, show_spinner=False)
@@ -2044,6 +2077,31 @@ with tab_mgmt:
         _yr_end = date(sel_year, 12, 31) if sel_year < date.today().year else date.today() - timedelta(days=1)
         bf_start = st.date_input(_t("start_date"), date(sel_year, 1, 1), key=f"bf_start_{sel_year}")
         bf_end   = st.date_input(_t("end_date"),   _yr_end,              key=f"bf_end_{sel_year}")
+
+    # ── S3 uploader (AWS only — when no local data folder) ────────────────────
+    _local_data = _REPO / "data" / "spot reports" / str(sel_year)
+    if not _local_data.exists():
+        with st.expander(_t("upload_pdf"), expanded=True):
+            st.caption(_t("upload_help"))
+            _uploaded = st.file_uploader(
+                _t("upload_pdf"),
+                type=["pdf"],
+                accept_multiple_files=True,
+                key=f"mgmt_upload_{sel_year}",
+                label_visibility="collapsed",
+            )
+            if _uploaded:
+                import boto3 as _boto3
+                _s3 = _boto3.client("s3")
+                for _uf in _uploaded:
+                    _s3.put_object(
+                        Bucket=_S3_BUCKET,
+                        Key=f"{_S3_PREFIX}/{sel_year}/{_uf.name}",
+                        Body=_uf.read(),
+                    )
+                st.success(_t("upload_success", n=len(_uploaded)))
+                _scan_pdf_inventory.clear()
+                st.rerun()
 
     st.divider()
 
@@ -2154,11 +2212,21 @@ with tab_mgmt:
 
             for i, (fname, s, e, path) in enumerate(pdfs_to_run):
                 progress.progress(i / total, text=_t("prog_parsing", fname=fname))
-                pdf_year = int(path.parent.name) if path.parent.name.isdigit() else sel_year
+                # S3 path is a str key; local path is a _Path object
+                if isinstance(path, str):
+                    import boto3 as _boto3
+                    _tmp_path = _Path(f"/tmp/{fname}")
+                    _boto3.client("s3").download_file(_S3_BUCKET, path, str(_tmp_path))
+                    actual_path = _tmp_path
+                    _key_parts = path.split("/")
+                    pdf_year = int(_key_parts[1]) if len(_key_parts) > 1 and _key_parts[1].isdigit() else sel_year
+                else:
+                    actual_path = path
+                    pdf_year = int(path.parent.name) if path.parent.name.isdigit() else sel_year
                 interprov_count = 0
                 ai_count = 0
                 try:
-                    parsed = _parse_pdf(path, pdf_year, provinces_cn)
+                    parsed = _parse_pdf(actual_path, pdf_year, provinces_cn)
                     rows = []
                     for rdate, provs in parsed.items():
                         for pcn, vals in provs.items():
@@ -2174,7 +2242,7 @@ with tab_mgmt:
                     if run_interprov:
                         progress.progress((i + 0.5) / total,
                                           text=_t("prog_interprov", fname=fname))
-                        interprov_rows = _parse_interprov(path, pdf_year)
+                        interprov_rows = _parse_interprov(actual_path, pdf_year)
                         if interprov_rows:
                             interprov_count = _upsert_interprov_rows(interprov_rows)
 

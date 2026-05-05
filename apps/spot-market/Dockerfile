@@ -16,7 +16,8 @@ RUN pip install --no-cache-dir \
     numpy \
     "python-dotenv==1.0.1" \
     "requests==2.32.3" \
-    "anthropic>=0.40" \
+    "anthropic[bedrock]>=0.40" \
+    boto3 \
     pdfplumber \
     openpyxl
 

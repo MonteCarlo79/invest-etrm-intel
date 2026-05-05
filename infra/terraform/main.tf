@@ -626,6 +626,22 @@ resource "aws_iam_role_policy_attachment" "attach_run_task" {
   policy_arn = aws_iam_policy.ecs_run_task_policy.arn
 }
 
+resource "aws_iam_role_policy" "task_bedrock" {
+  name = "${var.name}-task-bedrock"
+  role = aws_iam_role.task_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 
 # -------------------------
 # ECS Task Definitions
@@ -1458,6 +1474,10 @@ resource "aws_ecs_task_definition" "spot_markets" {
         {
           name  = "ANTHROPIC_API_KEY"
           value = var.anthropic_api_key
+        },
+        {
+          name  = "UPLOADS_BUCKET"
+          value = var.uploads_bucket_name
         }
       ]
 
