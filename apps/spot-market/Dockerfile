@@ -1,10 +1,5 @@
 FROM python:3.11-slim
 
-# Install CJK font so matplotlib can render Chinese province labels in geo maps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
@@ -21,12 +16,21 @@ RUN pip install --no-cache-dir \
     pdfplumber \
     openpyxl
 
+# Install CJK font AFTER matplotlib so the font cache is rebuilt with it present.
+# fonts-noto-cjk provides "Noto Sans CJK SC" used by chart_geo_map for Chinese titles.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -c "import matplotlib.font_manager as _fm; _fm.fontManager = _fm.FontManager(); print('matplotlib font cache rebuilt')"
+
 # App + all service dependencies
-COPY apps/spot-market/         ./apps/spot-market/
-COPY services/spot_ingest/     ./services/spot_ingest/
-COPY services/spot_mcp/        ./services/spot_mcp/
-COPY services/knowledge_pool/  ./services/knowledge_pool/
-COPY apps/spot-watcher/        ./apps/spot-watcher/
+COPY apps/spot-market/                  ./apps/spot-market/
+COPY services/spot_ingest/              ./services/spot_ingest/
+COPY services/spot_mcp/                 ./services/spot_mcp/
+COPY services/knowledge_pool/           ./services/knowledge_pool/
+COPY services/market_fundamentals/      ./services/market_fundamentals/
+COPY apps/spot-watcher/                 ./apps/spot-watcher/
+COPY data/market-fundamentals/          ./data/market-fundamentals/
 
 ENV PYTHONPATH=/app
 
@@ -38,4 +42,5 @@ CMD ["streamlit", "run", "apps/spot-market/app.py", \
      "--server.baseUrlPath=spot-markets", \
      "--server.enableCORS=false", \
      "--server.enableXsrfProtection=false", \
-     "--server.headless=true"]
+     "--server.headless=true", \
+     "--server.fileWatcherType=none"]

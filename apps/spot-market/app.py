@@ -21,9 +21,10 @@ import matplotlib.colors as mcolors
 import matplotlib.font_manager as _mfm
 from matplotlib.patches import Polygon as MplPolygon
 
-# Pick the first CJK-capable font available on this system
-_CJK_FONTS = ["Microsoft YaHei", "SimHei", "SimSun", "STHeiti",
-               "WenQuanYi Micro Hei", "Noto Sans CJK SC", "Arial Unicode MS"]
+# Pick the first CJK-capable font available on this system.
+# Linux (Docker) typically has Noto CJK; Windows has YaHei/SimHei.
+_CJK_FONTS = ["Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "SimSun",
+               "STHeiti", "WenQuanYi Micro Hei", "Arial Unicode MS"]
 _CJK_FONT: str | None = None
 for _f in _CJK_FONTS:
     try:
@@ -32,6 +33,20 @@ for _f in _CJK_FONTS:
             break
     except (ValueError, OSError):
         pass
+
+# File-path fallback: scan all system font files for Noto/WQY CJK fonts.
+# Handles cases where the font is installed but not yet in the family-name index.
+if _CJK_FONT is None:
+    for _fp in _mfm.findSystemFonts():
+        _bn = os.path.basename(_fp).lower()
+        if any(k in _bn for k in ("notocjk", "notosanscjk", "noto_cjk",
+                                   "wqymicro", "wenquanyi")):
+            try:
+                _mfm.fontManager.addfont(_fp)
+                _CJK_FONT = _mfm.FontProperties(fname=_fp).get_name()
+                break
+            except Exception:
+                pass
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -81,8 +96,35 @@ _T: dict[str, dict[str, str]] = {
         "tab_dist":             "Distributions",
         "tab_geo":              "Geo Map",
         "tab_interprov":        "Inter-Provincial Flow",
+        "tab_fundamentals":     "Market Fundamentals",
         "tab_agent":            "Agent",
         "tab_mgmt":             "Data Management",
+        # market fundamentals
+        "fund_provinces":       "Provinces",
+        "fund_year":            "Year",
+        "fund_capacity_title":  "Installed Capacity by Fuel Type (万kW)",
+        "fund_generation_title":"Generation by Fuel Type (亿kWh)",
+        "fund_peak_title":      "Peak Load (MW)",
+        "fund_summer_peak":     "Summer Peak",
+        "fund_winter_peak":     "Winter Peak",
+        "fund_other_peak":      "Off-Peak",
+        "fund_renewables_share":"Renewables share",
+        "fund_lf_title":        "Load Factor by Fuel Type (%)",
+        "fund_lf_caption":      "LF = Generation (亿kWh) ÷ Capacity (万kW) ÷ 8760. All provinces ranked.",
+        "fund_lf_sort":         "Sort ranking by",
+        "fund_tightness_title": "System Tightness",
+        "fund_tightness_caption": "Effective capacity = Σ(Installed capacity × standard EOH ÷ 8760). Green = surplus, red = deficit.",
+        "fund_eff_cap":         "Eff. Cap (MW)",
+        "fund_avg_demand":      "Avg Demand (MW)",
+        "fund_tight_avg":       "vs Avg Demand (MW)",
+        "fund_tight_summer":    "vs Summer Peak (MW)",
+        "fund_tight_winter":    "vs Winter Peak (MW)",
+        "fund_no_data":         "No market fundamentals data available. Ensure the Excel file is in data/market-fundamentals/.",
+        "fund_total":           "Total",
+        "fund_share_label":     "Share of capacity (%)",
+        "fund_capacity_unit":   "万kW",
+        "fund_generation_unit": "亿kWh",
+        "fund_select_prompt":   "Select at least one province.",
         # agent
         "agent_title":          "Spot Market AI Agent",
         "agent_caption":        "Ask questions about prices, trends, inter-provincial flows, or trigger ingestion.",
@@ -278,8 +320,35 @@ _T: dict[str, dict[str, str]] = {
         "tab_dist":             "价格分布",
         "tab_geo":              "地理分布图",
         "tab_interprov":        "省间现货交易",
+        "tab_fundamentals":     "市场基础数据",
         "tab_agent":            "智能助手",
         "tab_mgmt":             "数据管理",
+        # market fundamentals
+        "fund_provinces":       "省份",
+        "fund_year":            "年份",
+        "fund_capacity_title":  "各燃料类型装机容量（万千瓦）",
+        "fund_generation_title":"各燃料类型发电量（亿千瓦时）",
+        "fund_peak_title":      "最大负荷（兆瓦）",
+        "fund_summer_peak":     "度夏峰值",
+        "fund_winter_peak":     "度冬峰值",
+        "fund_other_peak":      "其余月份",
+        "fund_renewables_share":"可再生能源占比",
+        "fund_lf_title":        "各类型负荷率（%）",
+        "fund_lf_caption":      "负荷率 = 年发电量（亿千瓦时）÷ 装机容量（万千瓦）÷ 8760。显示全部省份排名。",
+        "fund_lf_sort":         "排序依据",
+        "fund_tightness_title": "电力系统紧张程度",
+        "fund_tightness_caption": "有效容量 = Σ（装机容量 × 标准利用小时 ÷ 8760）。绿色 = 盈余，红色 = 缺口。",
+        "fund_eff_cap":         "有效容量（兆瓦）",
+        "fund_avg_demand":      "平均负荷（兆瓦）",
+        "fund_tight_avg":       "对均值盈余（兆瓦）",
+        "fund_tight_summer":    "对度夏盈余（兆瓦）",
+        "fund_tight_winter":    "对度冬盈余（兆瓦）",
+        "fund_no_data":         "暂无市场基础数据。请确保Excel文件位于 data/market-fundamentals/ 目录下。",
+        "fund_total":           "合计",
+        "fund_share_label":     "装机占比（%）",
+        "fund_capacity_unit":   "万千瓦",
+        "fund_generation_unit": "亿千瓦时",
+        "fund_select_prompt":   "请至少选择一个省份。",
         # agent
         "agent_title":          "现货市场智能助手",
         "agent_caption":        "查询价格、走势、省间交易数据，或触发PDF导入流程。",
@@ -592,6 +661,32 @@ def load_summaries(start: date, end: date) -> tuple[pd.DataFrame, str]:
         return pd.DataFrame(cur.fetchall(), columns=cols), ""
     except Exception as e:
         return pd.DataFrame(), str(e)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _translate_to_zh(text: str) -> str:
+    """Translate an English market summary to Chinese. Cached per text (one API call per unique summary)."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return text
+    try:
+        import anthropic as _ant_tr
+        msg = _ant_tr.Anthropic(api_key=api_key).messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Translate the following China electricity market daily summary to "
+                    "Chinese (简体中文). Keep all numbers, units (¥/kWh, MW, GWh, 亿kWh), "
+                    "and province names unchanged. Output only the translated text.\n\n"
+                    + text
+                ),
+            }],
+        )
+        return msg.content[0].text
+    except Exception:
+        return text
 
 
 # ── colour helpers ────────────────────────────────────────────────────────────
@@ -1141,10 +1236,10 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_interprov, tab_agent, tab_mgmt = st.tabs([
+tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_interprov, tab_fundamentals, tab_agent, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
-    _t("tab_interprov"), _t("tab_agent"), _t("tab_mgmt"),
+    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_mgmt"),
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1245,9 +1340,27 @@ with tab_province:
         if df_summ_prov.empty:
             st.info(_t("summaries_no_data"))
         else:
+            _is_zh = st.session_state.get("lang_radio") == "中文"
+            # Translations stored in session state so they survive rerenders
+            # without triggering new API calls on every interaction.
+            if "translated_summaries" not in st.session_state:
+                st.session_state["translated_summaries"] = {}
+
             for _, row in df_summ_prov.iterrows():
-                with st.expander(_t("summary_label", date=str(row["report_date"]))):
-                    st.markdown(row["summary_text"])
+                _rkey = str(row["report_date"])
+                with st.expander(_t("summary_label", date=_rkey)):
+                    if _is_zh and _rkey in st.session_state["translated_summaries"]:
+                        st.markdown(st.session_state["translated_summaries"][_rkey])
+                    else:
+                        st.markdown(row["summary_text"] or "")
+                        if _is_zh:
+                            if st.button("🌐 翻译", key=f"tr_{_rkey}"):
+                                with st.spinner("翻译中…"):
+                                    _raw = row["summary_text"] or ""
+                                    st.session_state["translated_summaries"][_rkey] = (
+                                        _translate_to_zh(_raw) if _raw else ""
+                                    )
+                                st.rerun()
                     st.caption(f"{row['model']} · {row['source_pdf']}")
 
 # ── Tab 5: Distributions ─────────────────────────────────────────────────────
@@ -1400,6 +1513,12 @@ with tab_geo:
                 st.session_state["anim_playing"] = False
             if "anim_frame_idx" not in st.session_state:
                 st.session_state["anim_frame_idx"] = 0
+            # If this rerun was NOT triggered by the animation loop itself,
+            # stop the animation. This prevents the loop from running
+            # indefinitely in the background when the user navigates away
+            # or interacts with any other widget.
+            if not st.session_state.pop("_anim_loop_rerun", False):
+                st.session_state["anim_playing"] = False
             # Clamp index in case period changed
             st.session_state["anim_frame_idx"] = (
                 st.session_state["anim_frame_idx"] % _n_frames
@@ -1410,6 +1529,7 @@ with tab_geo:
             with ctrl_c1:
                 if st.button(_t("anim_play"), key="anim_play_btn"):
                     st.session_state["anim_playing"] = True
+                    st.session_state["_anim_loop_rerun"] = True
             with ctrl_c2:
                 if st.button(_t("anim_pause"), key="anim_pause_btn"):
                     st.session_state["anim_playing"] = False
@@ -1446,11 +1566,13 @@ with tab_geo:
                 st.pyplot(fig_anim, use_container_width=True)
                 plt.close(fig_anim)
 
-            # Auto-advance: sleep then advance index and rerun
+            # Auto-advance: sleep then advance index and rerun.
+            # Set _anim_loop_rerun so the next rerun keeps the animation alive.
             if st.session_state["anim_playing"]:
                 time.sleep(anim_speed)
                 _next_idx = (_cur_idx + 1) % _n_frames
                 st.session_state["anim_frame_idx"] = _next_idx
+                st.session_state["_anim_loop_rerun"] = True
                 st.rerun()
 
         # ── Section: Period Comparison ────────────────────────────────────────
@@ -1689,7 +1811,339 @@ with tab_interprov:
                 )
 
 
-# ── Tab 8: Agent ─────────────────────────────────────────────────────────────
+# ── Tab 8: Market Fundamentals ───────────────────────────────────────────────
+with tab_fundamentals:
+    from services.market_fundamentals.loader import (
+        load_province_data as _load_fund,
+        FUEL_EN as _FUEL_EN,
+        FUEL_COLORS as _FUEL_COLORS,
+        PROVINCE_EN as _PROVINCE_EN,
+    )
+
+    _fund_data = _load_fund()
+
+    if not _fund_data:
+        st.warning(_t("fund_no_data"))
+    else:
+        # ── Controls ──────────────────────────────────────────────────────────
+        _all_provs_cn = sorted(_fund_data.keys(), key=lambda p: _PROVINCE_EN.get(p, p))
+        _all_provs_en = [_PROVINCE_EN.get(p, p) for p in _all_provs_cn]
+        _prov_cn_to_en = {p: _PROVINCE_EN.get(p, p) for p in _all_provs_cn}
+        _prov_en_to_cn = {v: k for k, v in _prov_cn_to_en.items()}
+
+        _ctrl1, _ctrl2 = st.columns([5, 1])
+        with _ctrl1:
+            _default_provs_en = [
+                _PROVINCE_EN.get(p, p) for p in ["山东", "广东", "江苏", "蒙西", "四川"]
+                if p in _fund_data
+            ]
+            _sel_provs_en = st.multiselect(
+                _t("fund_provinces"), _all_provs_en, default=_default_provs_en,
+                key="fund_provs",
+            )
+        with _ctrl2:
+            _fund_year = st.radio(_t("fund_year"), [2025, 2024], key="fund_year")
+
+        if not _sel_provs_en:
+            st.info(_t("fund_select_prompt"))
+        else:
+            _sel_provs_cn = [_prov_en_to_cn[e] for e in _sel_provs_en if e in _prov_en_to_cn]
+
+            # ── Helper: build DataFrame for one metric ─────────────────────
+            def _fund_df(metric: str, year: int) -> pd.DataFrame:
+                """metric = 'capacity' or 'generation'"""
+                rows = []
+                for pcn in _sel_provs_cn:
+                    info  = _fund_data.get(pcn, {})
+                    raw   = info.get(metric, {}).get(year, {})
+                    pen   = _prov_cn_to_en[pcn]
+                    for fuel_cn in ["风电", "光伏", "水电", "核电", "储能", "火电"]:
+                        fuel_en = _FUEL_EN[fuel_cn]
+                        val = raw.get(fuel_cn, {}).get("value")
+                        if val is not None and val > 0:
+                            rows.append({"Province": pen, "Fuel": fuel_en, "Value": val})
+                return pd.DataFrame(rows)
+
+            # ── Helper: stacked-bar chart (multi-province) ─────────────────
+            def _stacked_bar(df: pd.DataFrame, title: str, unit: str) -> go.Figure:
+                fuel_order = ["Wind", "Solar", "Hydro", "Nuclear", "Storage", "Thermal"]
+                fig = go.Figure()
+                for fuel in fuel_order:
+                    sub = df[df["Fuel"] == fuel]
+                    if sub.empty:
+                        continue
+                    fig.add_trace(go.Bar(
+                        name=fuel,
+                        x=sub["Province"],
+                        y=sub["Value"],
+                        marker_color=_FUEL_COLORS.get(fuel, "#aaa"),
+                        hovertemplate=f"<b>%{{x}}</b><br>{fuel}: %{{y:,.1f}} {unit}<extra></extra>",
+                    ))
+                fig.update_layout(
+                    barmode="stack",
+                    title=title,
+                    xaxis_title="",
+                    yaxis_title=unit,
+                    legend_title="Fuel Type",
+                    height=420,
+                    margin=dict(t=50, b=40),
+                )
+                return fig
+
+            # ── Helper: donut chart (single province) ─────────────────────
+            def _donut(df: pd.DataFrame, title: str, unit: str) -> go.Figure:
+                fuel_order = ["Wind", "Solar", "Hydro", "Nuclear", "Storage", "Thermal"]
+                df_sorted = df.set_index("Fuel").reindex(fuel_order).dropna()
+                fig = go.Figure(go.Pie(
+                    labels=df_sorted.index,
+                    values=df_sorted["Value"],
+                    hole=0.45,
+                    marker_colors=[_FUEL_COLORS.get(f, "#aaa") for f in df_sorted.index],
+                    textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>%{value:,.1f} " + unit + "<br>%{percent}<extra></extra>",
+                ))
+                fig.update_layout(title=title, height=380, margin=dict(t=50, b=10))
+                return fig
+
+            # ── Installed Capacity & Generation (side by side) ─────────────
+            _df_cap = _fund_df("capacity", _fund_year)
+            _df_gen = _fund_df("generation", _fund_year)
+
+            _cap_title = f"{_t('fund_capacity_title')} — {_fund_year}"
+            _gen_title = f"{_t('fund_generation_title')} — {_fund_year}"
+
+            _chart_col1, _chart_col2 = st.columns(2)
+
+            if len(_sel_provs_en) == 1 and not _df_cap.empty:
+                with _chart_col1:
+                    st.plotly_chart(_donut(_df_cap, _cap_title, "万kW"), use_container_width=True)
+            elif not _df_cap.empty:
+                with _chart_col1:
+                    st.plotly_chart(_stacked_bar(_df_cap, _cap_title, "万kW"), use_container_width=True)
+
+            if len(_sel_provs_en) == 1 and not _df_gen.empty:
+                with _chart_col2:
+                    st.plotly_chart(_donut(_df_gen, _gen_title, "亿kWh"), use_container_width=True)
+            elif not _df_gen.empty:
+                with _chart_col2:
+                    st.plotly_chart(_stacked_bar(_df_gen, _gen_title, "亿kWh"), use_container_width=True)
+
+            # ── Renewables share bar ───────────────────────────────────────
+            _renew_fuels = {"Wind", "Solar", "Hydro", "Nuclear"}
+            _renew_rows = []
+            for pcn in _sel_provs_cn:
+                pen = _prov_cn_to_en[pcn]
+                raw = _fund_data.get(pcn, {}).get("capacity", {}).get(_fund_year, {})
+                total = sum(
+                    v["value"] for v in raw.values()
+                    if v.get("value") is not None and v["value"] > 0
+                )
+                renew = sum(
+                    raw.get(fc, {}).get("value") or 0
+                    for fc, fe in _FUEL_EN.items()
+                    if fe in _renew_fuels
+                )
+                if total > 0:
+                    _renew_rows.append({"Province": pen, "Share (%)": round(renew / total * 100, 1)})
+
+            if _renew_rows:
+                _df_renew = pd.DataFrame(sorted(_renew_rows, key=lambda r: -r["Share (%)"]))
+                _fig_renew = px.bar(
+                    _df_renew, x="Province", y="Share (%)",
+                    title=f"{_t('fund_renewables_share')} — {_fund_year}",
+                    color_discrete_sequence=["#4C9BE8"],
+                    text="Share (%)",
+                )
+                _fig_renew.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+                _fig_renew.update_layout(height=320, margin=dict(t=50, b=40), yaxis_range=[0, 105])
+                st.plotly_chart(_fig_renew, use_container_width=True)
+
+            # ── Peak Load Ranking Table (both years, all selected provinces) ──
+            st.subheader(_t("fund_peak_title"))
+            _peak_rows = []
+            for _pcn in _sel_provs_cn:
+                _pen = _prov_cn_to_en.get(_pcn, _pcn)
+                _row = {
+                    "_prov_en": _pen,
+                    "_prov_cn": _pcn,
+                }
+                for _yr in [2024, 2025]:
+                    _pl = _fund_data.get(_pcn, {}).get("peak_load", {}).get(_yr, {})
+                    _row[f"{_t('fund_summer_peak')} {_yr}"] = _pl.get("summer")
+                    _row[f"{_t('fund_winter_peak')} {_yr}"] = _pl.get("winter")
+                _peak_rows.append(_row)
+
+            if _peak_rows:
+                _peak_df = pd.DataFrame(_peak_rows)
+                # Sort by 2025 summer peak descending
+                _sort_col = f"{_t('fund_summer_peak')} 2025"
+                if _sort_col in _peak_df.columns and _peak_df[_sort_col].notna().any():
+                    _peak_df = _peak_df.sort_values(_sort_col, ascending=False, na_position="last")
+                _peak_df = _peak_df.reset_index(drop=True)
+                _peak_df.insert(0, "#", range(1, len(_peak_df) + 1))
+                _prov_col = "省份" if _is_zh else "Province"
+                _peak_df.insert(1, _prov_col, _peak_df["_prov_cn"] if _is_zh else _peak_df["_prov_en"])
+                _peak_df = _peak_df.drop(columns=["_prov_en", "_prov_cn"])
+                # Format numeric columns
+                _num_cols = [c for c in _peak_df.columns if c not in ("#", _prov_col)]
+                for _nc in _num_cols:
+                    _peak_df[_nc] = _peak_df[_nc].apply(
+                        lambda v: f"{int(v):,}" if pd.notna(v) and v else "—"
+                    )
+                st.dataframe(_peak_df, use_container_width=True, hide_index=True)
+
+            # ── Standard EOH (expected operating hours/year) ──────────────────
+            # Used for both LF and system tightness calculations.
+            # Thermal blended: coal-dominated Chinese fleet (~5 500 h).
+            # Storage excluded — net-zero generation asset.
+            _STD_EOH = {
+                "Wind":    2000,
+                "Solar":   1100,
+                "Thermal": 5500,
+                "Hydro":   3500,
+                "Nuclear": 7500,
+            }
+            _EOH_NOTE = (
+                f"Wind {_STD_EOH['Wind']} h · Solar {_STD_EOH['Solar']} h · "
+                f"Thermal {_STD_EOH['Thermal']} h · Hydro {_STD_EOH['Hydro']} h · "
+                f"Nuclear {_STD_EOH['Nuclear']} h"
+            )
+
+            # ── Load Factor ranking ───────────────────────────────────────────
+            st.divider()
+            st.subheader(f"{_t('fund_lf_title')} — {_fund_year}")
+            st.caption(_t("fund_lf_caption"))
+
+            _lf_rows = []
+            for _pcn, _pdata in _fund_data.items():
+                _pen = _prov_cn_to_en.get(_pcn, _pcn)
+                _cap_yr = _pdata.get("capacity", {}).get(_fund_year, {})
+                _gen_yr = _pdata.get("generation", {}).get(_fund_year, {})
+                _row = {"_prov_en": _pen, "_prov_cn": _pcn}
+                for _fcn, _fen in _FUEL_EN.items():
+                    if _fen not in _STD_EOH:
+                        continue
+                    _cap_v = (_cap_yr.get(_fcn) or {}).get("value")
+                    _gen_v = (_gen_yr.get(_fcn) or {}).get("value")
+                    if _cap_v and _cap_v > 0 and _gen_v is not None and _gen_v >= 0:
+                        # LF = gen(亿kWh)×10^8 / (cap(万kW)×10^4 × 8760)
+                        #     = gen × 10^4 / (cap × 8760)
+                        _row[_fen] = round(_gen_v * 1e4 / (_cap_v * 8760) * 100, 1)
+                    else:
+                        _row[_fen] = None
+                _lf_rows.append(_row)
+
+            if _lf_rows:
+                _lf_df = pd.DataFrame(_lf_rows)
+                _fuel_cols_lf = [f for f in _STD_EOH if f in _lf_df.columns]
+                _lf_sort_col = st.selectbox(
+                    _t("fund_lf_sort"), _fuel_cols_lf,
+                    index=0, key="lf_sort_fuel",
+                )
+                if _lf_sort_col and _lf_df[_lf_sort_col].notna().any():
+                    _lf_df = _lf_df.sort_values(_lf_sort_col, ascending=False, na_position="last")
+                _lf_df = _lf_df.reset_index(drop=True)
+                _lf_df.insert(0, "#", range(1, len(_lf_df) + 1))
+                _prov_col_lf = "省份" if _is_zh else "Province"
+                _lf_df.insert(1, _prov_col_lf,
+                              _lf_df["_prov_cn"] if _is_zh else _lf_df["_prov_en"])
+                _lf_df = _lf_df.drop(columns=["_prov_en", "_prov_cn"])
+                # Interleave LF% and equivalent hours (LF×8760) for each fuel
+                _lf_out = _lf_df[["#", _prov_col_lf]].copy()
+                for _fc in _fuel_cols_lf:
+                    _lf_out[f"{_fc} (%)"] = _lf_df[_fc].apply(
+                        lambda v: f"{v:.1f}%" if pd.notna(v) and v is not None else "—"
+                    )
+                    _lf_out[f"{_fc} (h)"] = _lf_df[_fc].apply(
+                        lambda v: f"{int(round(v * 8760 / 100)):,}" if pd.notna(v) and v is not None else "—"
+                    )
+                st.dataframe(_lf_out, use_container_width=True, hide_index=True)
+
+            # ── System Tightness ranking ──────────────────────────────────────
+            st.divider()
+            st.subheader(f"{_t('fund_tightness_title')} — {_fund_year}")
+            st.caption(f"{_t('fund_tightness_caption')}  |  {_EOH_NOTE}")
+
+            _tight_rows = []
+            for _pcn, _pdata in _fund_data.items():
+                _pen = _prov_cn_to_en.get(_pcn, _pcn)
+                _cap_yr = _pdata.get("capacity", {}).get(_fund_year, {})
+                _gen_yr = _pdata.get("generation", {}).get(_fund_year, {})
+                _pl_yr  = _pdata.get("peak_load", {}).get(_fund_year, {})
+
+                # Effective generation capacity (MW)
+                # = Σ_type [cap(万kW) × 10 MW/万kW × EOH / 8760]
+                # Use `or 0` after .get("value") to guard against {"value": None}.
+                _eff_mw = sum(
+                    ((_cap_yr.get(_fcn) or {}).get("value") or 0) * 10 * _STD_EOH[_fen] / 8760
+                    for _fcn, _fen in _FUEL_EN.items()
+                    if _fen in _STD_EOH
+                    and ((_cap_yr.get(_fcn) or {}).get("value") or 0) > 0
+                )
+
+                # Average (baseload) demand (MW)
+                # = total annual generation(亿kWh) × 10^8 kWh/亿kWh / 8760 h / 1000 kW/MW
+                _total_gen = sum(
+                    (_gen_yr.get(_fcn) or {}).get("value") or 0
+                    for _fcn in _FUEL_EN
+                )
+                _avg_mw = _total_gen * 1e8 / 8760 / 1000 if _total_gen > 0 else None
+
+                _sum_pk = _pl_yr.get("summer")
+                _win_pk = _pl_yr.get("winter")
+
+                _tight_rows.append({
+                    "_prov_en":            _pen,
+                    "_prov_cn":            _pcn,
+                    _t("fund_eff_cap"):    round(_eff_mw)   if _eff_mw  else None,
+                    _t("fund_avg_demand"): round(_avg_mw)   if _avg_mw  else None,
+                    "Summer Peak (MW)":    round(_sum_pk)   if _sum_pk  else None,
+                    "Winter Peak (MW)":    round(_win_pk)   if _win_pk  else None,
+                    _t("fund_tight_avg"):  round(_eff_mw - _avg_mw) if (_eff_mw and _avg_mw)  else None,
+                    _t("fund_tight_summer"): round(_eff_mw - _sum_pk) if (_eff_mw and _sum_pk) else None,
+                    _t("fund_tight_winter"): round(_eff_mw - _win_pk) if (_eff_mw and _win_pk) else None,
+                })
+
+            if _tight_rows:
+                _tdf = pd.DataFrame(_tight_rows)
+                # Rename raw peak columns to translated labels
+                _tdf = _tdf.rename(columns={
+                    "Summer Peak (MW)": f"{_t('fund_summer_peak')} (MW)",
+                    "Winter Peak (MW)": f"{_t('fund_winter_peak')} (MW)",
+                })
+                # Sort by tightness vs summer peak ascending (tightest = most stressed first)
+                _tight_sort = _t("fund_tight_summer")
+                if _tight_sort in _tdf.columns and _tdf[_tight_sort].notna().any():
+                    _tdf = _tdf.sort_values(_tight_sort, ascending=True, na_position="last")
+                _tdf = _tdf.reset_index(drop=True)
+                _tdf.insert(0, "#", range(1, len(_tdf) + 1))
+                _prov_col_t = "省份" if _is_zh else "Province"
+                _tdf.insert(1, _prov_col_t,
+                            _tdf["_prov_cn"] if _is_zh else _tdf["_prov_en"])
+                _tdf = _tdf.drop(columns=["_prov_en", "_prov_cn"])
+
+                # Format all numeric columns; prefix surplus cols with + / − for clarity
+                _surplus_col_keys = {
+                    _t("fund_tight_avg"),
+                    _t("fund_tight_summer"),
+                    _t("fund_tight_winter"),
+                }
+                _num_cols_t = [c for c in _tdf.columns if c not in ("#", _prov_col_t)]
+                for _nc in _num_cols_t:
+                    if _nc in _surplus_col_keys:
+                        _tdf[_nc] = _tdf[_nc].apply(
+                            lambda v: (f"+{int(v):,}" if v > 0 else f"{int(v):,}")
+                            if pd.notna(v) and v is not None else "—"
+                        )
+                    else:
+                        _tdf[_nc] = _tdf[_nc].apply(
+                            lambda v: f"{int(v):,}" if pd.notna(v) and v is not None else "—"
+                        )
+
+                st.dataframe(_tdf, use_container_width=True, hide_index=True)
+
+
+# ── Tab 9: Agent ──────────────────────────────────────────────────────────────
 with tab_agent:
     import os as _os
     import json as _json
@@ -1767,8 +2221,33 @@ with tab_agent:
                 "required": ["pdf_path"],
             },
         },
+        {
+            "name": "get_market_fundamentals",
+            "description": (
+                "Fetch market fundamentals for Chinese electricity provinces: "
+                "installed capacity by fuel type (万kW), generation mix (亿kWh), "
+                "and seasonal peak loads (MW). Data covers 2024 and 2025. "
+                "Use this to answer questions about fuel mix, renewables penetration, "
+                "storage capacity, peak demand, or structural comparisons between provinces."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "provinces": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Optional list of province_en names, e.g. ['Shandong','Guangdong']. Omit for all.",
+                    },
+                    "year": {
+                        "type": "integer",
+                        "description": "2024 or 2025 (default 2025)",
+                    },
+                },
+                "required": [],
+            },
+        },
     ]
 
+    _agent_lang_is_zh = st.session_state.get("lang_radio") == "中文"
     _AGENT_SYSTEM = (
         "You are a specialist analyst for China's spot electricity market. "
         "You have access to real-time market data via tools. "
@@ -1778,7 +2257,10 @@ with tab_agent:
         "Direction 送端 = exporting province; 受端 = importing province. "
         "When asked to compare periods or provinces, call get_spot_prices with the "
         "appropriate date range and compute statistics from the returned rows. "
-        "Be concise. Use markdown tables for price comparisons."
+        "For questions about installed capacity, fuel mix, renewables share, storage "
+        "capacity, or peak load, use get_market_fundamentals. "
+        "Be concise. Use markdown tables for price comparisons. "
+        + ("请用中文（简体）回复所有问题。" if _agent_lang_is_zh else "Respond in English.")
     )
 
     # ── Tool dispatcher ────────────────────────────────────────────────────────
@@ -1788,6 +2270,7 @@ with tab_agent:
             get_interprov_flow as _gif,
             get_market_summaries as _gms,
             run_pipeline as _rp,
+            get_market_fundamentals as _gmf,
         )
         try:
             if name == "get_spot_prices":
@@ -1798,6 +2281,8 @@ with tab_agent:
                 result = _gms(**inputs)
             elif name == "run_pipeline":
                 result = _rp(**inputs)
+            elif name == "get_market_fundamentals":
+                result = _gmf(**inputs)
             else:
                 result = {"error": f"Unknown tool: {name}"}
         except Exception as _e:
@@ -2101,6 +2586,9 @@ with tab_mgmt:
                     )
                 st.success(_t("upload_success", n=len(_uploaded)))
                 _scan_pdf_inventory.clear()
+                # Clear the uploader widget state so it resets to empty on rerun,
+                # preventing the same files from re-triggering the upload block.
+                st.session_state.pop(f"mgmt_upload_{sel_year}", None)
                 st.rerun()
 
     st.divider()

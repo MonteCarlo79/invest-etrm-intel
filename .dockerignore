@@ -19,6 +19,8 @@ infra/
 archived/
 backup/
 data/
+!data/market-fundamentals/
+!data/market-fundamentals/*.xlsx
 tmp/
 outputs/
 reports/

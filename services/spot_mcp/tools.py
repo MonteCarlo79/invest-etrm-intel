@@ -225,3 +225,45 @@ def run_pipeline(pdf_path: str, dry_run: bool = False) -> dict:
     result["dates"] = [d.isoformat() if hasattr(d, "isoformat") else str(d)
                        for d in result.get("dates", [])]
     return result
+
+
+# ── Tool: get_market_fundamentals ─────────────────────────────────────────────
+
+def get_market_fundamentals(
+    provinces: list[str] | None = None,
+    year: int = 2025,
+) -> dict:
+    """
+    Return market fundamentals (installed capacity, generation mix, peak load)
+    for Chinese electricity provinces, parsed from the Excel reference file.
+
+    Data covers:
+      - Installed capacity by fuel type (万kW): Wind, Solar, Thermal, Hydro, Nuclear, Storage
+      - Generation by fuel type (亿kWh)
+      - Peak load by season (summer 6–9 月 / winter 12–2 月) in MW
+
+    Args:
+        provinces: Optional list of province_en names (e.g. ['Shandong', 'Guangdong']).
+                   If omitted, all provinces are returned.
+        year:      2024 or 2025 (defaults to 2025).
+
+    Returns:
+        {
+          "year": int,
+          "provinces": [
+            {
+              "province_cn": str,
+              "province_en": str,
+              "capacity_10kw":     {"Wind": float, "Solar": float, ...},
+              "capacity_share":    {"Wind": float, ...},   # 0–1
+              "generation_100gwh": {"Wind": float, ...},
+              "generation_share":  {"Wind": float, ...},
+              "peak_summer_mw":    float | None,
+              "peak_winter_mw":    float | None,
+            },
+            ...
+          ]
+        }
+    """
+    from services.market_fundamentals.loader import get_fundamentals_summary as _gfs
+    return _gfs(provinces=provinces, year=year)
