@@ -54,6 +54,58 @@ Read this at the start of every session before doing anything.
 
 ---
 
+## 2026-05-06, Spot Market App — Full Reference
+
+### Current deployed version
+`bess-spot-markets:v13` on ECS service `bess-platform-spot-markets-svc`, task definition `bess-platform-spot-markets:13`
+
+### Tab structure (10 tabs in order)
+| # | Key | Title (EN) | What it shows |
+|---|-----|-----------|---------------|
+| 1 | `tab_overview` | Overview | DA/RT price time series, KPI strip, latest prices table |
+| 2 | `tab_spread` | DA–RT Spread | Spread analysis by province and period |
+| 3 | `tab_heatmap` | Heatmap | Province × time heatmap of DA or RT prices |
+| 4 | `tab_province` | Province Deep-Dive | Province-level detail + AI market summaries (translatable) |
+| 5 | `tab_dist` | Distributions | Price distribution histograms/KDE by province |
+| 6 | `tab_geo` | Geo Map | Choropleth map of China provinces + animated monthly playback + period comparison |
+| 7 | `tab_interprov` | Inter-Provincial Flow | 省间现货交易 — export/import volumes and prices by province |
+| 8 | `tab_fundamentals` | Market Fundamentals | Installed capacity, generation mix, renewables share, peak load, load factor, system tightness |
+| 9 | `tab_agent` | Agent | Claude-powered analyst agent with tool use |
+| 10 | `tab_mgmt` | Data Management | S3 PDF upload, PDF inventory vs DB coverage gap analysis, pipeline trigger |
+
+### Data sources
+| Table/Source | Schema | Content |
+|---|---|---|
+| `public.spot_daily` | report_date, province_en, province_cn, da_avg/max/min, rt_avg/max/min | Daily DA/RT clearing prices (¥/kWh) |
+| `staging.spot_interprov_flow` | report_date, direction, metric_type, province_cn, price, vol | Inter-provincial spot trading |
+| `staging.spot_report_summaries` | report_date, summary_text, model, source_pdf | AI-generated daily market narratives |
+| `data/market-fundamentals/*.xlsx` | Excel file, one sheet per province | Installed capacity (万kW), generation (亿kWh), peak load (MW) by fuel type, 2024/2025 |
+| S3 `bess-uploader-data-chen-singp-2026/spot-reports/<year>/` | PDF files | Source daily market reports |
+
+### Agent tools (defined in `services/spot_mcp/tools.py` + `tab_agent` in app.py)
+- `get_spot_prices(start_date, end_date, provinces)` — queries `public.spot_daily`
+- `get_interprov_flow(start_date, end_date)` — queries `staging.spot_interprov_flow`
+- `get_market_summaries(start_date, end_date)` — queries `staging.spot_report_summaries`
+- `get_market_fundamentals(provinces, year)` — reads Excel via `services/market_fundamentals/loader.py`
+- `run_pipeline(pdf_path, dry_run)` — triggers full ingestion pipeline via `apps/spot-watcher/pipeline.py`
+
+### Market Fundamentals Excel loader (`services/market_fundamentals/loader.py`)
+- `load_province_data()` — `@lru_cache(maxsize=1)`, reads latest `*.xlsx` from `data/market-fundamentals/`
+- Data structure per province: `{capacity: {year: {fuel_cn: {value, share}}}, generation: {...}, peak_load: {year: {summer, winter, other}}}`
+- Anchor-column parsing: finds 需求13 (capacity), 需求14 (generation), 需求11 (peak load) in each sheet
+- `stop_before_row` guards prevent row overlap between sections
+- Units: capacity in 万kW, generation in 亿kWh, peak load in MW
+
+### Key session state keys
+- `lang_radio` — "English" or "中文"
+- `anim_playing`, `anim_frame_idx`, `_anim_loop_rerun` — geo map animation control
+- `translated_summaries` — `{report_date_str: chinese_text}` cache for province deep-dive
+
+### Standard EOH constants (in `tab_fundamentals` code block)
+Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · Storage excluded
+
+---
+
 ## Session Summary, 2026-05-06
 
 **Worked on:** `apps/spot-market` — multiple feature additions and bug fixes; ECS deployment troubleshooting.

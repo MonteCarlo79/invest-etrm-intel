@@ -658,7 +658,7 @@ resource "aws_ecs_task_definition" "bess_map" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = "256"
-  memory                   = "512"
+  memory                   = "1024"
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -677,20 +677,17 @@ resource "aws_ecs_task_definition" "bess_map" {
     ]
 
     command = [
-  	"streamlit",
-  	"run",
-  	"streamlit_bess_profit_dashboard_v14.1_consistent_full2.py",
-  	"--server.port=8503",
-  	"--server.address=0.0.0.0",
-  	"--server.baseUrlPath=bess-map",
-  	"--server.enableCORS=false",
-  	"--server.enableXsrfProtection=false",
-  	"--",
-  	"--env",
-  	"/apps/.env",
-  	"--schema",
-  	"marketdata"
-     ]
+      "streamlit",
+      "run",
+      "apps/bess-map/app.py",
+      "--server.port=8503",
+      "--server.address=0.0.0.0",
+      "--server.baseUrlPath=bess-map",
+      "--server.enableCORS=false",
+      "--server.enableXsrfProtection=false",
+      "--server.fileWatcherType=none",
+      "--server.headless=true"
+    ]
 
     environment = [
       {
@@ -713,17 +710,25 @@ resource "aws_ecs_task_definition" "bess_map" {
         name  = "PGUSER"
         value = var.db_username
       },
-       {
-         name  = "AWS_REGION"
-         value = var.region
-       },
-       {
-         name  = "COGNITO_USER_POOL_ID"
-         value = aws_cognito_user_pool.bess_users.id
-       },
+      {
+        name  = "AWS_REGION"
+        value = var.region
+      },
+      {
+        name  = "COGNITO_USER_POOL_ID"
+        value = aws_cognito_user_pool.bess_users.id
+      },
       {
         name  = "PGPASSWORD"
         value = var.db_password
+      },
+      {
+        name  = "ANTHROPIC_API_KEY"
+        value = var.anthropic_api_key
+      },
+      {
+        name  = "S3_BUCKET"
+        value = var.uploads_bucket_name
       }
     ]
 

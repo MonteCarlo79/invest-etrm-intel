@@ -99,6 +99,15 @@ _T: dict[str, dict[str, str]] = {
         "tab_fundamentals":     "Market Fundamentals",
         "tab_agent":            "Agent",
         "tab_mgmt":             "Data Management",
+        "tab_intraday":         "Intraday Analysis",
+        # intraday
+        "intraday_shape_title": "Average Hourly Price Shape",
+        "intraday_spread_title":"Intraday Spread Ranking (¥/kWh)",
+        "intraday_spread_help": "Max − Min of hourly avg prices per province. Higher = more BESS arbitrage potential.",
+        "intraday_pdc_title":   "Price Duration Curve",
+        "intraday_heat_title":  "Hour × Province Heatmap",
+        "intraday_price_type":  "Price type",
+        "intraday_select_prov": "Select province for duration curve",
         # market fundamentals
         "fund_provinces":       "Provinces",
         "fund_year":            "Year",
@@ -323,6 +332,15 @@ _T: dict[str, dict[str, str]] = {
         "tab_fundamentals":     "市场基础数据",
         "tab_agent":            "智能助手",
         "tab_mgmt":             "数据管理",
+        "tab_intraday":         "日内价格分析",
+        # intraday
+        "intraday_shape_title": "平均小时价格曲线",
+        "intraday_spread_title":"日内价差排名 (元/千瓦时)",
+        "intraday_spread_help": "各省小时均价最大值减最小值。越高代表储能套利潜力越大。",
+        "intraday_pdc_title":   "价格持续时间曲线",
+        "intraday_heat_title":  "小时×省份热力图",
+        "intraday_price_type":  "价格类型",
+        "intraday_select_prov": "选择省份（持续时间曲线）",
         # market fundamentals
         "fund_provinces":       "省份",
         "fund_year":            "年份",
@@ -555,6 +573,41 @@ def _conn():
         _get_conn.clear()
         conn = _get_conn()
     return conn
+
+# ── intraday hourly price loaders ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def _load_intraday_shape(_conn_fn, provinces: tuple, start: str, end: str, price_col: str):
+    sql = f"""
+        SELECT province,
+               EXTRACT(hour FROM datetime)::int AS hour,
+               AVG({price_col}) AS avg_price
+        FROM marketdata.spot_prices_hourly
+        WHERE province = ANY(%s) AND datetime BETWEEN %s AND %s
+        GROUP BY province, hour ORDER BY province, hour
+    """
+    return pd.read_sql(sql, _conn_fn(), params=[list(provinces), start, end])
+
+@st.cache_data(ttl=3600)
+def _load_intraday_spread(_conn_fn, start: str, end: str, price_col: str):
+    sql = f"""
+        SELECT province, MAX(avg_price) - MIN(avg_price) AS spread
+        FROM (
+            SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
+                   AVG({price_col}) AS avg_price
+            FROM marketdata.spot_prices_hourly
+            WHERE datetime BETWEEN %s AND %s
+            GROUP BY province, hour
+        ) t GROUP BY province ORDER BY spread DESC
+    """
+    return pd.read_sql(sql, _conn_fn(), params=[start, end])
+
+@st.cache_data(ttl=3600)
+def _load_hourly_series(_conn_fn, province: str, start: str, end: str, price_col: str):
+    sql = f"""
+        SELECT {price_col} AS price FROM marketdata.spot_prices_hourly
+        WHERE province = %s AND datetime BETWEEN %s AND %s ORDER BY datetime
+    """
+    return pd.read_sql(sql, _conn_fn(), params=[province, start, end])["price"].dropna()
 
 # ── data quality filter ───────────────────────────────────────────────────────
 def _apply_quality_filter(df: pd.DataFrame) -> pd.DataFrame:
@@ -1236,8 +1289,9 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_spread, tab_heatmap, tab_province, tab_dist, tab_geo, tab_interprov, tab_fundamentals, tab_agent, tab_mgmt = st.tabs([
-    _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"),
+tab_overview, tab_spread, tab_heatmap, tab_intraday, tab_province, tab_dist, tab_geo, \
+tab_interprov, tab_fundamentals, tab_agent, tab_mgmt = st.tabs([
+    _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"), _t("tab_intraday"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
     _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_mgmt"),
 ])
@@ -1306,7 +1360,77 @@ with tab_heatmap:
     else:
         st.info("No data for selected range / provinces.")
 
-# ── Tab 4: Province Deep-Dive ────────────────────────────────────────────────
+# ── Tab 4: Intraday Analysis ──────────────────────────────────────────────────
+with tab_intraday:
+    pt_sel = st.radio(_t("intraday_price_type"), ["RT", "DA"], horizontal=True, key="intraday_pt")
+    price_col = "rt_price" if pt_sel == "RT" else "da_price"
+
+    h_start = str(df_sel["report_date"].min()) if not df_sel.empty else "2025-01-01"
+    h_end   = str(df_sel["report_date"].max()) if not df_sel.empty else "2026-01-31"
+    h_provs = tuple(sorted(selected_provs)) if selected_provs else ()
+
+    if not h_provs:
+        st.info(_t("select_prov_info"))
+    else:
+        # 1) Intraday shape
+        st.subheader(_t("intraday_shape_title"))
+        shape_df = _load_intraday_shape(_conn, h_provs, h_start, h_end, price_col)
+        if not shape_df.empty:
+            fig_intra = px.line(
+                shape_df, x="hour", y="avg_price", color="province",
+                labels={"hour": "Hour of day", "avg_price": "Avg price (¥/kWh)",
+                        "province": _t("col_province")},
+            )
+            fig_intra.update_layout(height=340, margin=dict(t=20, b=20))
+            st.plotly_chart(fig_intra, use_container_width=True)
+
+        # 2) Intraday spread ranking (all provinces)
+        st.subheader(_t("intraday_spread_title"))
+        st.caption(_t("intraday_spread_help"))
+        spread_df = _load_intraday_spread(_conn, h_start, h_end, price_col)
+        if not spread_df.empty:
+            fig_sp = px.bar(
+                spread_df, x="spread", y="province", orientation="h",
+                color="spread", color_continuous_scale="RdYlGn_r",
+                labels={"spread": "Intraday spread (¥/kWh)", "province": ""},
+            )
+            fig_sp.update_layout(
+                height=max(300, len(spread_df) * 22),
+                margin=dict(t=10, b=10),
+                showlegend=False, coloraxis_showscale=False,
+                yaxis=dict(autorange="reversed"),
+            )
+            st.plotly_chart(fig_sp, use_container_width=True)
+
+        # 3) Price Duration Curve + Hour×Province heatmap
+        col_pdc, col_heat = st.columns(2)
+        with col_pdc:
+            st.subheader(_t("intraday_pdc_title"))
+            pdc_prov = st.selectbox(_t("intraday_select_prov"), sorted(h_provs), key="intraday_pdc")
+            pdc_s = _load_hourly_series(_conn, pdc_prov, h_start, h_end, price_col)
+            if not pdc_s.empty:
+                sorted_p = pdc_s.sort_values(ascending=False).reset_index(drop=True)
+                pct = pd.Series(range(len(sorted_p))) / len(sorted_p) * 100
+                fig_pdc = px.line(
+                    x=pct, y=sorted_p.values,
+                    labels={"x": "Percentile (%)", "y": "Price (¥/kWh)"},
+                )
+                fig_pdc.update_layout(height=300, margin=dict(t=10, b=10))
+                st.plotly_chart(fig_pdc, use_container_width=True)
+        with col_heat:
+            st.subheader(_t("intraday_heat_title"))
+            if not shape_df.empty:
+                pivot = shape_df.pivot_table(
+                    index="hour", columns="province", values="avg_price", aggfunc="mean"
+                )
+                fig_heat = px.imshow(
+                    pivot.T, aspect="auto", color_continuous_scale="RdYlGn_r",
+                    labels=dict(x="Hour", y="", color="¥/kWh"),
+                )
+                fig_heat.update_layout(height=300, margin=dict(t=10, b=10))
+                st.plotly_chart(fig_heat, use_container_width=True)
+
+# ── Tab 5: Province Deep-Dive ────────────────────────────────────────────────
 with tab_province:
     dive_prov = st.selectbox(_t("select_province"), sorted(selected_provs))
     if dive_prov:
