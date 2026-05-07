@@ -2,4 +2,7 @@ streamlit>=1.30
 plotly>=5.18
 pandas>=2.0
 psycopg2-binary
+sqlalchemy>=2.0
+openpyxl>=3.0
+scipy>=1.10
 python-dotenv

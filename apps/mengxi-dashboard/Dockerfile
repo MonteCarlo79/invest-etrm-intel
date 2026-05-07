@@ -2,21 +2,23 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY apps/mengxi-dashboard/app.py ./apps/mengxi-dashboard/app.py
+# Install pip packages first (before system fonts / apt installs)
+COPY apps/mengxi-dashboard/requirements.txt ./apps/mengxi-dashboard/requirements.txt
+RUN pip install --no-cache-dir -r apps/mengxi-dashboard/requirements.txt
 
-RUN pip install --no-cache-dir \
-    streamlit>=1.30 \
-    plotly>=5.18 \
-    pandas>=2.0 \
-    psycopg2-binary
+# Copy source
+COPY libs/ ./libs/
+COPY services/ ./services/
+COPY apps/mengxi-dashboard/ ./apps/mengxi-dashboard/
 
 ENV PYTHONPATH=/app
 
-EXPOSE 8505
+EXPOSE 8511
 
 CMD ["streamlit", "run", "apps/mengxi-dashboard/app.py", \
-     "--server.port=8505", \
+     "--server.port=8511", \
      "--server.address=0.0.0.0", \
      "--server.baseUrlPath=mengxi-dashboard", \
+     "--server.fileWatcherType=none", \
      "--server.enableCORS=false", \
      "--server.enableXsrfProtection=false"]
