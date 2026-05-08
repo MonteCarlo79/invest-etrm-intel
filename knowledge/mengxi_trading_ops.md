@@ -5,7 +5,7 @@
 **URL:** `https://www.pjh-etrm.ai/mengxi-dashboard`  
 **Port:** 8511  
 **ECR repo:** `bess-mengxi-dashboard`  
-**Current image:** `bess-mengxi-dashboard:v3` (deployed 2026-05-08)  
+**Current image:** `bess-mengxi-dashboard:v4` (pending build/deploy — code committed 2026-05-08)  
 **Ingestion image:** `bess-mengxi-ingestion:v19` (deployed 2026-05-08)
 
 ---
@@ -138,6 +138,18 @@ Populated only after the new ingestion pipeline image (v19+) runs. Shows `is_com
 ### Load Log
 Populated only after the new pipeline runs. Shows success/partial/failed per file with error details.
 
+### Manual File Upload & Ingest (Section 5)
+For dates the automated pipeline can't download (upstream API returning HTTP 500/504), files can be downloaded manually and ingested via the UI:
+
+1. Download the missing file from the Enos portal as `data_YYYY-MM-DD.xlsx`
+2. Go to **Data Management → Manual File Upload & Ingest**
+3. Upload one or more files (multi-select supported)
+4. Leave **Force reload** checked (default) — this deletes existing partial data for those dates before inserting
+5. Click **Ingest files** — per-file progress and sheet-level results are shown inline
+6. Click **Refresh now** to confirm the dates are now covered in the Missing Dates section
+
+**How it works:** Uses `services/mengxi_ingestion/loader.py` — identical parse/upsert/quality-log logic as the ECS pipeline but accepts raw bytes. Updates both `marketdata.md_load_log` and `marketdata.data_quality_status` so the Pipeline Quality Log reflects the manual load.
+
 ---
 
 ## Deployment
@@ -176,4 +188,5 @@ cd infra/terraform && terraform apply
 | Ingestion orchestrator | `bess-marketdata-ingestion/providers/mengxi/run_pipeline.py` |
 | Excel loader | `bess-marketdata-ingestion/providers/mengxi/load_excel_to_marketdata.py` |
 | Batch downloader | `bess-marketdata-ingestion/providers/mengxi/batch_downloader.py` |
+| Manual upload loader (shared) | `services/mengxi_ingestion/loader.py` |
 | Ingestion infra | `infra/terraform/mengxi-ingestion/` |
