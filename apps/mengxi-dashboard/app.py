@@ -77,6 +77,16 @@ def _get_pg_conn():
     )
 
 
+@st.cache_resource
+def _get_sqlalchemy_engine():
+    from sqlalchemy import create_engine
+    url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    if not url:
+        st.error("PGURL environment variable is not set.")
+        st.stop()
+    return create_engine(url, pool_pre_ping=True)
+
+
 # ---------------------------------------------------------------------------
 # Market Data — table catalogue (provincial fundamentals)
 # ---------------------------------------------------------------------------
@@ -700,3 +710,87 @@ with tab_data_mgmt:
                 "message":    st.column_config.TextColumn("Message",    width="large"),
             },
         )
+
+    st.markdown("---")
+
+    # ── Section 5: Manual file upload & ingest ──────────────────────────────
+    st.subheader("Manual File Upload & Ingest")
+    st.caption(
+        "Upload `data_YYYY-MM-DD.xlsx` files downloaded manually from the portal. "
+        "Each file is parsed and inserted directly into the database."
+    )
+
+    uploaded_files = st.file_uploader(
+        "Excel files (data_YYYY-MM-DD.xlsx)",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        key="dm_upload",
+    )
+    force_reload = st.checkbox(
+        "Force reload — delete and replace existing rows for these dates",
+        value=True,
+        key="dm_force_reload",
+        help="Recommended for remediation: ensures the manually downloaded file fully replaces any previously partial data.",
+    )
+
+    if uploaded_files:
+        st.write(f"{len(uploaded_files)} file(s) selected:")
+        for uf in uploaded_files:
+            st.text(f"  • {uf.name}  ({uf.size / 1024 / 1024:.1f} MB)")
+
+        if st.button("Ingest files", type="primary", key="dm_ingest_btn"):
+            from services.mengxi_ingestion.loader import load_excel_file, ensure_schema_and_log
+
+            engine = _get_sqlalchemy_engine()
+            ensure_schema_and_log(engine, "marketdata")
+
+            results = []
+            progress_bar = st.progress(0, text="Starting…")
+
+            for i, uf in enumerate(uploaded_files):
+                progress_bar.progress((i) / len(uploaded_files), text=f"Loading {uf.name}…")
+                file_bytes = uf.read()
+                result = load_excel_file(
+                    file_bytes=file_bytes,
+                    filename=uf.name,
+                    engine=engine,
+                    schema="marketdata",
+                    province="mengxi",
+                    force_reload=force_reload,
+                )
+                results.append(result)
+
+            progress_bar.progress(1.0, text="Done.")
+
+            st.markdown("**Results:**")
+            any_success = False
+            for r in results:
+                if r["status"] == "success":
+                    icon, colour = "✅", "success"
+                    any_success = True
+                elif r["status"] == "partial_success":
+                    icon, colour = "⚠️", "warning"
+                    any_success = True
+                elif r["status"] == "skipped":
+                    icon, colour = "⏭️", "info"
+                else:
+                    icon, colour = "❌", "error"
+
+                label = (
+                    f"{icon} **{r['filename']}**"
+                    + (f" — {r['file_date']}" if r["file_date"] else "")
+                    + f" — `{r['status']}`"
+                )
+                with st.expander(label, expanded=(r["status"] != "success")):
+                    if r["sheets_ok"]:
+                        st.success(f"Loaded {len(r['sheets_ok'])} sheet(s): " + ", ".join(r["sheets_ok"]))
+                    if r["sheets_failed"]:
+                        for err in r["sheets_failed"]:
+                            st.error(err)
+                    if r["message"] and not r["sheets_ok"]:
+                        st.error(r["message"])
+                    elif r["message"] and r["sheets_failed"]:
+                        st.warning(r["message"])
+
+            if any_success:
+                st.info("Upload complete. Click **Refresh now** above to update coverage stats.")
