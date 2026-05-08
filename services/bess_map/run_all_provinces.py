@@ -13,7 +13,7 @@ except Exception:
     pd = None
 
 import os
-import psycopg
+import psycopg2 as psycopg
 from datetime import datetime
 
 
@@ -137,6 +137,8 @@ def get_province_progress(conn):
             );
 
         """)
+    conn.commit()
+    with conn.cursor() as cur:
         cur.execute("""
             SELECT province, duration_h, last_ts
             FROM audit.province_progress

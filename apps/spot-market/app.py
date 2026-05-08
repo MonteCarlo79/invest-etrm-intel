@@ -108,6 +108,13 @@ _T: dict[str, dict[str, str]] = {
         "intraday_heat_title":  "Hour × Province Heatmap",
         "intraday_price_type":  "Price type",
         "intraday_select_prov": "Select province for duration curve",
+        # intraday fundamentals
+        "intraday_fund_title":  "Fundamentals — Market Drivers",
+        "intraday_bid_title":   "Bidding Space vs RT Price",
+        "intraday_bid_caption": "Each point = one hour. Higher bidding space → lower RT price (supply glut suppresses clearing price).",
+        "intraday_wap_title":   "Wind & Solar WAP vs Avg RT Price",
+        "intraday_wap_caption": "WAP = Σ(generation_MW × price) / Σ(generation_MW). WAP below avg RT = renewable generation concentrated in low-price hours.",
+        "intraday_no_fund":     "No fundamentals data found in DB for the selected period. Use bess-map Data Management → Run Fundamentals Ingest to populate.",
         # market fundamentals
         "fund_provinces":       "Provinces",
         "fund_year":            "Year",
@@ -145,6 +152,15 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "ANTHROPIC_API_KEY is not set. Please add it to your .env file.",
         "agent_clear":          "Clear chat",
         "agent_error":          "Agent error: {err}",
+        # memory
+        "mem_saved_ok":         "Saved {n} memory item(s).",
+        "mem_confirm_title":    "💡 Suggested memories from this conversation",
+        "mem_save_selected":    "Save selected",
+        "mem_dismiss":          "Dismiss",
+        "mem_manage":           "Memory Management",
+        "mem_caption":          "Active memories are injected into every conversation as domain context.",
+        "mem_empty":            "No memories stored yet.",
+        "mem_delete":           "Delete",
         # overview
         "latest_prices":        "Latest prices",
         "col_province":         "Province",
@@ -341,6 +357,13 @@ _T: dict[str, dict[str, str]] = {
         "intraday_heat_title":  "小时×省份热力图",
         "intraday_price_type":  "价格类型",
         "intraday_select_prov": "选择省份（持续时间曲线）",
+        # intraday fundamentals
+        "intraday_fund_title":  "基本面——市场驱动因素",
+        "intraday_bid_title":   "竞价空间 vs 实时价格",
+        "intraday_bid_caption": "每点代表一小时。竞价空间越大，实时价格越低（供给宽松压低出清价格）。",
+        "intraday_wap_title":   "风光加权平均价 vs 均价",
+        "intraday_wap_caption": "加权均价 = Σ(发电量×价格) / Σ(发电量)。加权均价低于均价说明新能源发电集中于低价时段。",
+        "intraday_no_fund":     "所选时段数据库中暂无基本面数据，请在储能地图→数据管理→运行基本面导入后再查看。",
         # market fundamentals
         "fund_provinces":       "省份",
         "fund_year":            "年份",
@@ -378,6 +401,15 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "未设置 ANTHROPIC_API_KEY，请在 .env 文件中添加。",
         "agent_clear":          "清除对话",
         "agent_error":          "助手出错：{err}",
+        # memory
+        "mem_saved_ok":         "已保存 {n} 条记忆。",
+        "mem_confirm_title":    "💡 本次对话中发现的记忆建议",
+        "mem_save_selected":    "保存所选",
+        "mem_dismiss":          "忽略",
+        "mem_manage":           "记忆管理",
+        "mem_caption":          "已激活的记忆将在每次对话开始时注入系统提示。",
+        "mem_empty":            "暂无已保存的记忆。",
+        "mem_delete":           "删除",
         # overview
         "latest_prices":        "最新价格",
         "col_province":         "省份",
@@ -608,6 +640,46 @@ def _load_hourly_series(_conn_fn, province: str, start: str, end: str, price_col
         WHERE province = %s AND datetime BETWEEN %s AND %s ORDER BY datetime
     """
     return pd.read_sql(sql, _conn_fn(), params=[province, start, end])["price"].dropna()
+
+
+@st.cache_data(ttl=3600)
+def _load_bidding_vs_price(_conn_fn, provinces: tuple, start: str, end: str):
+    """Hourly bidding space (RT outturn) vs RT price — for scatter/OLS."""
+    sql = """
+        SELECT f.province,
+               f.bidding_space_mw,
+               p.rt_price
+        FROM marketdata.spot_fundamentals_hourly f
+        JOIN marketdata.spot_prices_hourly p
+          ON p.province = f.province AND p.datetime = f.datetime
+        WHERE f.province = ANY(%s)
+          AND f.datetime BETWEEN %s AND %s
+          AND f.bidding_space_mw IS NOT NULL
+          AND p.rt_price IS NOT NULL
+        ORDER BY f.province, f.datetime
+    """
+    return pd.read_sql(sql, _conn_fn(), params=[list(provinces), start, end])
+
+
+@st.cache_data(ttl=3600)
+def _load_wap(_conn_fn, provinces: tuple, start: str, end: str):
+    """Wind and solar weighted average price vs avg RT price, by province."""
+    sql = """
+        SELECT f.province,
+               SUM(f.wind_mw  * p.rt_price) / NULLIF(SUM(f.wind_mw),  0) AS wind_wap,
+               SUM(f.solar_mw * p.rt_price) / NULLIF(SUM(f.solar_mw), 0) AS solar_wap,
+               AVG(p.rt_price)                                             AS avg_rt_price
+        FROM marketdata.spot_fundamentals_hourly f
+        JOIN marketdata.spot_prices_hourly p
+          ON p.province = f.province AND p.datetime = f.datetime
+        WHERE f.province = ANY(%s)
+          AND f.datetime BETWEEN %s AND %s
+          AND (f.wind_mw IS NOT NULL OR f.solar_mw IS NOT NULL)
+        GROUP BY f.province
+        ORDER BY f.province
+    """
+    return pd.read_sql(sql, _conn_fn(), params=[list(provinces), start, end])
+
 
 # ── data quality filter ───────────────────────────────────────────────────────
 def _apply_quality_filter(df: pd.DataFrame) -> pd.DataFrame:
@@ -1367,14 +1439,25 @@ with tab_intraday:
 
     h_start = str(df_sel["report_date"].min()) if not df_sel.empty else "2025-01-01"
     h_end   = str(df_sel["report_date"].max()) if not df_sel.empty else "2026-01-31"
-    h_provs = tuple(sorted(selected_provs)) if selected_provs else ()
 
-    if not h_provs:
+    # spot_prices_hourly stores Chinese province names; selected_provs are English.
+    # Build a mapping from df (which has both columns) and translate before querying.
+    _en_to_zh = (
+        df[["province_en", "province_cn"]]
+        .drop_duplicates()
+        .set_index("province_en")["province_cn"]
+        .to_dict()
+    ) if not df.empty else {}
+    h_provs_zh = tuple(sorted(
+        _en_to_zh[p] for p in selected_provs if p in _en_to_zh
+    )) if selected_provs else ()
+
+    if not h_provs_zh:
         st.info(_t("select_prov_info"))
     else:
         # 1) Intraday shape
         st.subheader(_t("intraday_shape_title"))
-        shape_df = _load_intraday_shape(_conn, h_provs, h_start, h_end, price_col)
+        shape_df = _load_intraday_shape(_conn, h_provs_zh, h_start, h_end, price_col)
         if not shape_df.empty:
             fig_intra = px.line(
                 shape_df, x="hour", y="avg_price", color="province",
@@ -1406,7 +1489,7 @@ with tab_intraday:
         col_pdc, col_heat = st.columns(2)
         with col_pdc:
             st.subheader(_t("intraday_pdc_title"))
-            pdc_prov = st.selectbox(_t("intraday_select_prov"), sorted(h_provs), key="intraday_pdc")
+            pdc_prov = st.selectbox(_t("intraday_select_prov"), sorted(h_provs_zh), key="intraday_pdc")
             pdc_s = _load_hourly_series(_conn, pdc_prov, h_start, h_end, price_col)
             if not pdc_s.empty:
                 sorted_p = pdc_s.sort_values(ascending=False).reset_index(drop=True)
@@ -1429,6 +1512,64 @@ with tab_intraday:
                 )
                 fig_heat.update_layout(height=300, margin=dict(t=10, b=10))
                 st.plotly_chart(fig_heat, use_container_width=True)
+
+        # 4) Fundamentals analysis (bidding space + WAP)
+        st.divider()
+        st.subheader(_t("intraday_fund_title"))
+        bid_df = _load_bidding_vs_price(_conn, h_provs_zh, h_start, h_end)
+
+        if bid_df.empty:
+            st.info(_t("intraday_no_fund"))
+        else:
+            # Bidding space vs RT price scatter + OLS trendline
+            st.subheader(_t("intraday_bid_title"))
+            st.caption(_t("intraday_bid_caption"))
+            try:
+                fig_bid = px.scatter(
+                    bid_df, x="bidding_space_mw", y="rt_price", color="province",
+                    opacity=0.35, trendline="ols",
+                    labels={"bidding_space_mw": "Bidding Space (MW)",
+                            "rt_price": "RT Price (¥/kWh)",
+                            "province": _t("col_province")},
+                )
+            except Exception:
+                # statsmodels not installed — fall back to scatter without trendline
+                fig_bid = px.scatter(
+                    bid_df, x="bidding_space_mw", y="rt_price", color="province",
+                    opacity=0.35,
+                    labels={"bidding_space_mw": "Bidding Space (MW)",
+                            "rt_price": "RT Price (¥/kWh)",
+                            "province": _t("col_province")},
+                )
+            fig_bid.update_layout(height=400, margin=dict(t=20, b=20))
+            st.plotly_chart(fig_bid, use_container_width=True)
+
+            # Wind & Solar WAP vs avg RT price
+            wap_df = _load_wap(_conn, h_provs_zh, h_start, h_end)
+            if not wap_df.empty:
+                st.subheader(_t("intraday_wap_title"))
+                st.caption(_t("intraday_wap_caption"))
+                wap_long = wap_df.melt(
+                    id_vars=["province", "avg_rt_price"],
+                    value_vars=["wind_wap", "solar_wap"],
+                    var_name="type", value_name="wap",
+                )
+                wap_long["type"] = wap_long["type"].map(
+                    {"wind_wap": "Wind WAP", "solar_wap": "Solar WAP"}
+                )
+                fig_wap = px.bar(
+                    wap_long, x="province", y="wap", color="type", barmode="group",
+                    labels={"wap": "WAP (¥/kWh)", "province": "", "type": ""},
+                    color_discrete_map={"Wind WAP": "#4C9BE8", "Solar WAP": "#F5A623"},
+                )
+                fig_wap.add_scatter(
+                    x=wap_df["province"], y=wap_df["avg_rt_price"],
+                    mode="markers",
+                    marker=dict(symbol="diamond", size=10, color="black"),
+                    name="Avg RT price",
+                )
+                fig_wap.update_layout(height=360, margin=dict(t=20, b=20))
+                st.plotly_chart(fig_wap, use_container_width=True)
 
 # ── Tab 5: Province Deep-Dive ────────────────────────────────────────────────
 with tab_province:
@@ -2273,10 +2414,138 @@ with tab_agent:
     import json as _json
     import anthropic as _anthropic
 
-    st.subheader(_t("agent_title"))
-    st.caption(_t("agent_caption"))
+    # ── Memory infrastructure ──────────────────────────────────────────────────
+    _SPOT_MEM_KEY = "spot_v1"
+    _SPOT_APP_NAME = "spot_market"
 
-    # ── Tool definitions (mirrors services/spot_mcp/tools.py) ─────────────────
+    @st.cache_resource
+    def _ensure_spot_memory_table():
+        conn = _conn()
+        with conn.cursor() as _cur:
+            _cur.execute("""
+                CREATE TABLE IF NOT EXISTS marketdata.agent_memory (
+                    id SERIAL PRIMARY KEY,
+                    app TEXT NOT NULL DEFAULT 'spot_market',
+                    category TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    source TEXT DEFAULT 'manual',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            _cur.execute("""
+                ALTER TABLE marketdata.agent_memory
+                ADD COLUMN IF NOT EXISTS app TEXT NOT NULL DEFAULT 'spot_market'
+            """)
+        conn.commit()
+        return True
+
+    @st.cache_data(ttl=60)
+    def _load_spot_memories(_key) -> pd.DataFrame:
+        try:
+            return pd.read_sql(
+                "SELECT id, category, subject, content, source "
+                "FROM marketdata.agent_memory WHERE active AND app=%s ORDER BY id",
+                _conn(),
+                params=(_SPOT_APP_NAME,),
+            )
+        except Exception:
+            return pd.DataFrame(columns=["id", "category", "subject", "content", "source"])
+
+    def _save_spot_memory(category: str, subject: str, content: str, source: str = "manual"):
+        conn = _conn()
+        with conn.cursor() as _cur:
+            _cur.execute(
+                "INSERT INTO marketdata.agent_memory (app,category,subject,content,source) "
+                "VALUES (%s,%s,%s,%s,%s)",
+                (_SPOT_APP_NAME, category, subject, content, source),
+            )
+        conn.commit()
+        _load_spot_memories.clear()
+
+    def _delete_spot_memory(memory_id: int):
+        conn = _conn()
+        with conn.cursor() as _cur:
+            _cur.execute(
+                "UPDATE marketdata.agent_memory SET active=FALSE WHERE id=%s AND app=%s",
+                (memory_id, _SPOT_APP_NAME),
+            )
+        conn.commit()
+        _load_spot_memories.clear()
+
+    _ensure_spot_memory_table()
+
+    # ── Base system prompt ─────────────────────────────────────────────────────
+    _SPOT_AGENT_BASE_SYSTEM = """\
+You are a specialist analyst for China's spot electricity market. \
+Your knowledge comes **exclusively** from the data tools below — never from general training data or external information. \
+Do not state any price level, trend, or market event unless it was returned by a tool call in this conversation.
+
+## Domain definitions
+- **DA price**: Day-Ahead electricity clearing price (¥/kWh). Set one day ahead via auction.
+- **RT price**: Real-Time electricity clearing price (¥/kWh). Reflects actual intraday supply/demand balance.
+- **Spread**: DA − RT; positive = DA premium (normal); negative = RT spike (intraday supply stress).
+- **送端**: Exporting province in inter-provincial spot market.
+- **受端**: Importing province in inter-provincial spot market.
+- Province names in DB: Shandong, Guangdong, Mengxi, Shanxi, Gansu, Sichuan, Yunnan, Guizhou, \
+Guangxi, Hunan, Hubei, Anhui, Zhejiang, Jiangsu, Fujian, Henan, Shaanxi, Ningxia, Xinjiang, \
+Liaoning, Jilin, Heilongjiang, Mengdong, Hebei, Hebei-North, Hebei-South, Qinghai, Jiangxi, \
+Hainan, Chongqing, Shanghai, Beijing, Tianjin.
+
+## Analytical framework
+1. Always call a tool before stating any price, spread, volume, or trend.
+2. When comparing provinces or time periods, call get_spot_prices with the full range then compute statistics from the returned rows.
+3. For structural questions (fuel mix, capacity, renewables share, peak demand), call get_market_fundamentals.
+4. For inter-provincial flow questions (volumes, sending/receiving provinces), call get_interprov_flow.
+5. For qualitative market colour or key drivers, call get_market_summaries.
+6. Use markdown tables for multi-province or multi-period comparisons.
+7. If asked to ingest a new PDF, confirm the file path with the user before calling run_pipeline.
+"""
+
+    def _build_spot_system() -> str:
+        mems = _load_spot_memories(_SPOT_MEM_KEY)
+        if mems.empty:
+            lang_suffix = "\n\n请用中文（简体）回复所有问题。" if st.session_state.get("lang_radio") == "中文" else "\n\nRespond in English."
+            return _SPOT_AGENT_BASE_SYSTEM + lang_suffix
+        mem_lines = "\n".join(
+            f"- [{r.category}] {r.subject}: {r.content}"
+            for r in mems.itertuples()
+        )
+        lang_suffix = "\n\n请用中文（简体）回复所有问题。" if st.session_state.get("lang_radio") == "中文" else "\n\nRespond in English."
+        return _SPOT_AGENT_BASE_SYSTEM + f"\n\n## Analyst preferences & domain knowledge\n{mem_lines}" + lang_suffix
+
+    def _extract_spot_memories(user_msg: str, agent_reply: str) -> list[dict]:
+        """Use Haiku to extract memorable facts/preferences from a conversation turn."""
+        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return []
+        try:
+            haiku = _anthropic.Anthropic(api_key=api_key)
+            resp = haiku.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=(
+                    "Extract memorable analyst preferences or domain facts from the conversation. "
+                    "Return a JSON array of objects with keys: category (string, e.g. 'preference', 'market_view', 'methodology'), "
+                    "subject (short title ≤8 words), content (one sentence). "
+                    "Only extract genuinely reusable insights — not one-off data points. "
+                    "Return [] if nothing is worth remembering."
+                ),
+                messages=[{
+                    "role": "user",
+                    "content": f"User: {user_msg}\n\nAgent: {agent_reply}",
+                }],
+            )
+            raw = next((b.text for b in resp.content if hasattr(b, "text")), "[]")
+            start, end = raw.find("["), raw.rfind("]")
+            if start == -1:
+                return []
+            return _json.loads(raw[start:end + 1])
+        except Exception:
+            return []
+
+    # ── Tool definitions ───────────────────────────────────────────────────────
     _AGENT_TOOLS = [
         {
             "name": "get_spot_prices",
@@ -2371,22 +2640,6 @@ with tab_agent:
         },
     ]
 
-    _agent_lang_is_zh = st.session_state.get("lang_radio") == "中文"
-    _AGENT_SYSTEM = (
-        "You are a specialist analyst for China's spot electricity market. "
-        "You have access to real-time market data via tools. "
-        "Always cite date ranges and province names when reporting prices. "
-        "Prices are in ¥/kWh. Province names are in English "
-        "(e.g. Shandong, Guangdong, Mengxi, Shanxi). "
-        "Direction 送端 = exporting province; 受端 = importing province. "
-        "When asked to compare periods or provinces, call get_spot_prices with the "
-        "appropriate date range and compute statistics from the returned rows. "
-        "For questions about installed capacity, fuel mix, renewables share, storage "
-        "capacity, or peak load, use get_market_fundamentals. "
-        "Be concise. Use markdown tables for price comparisons. "
-        + ("请用中文（简体）回复所有问题。" if _agent_lang_is_zh else "Respond in English.")
-    )
-
     # ── Tool dispatcher ────────────────────────────────────────────────────────
     def _dispatch_tool(name: str, inputs: dict) -> str:
         from services.spot_mcp.tools import (
@@ -2414,14 +2667,7 @@ with tab_agent:
         return _json.dumps(result, default=str)
 
     # ── Agent turn (handles multi-step tool-use loop) ──────────────────────────
-    def _run_agent_turn(messages: list) -> tuple[str, list, list]:
-        """
-        Run one user turn through Claude with tools until stop_reason == end_turn.
-
-        Returns:
-            (final_text, updated_messages, tool_events)
-            tool_events: list of {"tool": str, "result": str} for display
-        """
+    def _run_agent_turn(messages: list, system: str) -> tuple[str, list, list]:
         _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
         if not _api_key:
             return _t("agent_no_key"), messages, []
@@ -2433,7 +2679,7 @@ with tab_agent:
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=4096,
-                system=_AGENT_SYSTEM,
+                system=system,
                 tools=_AGENT_TOOLS,
                 messages=messages,
             )
@@ -2466,10 +2712,14 @@ with tab_agent:
     if "agent_messages" not in st.session_state:
         st.session_state["agent_messages"] = []
     if "agent_display" not in st.session_state:
-        # Display log: list of {"role": "user"|"assistant"|"tool", "content": str, "tool": str}
         st.session_state["agent_display"] = [
             {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
         ]
+    if "spot_mem_suggestions" not in st.session_state:
+        st.session_state["spot_mem_suggestions"] = []
+
+    st.subheader(_t("agent_title"))
+    st.caption(_t("agent_caption"))
 
     # ── Clear button ───────────────────────────────────────────────────────────
     if st.button(_t("agent_clear"), key="agent_clear_btn"):
@@ -2477,6 +2727,7 @@ with tab_agent:
         st.session_state["agent_display"] = [
             {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
         ]
+        st.session_state["spot_mem_suggestions"] = []
         st.rerun()
 
     # ── Render existing chat history ───────────────────────────────────────────
@@ -2495,35 +2746,55 @@ with tab_agent:
             with st.chat_message(_msg["role"]):
                 st.markdown(_msg["content"])
 
+    # ── Memory suggestion panel ────────────────────────────────────────────────
+    if st.session_state["spot_mem_suggestions"]:
+        with st.expander(_t("mem_confirm_title"), expanded=True):
+            selected_idxs = []
+            for _i, _sug in enumerate(st.session_state["spot_mem_suggestions"]):
+                if st.checkbox(
+                    f"**[{_sug.get('category','')}]** {_sug.get('subject','')} — {_sug.get('content','')}",
+                    value=True,
+                    key=f"spot_mem_chk_{_i}",
+                ):
+                    selected_idxs.append(_i)
+            col_sv, col_dm = st.columns(2)
+            if col_sv.button(_t("mem_save_selected"), key="spot_mem_save_btn"):
+                for _idx in selected_idxs:
+                    _s = st.session_state["spot_mem_suggestions"][_idx]
+                    _save_spot_memory(_s["category"], _s["subject"], _s["content"], source="auto")
+                st.success(_t("mem_saved_ok", n=len(selected_idxs)))
+                st.session_state["spot_mem_suggestions"] = []
+                st.rerun()
+            if col_dm.button(_t("mem_dismiss"), key="spot_mem_dismiss_btn"):
+                st.session_state["spot_mem_suggestions"] = []
+                st.rerun()
+
     # ── Chat input ─────────────────────────────────────────────────────────────
     _user_input = st.chat_input(_t("agent_placeholder"), key="agent_input")
 
     if _user_input:
-        # Show user message immediately
         st.session_state["agent_display"].append(
             {"role": "user", "content": _user_input, "tool": None}
         )
         with st.chat_message("user"):
             st.markdown(_user_input)
 
-        # Append to API message history
         st.session_state["agent_messages"].append(
             {"role": "user", "content": _user_input}
         )
 
-        # Run agent
         with st.chat_message("assistant"):
             with st.spinner(_t("agent_thinking")):
                 try:
                     _reply, _new_msgs, _tool_events = _run_agent_turn(
-                        st.session_state["agent_messages"]
+                        st.session_state["agent_messages"],
+                        _build_spot_system(),
                     )
                 except Exception as _exc:
                     _reply = _t("agent_error", err=str(_exc))
                     _new_msgs = st.session_state["agent_messages"]
                     _tool_events = []
 
-            # Record tool calls in display log
             for _ev in _tool_events:
                 st.session_state["agent_display"].append({
                     "role": "tool",
@@ -2536,6 +2807,28 @@ with tab_agent:
                 {"role": "assistant", "content": _reply, "tool": None}
             )
             st.markdown(_reply)
+
+        # ── Auto-extract memories ──────────────────────────────────────────────
+        _suggestions = _extract_spot_memories(_user_input, _reply)
+        if _suggestions:
+            st.session_state["spot_mem_suggestions"] = _suggestions
+            st.rerun()
+
+    # ── Memory management (bottom of tab) ─────────────────────────────────────
+    st.divider()
+    with st.expander(f"🗄️ {_t('mem_manage')}", expanded=False):
+        st.caption(_t("mem_caption"))
+        _mem_df = _load_spot_memories(_SPOT_MEM_KEY)
+        if _mem_df.empty:
+            st.info(_t("mem_empty"))
+        else:
+            for _row in _mem_df.itertuples():
+                _c1, _c2, _c3 = st.columns([1, 5, 1])
+                _c1.markdown(f"**{_row.category}**")
+                _c2.markdown(f"**{_row.subject}** — {_row.content}")
+                if _c3.button(_t("mem_delete"), key=f"del_spot_mem_{_row.id}"):
+                    _delete_spot_memory(_row.id)
+                    st.rerun()
 
 
 # ── Tab 9: Data Management ────────────────────────────────────────────────────

@@ -561,6 +561,9 @@ def main():
                 max_throughput_mwh=args.max_throughput_mwh,
                 max_cycles_per_day=args.max_cycles_per_day,
             )
+            # Prices are stored in ¥/kWh; LP returns profit in ¥/kWh × MWh.
+            # Multiply by 1000 to convert to ¥ so that profit_per_mwh_day is in ¥/MWh.
+            theo_profit_by_day = theo_profit_by_day * 1000
         
             upsert_dispatch_theoretical(
                 engine,
@@ -594,7 +597,8 @@ def main():
             realized_profit_by_day = pd.Series(dtype=float)
         else:
             aligned = cap_dispatch.join(hourly["rt_price"].rename("rt_actual"), how="inner").dropna()
-            aligned["pnl"] = aligned["rt_actual"] * aligned["dispatch_grid_mw"]
+            # rt_actual is in ¥/kWh; multiply by 1000 to get ¥ per MWh dispatched.
+            aligned["pnl"] = aligned["rt_actual"] * aligned["dispatch_grid_mw"] * 1000
             realized_profit_by_day = aligned["pnl"].groupby(aligned.index.date).sum()
 
         # ---------------- CAPTURE DAILY ----------------

@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir \
     "anthropic[bedrock]>=0.40" \
     boto3 \
     pdfplumber \
-    openpyxl
+    openpyxl \
+    "statsmodels>=0.14"
 
 # Install CJK font AFTER matplotlib so the font cache is rebuilt with it present.
 # fonts-noto-cjk provides "Noto Sans CJK SC" used by chart_geo_map for Chinese titles.

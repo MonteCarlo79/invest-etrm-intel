@@ -16,6 +16,12 @@ RUN pip install --no-cache-dir \
     pulp \
     "requests==2.32.3"
 
+# Install CJK font so matplotlib can render Chinese titles on the geo map
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -c "import matplotlib.font_manager as _fm; _fm.fontManager = _fm.FontManager(); print('matplotlib font cache rebuilt')"
+
 COPY apps/bess-map/      ./apps/bess-map/
 COPY services/bess_map/  ./services/bess_map/
 COPY auth/               ./auth/
