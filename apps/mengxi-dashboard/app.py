@@ -195,6 +195,165 @@ _IM_ASSET_DISPLAY = {
 }
 
 # ---------------------------------------------------------------------------
+# Data Management — monitored tables + query helpers
+# ---------------------------------------------------------------------------
+
+# (display_name, fully_qualified_table, date_column, group)
+_MONITORED_TABLES = [
+    ("md_id_cleared_energy",         "marketdata.md_id_cleared_energy",         "data_date",  "Ingestion"),
+    ("md_rt_nodal_price",            "marketdata.md_rt_nodal_price",            "data_date",  "Ingestion"),
+    ("md_da_cleared_energy",         "marketdata.md_da_cleared_energy",         "data_date",  "Ingestion"),
+    ("md_rt_total_cleared_energy",   "marketdata.md_rt_total_cleared_energy",   "data_date",  "Ingestion"),
+    ("md_id_fuel_summary",           "marketdata.md_id_fuel_summary",           "data_date",  "Ingestion"),
+    ("md_da_fuel_summary",           "marketdata.md_da_fuel_summary",           "data_date",  "Ingestion"),
+    ("md_avg_bid_price",             "marketdata.md_avg_bid_price",             "data_date",  "Ingestion"),
+    ("md_settlement_ref_price",      "marketdata.md_settlement_ref_price",      "data_date",  "Ingestion"),
+    ("ops_bess_dispatch_15min",      "marketdata.ops_bess_dispatch_15min",      "data_date",  "Ops"),
+    ("nodal_rt_price_15min",         "canon.nodal_rt_price_15min",              "time::date", "Canon"),
+    ("bess_asset_daily_attribution", "reports.bess_asset_daily_attribution",    "trade_date", "Reports"),
+]
+
+
+def _stale_badge(days_stale):
+    if days_stale is None:
+        return "🔴 No data"
+    if days_stale <= 2:
+        return f"🟢 {days_stale}d"
+    if days_stale <= 7:
+        return f"🟡 {days_stale}d"
+    return f"🔴 {days_stale}d"
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_table_freshness() -> pd.DataFrame:
+    today_d = date.today()
+    try:
+        conn = _get_pg_conn()
+    except Exception:
+        return pd.DataFrame()
+    rows = []
+    for name, fqn, date_col, group in _MONITORED_TABLES:
+        try:
+            df = pd.read_sql(f"SELECT MAX({date_col}) AS latest_date FROM {fqn}", conn)
+            latest = df["latest_date"].iloc[0]
+            if latest is not None:
+                latest = pd.Timestamp(latest).date()
+                days_stale = (today_d - latest).days
+            else:
+                latest, days_stale = None, None
+        except Exception:
+            latest, days_stale = None, None
+        rows.append({
+            "Group": group,
+            "Table": name,
+            "Latest Date": str(latest) if latest else "—",
+            "Staleness": _stale_badge(days_stale),
+        })
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_quality_status(days: int = 60) -> pd.DataFrame:
+    try:
+        conn = _get_pg_conn()
+        df = pd.read_sql(
+            """
+            SELECT
+                data_date,
+                CASE WHEN is_complete THEN '🟢 Complete' ELSE '🔴 Incomplete' END AS status,
+                ROUND(interval_coverage * 100, 1)  AS "coverage_%",
+                actual_intervals                    AS intervals,
+                ROUND(file_size_mb, 1)              AS "size_mb",
+                TO_CHAR(check_time, 'MM-DD HH24:MI') AS checked,
+                LEFT(notes, 120)                    AS notes
+            FROM marketdata.data_quality_status
+            WHERE province = 'mengxi'
+              AND data_date >= CURRENT_DATE - %s
+            ORDER BY data_date DESC
+            """,
+            conn,
+            params=(days,),
+        )
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_load_log(n: int = 50) -> pd.DataFrame:
+    _badge = {"success": "🟢 success", "partial_success": "🟡 partial", "failed": "🔴 failed", "skipped": "⚪ skipped"}
+    try:
+        conn = _get_pg_conn()
+        df = pd.read_sql(
+            f"""
+            SELECT
+                file_date,
+                status,
+                TO_CHAR(loaded_at, 'MM-DD HH24:MI') AS loaded_at,
+                file_name,
+                LEFT(message, 200)                   AS message
+            FROM marketdata.md_load_log
+            ORDER BY loaded_at DESC
+            LIMIT {n}
+            """,
+            conn,
+        )
+        if not df.empty:
+            df["status"] = df["status"].map(lambda s: _badge.get(s, s))
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_missing_dates(table_fqn: str, date_col: str, start_date: str) -> tuple:
+    """Return (total_weekdays, missing_count, missing_dates_list) for weekdays since start_date."""
+    try:
+        conn = _get_pg_conn()
+        result = pd.read_sql(
+            f"""
+            WITH weekdays AS (
+                SELECT d::date AS dt
+                FROM generate_series(%s::date, CURRENT_DATE - 1, interval '1 day') d
+                WHERE extract(isodow from d) < 6
+            )
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE t.d IS NULL) AS missing
+            FROM weekdays w
+            LEFT JOIN (SELECT DISTINCT {date_col} AS d FROM {table_fqn}) t ON t.d = w.dt
+            """,
+            conn,
+            params=(start_date,),
+        )
+        total = int(result["total"].iloc[0])
+        missing_count = int(result["missing"].iloc[0])
+
+        if missing_count == 0:
+            return total, 0, []
+
+        missing_df = pd.read_sql(
+            f"""
+            WITH weekdays AS (
+                SELECT d::date AS dt
+                FROM generate_series(%s::date, CURRENT_DATE - 1, interval '1 day') d
+                WHERE extract(isodow from d) < 6
+            )
+            SELECT w.dt AS missing_date
+            FROM weekdays w
+            LEFT JOIN (SELECT DISTINCT {date_col} AS d FROM {table_fqn}) t ON t.d = w.dt
+            WHERE t.d IS NULL
+            ORDER BY w.dt DESC
+            """,
+            conn,
+            params=(start_date,),
+        )
+        return total, missing_count, [str(d) for d in missing_df["missing_date"]]
+    except Exception:
+        return 0, 0, []
+
+
+# ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -266,12 +425,13 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_market, tab_dispatch_pnl, tab_daily_ops, tab_strategy, tab_cockpit = st.tabs([
+tab_market, tab_dispatch_pnl, tab_daily_ops, tab_strategy, tab_cockpit, tab_data_mgmt = st.tabs([
     "Market Data",
     "Dispatch & P&L Waterfall",
     "Daily Ops",
     "Strategy Comparison",
     "Options Cockpit",
+    "Data Management",
 ])
 
 # ---------------------------------------------------------------------------
@@ -413,3 +573,130 @@ with tab_strategy:
 with tab_cockpit:
     from libs.decision_models.adapters.app.cockpit_page import render_cockpit_page
     render_cockpit_page()
+
+# ---------------------------------------------------------------------------
+# Tab 6: Data Management
+# ---------------------------------------------------------------------------
+with tab_data_mgmt:
+    st.title("Data Management")
+    st.caption("Freshness and quality of all tables feeding this dashboard. Auto-refreshes every 60 s.")
+
+    if st.button("Refresh now", key="dm_refresh"):
+        _load_table_freshness.clear()
+        _load_quality_status.clear()
+        _load_load_log.clear()
+        st.rerun()
+
+    # ── Section 1: Table freshness ──────────────────────────────────────────
+    st.subheader("Table Freshness")
+    st.caption("🟢 ≤2 days  🟡 3–7 days  🔴 >7 days or no data")
+
+    df_fresh = _load_table_freshness()
+    if df_fresh.empty:
+        st.warning("Could not load freshness data — check DB connection.")
+    else:
+        for group in ["Ingestion", "Ops", "Canon", "Reports"]:
+            sub = df_fresh[df_fresh["Group"] == group].drop(columns=["Group"]).reset_index(drop=True)
+            if sub.empty:
+                continue
+            st.markdown(f"**{group}**")
+            st.dataframe(
+                sub,
+                use_container_width=True,
+                hide_index=True,
+                height=min(38 * len(sub) + 38, 400),
+            )
+
+    st.markdown("---")
+
+    # ── Section 2: Missing dates coverage ───────────────────────────────────
+    st.subheader("Ingestion Coverage — Missing Dates")
+    st.caption("Counts weekdays (Mon–Fri) since the start date with no row in the selected table.")
+
+    cov_c1, cov_c2, _ = st.columns([3, 2, 5])
+    cov_table_label = cov_c1.selectbox(
+        "Table",
+        ["md_id_cleared_energy", "md_rt_nodal_price", "md_da_cleared_energy",
+         "md_rt_total_cleared_energy", "md_id_fuel_summary", "md_da_fuel_summary",
+         "md_avg_bid_price", "md_settlement_ref_price"],
+        key="dm_cov_table",
+    )
+    cov_start = cov_c2.date_input("Since", value=date(2026, 1, 1), key="dm_cov_start")
+
+    cov_fqn = f"marketdata.{cov_table_label}"
+    total_days, missing_count, missing_dates = _load_missing_dates(cov_fqn, "data_date", str(cov_start))
+
+    if total_days == 0:
+        st.warning("Could not query table — it may not exist yet.")
+    else:
+        present = total_days - missing_count
+        pct = present / total_days * 100
+        badge = "🟢" if missing_count == 0 else ("🟡" if missing_count <= 5 else "🔴")
+        st.metric(
+            label=f"{badge} Coverage since {cov_start}",
+            value=f"{present} / {total_days} weekdays",
+            delta=f"{missing_count} missing" if missing_count else "complete",
+            delta_color="inverse" if missing_count else "normal",
+        )
+        if missing_dates:
+            with st.expander(f"Missing dates ({missing_count})", expanded=missing_count <= 20):
+                # Show as a compact grid
+                chunks = [missing_dates[i:i+7] for i in range(0, len(missing_dates), 7)]
+                for chunk in chunks:
+                    st.text("  ".join(chunk))
+
+    st.markdown("---")
+
+    # ── Section 3: Data quality status (pipeline-tracked) ───────────────────
+    st.subheader("Pipeline Quality Log — Last 60 Days")
+    st.caption("Populated only when the new ingestion pipeline version runs. Source: `marketdata.data_quality_status`")
+
+    col_days, _ = st.columns([2, 8])
+    quality_days = col_days.number_input("Days to show", min_value=7, max_value=365, value=60, step=7, key="dm_days")
+
+    df_quality = _load_quality_status(int(quality_days))
+    if df_quality.empty:
+        st.info("No quality records yet — will populate after the next ingestion pipeline run.")
+    else:
+        st.dataframe(
+            df_quality,
+            use_container_width=True,
+            hide_index=True,
+            height=min(38 * len(df_quality) + 38, 600),
+            column_config={
+                "data_date":   st.column_config.DateColumn("Date",       width="small"),
+                "status":      st.column_config.TextColumn("Status",     width="medium"),
+                "coverage_%":  st.column_config.NumberColumn("Coverage %", format="%.1f", width="small"),
+                "intervals":   st.column_config.NumberColumn("Intervals", width="small"),
+                "size_mb":     st.column_config.NumberColumn("Size MB",   format="%.1f", width="small"),
+                "checked":     st.column_config.TextColumn("Checked",    width="small"),
+                "notes":       st.column_config.TextColumn("Notes",      width="large"),
+            },
+        )
+        n_incomplete = (df_quality["status"].str.startswith("🔴")).sum()
+        if n_incomplete:
+            st.warning(f"{n_incomplete} incomplete day(s) in the last {quality_days} days.")
+
+    st.markdown("---")
+
+    # ── Section 4: Load log ──────────────────────────────────────────────────
+    st.subheader("Load Log — Last 50 Entries")
+    st.caption("Source: `marketdata.md_load_log`")
+
+    df_log = _load_load_log()
+    if df_log.empty:
+        st.info("No load log records found.")
+    else:
+        st.dataframe(
+            df_log,
+            use_container_width=True,
+            hide_index=True,
+            height=min(38 * len(df_log) + 38, 600),
+            column_config={
+                "file_date":  st.column_config.DateColumn("File Date",  width="small"),
+                "status":     st.column_config.TextColumn("Status",     width="medium"),
+                "loaded_at":  st.column_config.TextColumn("Loaded At",  width="small"),
+                "file_name":  st.column_config.TextColumn("File",       width="medium"),
+                "message":    st.column_config.TextColumn("Message",    width="large"),
+            },
+        )

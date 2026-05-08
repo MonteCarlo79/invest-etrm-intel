@@ -96,6 +96,138 @@ def build_db_timeout_alert(max_attempts, delay, last_error):
         "error_message": str(last_error),
     }
 
+def query_load_issues(window_start, window_end):
+    """Return (load_issues, quality_issues, missing_no_record) for the given date window."""
+    if not DB_DSN:
+        return [], [], []
+    try:
+        conn = psycopg2.connect(DB_DSN, connect_timeout=DB_CONNECT_TIMEOUT_SECONDS)
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT file_date, status, message
+            FROM marketdata.md_load_log
+            WHERE file_date BETWEEN %s::date AND %s::date
+              AND status IN ('failed', 'partial_success')
+            ORDER BY file_date
+            """,
+            (window_start, window_end),
+        )
+        load_issues = [
+            {"date": str(r[0]), "status": r[1], "message": (r[2] or "")[:500]}
+            for r in cur.fetchall()
+        ]
+
+        cur.execute(
+            """
+            SELECT data_date, interval_coverage, notes
+            FROM marketdata.data_quality_status
+            WHERE data_date BETWEEN %s::date AND %s::date
+              AND is_complete = FALSE
+            ORDER BY data_date
+            """,
+            (window_start, window_end),
+        )
+        quality_issues = [
+            {"date": str(r[0]), "coverage": float(r[1] or 0), "notes": (r[2] or "")[:300]}
+            for r in cur.fetchall()
+        ]
+
+        # Weekdays with no quality record (download likely failed entirely)
+        cur.execute(
+            """
+            WITH weekdays AS (
+                SELECT d::date AS dt
+                FROM generate_series(%s::date, %s::date, interval '1 day') d
+                WHERE extract(isodow from d) < 6
+                  AND d::date < CURRENT_DATE
+            )
+            SELECT w.dt
+            FROM weekdays w
+            LEFT JOIN marketdata.data_quality_status dq
+              ON dq.data_date = w.dt AND dq.province = 'mengxi'
+            WHERE dq.data_date IS NULL
+            ORDER BY w.dt
+            """,
+            (window_start, window_end),
+        )
+        missing_no_record = [str(r[0]) for r in cur.fetchall()]
+
+        conn.close()
+        return load_issues, quality_issues, missing_no_record
+
+    except Exception as e:
+        print(f"[WARN] Could not query load issues: {e}")
+        return [], [], []
+
+
+def build_load_issues_alert(load_issues, quality_issues, missing_no_record, window_start, window_end):
+    failed_dates = [i["date"] for i in load_issues if i["status"] == "failed"]
+    partial_dates = [i["date"] for i in load_issues if i["status"] == "partial_success"]
+    incomplete_quality = [i["date"] for i in quality_issues]
+
+    parts = []
+    if failed_dates:
+        parts.append(f"failed loads ({len(failed_dates)}): {', '.join(failed_dates)}")
+    if partial_dates:
+        parts.append(f"partial loads ({len(partial_dates)}): {', '.join(partial_dates)}")
+    if incomplete_quality:
+        parts.append(f"incomplete data ({len(incomplete_quality)}): {', '.join(incomplete_quality)}")
+    if missing_no_record:
+        parts.append(f"no record at all ({len(missing_no_record)}): {', '.join(missing_no_record)}")
+
+    summary = (
+        f"Mengxi ingestion alert: data quality issues for {window_start} → {window_end}. "
+        + "; ".join(parts)
+    )
+    return {
+        "text": summary,
+        "pipeline_name": PIPELINE_NAME,
+        "alert_context": ALERT_CONTEXT,
+        "run_mode": mode,
+        "window_start": window_start,
+        "window_end": window_end,
+        "error_class": "load_data_quality",
+        "utc_timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "failed_dates": failed_dates,
+        "partial_dates": partial_dates,
+        "incomplete_quality_dates": incomplete_quality,
+        "missing_no_record_dates": missing_no_record,
+    }
+
+
+def check_and_alert_load_issues(window_start, window_end):
+    load_issues, quality_issues, missing_no_record = query_load_issues(window_start, window_end)
+    if load_issues or quality_issues or missing_no_record:
+        payload = build_load_issues_alert(
+            load_issues, quality_issues, missing_no_record, window_start, window_end
+        )
+        print("[ALERT] Load/quality issues:", payload["text"])
+        send_alert(payload)
+    else:
+        print(f"[OK] Data quality check passed for {window_start} → {window_end}")
+
+
+def build_pipeline_crash_alert(error, window_start, window_end):
+    summary = (
+        f"Mengxi ingestion alert: pipeline crashed during {mode} mode "
+        f"({window_start} → {window_end}). "
+        f"{type(error).__name__}: {str(error)[:500]}"
+    )
+    return {
+        "text": summary,
+        "pipeline_name": PIPELINE_NAME,
+        "alert_context": ALERT_CONTEXT,
+        "run_mode": mode,
+        "window_start": window_start,
+        "window_end": window_end,
+        "error_class": "pipeline_crash",
+        "utc_timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "error_message": str(error),
+    }
+
+
 def wait_for_db(max_attempts=10, delay=10):
 
     if not DB_DSN:
@@ -184,54 +316,74 @@ def chunked(values, size):
 # STEP 2 — DOWNLOAD DATA
 # ------------------------------------------------
 
-if mode == "reconcile":
+_window_start = None
+_window_end = None
 
-    print("Running reconciliation mode")
+try:
+    if mode == "reconcile":
 
-    start_date, end_date = resolve_window_for_non_daily()
+        print("Running reconciliation mode")
 
-    print(f"Reconciling window: {start_date} → {end_date}")
+        start_date, end_date = resolve_window_for_non_daily()
 
-    os.environ["START_DATE"] = start_date.strftime("%Y-%m-%d")
-    os.environ["END_DATE"] = end_date.strftime("%Y-%m-%d")
-    os.environ.pop("EXACT_DATES", None)
-    run_downloader()
-    run_loader_with_retry()
+        print(f"Reconciling window: {start_date} → {end_date}")
 
-elif mode == "remediation":
-    print("Running remediation mode (targeted missing dates)")
+        _window_start = start_date.strftime("%Y-%m-%d")
+        _window_end = end_date.strftime("%Y-%m-%d")
+        os.environ["START_DATE"] = _window_start
+        os.environ["END_DATE"] = _window_end
+        os.environ.pop("EXACT_DATES", None)
+        run_downloader()
+        run_loader_with_retry()
+        check_and_alert_load_issues(_window_start, _window_end)
 
-    start_date, end_date = resolve_window_for_non_daily()
-    window_start = start_date.strftime("%Y-%m-%d")
-    window_end = end_date.strftime("%Y-%m-%d")
+    elif mode == "remediation":
+        print("Running remediation mode (targeted missing dates)")
 
-    print(f"Remediation window: {window_start} → {window_end}")
+        start_date, end_date = resolve_window_for_non_daily()
+        _window_start = start_date.strftime("%Y-%m-%d")
+        _window_end = end_date.strftime("%Y-%m-%d")
 
-    from batch_downloader import get_missing_dates
-    missing_dates = get_missing_dates(window_start, window_end)
+        print(f"Remediation window: {_window_start} → {_window_end}")
 
-    if not missing_dates:
-        print("No missing dates found in remediation window")
+        from batch_downloader import get_missing_dates
+        missing_dates = get_missing_dates(_window_start, _window_end)
+
+        if not missing_dates:
+            print("No missing dates found in remediation window")
+        else:
+            print(f"Targeted remediation dates: {len(missing_dates)}")
+            for chunk in chunked(missing_dates, max(1, REMEDIATION_BATCH_SIZE)):
+                print(f"Remediation chunk: {chunk[0]} → {chunk[-1]} ({len(chunk)} dates)")
+                os.environ["EXACT_DATES"] = json.dumps(chunk, ensure_ascii=False)
+                os.environ["START_DATE"] = chunk[0]
+                os.environ["END_DATE"] = chunk[-1]
+                run_downloader()
+                run_loader_with_retry()
+        check_and_alert_load_issues(_window_start, _window_end)
+
     else:
-        print(f"Targeted remediation dates: {len(missing_dates)}")
-        for chunk in chunked(missing_dates, max(1, REMEDIATION_BATCH_SIZE)):
-            print(f"Remediation chunk: {chunk[0]} → {chunk[-1]} ({len(chunk)} dates)")
-            os.environ["EXACT_DATES"] = json.dumps(chunk, ensure_ascii=False)
-            os.environ["START_DATE"] = chunk[0]
-            os.environ["END_DATE"] = chunk[-1]
-            run_downloader()
-            run_loader_with_retry()
+        target_day = latest_available.strftime("%Y-%m-%d")
+        _window_start = target_day
+        _window_end = target_day
+        print("Daily ingestion for:", target_day)
+        os.environ["START_DATE"] = target_day
+        os.environ["END_DATE"] = target_day
+        os.environ.pop("EXACT_DATES", None)
+        subprocess.run(
+            ["python", "batch_downloader.py", target_day, target_day],
+            check=True
+        )
+        run_loader_with_retry()
+        check_and_alert_load_issues(_window_start, _window_end)
 
-else:
-    target_day = latest_available.strftime("%Y-%m-%d")
-    print("Daily ingestion for:", target_day)
-    os.environ["START_DATE"] = target_day
-    os.environ["END_DATE"] = target_day
-    os.environ.pop("EXACT_DATES", None)
-    subprocess.run(
-        ["python", "batch_downloader.py", target_day, target_day],
-        check=True
-    )
-    run_loader_with_retry()
+    print("Pipeline completed successfully")
 
-print("Pipeline completed successfully")
+except Exception as _pipeline_error:
+    print(f"[FATAL] Pipeline crashed: {_pipeline_error}")
+    send_alert(build_pipeline_crash_alert(
+        _pipeline_error,
+        _window_start or "unknown",
+        _window_end or "unknown",
+    ))
+    raise
