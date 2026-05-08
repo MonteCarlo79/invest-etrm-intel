@@ -141,7 +141,7 @@ Populated only after the new pipeline runs. Shows success/partial/failed per fil
 ### Manual File Upload & Ingest (Section 5)
 For dates the automated pipeline can't download (upstream API returning HTTP 500/504), files can be downloaded manually and ingested via the UI:
 
-1. Download the missing file from the Enos portal as `data_YYYY-MM-DD.xlsx`
+1. Download the missing file from the Enos portal and rename it `YYYY-MM-DD.xlsx` (e.g. `2026-03-13.xlsx`)
 2. Go to **Data Management → Manual File Upload & Ingest**
 3. Upload one or more files (multi-select supported)
 4. Leave **Force reload** checked (default) — this deletes existing partial data for those dates before inserting

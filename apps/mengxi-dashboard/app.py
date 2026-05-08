@@ -716,12 +716,12 @@ with tab_data_mgmt:
     # ── Section 5: Manual file upload & ingest ──────────────────────────────
     st.subheader("Manual File Upload & Ingest")
     st.caption(
-        "Upload `data_YYYY-MM-DD.xlsx` files downloaded manually from the portal. "
+        "Upload `YYYY-MM-DD.xlsx` files downloaded manually from the portal. "
         "Each file is parsed and inserted directly into the database."
     )
 
     uploaded_files = st.file_uploader(
-        "Excel files (data_YYYY-MM-DD.xlsx)",
+        "Excel files (YYYY-MM-DD.xlsx)",
         type=["xlsx"],
         accept_multiple_files=True,
         key="dm_upload",

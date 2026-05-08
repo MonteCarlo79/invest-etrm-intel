@@ -94,7 +94,7 @@ VALUE_COL_HINTS = {
     f"{TABLE_PREFIX}settlement_ref_price":    ["system_settlement_price"],
 }
 
-FILENAME_RE = re.compile(r"^data_(\d{4}-\d{2}-\d{2})\.xlsx$", re.I)
+FILENAME_RE = re.compile(r"^(?:data_)?(\d{4}-\d{2}-\d{2})\.xlsx$", re.I)
 
 NUMERIC_COLS = [
     "energy_mwh", "cleared_energy_mwh", "cleared_price", "price",
