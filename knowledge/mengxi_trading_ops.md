@@ -5,7 +5,8 @@
 **URL:** `https://www.pjh-etrm.ai/mengxi-dashboard`  
 **Port:** 8511  
 **ECR repo:** `bess-mengxi-dashboard`  
-**Current image:** `bess-mengxi-dashboard:v2` (deployed 2026-05-08)
+**Current image:** `bess-mengxi-dashboard:v3` (deployed 2026-05-08)  
+**Ingestion image:** `bess-mengxi-ingestion:v19` (deployed 2026-05-08)
 
 ---
 
