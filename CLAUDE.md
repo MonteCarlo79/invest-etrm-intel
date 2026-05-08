@@ -270,6 +270,23 @@ Stop completely, list what will be affected, and wait for explicit "yes" in the 
 
 ---
 
+## Data Upload — Prefer Local App Over S3
+
+When ingesting data files (Excel, CSV, etc.) into the database, **always prefer the in-app upload path over S3** to minimise AWS storage and transfer costs.
+
+| Method | When to use |
+|--------|-------------|
+| **In-app upload** (Streamlit file uploader → direct DB insert) | Default for all manual data ingestion. No S3 involved. |
+| **S3 upload** | Only when files are too large for in-memory processing (>100 MB), or when the ingestion pipeline explicitly requires an S3 trigger. |
+
+**Current in-app upload paths:**
+- Mengxi market data (missing dates remediation): **Data Management tab → Section 5** in `apps/mengxi-dashboard`. Upload `YYYY-MM-DD.xlsx`, ingested directly to `marketdata.*` tables via `services/mengxi_ingestion/loader.py`.
+- Ops dispatch data (nominated + actual curves): `services/ops_ingestion/inner_mongolia/` Excel upload flow.
+
+When adding new data ingestion features, default to the in-app upload pattern. Only introduce an S3 path if there is a specific technical reason (batch size, pipeline trigger, cross-service sharing).
+
+---
+
 ## Dual Environment — AWS + Local
 
 Every app dashboard must run in two modes:
