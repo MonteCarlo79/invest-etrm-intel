@@ -514,3 +514,24 @@ variable "cognito_callback_urls" {
 variable "cognito_default_redirect_uri" {
   type = string
 }
+#################################################
+# GB Market Intelligence Dashboard
+#################################################
+variable "image_gb_market" {
+  description = "Docker image for GB Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_gb_market" {
+  description = "Desired task count for the gb-market ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "modo_api_key" {
+  description = "Modo Energy public API token"
+  type        = string
+  default     = ""
+  sensitive   = true
+}

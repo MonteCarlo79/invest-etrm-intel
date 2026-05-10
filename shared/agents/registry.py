@@ -47,6 +47,13 @@ APP_CATALOG = [
         "category": "Applications",
     },
     {
+        "name": "GB Market",
+        "path": "/gb-market/",
+        "description": "GB BESS market intelligence: system price, EPEX, ancillary services, BESS benchmarking index, asset map, Strategist + Quant agents.",
+        "roles": ["Admin", "Trader", "Quant", "Analyst", "Viewer"],
+        "category": "Applications",
+    },
+    {
         "name": "Strategy Agent",
         "path": "/strategy-agent/",
         "description": "Opportunity screening, market structure, and deployment ranking.",
