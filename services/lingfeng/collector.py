@@ -96,28 +96,54 @@ async def _collect_async(
         logger.info(f"Logged in — current URL: {page.url}")
 
         # ── 2. Navigate to Data Consultation ─────────────────────────────
+        # Some SPA shells require clicking the nav item before the route activates
+        # the form — try clicking 电力交易 first, then navigate directly.
+        try:
+            nav_item = page.locator("li, a, span, div").filter(has_text="电力交易").first
+            if await nav_item.count() > 0:
+                await nav_item.click()
+                await page.wait_for_timeout(800)
+        except Exception:
+            pass
+
         await page.goto(_DATA_URL)
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(1_000)   # let Vue render selects
+
+        # Wait for Vue to mount the form — poll for the first el-select
+        logger.info("Waiting for form to render …")
+        await page.wait_for_selector("div.el-select", timeout=30_000)
+        await page.wait_for_timeout(500)   # brief extra settle
         logger.info("On data-consultation page.")
 
         # ── 3. Select market (市场交易) — first el-select ─────────────────
         selects = page.locator("div.el-select")
+        count = await selects.count()
+        logger.info(f"Found {count} el-select element(s).")
+
         await selects.nth(0).click()
-        await page.wait_for_timeout(300)
-        await page.locator(
-            f"li.el-select-dropdown__item, .el-select-dropdown .el-select-dropdown__item"
-        ).filter(has_text=market).first.click()
         await page.wait_for_timeout(400)
+        # Wait for dropdown to open
+        await page.wait_for_selector(
+            "li.el-select-dropdown__item", timeout=10_000
+        )
+        await page.locator("li.el-select-dropdown__item").filter(
+            has_text=market
+        ).first.click()
+        await page.wait_for_timeout(500)
         logger.info(f"Selected market: {market}")
 
         # ── 4. Select indicator (指标选择) — second el-select ────────────
+        # Re-query selects after DOM may have updated
+        selects = page.locator("div.el-select")
         await selects.nth(1).click()
-        await page.wait_for_timeout(300)
-        await page.locator(
-            f"li.el-select-dropdown__item, .el-select-dropdown .el-select-dropdown__item"
-        ).filter(has_text=indicator).first.click()
         await page.wait_for_timeout(400)
+        await page.wait_for_selector(
+            "li.el-select-dropdown__item", timeout=10_000
+        )
+        await page.locator("li.el-select-dropdown__item").filter(
+            has_text=indicator
+        ).first.click()
+        await page.wait_for_timeout(500)
         logger.info(f"Selected indicator: {indicator}")
 
         # ── 5. Set date range ─────────────────────────────────────────────
