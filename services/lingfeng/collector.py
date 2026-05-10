@@ -96,79 +96,75 @@ async def _collect_async(
         logger.info(f"Logged in — current URL: {page.url}")
 
         # ── 2. Navigate to Data Consultation ─────────────────────────────
-        # Some SPA shells require clicking the nav item before the route activates
-        # the form — try clicking 电力交易 first, then navigate directly.
-        try:
-            nav_item = page.locator("li, a, span, div").filter(has_text="电力交易").first
-            if await nav_item.count() > 0:
-                await nav_item.click()
-                await page.wait_for_timeout(800)
-        except Exception:
-            pass
-
         await page.goto(_DATA_URL)
         await page.wait_for_load_state("networkidle")
 
-        # Wait for Vue to mount the form — poll for the first el-select
+        # Form uses Ant Design — wait for .ant-select-selector to be visible
         logger.info("Waiting for form to render …")
-        await page.wait_for_selector("div.el-select", timeout=30_000)
-        await page.wait_for_timeout(500)   # brief extra settle
+        await page.wait_for_selector(".ant-select-selector", timeout=30_000)
+        await page.wait_for_timeout(300)
         logger.info("On data-consultation page.")
 
-        # ── 3. Select market (市场交易) — first el-select ─────────────────
-        selects = page.locator("div.el-select")
-        count = await selects.count()
-        logger.info(f"Found {count} el-select element(s).")
+        # ── 3. Select market (市场交易) — first ant-select ────────────────
+        # Only change if current value differs from requested market
+        current_market = await page.locator(
+            ".ant-select-selection-item"
+        ).nth(0).inner_text()
+        if current_market.strip() != market.strip():
+            logger.info(f"Current market '{current_market}' ≠ '{market}' — selecting …")
+            await page.locator(".ant-select-selector").nth(0).click()
+            await page.wait_for_selector(".ant-select-item-option-content", timeout=10_000)
+            await page.locator(".ant-select-item-option-content").filter(
+                has_text=market
+            ).first.click()
+            await page.wait_for_timeout(400)
+        else:
+            logger.info(f"Market already set to '{market}' — no change needed.")
+        logger.info(f"Market: {market}")
 
-        await selects.nth(0).click()
-        await page.wait_for_timeout(400)
-        # Wait for dropdown to open
-        await page.wait_for_selector(
-            "li.el-select-dropdown__item", timeout=10_000
-        )
-        await page.locator("li.el-select-dropdown__item").filter(
-            has_text=market
-        ).first.click()
-        await page.wait_for_timeout(500)
-        logger.info(f"Selected market: {market}")
-
-        # ── 4. Select indicator (指标选择) — second el-select ────────────
-        # Re-query selects after DOM may have updated
-        selects = page.locator("div.el-select")
-        await selects.nth(1).click()
-        await page.wait_for_timeout(400)
-        await page.wait_for_selector(
-            "li.el-select-dropdown__item", timeout=10_000
-        )
-        await page.locator("li.el-select-dropdown__item").filter(
-            has_text=indicator
-        ).first.click()
-        await page.wait_for_timeout(500)
-        logger.info(f"Selected indicator: {indicator}")
+        # ── 4. Select indicator (指标选择) — second ant-select ───────────
+        current_indicator = await page.locator(
+            ".ant-select-selection-item"
+        ).nth(1).inner_text()
+        if current_indicator.strip() != indicator.strip():
+            logger.info(f"Current indicator '{current_indicator}' ≠ '{indicator}' — selecting …")
+            await page.locator(".ant-select-selector").nth(1).click()
+            await page.wait_for_selector(".ant-select-item-option-content", timeout=10_000)
+            await page.locator(".ant-select-item-option-content").filter(
+                has_text=indicator
+            ).first.click()
+            await page.wait_for_timeout(400)
+        else:
+            logger.info(f"Indicator already set to '{indicator}' — no change needed.")
+        logger.info(f"Indicator: {indicator}")
 
         # ── 5. Set date range ─────────────────────────────────────────────
-        # Element UI date range picker has two inputs inside el-date-editor.
-        date_inputs = page.locator(".el-date-editor input")
-        # Start date
-        await date_inputs.nth(0).triple_click()
-        await date_inputs.nth(0).fill(start_str)
-        await date_inputs.nth(0).press("Tab")
-        await page.wait_for_timeout(200)
-        # End date
-        await date_inputs.nth(1).triple_click()
-        await date_inputs.nth(1).fill(end_str)
-        await date_inputs.nth(1).press("Enter")
-        await page.wait_for_timeout(500)
-        logger.info(f"Date range set: {start_str} → {end_str}")
+        # Ant Design range picker: input[date-range="start"] and input[date-range="end"]
+        start_input = page.locator("input[date-range='start']").first
+        end_input   = page.locator("input[date-range='end']").first
+
+        await start_input.click()
+        await page.wait_for_timeout(300)
+        await start_input.triple_click()
+        await start_input.fill(start_str)
+        await start_input.press("Tab")
+        await page.wait_for_timeout(300)
+
+        await end_input.triple_click()
+        await end_input.fill(end_str)
+        await end_input.press("Enter")
+        await page.wait_for_timeout(400)
 
         # Close any open date picker popup by clicking outside
         await page.keyboard.press("Escape")
         await page.wait_for_timeout(300)
+        logger.info(f"Date range set: {start_str} → {end_str}")
 
         # ── 6. Click 导出 and capture download ───────────────────────────
-        logger.info("Clicking 导出 …")
+        # Button text is "导 出" (with a space) and has class ant-btn-primary
+        logger.info("Clicking 导 出 …")
         async with page.expect_download(timeout=60_000) as dl_info:
-            await page.locator("button", has_text="导出").first.click()
+            await page.locator("button.ant-btn-primary").first.click()
         download = await dl_info.value
 
         suggested = download.suggested_filename or ""
