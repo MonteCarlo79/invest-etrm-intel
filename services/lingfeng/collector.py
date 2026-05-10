@@ -145,12 +145,11 @@ async def _collect_async(
 
         await start_input.click()
         await page.wait_for_timeout(300)
-        await start_input.triple_click()
         await start_input.fill(start_str)
         await start_input.press("Tab")
         await page.wait_for_timeout(300)
 
-        await end_input.triple_click()
+        await end_input.click()
         await end_input.fill(end_str)
         await end_input.press("Enter")
         await page.wait_for_timeout(400)
