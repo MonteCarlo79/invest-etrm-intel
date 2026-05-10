@@ -105,6 +105,106 @@ def _province_from_market(market: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Date chunking helper
+# ---------------------------------------------------------------------------
+
+def _date_chunks(start: date, end: date, chunk_days: int):
+    """Yield (chunk_start, chunk_end) pairs covering [start, end] in steps of chunk_days."""
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + timedelta(days=chunk_days - 1), end)
+        yield cursor, chunk_end
+        cursor = chunk_end + timedelta(days=1)
+
+
+# ---------------------------------------------------------------------------
+# Single-chunk download + ingest
+# ---------------------------------------------------------------------------
+
+def _collect_and_ingest_chunk(
+    collect_fn,
+    username: str,
+    password: str,
+    market: str,
+    indicator: str,
+    chunk_start: date,
+    chunk_end: date,
+    province_cn: str,
+    schema: str,
+    skip_prices: bool,
+    skip_fundamentals: bool,
+    headless: bool,
+    download_dir: Path,
+    keep_files: bool,
+) -> bool:
+    """Download one date-range chunk and run price + fundamentals ingest. Returns True on success."""
+
+    logger.info(f"  Chunk {chunk_start} → {chunk_end}")
+
+    # Download
+    try:
+        raw_path = collect_fn(
+            username=username,
+            password=password,
+            market=market,
+            indicator=indicator,
+            start_date=chunk_start,
+            end_date=chunk_end,
+            download_dir=download_dir,
+            headless=headless,
+        )
+    except Exception as exc:
+        logger.error(f"  [FAIL] Download failed for chunk {chunk_start}–{chunk_end}: {exc}")
+        return False
+
+    logger.info(f"  Downloaded: {raw_path}")
+
+    # Rename to <province>.xlsx so ingest scripts resolve province from stem
+    target_name = f"{province_cn}.xlsx"
+    target_path = raw_path.parent / target_name
+    if raw_path.name != target_name:
+        shutil.move(str(raw_path), str(target_path))
+
+    # Price ingestion
+    if not skip_prices:
+        ok = _run(
+            [sys.executable, _INGEST_PRICES_SCRIPT,
+             "--indir",    str(target_path.parent),
+             "--auto-cols", "--upload-db",
+             "--env",      "none",
+             "--schema",   schema,
+             "--continue-on-error"],
+            f"Price ingestion ({chunk_start}–{chunk_end})",
+        )
+        if not ok:
+            logger.warning("  Price ingestion failed — continuing.")
+
+    # Fundamentals ingestion
+    if not skip_fundamentals:
+        ok = _run(
+            [sys.executable, _INGEST_FUNDAMENTALS_SCRIPT,
+             "--indir",      str(target_path.parent),
+             "--env",        "none",
+             "--schema",     schema,
+             "--start-date", str(chunk_start),
+             "--end-date",   str(chunk_end),
+             "--continue-on-error"],
+            f"Fundamentals ingestion ({chunk_start}–{chunk_end})",
+        )
+        if not ok:
+            logger.warning("  Fundamentals ingestion failed — continuing.")
+
+    # Cleanup
+    if not keep_files:
+        try:
+            target_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"  Could not clean up {target_path}: {e}")
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
 
@@ -125,99 +225,64 @@ def run_pipeline(
     headless: bool,
     download_dir: Path,
     keep_files: bool,
+    chunk_days: int,
 ) -> None:
 
-    province_cn   = _province_from_market(market)           # e.g. "山东"
-    province_slug = _PROVINCE_SLUG.get(province_cn, province_cn)  # e.g. "shandong"
+    province_cn   = _province_from_market(market)
+    province_slug = _PROVINCE_SLUG.get(province_cn, province_cn)
+
+    total_days = (end_date - start_date).days + 1
+    chunks = list(_date_chunks(start_date, end_date, chunk_days))
 
     logger.info("=" * 60)
-    logger.info(f"LingFeng daily collection — {market} / {indicator}")
-    logger.info(f"Date range: {start_date} → {end_date}")
+    logger.info(f"LingFeng collection — {market} / {indicator}")
+    logger.info(f"Date range: {start_date} → {end_date} ({total_days} days)")
+    logger.info(f"Chunk size: {chunk_days} days → {len(chunks)} chunk(s)")
     logger.info("=" * 60)
 
-    # ── Step 1: Download from LingFeng ─────────────────────────────────────
-    logger.info("[STEP 1] Downloading from LingFeng SaaS …")
     try:
         from services.lingfeng.collector import collect
     except ImportError:
-        # Fallback: add repo to path
         sys.path.insert(0, str(_REPO))
         from services.lingfeng.collector import collect
 
-    try:
-        raw_path = collect(
+    # ── Steps 1–4: download + ingest each chunk ────────────────────────────
+    failed_chunks = []
+    for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
+        logger.info(f"[CHUNK {i}/{len(chunks)}]")
+        ok = _collect_and_ingest_chunk(
+            collect_fn=collect,
             username=username,
             password=password,
             market=market,
             indicator=indicator,
-            start_date=start_date,
-            end_date=end_date,
-            download_dir=download_dir,
+            chunk_start=chunk_start,
+            chunk_end=chunk_end,
+            province_cn=province_cn,
+            schema=schema,
+            skip_prices=skip_prices,
+            skip_fundamentals=skip_fundamentals,
             headless=headless,
-        )
-    except Exception as exc:
-        logger.error(f"[FAIL] Download failed: {exc}")
-        raise
-
-    logger.info(f"Downloaded: {raw_path}")
-
-    # ── Step 2: Rename to <province>.xlsx ──────────────────────────────────
-    # Ingestion scripts derive province name from the filename stem.
-    # Rename to just the Chinese province chars so they resolve correctly.
-    target_name = f"{province_cn}.xlsx"
-    target_path = raw_path.parent / target_name
-    if raw_path.name != target_name:
-        shutil.move(str(raw_path), str(target_path))
-        logger.info(f"Renamed: {raw_path.name} → {target_name}")
-    else:
-        target_path = raw_path
-
-    # ── Step 3: Price ingestion (run_all_provinces.py) ─────────────────────
-    if not skip_prices:
-        logger.info("[STEP 3] Running RT/DA price ingestion …")
-        ok = _run(
-            [sys.executable, _INGEST_PRICES_SCRIPT,
-             "--indir",    str(target_path.parent),
-             "--auto-cols", "--upload-db",
-             "--env",      "none",
-             "--schema",   schema,
-             "--continue-on-error"],
-            "Price ingestion",
+            download_dir=download_dir,
+            keep_files=keep_files,
         )
         if not ok:
-            logger.warning("Price ingestion failed — continuing with fundamentals step.")
-    else:
-        logger.info("[STEP 3] Skipped price ingestion (--skip-prices).")
+            failed_chunks.append((chunk_start, chunk_end))
 
-    # ── Step 4: Fundamentals ingestion (run_fundamentals_ingest.py) ────────
-    if not skip_fundamentals:
-        logger.info("[STEP 4] Running fundamentals ingestion …")
-        ok = _run(
-            [sys.executable, _INGEST_FUNDAMENTALS_SCRIPT,
-             "--indir",      str(target_path.parent),
-             "--env",        "none",
-             "--schema",     schema,
-             "--start-date", str(start_date),
-             "--end-date",   str(end_date),
-             "--continue-on-error"],
-            "Fundamentals ingestion",
-        )
-        if not ok:
-            logger.warning("Fundamentals ingestion failed — continuing with capture step.")
-    else:
-        logger.info("[STEP 4] Skipped fundamentals ingestion (--skip-fundamentals).")
+    if failed_chunks:
+        logger.warning(f"Failed chunks: {failed_chunks}")
 
-    # ── Step 5: Capture pipeline ────────────────────────────────────────────
+    # ── Step 5: Capture pipeline — once for the full date range ───────────
     if not skip_capture:
         durations = ["2", "4"] if duration_h == "both" else [duration_h.replace("h", "")]
         for dur in durations:
-            logger.info(f"[STEP 5] Running capture pipeline — {dur}h, model={model} …")
+            logger.info(f"[CAPTURE] {dur}h, model={model}, province={province_slug} …")
             cmd = [
                 sys.executable, _CAPTURE_PIPELINE_SCRIPT,
-                "--env",          "none",
-                "--schema",       schema,
-                "--duration-h",   dur,
-                "--model",        model,
+                "--env",           "none",
+                "--schema",        schema,
+                "--duration-h",    dur,
+                "--model",         model,
                 "--province-list", province_slug,
             ]
             if force_capture:
@@ -226,18 +291,11 @@ def run_pipeline(
             if not ok:
                 logger.warning(f"Capture pipeline {dur}h failed.")
     else:
-        logger.info("[STEP 5] Skipped capture pipeline (--skip-capture).")
-
-    # ── Cleanup ────────────────────────────────────────────────────────────
-    if not keep_files:
-        try:
-            target_path.unlink(missing_ok=True)
-            logger.info(f"Cleaned up: {target_path}")
-        except Exception as e:
-            logger.warning(f"Could not clean up {target_path}: {e}")
+        logger.info("[CAPTURE] Skipped (--skip-capture).")
 
     logger.info("=" * 60)
-    logger.info("Daily collection complete.")
+    logger.info(f"Collection complete. Chunks ok={len(chunks)-len(failed_chunks)}, "
+                f"failed={len(failed_chunks)}")
     logger.info("=" * 60)
 
 
@@ -287,6 +345,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Skip capture pipeline")
 
     # Download options
+    p.add_argument("--chunk-days", type=int, default=30,
+                   help="Max days per download request — splits the full range into "
+                        "chunks of this size (default: 30). Set to the platform limit.")
     p.add_argument("--download-dir", default=None,
                    help="Directory to save downloaded files (default: system temp)")
     p.add_argument("--keep-files", action="store_true",
@@ -353,6 +414,7 @@ def main() -> None:
         headless=not args.show_browser,
         download_dir=download_dir,
         keep_files=args.keep_files,
+        chunk_days=args.chunk_days,
     )
 
 
