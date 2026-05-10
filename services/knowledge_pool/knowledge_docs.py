@@ -310,6 +310,7 @@ CREATE TABLE IF NOT EXISTS staging.spot_knowledge_docs (
     file_name       TEXT NOT NULL,
     file_hash       TEXT UNIQUE NOT NULL,
     category        TEXT NOT NULL DEFAULT 'other',
+    app             TEXT NOT NULL DEFAULT 'shared',
     title           TEXT,
     doc_year        INT,
     file_size_bytes INT,
@@ -340,6 +341,11 @@ def init_knowledge_tables() -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(_DDL)
+            # Migration: add app column for tables created before app-scoping
+            cur.execute("""
+                ALTER TABLE staging.spot_knowledge_docs
+                ADD COLUMN IF NOT EXISTS app TEXT NOT NULL DEFAULT 'shared'
+            """)
         conn.commit()
 
 
@@ -433,10 +439,15 @@ def register_and_ingest(
     file_bytes: bytes,
     filename: str,
     category_override: Optional[str] = None,
+    app: str = "shared",
     api_key: Optional[str] = None,
 ) -> tuple[int, bool, str]:
     """
     Register and ingest a document from raw bytes (e.g. from Streamlit uploader).
+
+    Args:
+        app: Scopes the document to an agent. One of 'shared', 'strategist', 'trader'.
+             'shared' means all agents can search it.
 
     Returns:
         (doc_id, is_new, category)
@@ -468,12 +479,12 @@ def register_and_ingest(
                 cur.execute(
                     """
                     INSERT INTO staging.spot_knowledge_docs
-                        (file_name, file_hash, category, file_size_bytes, ingest_status, parse_error)
-                    VALUES (%s, %s, %s, %s, 'failed', %s)
+                        (file_name, file_hash, category, app, file_size_bytes, ingest_status, parse_error)
+                    VALUES (%s, %s, %s, %s, %s, 'failed', %s)
                     RETURNING id
                     """,
                     (filename, file_hash, category_override or "other",
-                     len(file_bytes), str(exc)),
+                     app, len(file_bytes), str(exc)),
                 )
                 doc_id = cur.fetchone()[0]
             conn.commit()
@@ -489,12 +500,12 @@ def register_and_ingest(
             cur.execute(
                 """
                 INSERT INTO staging.spot_knowledge_docs
-                    (file_name, file_hash, category, title, file_size_bytes,
+                    (file_name, file_hash, category, app, title, file_size_bytes,
                      page_count, ingest_status)
-                VALUES (%s, %s, %s, %s, %s, %s, 'parsed')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'parsed')
                 RETURNING id
                 """,
-                (filename, file_hash, category, title,
+                (filename, file_hash, category, app, title,
                  len(file_bytes), len(pages_text)),
             )
             doc_id = cur.fetchone()[0]
@@ -526,13 +537,19 @@ def register_and_ingest(
 def search_reference_docs(
     query: str,
     category: Optional[str] = None,
+    app: Optional[str] = None,
     limit: int = 5,
 ) -> list[dict]:
     """
     Full-text search over staging.spot_knowledge_chunks.
 
+    Args:
+        app: When set, returns docs where app = :app OR app = 'shared'.
+             Pass 'strategist' or 'trader' to exclude the other agent's
+             private documents.  Omit (None) to search all docs.
+
     Returns list of dicts:
-        doc_id, file_name, category, page_no, chunk_text, rank
+        doc_id, file_name, category, app, page_no, chunk_text, rank
     """
     init_knowledge_tables()
 
@@ -558,9 +575,13 @@ def search_reference_docs(
         conditions.append("d.category = %s")
         params.append(category)
 
+    if app:
+        conditions.append("(d.app = %s OR d.app = 'shared')")
+        params.append(app)
+
     where = " AND ".join(conditions)
     sql = f"""
-        SELECT d.id AS doc_id, d.file_name, d.category,
+        SELECT d.id AS doc_id, d.file_name, d.category, d.app,
                c.page_no, c.chunk_text,
                {rank_expr} AS rank
         FROM staging.spot_knowledge_chunks c

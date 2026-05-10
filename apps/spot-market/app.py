@@ -2731,6 +2731,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
                 rows = _srd(
                     query=inputs["query"],
                     category=inputs.get("category"),
+                    app="strategist",
                     limit=_limit,
                 )
                 result = {"count": len(rows), "chunks": rows}
