@@ -141,6 +141,8 @@ def _ingest_one_file(
     col_map: dict[str, str],
     dsn: str,
     schema: str,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
 ) -> int:
     """Read one file, aggregate 15-min → hourly, upsert into DB. Returns row count."""
     if not col_map:
@@ -160,6 +162,12 @@ def _ingest_one_file(
     # Parse date
     df["_date"] = df[date_col].apply(_parse_date)
     df = df.dropna(subset=["_date"])
+
+    # Apply date range filter if specified
+    if start_date is not None:
+        df = df[df["_date"] >= start_date]
+    if end_date is not None:
+        df = df[df["_date"] <= end_date]
 
     # Parse time → floor to hour
     def _to_hour(v):
@@ -308,9 +316,15 @@ def main() -> None:
                    help="Comma-separated filenames to process, e.g. '山东.xlsx,广东.xlsx'")
     p.add_argument("--dry-run", action="store_true",
                    help="Detect columns and report, but do not write to DB")
+    p.add_argument("--start-date", default=None,
+                   help="Only ingest rows on or after this date (YYYY-MM-DD)")
+    p.add_argument("--end-date", default=None,
+                   help="Only ingest rows on or before this date (YYYY-MM-DD) — ignores extra rows in file")
     args = p.parse_args()
 
     dsn = _get_dsn(args.env) if not args.dry_run else None
+    filter_start = date.fromisoformat(args.start_date) if args.start_date else None
+    filter_end   = date.fromisoformat(args.end_date)   if args.end_date   else None
 
     indir = Path(args.indir)
     if not indir.exists():
@@ -354,7 +368,8 @@ def main() -> None:
                 ok += 1
                 continue
 
-            _ingest_one_file(xlsx, province, col_map, dsn, args.schema)
+            _ingest_one_file(xlsx, province, col_map, dsn, args.schema,
+                             start_date=filter_start, end_date=filter_end)
             ok += 1
 
         except Exception as e:

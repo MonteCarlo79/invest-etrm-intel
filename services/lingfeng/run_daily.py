@@ -194,9 +194,11 @@ def run_pipeline(
         logger.info("[STEP 4] Running fundamentals ingestion …")
         ok = _run(
             [sys.executable, _INGEST_FUNDAMENTALS_SCRIPT,
-             "--indir",    str(target_path.parent),
-             "--env",      "none",
-             "--schema",   schema,
+             "--indir",      str(target_path.parent),
+             "--env",        "none",
+             "--schema",     schema,
+             "--start-date", str(start_date),
+             "--end-date",   str(end_date),
              "--continue-on-error"],
             "Fundamentals ingestion",
         )
