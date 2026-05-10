@@ -328,6 +328,227 @@ def forecast_ols_rt_time_v1(
     return out["rt_pred"].astype(float)
 
 
+def forecast_naive_rt_ar17(
+    hourly: pd.DataFrame,
+    min_train_days: int = 8,
+    lookback_days: int = 60,
+) -> pd.Series:
+    """
+    Rolling OLS forecast combining lag-1 and lag-7 same-hour RT prices with time-of-day.
+
+    Features: [1, sin(2πh/24), cos(2πh/24), lag1_rt_h, lag7_rt_h]
+      where lag1_rt_h = RT price same hour yesterday
+            lag7_rt_h = RT price same hour 7 days ago
+
+    Falls back to naive_rt_lag1 when fewer than min_train_days of history available
+    or when both lag values are unavailable for a prediction day.
+
+    Parameters
+    ----------
+    hourly         : pd.DataFrame with DatetimeIndex and 'rt_price' column
+    min_train_days : minimum days of history required before using OLS (default 8, needs lag-7)
+    lookback_days  : rolling training window width in days
+    """
+    if hourly.empty:
+        return pd.Series(dtype=float, name="rt_pred")
+
+    df = hourly[["rt_price"]].copy()
+    df["hour"] = df.index.hour
+    df["date"] = df.index.date
+
+    # Build (date, hour) -> rt_price lookup for fast lag access
+    ph_lookup: dict = {}
+    for ts, row in df.iterrows():
+        if not pd.isna(row["rt_price"]):
+            ph_lookup[(ts.date(), ts.hour)] = float(row["rt_price"])
+
+    # Precompute per-hour global mean for fallback when lag values are missing
+    hour_means = df.dropna(subset=["rt_price"]).groupby("hour")["rt_price"].mean().to_dict()
+
+    dates = sorted(df["date"].unique())
+    preds: List[pd.DataFrame] = []
+
+    for d in dates:
+        day_df = df[df["date"] == d]
+        d_lag1 = d - datetime.timedelta(days=1)
+        d_lag7 = d - datetime.timedelta(days=7)
+
+        train_end = pd.Timestamp(d)
+        train_start = train_end - pd.Timedelta(days=lookback_days)
+        train_df = df.loc[
+            (df.index < train_end) & (df.index >= train_start)
+        ].dropna(subset=["rt_price"])
+
+        if train_df["date"].nunique() < min_train_days:
+            pred = _lag_rt_forecast(hourly, lag_days=1)
+            day_pred = pred[pred.index.date == d]
+            if not day_pred.empty:
+                preds.append(day_pred.to_frame())
+            continue
+
+        # Build training matrix with lag-1 and lag-7 features per row
+        X_rows: list = []
+        y_rows: list = []
+        for ts, row in train_df.iterrows():
+            tdate, thour = ts.date(), ts.hour
+            l1 = ph_lookup.get((tdate - datetime.timedelta(days=1), thour), np.nan)
+            l7 = ph_lookup.get((tdate - datetime.timedelta(days=7), thour), np.nan)
+            if np.isnan(l1) or np.isnan(l7):
+                continue
+            h = float(thour)
+            X_rows.append([1.0, np.sin(2 * np.pi * h / 24.0), np.cos(2 * np.pi * h / 24.0), l1, l7])
+            y_rows.append(float(row["rt_price"]))
+
+        if len(y_rows) < min_train_days * 4:
+            pred = _lag_rt_forecast(hourly, lag_days=1)
+            day_pred = pred[pred.index.date == d]
+            if not day_pred.empty:
+                preds.append(day_pred.to_frame())
+            continue
+
+        beta, *_ = np.linalg.lstsq(np.array(X_rows), np.array(y_rows), rcond=None)
+
+        # Predict for each hour of the day
+        X_pred = []
+        for ts in day_df.index:
+            h = float(ts.hour)
+            l1 = ph_lookup.get((d_lag1, ts.hour), hour_means.get(ts.hour, 0.0))
+            l7 = ph_lookup.get((d_lag7, ts.hour), hour_means.get(ts.hour, 0.0))
+            X_pred.append([1.0, np.sin(2 * np.pi * h / 24.0), np.cos(2 * np.pi * h / 24.0), l1, l7])
+
+        yhat = np.array(X_pred) @ beta
+        preds.append(pd.Series(yhat, index=day_df.index, name="rt_pred").to_frame())
+
+    if not preds:
+        return pd.Series(dtype=float, name="rt_pred")
+    out = pd.concat(preds).sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+    return out["rt_pred"].astype(float)
+
+
+def forecast_ols_fundamentals_v1(
+    hourly: pd.DataFrame,
+    min_train_days: int = 7,
+    lookback_days: int = 60,
+) -> pd.Series:
+    """
+    Rolling OLS forecast using historical RT prices, time-of-day, and D-1 fundamentals.
+
+    Features: [1, sin(2πh/24), cos(2πh/24), lag7_mean_rt, bidding_space_d1_mw, load_d1_mw, renewable_d1_mw]
+
+    The caller is responsible for joining the fundamentals columns into `hourly` before
+    calling this function (via a LEFT JOIN on spot_fundamentals_hourly).  If the columns
+    are absent or the day has no fundamentals rows, falls back to naive_rt_lag1 for that day.
+
+    Parameters
+    ----------
+    hourly         : pd.DataFrame with DatetimeIndex and columns:
+                       rt_price  (required)
+                       bidding_space_d1_mw, load_d1_mw, renewable_d1_mw  (optional — from spot_fundamentals_hourly)
+    min_train_days : minimum complete training days before using OLS (falls back to naive_rt_lag1)
+    lookback_days  : rolling training window width in days
+    """
+    _FUND_COLS = ["bidding_space_d1_mw", "load_d1_mw", "renewable_d1_mw"]
+    has_fund = all(c in hourly.columns for c in _FUND_COLS)
+
+    if hourly.empty:
+        return pd.Series(dtype=float, name="rt_pred")
+
+    df = hourly[["rt_price"]].copy()
+    if has_fund:
+        for c in _FUND_COLS:
+            df[c] = hourly[c].values
+    df["hour"] = df.index.hour
+    df["date"] = df.index.date
+
+    # Precompute per-(date, hour) 7-day rolling mean of rt_price
+    hourly_pivot = (
+        df.dropna(subset=["rt_price"])
+        .groupby(["date", "hour"])["rt_price"].mean().reset_index()
+    )
+    hourly_pivot["date"] = pd.to_datetime(hourly_pivot["date"])
+    lag7_records: dict = {}
+    for _, grp in hourly_pivot.groupby("hour"):
+        grp = grp.sort_values("date")
+        grp["lag7_mean"] = grp["rt_price"].shift(1).rolling(7, min_periods=1).mean()
+        for _, row in grp.iterrows():
+            lag7_records[(row["date"].date(), int(row["hour"]))] = row["lag7_mean"]
+
+    dates = pd.Index(pd.to_datetime(df["date"]).unique()).sort_values()
+    preds: List[pd.DataFrame] = []
+
+    for d in dates:
+        day = d.date()
+        day_df = df[df["date"] == day]
+
+        train_end = pd.Timestamp(day)
+        train_start = train_end - pd.Timedelta(days=lookback_days)
+        train_df = df.loc[
+            (df.index < train_end) & (df.index >= train_start)
+        ].dropna(subset=["rt_price"])
+
+        day_has_fund = has_fund and day_df[_FUND_COLS].notna().any(axis=None)
+
+        if train_df["date"].nunique() < min_train_days or not day_has_fund:
+            pred = _lag_rt_forecast(hourly, lag_days=1)
+            day_pred = pred[pred.index.date == day]
+            if not day_pred.empty:
+                preds.append(day_pred.to_frame())
+            continue
+
+        h_train = train_df["hour"].to_numpy(dtype=float)
+        y_train = train_df["rt_price"].to_numpy(dtype=float)
+        lag7_train = np.array([
+            lag7_records.get((r["date"], int(r["hour"])), np.nan)
+            for _, r in train_df.iterrows()
+        ])
+        fund_train = train_df[_FUND_COLS].fillna(method="ffill").fillna(method="bfill").to_numpy(dtype=float)
+
+        valid = ~np.isnan(lag7_train) & ~np.any(np.isnan(fund_train), axis=1)
+        if valid.sum() < min_train_days * 4:
+            pred = _lag_rt_forecast(hourly, lag_days=1)
+            day_pred = pred[pred.index.date == day]
+            if not day_pred.empty:
+                preds.append(day_pred.to_frame())
+            continue
+
+        X_train = np.column_stack([
+            np.ones(valid.sum()),
+            np.sin(2 * np.pi * h_train[valid] / 24.0),
+            np.cos(2 * np.pi * h_train[valid] / 24.0),
+            lag7_train[valid],
+            fund_train[valid],
+        ])
+        beta, *_ = np.linalg.lstsq(X_train, y_train[valid], rcond=None)
+
+        h_pred = day_df["hour"].to_numpy(dtype=float)
+        lag7_pred = np.array([
+            lag7_records.get((day, int(h)), np.nan) for h in h_pred
+        ])
+        lag7_pred = np.where(np.isnan(lag7_pred), np.nanmean(lag7_train[valid]), lag7_pred)
+
+        fund_pred = day_df[_FUND_COLS].fillna(method="ffill").fillna(method="bfill").to_numpy(dtype=float)
+        for col_i in range(fund_pred.shape[1]):
+            col_mean = np.nanmean(fund_train[valid, col_i]) if valid.sum() > 0 else 0.0
+            fund_pred[:, col_i] = np.where(np.isnan(fund_pred[:, col_i]), col_mean, fund_pred[:, col_i])
+
+        X_pred = np.column_stack([
+            np.ones(len(h_pred)),
+            np.sin(2 * np.pi * h_pred / 24.0),
+            np.cos(2 * np.pi * h_pred / 24.0),
+            lag7_pred,
+            fund_pred,
+        ])
+        yhat = X_pred @ beta
+        preds.append(pd.Series(yhat, index=day_df.index, name="rt_pred").to_frame())
+
+    if not preds:
+        return pd.Series(dtype=float, name="rt_pred")
+    out = pd.concat(preds).sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+    return out["rt_pred"].astype(float)
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -339,10 +560,16 @@ SUPPORTED_MODELS = (
     # RT-only (no DA prices required — default for Inner Mongolia Mengxi)
     "naive_rt_lag1",
     "naive_rt_lag7",
+    "naive_rt_ar17",       # OLS combining lag-1 and lag-7 same-hour prices
     "ols_rt_time_v1",
+    # RT + D-1 fundamentals (bidding_space_d1_mw, load_d1_mw, renewable_d1_mw)
+    "ols_fundamentals_v1",
 )
 
-RT_ONLY_MODELS = frozenset(["naive_rt_lag1", "naive_rt_lag7", "ols_rt_time_v1"])
+RT_ONLY_MODELS = frozenset([
+    "naive_rt_lag1", "naive_rt_lag7", "naive_rt_ar17",
+    "ols_rt_time_v1", "ols_fundamentals_v1",
+])
 
 
 def build_forecast(
@@ -359,6 +586,7 @@ def build_forecast(
     hourly         : pd.DataFrame with DatetimeIndex and 'rt_price' column.
                      RT-only models require only 'rt_price'.
                      DA-based models also require 'da_price'.
+                     ols_fundamentals_v1 also requires D-1 fundamentals columns joined in by caller.
     model          : model name — one of ``SUPPORTED_MODELS``
     min_train_days : passed to OLS-based models
     lookback_days  : passed to OLS-based models
@@ -376,8 +604,12 @@ def build_forecast(
         return forecast_naive_rt_lag1(hourly)
     if model == "naive_rt_lag7":
         return forecast_naive_rt_lag7(hourly)
+    if model == "naive_rt_ar17":
+        return forecast_naive_rt_ar17(hourly, min_train_days=min_train_days, lookback_days=lookback_days)
     if model == "ols_rt_time_v1":
         return forecast_ols_rt_time_v1(hourly, min_train_days=min_train_days, lookback_days=lookback_days)
+    if model == "ols_fundamentals_v1":
+        return forecast_ols_fundamentals_v1(hourly, min_train_days=min_train_days, lookback_days=lookback_days)
     raise ValueError(
         f"Unknown model: {model!r}. Supported: {SUPPORTED_MODELS}"
     )

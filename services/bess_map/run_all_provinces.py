@@ -85,7 +85,15 @@ def _guess_cols_from_header(xlsx_path: Path, province: str) -> Tuple[str, str]:
         return cands[0]
 
     rt_col = pick("实时")
-    da_col = pick("日前")
+
+    # DA: prefer the other province+price column that is not RT (handles newer file formats
+    # where DA column uses 结算价 or similar instead of the expected 日前 keyword)
+    prov_price_cols = [c for c in cols if province in c and "价" in c and c != rt_col]
+    if prov_price_cols:
+        da_col = sorted(prov_price_cols, key=lambda x: (-len(x), x))[0]
+    else:
+        da_col = pick("日前")
+
     return rt_col, da_col
 
 

@@ -245,7 +245,31 @@ def fetch_hourly_prices(engine, schema: str, province: str) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["datetime"]).sort_values("datetime").set_index("datetime")
     df["rt_price"] = pd.to_numeric(df["rt_price"], errors="coerce")
     df["da_price"] = pd.to_numeric(df["da_price"], errors="coerce")
+    # Fall back to DA price where RT is zero or missing (e.g. provinces with DA-only settlement)
+    df["rt_price"] = df["rt_price"].replace(0, np.nan).fillna(df["da_price"])
     return df
+
+
+def fetch_fundamentals(engine, schema: str, province: str) -> pd.DataFrame:
+    """Fetch D-1 fundamentals for ols_fundamentals_v1. Returns empty DataFrame if table/data absent."""
+    try:
+        sql = f"""
+            SELECT datetime, bidding_space_d1_mw, load_d1_mw, renewable_d1_mw
+            FROM {schema}.spot_fundamentals_hourly
+            WHERE province = :p
+            ORDER BY datetime
+        """
+        df = pd.read_sql(sql_text(sql), engine, params={"p": province})
+        if df.empty:
+            return df
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.drop_duplicates(subset=["datetime"]).sort_values("datetime").set_index("datetime")
+        for c in ["bidding_space_d1_mw", "load_d1_mw", "renewable_d1_mw"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception as e:
+        print(f"[WARN] fetch_fundamentals failed for {province}: {e}")
+        return pd.DataFrame()
 
 
 def get_last_capture_day(engine, schema: str, province: str, model: str, duration_h: float, power_mw: float, rte: float) -> Optional[dt.date]:
@@ -422,6 +446,7 @@ def upsert_capture_daily(
 
     for c in ["capture_rate", "theoretical_profit_per_mwh_day", "realized_profit_per_mwh_day", "capturable_profit_per_mwh_day"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        df[c] = df[c].where(df[c].notna(), other=None)  # write NULL not NaN float to DB
 
     rows = list(df[[
         "province", "date", "model", "duration_h", "power_mw", "roundtrip_eff",
@@ -463,7 +488,8 @@ def main():
     ap.add_argument("--duration-h", type=float, required=True)
     ap.add_argument("--power-mw", type=float, default=1.0)
     ap.add_argument("--roundtrip-eff", type=float, default=0.85)
-    ap.add_argument("--model", default="ols_da_time_v1", help="naive_da | ols_da_time_v1")
+    ap.add_argument("--model", default="ols_rt_time_v1",
+                    help="naive_da | ols_da_time_v1 | naive_rt_lag1 | naive_rt_lag7 | ols_rt_time_v1 | ols_fundamentals_v1")
     ap.add_argument("--province", default=None)
     ap.add_argument("--min-train-days", type=int, default=7)
     ap.add_argument("--lookback-days", type=int, default=60)
@@ -501,6 +527,14 @@ def main():
         if hourly.empty:
             print(f"[SKIP] {p}: no hourly prices")
             continue
+
+        # Join D-1 fundamentals when using fundamentals model
+        if args.model == "ols_fundamentals_v1":
+            fund = fetch_fundamentals(engine, args.schema, p)
+            if not fund.empty:
+                hourly = hourly.join(fund[["bidding_space_d1_mw", "load_d1_mw", "renewable_d1_mw"]], how="left")
+            else:
+                print(f"[WARN] {p}: no fundamentals data — ols_fundamentals_v1 will fall back to naive_rt_lag1")
 
         # incremental trim (based on capture table)
         last_day = get_last_capture_day(
@@ -561,9 +595,8 @@ def main():
                 max_throughput_mwh=args.max_throughput_mwh,
                 max_cycles_per_day=args.max_cycles_per_day,
             )
-            # Prices are stored in ¥/kWh; LP returns profit in ¥/kWh × MWh.
-            # Multiply by 1000 to convert to ¥ so that profit_per_mwh_day is in ¥/MWh.
-            theo_profit_by_day = theo_profit_by_day * 1000
+            # Prices are stored in ¥/MWh; LP returns profit in ¥/MWh × MWh = ¥.
+            # No unit conversion needed.
         
             upsert_dispatch_theoretical(
                 engine,
@@ -597,8 +630,8 @@ def main():
             realized_profit_by_day = pd.Series(dtype=float)
         else:
             aligned = cap_dispatch.join(hourly["rt_price"].rename("rt_actual"), how="inner").dropna()
-            # rt_actual is in ¥/kWh; multiply by 1000 to get ¥ per MWh dispatched.
-            aligned["pnl"] = aligned["rt_actual"] * aligned["dispatch_grid_mw"] * 1000
+            # rt_actual is in ¥/MWh; energy per hour = dispatch_grid_mw MWh → profit in ¥.
+            aligned["pnl"] = aligned["rt_actual"] * aligned["dispatch_grid_mw"]
             realized_profit_by_day = aligned["pnl"].groupby(aligned.index.date).sum()
 
         # ---------------- CAPTURE DAILY ----------------
