@@ -145,11 +145,63 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v22 |
-| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v38 |
+| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v38 (v39 pending) |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v5 |
-| Portal | 4 Quick Ask personas | `portal` | `/portal/*` | 8500 | v24 |
+| Portal | 4 Quick Ask personas | `portal` | `/portal/*` | 8500 | v24 (v25 pending) |
+| GB Market | Strategist + Quant | `bess-gb-market` | `/gb-market/*` | 8508 | pending first deploy |
+
+**Local run (GB Market):**
+```powershell
+streamlit run apps/gb-market/app.py --server.port 8508
+```
 
 **Retired services (2026-05-10):** `bess-pnl-attribution` (ECR repo deleted, ALB rule removed) — superseded by bess-map Data Management. `bess-uploader` (ECS service + ALB rule removed, `enable_uploader_service = false`) — superseded by bess-map Data Management.
+
+---
+
+## LingFeng Data Pipeline
+
+**Location:** `services/lingfeng/`
+
+Automated daily data collection from LingFeng SaaS (`https://lingfeng-saas.tradingthink.cn`) → ingestion → capture pipeline.
+
+| File | Purpose |
+|------|---------|
+| `collector.py` | Playwright browser automation: login, select market+indicator+date, export Excel |
+| `run_daily.py` | Orchestrator: multi-market loop, chunked downloads, price+fundamentals ingest, capture |
+| `ops_log.py` | Writes run status to `marketdata.data_ops_log` (start_op / finish_op) |
+| `setup_schedule.ps1` | One-time Windows Task Scheduler registration (daily 06:00) |
+
+**29 markets:** 河南, 新疆, 吉林, 海南, 湖北, 四川, 黑龙江, 福建, 浙江, 江苏, 广西, 安徽, 陕西, 贵州, 云南, 广东, 蒙东, 湖南, 宁夏, 辽宁, 河北南网, 甘肃, 蒙西, 山东, 山西, 冀北, 广州, 青海, 江西
+
+**Scheduled run (06:00):** `python run_daily.py --markets all --models ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1`
+
+**Manual backfill example:**
+```bash
+python services/lingfeng/run_daily.py --markets 山东,山西 --start-date 2026-01-01 --end-date 2026-04-30 --chunk-days 30
+```
+
+**Re-register Task Scheduler (after any change to schedule or args):**
+```powershell
+.\services\lingfeng\setup_schedule.ps1
+```
+
+**Ops log table:** `marketdata.data_ops_log` — visible in Portal (Data Operations Status) and bess-map Data Management tab (Data Operations Log section).
+
+---
+
+## Data Operations Status
+
+**Portal (`apps/portal/app.py`):** Replaces the old Portfolio Snapshot. Shows:
+- Metric tiles for last run per op type (success/running/failed)
+- Warning if any pipeline_job_status rows are running
+- Collapsible table of last 48h ops from `data_ops_log`
+
+**bess-map Data Management tab:** "Data Operations Log" section at bottom showing last 48h ops.
+
+**Query helpers:** `shared/data_ops/status.py` — `get_recent_ops(engine)`, `get_pipeline_jobs(engine)`
+
+**DB tables used:** `marketdata.data_ops_log` (LingFeng ops), `pipeline_job_status` (pipeline job tracker)
 
 ---
 
