@@ -26,7 +26,6 @@ st.set_page_config(page_title="BESS Intelligence Platform", layout="wide")
 
 from shared.agents.registry import get_visible_apps, get_visible_by_category
 from auth.rbac import get_user, get_groups, get_email
-from shared.metrics.portfolio import get_portfolio_metrics
 
 # --------------------------------------------------
 # AWS DEBUG
@@ -334,6 +333,7 @@ _DEV_PORTS = {
     "spot-markets":     "8505",
     "bess-map":         "8503",
     "mengxi-dashboard": "8511",
+    "gb-market":        "8508",
 }
 
 
@@ -460,21 +460,57 @@ if IS_VIEWER:
     st.info("You are signed in as Viewer. This role has read-only access to the portal.")
 
 # --------------------------------------------------
-# PORTFOLIO SNAPSHOT
+# DATA OPERATIONS STATUS
 # --------------------------------------------------
 
-st.subheader("Portfolio Snapshot")
+st.subheader("Data Operations Status")
 
 try:
-    metrics = get_portfolio_metrics()
+    import sqlalchemy as _sa
+    from shared.data_ops.status import get_recent_ops, get_pipeline_jobs
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total PnL", f"{metrics['total_pnl']:,.0f} ¥")
-    m2.metric("Today PnL", f"{metrics['today_pnl']:,.0f} ¥")
-    m3.metric("Active Assets", metrics["assets"])
-    m4.metric("Platform", "Operational")
-except Exception:
-    st.info("Portfolio metrics not available yet.")
+    _pgurl = os.environ.get("PGURL") or os.environ.get("DB_DSN", "")
+    _ops_engine = _sa.create_engine(_pgurl) if _pgurl else None
+
+    if _ops_engine is None:
+        st.info("DB not configured (PGURL missing).")
+    else:
+        _ops  = get_recent_ops(_ops_engine, hours=48)
+        _jobs = get_pipeline_jobs(_ops_engine)
+
+        # ── Summary tiles: last run per op type ─────────────────────────
+        if not _ops.empty:
+            _last = _ops.groupby("op_name").first().reset_index()
+            _status_icon = {"success": "✅", "running": "⏳", "failed": "❌"}
+            cols = st.columns(max(len(_last), 1))
+            for i, (_, row) in enumerate(_last.iterrows()):
+                icon = _status_icon.get(row["status"], "❓")
+                cols[i].metric(
+                    label=row["op_name"],
+                    value=f"{icon} {row['status']}",
+                    delta=row.get("market") or "",
+                )
+        else:
+            st.info("No data operations recorded in the last 48 hours.")
+
+        # ── Running pipeline jobs ────────────────────────────────────────
+        if not _jobs.empty:
+            running = _jobs[_jobs["status"] == "running"]
+            if not running.empty:
+                names = ", ".join(running["job_name"].tolist())
+                st.warning(f"{len(running)} pipeline job(s) currently running: {names}")
+
+        # ── Recent ops table (collapsible) ───────────────────────────────
+        if not _ops.empty:
+            with st.expander("Recent operations (last 48 h)", expanded=False):
+                st.dataframe(
+                    _ops[["op_name", "market", "date_range", "status", "message",
+                           "started_at", "duration_s"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+except Exception as _e:
+    st.info(f"Data operations status unavailable: {_e}")
 
 st.divider()
 

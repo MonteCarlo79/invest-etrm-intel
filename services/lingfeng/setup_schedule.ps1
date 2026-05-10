@@ -1,7 +1,7 @@
 # setup_schedule.ps1
 # ---------------------------------------------------------------------------
 # One-time setup: registers a Windows Task Scheduler task that runs the
-# LingFeng daily collection every day at 08:00.
+# LingFeng daily collection every day at 06:00 for all 29 provinces.
 #
 # Run this script once from PowerShell (as the same user who will run it):
 #   .\services\lingfeng\setup_schedule.ps1
@@ -14,8 +14,9 @@
 param(
     [string]$RepoRoot    = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$TaskName    = "BESS-LingFeng-DailyCollection",
-    [string]$RunAt       = "08:00",            # daily trigger time
-    [string]$PythonExe   = (Get-Command python -ErrorAction SilentlyContinue).Source
+    [string]$RunAt       = "06:00",            # daily trigger time
+    [string]$PythonExe   = (Get-Command python -ErrorAction SilentlyContinue).Source,
+    [string]$ScriptArgs  = "--markets all --models ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1"
 )
 
 if (-not $PythonExe) {
@@ -34,7 +35,7 @@ if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out
 # Build the command.  We wrap in cmd /c so stdout goes to the log file.
 $Action = New-ScheduledTaskAction `
     -Execute  "cmd.exe" `
-    -Argument "/c `"$PythonExe`" `"$Script`" >> `"$LogFile`" 2>&1" `
+    -Argument "/c `"$PythonExe`" `"$Script`" $ScriptArgs >> `"$LogFile`" 2>&1" `
     -WorkingDirectory $RepoRoot
 
 $Trigger = New-ScheduledTaskTrigger -Daily -At $RunAt
@@ -61,7 +62,8 @@ if ($existing) {
 
 Write-Host ""
 Write-Host "Task: $TaskName"
-Write-Host "Runs: daily at $RunAt"
+Write-Host "Runs: daily at $RunAt (all 29 provinces, 3 models)"
+Write-Host "Args: $ScriptArgs"
 Write-Host "Log:  $LogFile"
 Write-Host ""
 Write-Host "IMPORTANT — set credentials in system environment variables before first run:"

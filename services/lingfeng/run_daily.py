@@ -3,17 +3,20 @@ LingFeng daily data collection + ingestion pipeline.
 
 Downloads Excel data from https://lingfeng-saas.tradingthink.cn, renames it
 to <market>.xlsx, runs fundamentals ingestion and (optionally) the RT capture
-pipeline for the specified province.
+pipeline for the specified provinces.
 
-Usage — manual one-shot:
+Usage — all provinces, all models (daily scheduled run):
+    python services/lingfeng/run_daily.py --markets all
+
+Usage — single province, manual backfill:
     python services/lingfeng/run_daily.py \\
-        --market 山东 --indicator 市场供需数据 \\
+        --markets 山东 --indicator 市场供需数据 \\
         --lookback 30 \\
-        --model ols_rt_time_v1
+        --models ols_rt_time_v1
 
-Usage — with explicit date range:
+Usage — explicit date range:
     python services/lingfeng/run_daily.py \\
-        --market 山东 --indicator 市场供需数据 \\
+        --markets 山东,山西 \\
         --start-date 2026-01-01 --end-date 2026-05-09
 
 Credentials are read from env vars:
@@ -24,8 +27,8 @@ Credentials are read from env vars:
 Or pass --username / --password on the command line (not recommended for scheduled use).
 
 Scheduling (Windows Task Scheduler):
-    Action: python C:\\...\\services\\lingfeng\\run_daily.py
-    Trigger: Daily, 08:00 (data typically published by 07:00)
+    Action: python C:\\...\\services\\lingfeng\\run_daily.py --markets all
+    Trigger: Daily, 06:00
     Working dir: C:\\...\\bess-platform
     Before first run: set LINGFENG_USERNAME and LINGFENG_PASSWORD in the system
     environment variables (Control Panel → System → Advanced → Environment Variables).
@@ -60,17 +63,22 @@ _INGEST_PRICES_SCRIPT       = _REPO / "services" / "bess_map" / "run_all_provinc
 _INGEST_FUNDAMENTALS_SCRIPT = _REPO / "services" / "bess_map" / "run_fundamentals_ingest.py"
 _CAPTURE_PIPELINE_SCRIPT    = _REPO / "services" / "bess_map" / "run_capture_pipeline.py"
 
-# Province → canonical slug used in capture pipeline --province-list arg
-_PROVINCE_SLUG = {
-    "山东": "shandong",
-    "内蒙古": "inner_mongolia",
-    "广东": "guangdong",
-    "浙江": "zhejiang",
-    "湖北": "hubei",
-    "四川": "sichuan",
-    "甘肃": "gansu",
-    "新疆": "xinjiang",
-}
+# ---------------------------------------------------------------------------
+# All 29 LingFeng markets (Chinese province names as shown on the platform)
+# Province names in DB are stored as Chinese characters.
+# ---------------------------------------------------------------------------
+_ALL_MARKETS = [
+    "河南", "新疆", "吉林", "海南", "湖北", "四川", "黑龙江", "福建",
+    "浙江", "江苏", "广西", "安徽", "陕西", "贵州", "云南", "广东",
+    "蒙东", "湖南", "宁夏", "辽宁", "河北南网", "甘肃", "蒙西",
+    "山东", "山西", "冀北", "广州", "青海", "江西",
+]
+
+# Default capture models for daily runs
+_DEFAULT_MODELS = "ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1"
+
+# Default indicator for all markets
+_DEFAULT_INDICATOR = "市场供需数据"
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +219,12 @@ def _collect_and_ingest_chunk(
 def run_pipeline(
     username: str,
     password: str,
-    market: str,
+    markets: list[str],
     indicator: str,
     start_date: date,
     end_date: date,
     schema: str,
-    model: str,
+    models: list[str],
     duration_h: str,
     skip_prices: bool,
     skip_fundamentals: bool,
@@ -228,16 +236,14 @@ def run_pipeline(
     chunk_days: int,
 ) -> None:
 
-    province_cn   = _province_from_market(market)
-    province_slug = _PROVINCE_SLUG.get(province_cn, province_cn)
-
     total_days = (end_date - start_date).days + 1
-    chunks = list(_date_chunks(start_date, end_date, chunk_days))
 
     logger.info("=" * 60)
-    logger.info(f"LingFeng collection — {market} / {indicator}")
+    logger.info(f"LingFeng collection — {len(markets)} market(s) / {indicator}")
+    logger.info(f"Markets: {', '.join(markets)}")
     logger.info(f"Date range: {start_date} → {end_date} ({total_days} days)")
-    logger.info(f"Chunk size: {chunk_days} days → {len(chunks)} chunk(s)")
+    logger.info(f"Chunk size: {chunk_days} days")
+    logger.info(f"Models: {', '.join(models)}")
     logger.info("=" * 60)
 
     try:
@@ -246,56 +252,93 @@ def run_pipeline(
         sys.path.insert(0, str(_REPO))
         from services.lingfeng.collector import collect
 
-    # ── Steps 1–4: download + ingest each chunk ────────────────────────────
-    failed_chunks = []
-    for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
-        logger.info(f"[CHUNK {i}/{len(chunks)}]")
-        ok = _collect_and_ingest_chunk(
-            collect_fn=collect,
-            username=username,
-            password=password,
-            market=market,
-            indicator=indicator,
-            chunk_start=chunk_start,
-            chunk_end=chunk_end,
-            province_cn=province_cn,
-            schema=schema,
-            skip_prices=skip_prices,
-            skip_fundamentals=skip_fundamentals,
-            headless=headless,
-            download_dir=download_dir,
-            keep_files=keep_files,
-        )
-        if not ok:
-            failed_chunks.append((chunk_start, chunk_end))
+    # Try to load ops_log; degrade gracefully if unavailable
+    try:
+        sys.path.insert(0, str(_REPO))
+        from services.lingfeng import ops_log as _ops_log
+        _ops_log.ensure_table()
+        _use_ops_log = True
+    except Exception as e:
+        logger.warning(f"ops_log unavailable — skipping: {e}")
+        _use_ops_log = False
 
-    if failed_chunks:
-        logger.warning(f"Failed chunks: {failed_chunks}")
+    # ── Phase 1: Download + Ingest all markets ─────────────────────────────
+    all_provinces = []
+    for market in markets:
+        province_cn = _province_from_market(market)
+        all_provinces.append(province_cn)
+        chunks = list(_date_chunks(start_date, end_date, chunk_days))
 
-    # ── Step 5: Capture pipeline — once for the full date range ───────────
-    if not skip_capture:
-        durations = ["2", "4"] if duration_h == "both" else [duration_h.replace("h", "")]
-        for dur in durations:
-            logger.info(f"[CAPTURE] {dur}h, model={model}, province={province_slug} …")
-            cmd = [
-                sys.executable, _CAPTURE_PIPELINE_SCRIPT,
-                "--env",           "none",
-                "--schema",        schema,
-                "--duration-h",    dur,
-                "--model",         model,
-                "--province-list", province_slug,
-            ]
-            if force_capture:
-                cmd += ["--force", "--force-theoretical"]
-            ok = _run(cmd, f"Capture pipeline ({dur}h)")
+        logger.info(f"\n{'─'*50}")
+        logger.info(f"MARKET: {market} ({province_cn})  [{len(chunks)} chunk(s)]")
+        logger.info(f"{'─'*50}")
+
+        dr_str = f"{start_date}→{end_date}"
+        op_id = _ops_log.start_op("lingfeng_ingest", market=market, date_range=dr_str) if _use_ops_log else None
+
+        failed_chunks = []
+        for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
+            logger.info(f"[CHUNK {i}/{len(chunks)}]")
+            ok = _collect_and_ingest_chunk(
+                collect_fn=collect,
+                username=username,
+                password=password,
+                market=market,
+                indicator=indicator,
+                chunk_start=chunk_start,
+                chunk_end=chunk_end,
+                province_cn=province_cn,
+                schema=schema,
+                skip_prices=skip_prices,
+                skip_fundamentals=skip_fundamentals,
+                headless=headless,
+                download_dir=download_dir,
+                keep_files=keep_files,
+            )
             if not ok:
-                logger.warning(f"Capture pipeline {dur}h failed.")
+                failed_chunks.append((chunk_start, chunk_end))
+
+        market_ok = len(failed_chunks) == 0
+        msg = "" if market_ok else f"Failed chunks: {failed_chunks}"
+        if failed_chunks:
+            logger.warning(f"  {market}: {msg}")
+
+        if _use_ops_log and op_id is not None:
+            _ops_log.finish_op(op_id, market_ok, msg)
+
+    # ── Phase 2: Capture pipeline — once per model for all provinces ───────
+    if not skip_capture:
+        province_list = ",".join(all_provinces)
+        durations = ["2", "4"] if duration_h == "both" else [duration_h.replace("h", "")]
+
+        for model in models:
+            logger.info(f"\n[CAPTURE] model={model}, provinces={province_list}")
+            op_id = _ops_log.start_op("capture", market="all", date_range=model) if _use_ops_log else None
+
+            model_ok = True
+            for dur in durations:
+                cmd = [
+                    sys.executable, _CAPTURE_PIPELINE_SCRIPT,
+                    "--env",           "none",
+                    "--schema",        schema,
+                    "--duration-h",    dur,
+                    "--model",         model,
+                    "--province-list", province_list,
+                ]
+                if force_capture:
+                    cmd += ["--force", "--force-theoretical"]
+                ok = _run(cmd, f"Capture ({dur}h, {model})")
+                if not ok:
+                    logger.warning(f"Capture pipeline {dur}h {model} failed.")
+                    model_ok = False
+
+            if _use_ops_log and op_id is not None:
+                _ops_log.finish_op(op_id, model_ok, "" if model_ok else "One or more durations failed")
     else:
         logger.info("[CAPTURE] Skipped (--skip-capture).")
 
     logger.info("=" * 60)
-    logger.info(f"Collection complete. Chunks ok={len(chunks)-len(failed_chunks)}, "
-                f"failed={len(failed_chunks)}")
+    logger.info("Pipeline complete.")
     logger.info("=" * 60)
 
 
@@ -315,13 +358,15 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="LingFeng password (default: $LINGFENG_PASSWORD)")
 
     # Data selection
-    p.add_argument("--market",    default="山东",          help="Market to download (default: 山东)")
-    p.add_argument("--indicator", default="市场供需数据",  help="Indicator type (default: 市场供需数据)")
+    p.add_argument("--markets", default="all",
+                   help="Comma-separated market names or 'all' for all 29 markets (default: all)")
+    p.add_argument("--indicator", default=_DEFAULT_INDICATOR,
+                   help=f"Indicator type (default: {_DEFAULT_INDICATOR})")
 
     # Date range — mutually exclusive with --lookback
     date_grp = p.add_mutually_exclusive_group()
-    date_grp.add_argument("--lookback", type=int, default=30,
-                          help="Download the last N days (default: 30)")
+    date_grp.add_argument("--lookback", type=int, default=2,
+                          help="Download the last N days (default: 2)")
     date_grp.add_argument("--start-date", default=None,
                           help="Explicit start date YYYY-MM-DD (use with --end-date)")
     p.add_argument("--end-date", default=None,
@@ -329,8 +374,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Pipeline options
     p.add_argument("--schema",    default="marketdata",  help="DB schema (default: marketdata)")
-    p.add_argument("--model",     default="ols_rt_time_v1",
-                   help="Capture pipeline forecast model (default: ols_rt_time_v1)")
+    p.add_argument("--models",    default=_DEFAULT_MODELS,
+                   help=f"Comma-separated capture models (default: {_DEFAULT_MODELS})")
     p.add_argument("--duration-h", default="both", choices=["2", "4", "both"],
                    help="BESS duration for capture pipeline (default: both)")
     p.add_argument("--force-capture", action="store_true",
@@ -382,6 +427,21 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Resolve markets
+    if args.markets.strip().lower() == "all":
+        markets = _ALL_MARKETS
+    else:
+        markets = [m.strip() for m in args.markets.split(",") if m.strip()]
+    if not markets:
+        logger.error("No markets specified.")
+        sys.exit(1)
+
+    # Resolve models
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    if not models:
+        logger.error("No models specified.")
+        sys.exit(1)
+
     # Resolve date range
     today = date.today()
     if args.start_date:
@@ -400,12 +460,12 @@ def main() -> None:
     run_pipeline(
         username=username,
         password=password,
-        market=args.market,
+        markets=markets,
         indicator=args.indicator,
         start_date=start_date,
         end_date=end_date,
         schema=args.schema,
-        model=args.model,
+        models=models,
         duration_h=args.duration_h,
         skip_prices=args.skip_prices,
         skip_fundamentals=args.skip_fundamentals,

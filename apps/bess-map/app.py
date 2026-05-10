@@ -182,6 +182,7 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_no_files":   "No files uploaded this session. Upload Excel files above first.",
         "mgmt_fund_s3_needed":  "S3 not configured — cannot download files for ingestion.",
         "mgmt_col_last_fund":   "Last fundamentals date",
+        "data_ops_log_title":   "Data Operations Log",
         # agent
         "agent_title":          "BESS Market AI Agent",
         "agent_caption":        "Ask about province BESS economics, IRR scenarios, or dispatch performance.",
@@ -321,6 +322,7 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_no_files":   "本次会话无已上传文件，请先在上方上传Excel文件。",
         "mgmt_fund_s3_needed":  "S3未配置——无法下载文件进行导入。",
         "mgmt_col_last_fund":   "最新基本面日期",
+        "data_ops_log_title":   "数据操作日志",
         "agent_title":          "储能市场量化分析师",
         "agent_caption":        "询问省份储能经济性、IRR情景或调度表现。",
         "agent_welcome":        "您好！我可以查询储能经济数据、调度数据，并为任意省份计算IRR。请问您想了解什么？",
@@ -591,6 +593,16 @@ def load_coverage(_eng_key):
         ORDER BY h.province
     """)
     return pd.read_sql(sql, _eng(), parse_dates=["last_hourly", "last_capture", "last_fund"])
+
+@st.cache_data(ttl=60)
+def load_data_ops_log(_eng_key):
+    """Recent 48-hour data operations log, newest first."""
+    from shared.data_ops.status import get_recent_ops
+    try:
+        return get_recent_ops(_eng(), hours=48)
+    except Exception:
+        return pd.DataFrame()
+
 
 # ── Agent memory ──────────────────────────────────────────────────────────────
 _APP_NAME = "bess_map"
@@ -1524,6 +1536,19 @@ with tab_mgmt:
                     st.success(f"{dur}h pipeline completed.")
             load_coverage.clear()
             st.cache_data.clear()
+
+    # ── Data Operations Log ──────────────────────────────────────────────────
+    st.divider()
+    st.subheader(_t("data_ops_log_title"))
+
+    _ops_df = load_data_ops_log(_ENG_KEY)
+    if not _ops_df.empty:
+        _disp_cols = [c for c in ["op_name", "market", "date_range", "status", "message",
+                                   "started_at", "finished_at", "duration_s"]
+                      if c in _ops_df.columns]
+        st.dataframe(_ops_df[_disp_cols], use_container_width=True, hide_index=True)
+    else:
+        st.caption("No operations logged yet.")
 
 # ── Tab 6: Agent ──────────────────────────────────────────────────────────────
 with tab_agent:

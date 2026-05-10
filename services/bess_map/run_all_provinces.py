@@ -158,10 +158,7 @@ def update_province_progress(conn, province, duration_h, last_ts):
         cur.execute("""
             INSERT INTO audit.province_progress (province, duration_h, last_ts)
             VALUES (%s, %s, %s)
-            ON CONFLICT (province, duration_h)
-            DO UPDATE SET
-              last_ts = EXCLUDED.last_ts,
-              updated_at = now();
+            ON CONFLICT DO NOTHING
         """, (province, duration_h, last_ts))
     conn.commit()
 
