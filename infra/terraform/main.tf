@@ -249,6 +249,7 @@ resource "aws_lb_target_group" "bess_map" {
 }
 
 resource "aws_lb_target_group" "uploader" {
+  count       = var.enable_uploader_service ? 1 : 0
   name_prefix = "tgupl-"
   port        = 8501
   protocol    = "HTTP"
@@ -396,6 +397,7 @@ resource "aws_lb_listener_rule" "portal_path" {
 }
 
 resource "aws_lb_listener_rule" "uploader_path" {
+  count        = var.enable_uploader_service ? 1 : 0
   listener_arn = aws_lb_listener.https.arn
   priority     = 10
 
@@ -413,7 +415,7 @@ resource "aws_lb_listener_rule" "uploader_path" {
   action {
     type             = "forward"
     order            = 2
-    target_group_arn = aws_lb_target_group.uploader.arn
+    target_group_arn = aws_lb_target_group.uploader[0].arn
   }
 
   condition {
@@ -752,6 +754,7 @@ resource "aws_ecs_task_definition" "bess_map" {
 # memory spike during large Excel uploads. Rolling deployment; roll back by reverting + apply.
 ############################################
 resource "aws_ecs_task_definition" "uploader" {
+  count                    = var.enable_uploader_service ? 1 : 0
   family                   = "${var.name}-uploader"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -934,6 +937,10 @@ resource "aws_ecs_task_definition" "portal" {
         {
           name  = "LOGOUT_REDIRECT_URI"
           value = var.logout_redirect_uri
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
         }
 
       ]
@@ -1681,9 +1688,10 @@ resource "aws_ecs_service" "bess_map" {
 }
 
 resource "aws_ecs_service" "uploader" {
+  count           = var.enable_uploader_service ? 1 : 0
   name            = "${var.name}-uploader-svc"
   cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.uploader.arn
+  task_definition = aws_ecs_task_definition.uploader[0].arn
   desired_count   = var.desired_count_uploader
   launch_type     = "FARGATE"
 
@@ -1694,7 +1702,7 @@ resource "aws_ecs_service" "uploader" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.uploader.arn
+    target_group_arn = aws_lb_target_group.uploader[0].arn
     container_name   = "bess-uploader"
     container_port   = 8501
   }

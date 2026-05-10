@@ -18,7 +18,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 # PAGE CONFIG
 # --------------------------------------------------
 
-st.set_page_config(page_title="BESS Platform", layout="wide")
+st.set_page_config(page_title="BESS Intelligence Platform", layout="wide")
 
 # --------------------------------------------------
 # PROJECT IMPORTS
@@ -27,9 +27,6 @@ st.set_page_config(page_title="BESS Platform", layout="wide")
 from shared.agents.registry import get_visible_apps, get_visible_by_category
 from auth.rbac import get_user, get_groups, get_email
 from shared.metrics.portfolio import get_portfolio_metrics
-from shared.metrics.agents import get_agent_status
-from shared.metrics.dispatch import get_dispatch_preview
-from shared.metrics.market import get_price_series
 
 # --------------------------------------------------
 # AWS DEBUG
@@ -258,7 +255,7 @@ user_email = user.get("email", "unknown") if user else "unknown"
 
 IS_VIEWER = role == "Viewer"
 CAN_OPEN_APPS = role in ["Admin", "Trader", "Quant", "Analyst"]
-CAN_RUN_AGENTS = role in ["Admin", "Trader", "Quant", "Analyst"]
+CAN_QUICK_ASK = role in ["Admin", "Trader", "Quant", "Analyst"]
 CAN_MANAGE_USERS = role == "Admin"
 
 COGNITO_DOMAIN = os.getenv(
@@ -277,137 +274,165 @@ logout_url = (
     f"&logout_uri={urllib.parse.quote(LOGOUT_REDIRECT_URI, safe='')}"
 )
 
-visible_apps = [] if role == "Viewer" else get_visible_apps(role)
-app_items = [] if role == "Viewer" else get_visible_by_category(role, "Applications")
-agent_items = [] if role == "Viewer" else get_visible_by_category(role, "Agents")
-
 # --------------------------------------------------
-# ECS RUNNER
+# QUICK ASK — Anthropic one-shot helper
 # --------------------------------------------------
 
+_QUICK_ASK_SYSTEM = {
+    "strategist": (
+        "You are the Strategist — China spot electricity market analyst. "
+        "You give concise, expert answers on: spot market prices, inter-provincial flows, "
+        "market fundamentals (load, new energy, system tightness), and market rules. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "quant": (
+        "You are the Quant — BESS investment economics specialist. "
+        "You give concise, expert answers on: province-level BESS economics, LP dispatch, "
+        "IRR modelling, capture rates, and investment screening. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "trader": (
+        "You are the Trader — Inner Mongolia BESS trading operations analyst. "
+        "You give concise, expert answers on: asset P&L attribution, dispatch quality, "
+        "execution gaps, RT price dynamics for the 4 IM BESS assets "
+        "(SuYou, HangJinQi, SiZiWangQi, GuShanLiang). "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "deal_structurer": (
+        "You are the Deal Structurer — investment committee analyst. "
+        "You give concise, expert answers on: BESS investment deal structuring, "
+        "market attractiveness assessment, IRR hurdle rates, equity/debt structure, "
+        "and investment memorandum framing for China renewable assets. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+}
 
-def run_ecs_task(task_def: str, display_name: str):
+
+def _quick_ask(agent_key: str, question: str) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return "ANTHROPIC_API_KEY not configured."
     try:
-        if not task_def:
-            st.error(f"No task_definition configured for {display_name}")
-            return
-
-        if not cluster:
-            st.error("ECS_CLUSTER is not configured.")
-            return
-
-        if not private_subnets:
-            st.error("PRIVATE_SUBNETS is not configured.")
-            return
-
-        if not task_security_group:
-            st.error("TASK_SECURITY_GROUPS is not configured.")
-            return
-
-        response = ecs.run_task(
-            cluster=cluster,
-            taskDefinition=task_def,
-            launchType="FARGATE",
-            networkConfiguration={
-                "awsvpcConfiguration": {
-                    "subnets": private_subnets,
-                    "securityGroups": [task_security_group],
-                    "assignPublicIp": "DISABLED",
-                }
-            },
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            system=_QUICK_ASK_SYSTEM[agent_key],
+            messages=[{"role": "user", "content": question}],
         )
-
-        failures = response.get("failures", [])
-        tasks = response.get("tasks", [])
-
-        if failures:
-            st.error(f"Failed to start {display_name}: {failures}")
-        elif tasks:
-            st.success(f"{display_name} started.")
-        else:
-            st.warning(f"No task started for {display_name}.")
+        return resp.content[0].text.strip()
     except Exception as e:
-        st.error(f"Failed to start {display_name}: {e}")
+        return f"Error: {e}"
+
 
 # --------------------------------------------------
-# UI HELPERS
+# APP URL RESOLVER
 # --------------------------------------------------
 
+_DEV_PORTS = {
+    "spot-markets":     "8505",
+    "bess-map":         "8503",
+    "mengxi-dashboard": "8511",
+}
 
-def render_application_cards(items: list[dict]):
-    if not items:
-        st.info("No application modules are visible for your role.")
-        return
 
-    cols = st.columns(3)
-    for i, item in enumerate(items):
-        with cols[i % 3]:
-            with st.container(border=True):
-                st.markdown(f"### {item['name']}")
-                st.write(item.get("description", "-"))
-                path = item.get("path", "")
+def _app_url(path_slug: str) -> str:
+    """Resolve app URL — APP_URL_MAP overrides first, then dev-mode localhost, then ALB path."""
+    raw = os.getenv("APP_URL_MAP", "")
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        slug, url = item.split("=", 1)
+        if slug.strip() == path_slug:
+            return url.strip()
+    if os.getenv("AUTH_MODE", "alb_oidc").lower() == "dev" and path_slug in _DEV_PORTS:
+        return f"http://localhost:{_DEV_PORTS[path_slug]}"
+    return f"/{path_slug}/"
 
-                if CAN_OPEN_APPS and path:
-                    st.link_button("Open", path, use_container_width=True)
-                else:
-                    st.button(
-                        "Open",
-                        disabled=True,
-                        key=f"disabled_open_{item['name']}",
-                        use_container_width=True,
+
+# --------------------------------------------------
+# AGENT SECTION RENDERER
+# --------------------------------------------------
+
+def _render_agent_section(
+    icon: str,
+    name: str,
+    subtitle: str,
+    description: str,
+    capabilities: list[str],
+    app_slug: str | None,
+    agent_key: str,
+    available: bool = True,
+):
+    with st.container(border=True):
+        # Header row: icon + name + Open App button
+        hcol1, hcol2 = st.columns([7, 2])
+        with hcol1:
+            st.markdown(
+                f"<h2 style='margin:0; padding:0'>{icon} {name}</h2>"
+                f"<p style='color:#888; margin:0; font-size:0.9rem'>{subtitle}</p>",
+                unsafe_allow_html=True,
+            )
+        with hcol2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if available and CAN_OPEN_APPS and app_slug:
+                st.link_button(
+                    "Open App →",
+                    _app_url(app_slug),
+                    use_container_width=True,
+                    type="primary",
+                )
+            else:
+                st.button(
+                    "Coming Soon",
+                    disabled=True,
+                    key=f"open_{agent_key}",
+                    use_container_width=True,
+                )
+
+        st.markdown(f"*{description}*")
+
+        # Capabilities
+        cap_cols = st.columns(2)
+        half = len(capabilities) // 2 + len(capabilities) % 2
+        for i, cap in enumerate(capabilities):
+            cap_cols[i // half].markdown(f"- {cap}")
+
+        st.markdown("---")
+
+        # Quick Ask
+        if not IS_VIEWER and CAN_QUICK_ASK:
+            with st.expander("Quick Ask", expanded=False):
+                q_key = f"qa_input_{agent_key}"
+                r_key = f"qa_reply_{agent_key}"
+
+                if r_key not in st.session_state:
+                    st.session_state[r_key] = ""
+
+                q = st.text_input(
+                    f"Ask {name} a quick question",
+                    key=q_key,
+                    placeholder=f"e.g. What provinces have the best BESS economics right now?",
+                    label_visibility="collapsed",
+                )
+                c1, c2 = st.columns([2, 8])
+                with c1:
+                    if st.button("Ask", key=f"qa_btn_{agent_key}", type="primary"):
+                        if q.strip():
+                            with st.spinner("Thinking…"):
+                                st.session_state[r_key] = _quick_ask(agent_key, q.strip())
+                with c2:
+                    if st.button("Clear", key=f"qa_clear_{agent_key}"):
+                        st.session_state[r_key] = ""
+
+                if st.session_state[r_key]:
+                    st.info(st.session_state[r_key])
+                    st.caption(
+                        f"Quick answer — no live data access. Open the app for full {name} analysis."
                     )
 
-
-def render_agent_cards(items: list[dict]):
-    if not items:
-        st.info("No agent modules are visible for your role.")
-        return
-
-    cols = st.columns(2)
-    for i, item in enumerate(items):
-        with cols[i % 2]:
-            with st.container(border=True):
-                st.markdown(f"### {item['name']}")
-                st.write(item.get("description", "-"))
-
-                task_def = item.get("task_definition")
-                path = item.get("path", "")
-
-                btn_cols = st.columns(2)
-
-                with btn_cols[0]:
-                    if CAN_OPEN_APPS and path:
-                        st.link_button(
-                            "Open UI",
-                            path,
-                            use_container_width=True,
-                        )
-                    else:
-                        st.button(
-                            "Open UI",
-                            disabled=True,
-                            key=f"disabled_open_agent_{item['name']}",
-                            use_container_width=True,
-                        )
-
-                with btn_cols[1]:
-                    if CAN_RUN_AGENTS and task_def:
-                        if st.button(
-                            "Run Task",
-                            key=f"run_{item['name']}",
-                            use_container_width=True,
-                        ):
-                            run_ecs_task(task_def, item["name"])
-                    else:
-                        st.button(
-                            "Run Task",
-                            disabled=True,
-                            key=f"disabled_run_{item['name']}",
-                            use_container_width=True,
-                        )
-
-                if task_def:
-                    st.caption(f"ECS task: {task_def}")
 
 # --------------------------------------------------
 # HEADER
@@ -416,7 +441,7 @@ def render_agent_cards(items: list[dict]):
 header_left, header_right = st.columns([6, 1])
 
 with header_left:
-    st.title("⚡ BESS Energy Investment & Trading Platform")
+    st.title("BESS Investment-Trading-Asset Intelligence")
     st.caption(f"User: {user_email} | Role: {role}")
 
 with header_right:
@@ -447,7 +472,7 @@ try:
     m1.metric("Total PnL", f"{metrics['total_pnl']:,.0f} ¥")
     m2.metric("Today PnL", f"{metrics['today_pnl']:,.0f} ¥")
     m3.metric("Active Assets", metrics["assets"])
-    m4.metric("Running Agents", len(agent_items))
+    m4.metric("Platform", "Operational")
 except Exception:
     st.info("Portfolio metrics not available yet.")
 
@@ -521,85 +546,126 @@ if CAN_MANAGE_USERS:
     st.divider()
 
 # --------------------------------------------------
-# PLATFORM METRICS
+# 4 AGENT SECTIONS
 # --------------------------------------------------
 
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Role", role)
-k2.metric("Visible Modules", len(visible_apps))
-k3.metric("Agent Modules", len(agent_items))
-k4.metric("Status", "Operational")
+st.subheader("Your Intelligence Team")
+st.caption(
+    "Four specialist agents covering the full investment lifecycle. "
+    "Open an app for deep analysis, or Quick Ask for instant answers."
+)
 
-# --------------------------------------------------
-# APPLICATIONS
-# --------------------------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
 
-st.subheader("Applications")
-render_application_cards(app_items)
+# ── Row 1: Strategist + Quant ──────────────────────────────────────────────
+col_strategist, col_quant = st.columns(2)
 
-# --------------------------------------------------
-# AI AGENTS
-# --------------------------------------------------
+with col_strategist:
+    _render_agent_section(
+        icon="📊",
+        name="Strategist",
+        subtitle="China Spot Market Intelligence · Pillar 1",
+        description=(
+            "Analyses China's provincial spot electricity markets — price spreads, "
+            "inter-provincial flows, market fundamentals, and system tightness. "
+            "Trained on market rules, exchange annual reports, and policy documents "
+            "via the Knowledge Pool."
+        ),
+        capabilities=[
+            "Daily DA/RT price spread & volatility by province",
+            "Inter-provincial flow analysis (省间现货交易)",
+            "Market fundamentals: load, new energy, thermal capacity",
+            "System tightness & congestion signals",
+            "Knowledge base: market rules, policy docs, annual reports",
+            "Conversation memory across sessions",
+        ],
+        app_slug="spot-markets",
+        agent_key="strategist",
+        available=True,
+    )
 
-st.divider()
-st.subheader("AI Agents")
-render_agent_cards(agent_items)
+with col_quant:
+    _render_agent_section(
+        icon="📐",
+        name="Quant",
+        subtitle="BESS Investment Economics · Pillar 2",
+        description=(
+            "Screens provinces for BESS investment attractiveness using LP perfect-foresight "
+            "dispatch. Computes theoretical revenue, capture rate, and equity IRR under "
+            "configurable CapEx/O&M/RTE scenarios. Province ranking updated daily."
+        ),
+        capabilities=[
+            "Province ranking: annual revenue/MWh/day (2h and 4h)",
+            "LP-optimal dispatch detail by province and date",
+            "IRR, NPV, and payback under custom assumptions",
+            "Capture rate vs perfect-foresight benchmark",
+            "Realised vs theoretical revenue comparison",
+            "Conversation memory across sessions",
+        ],
+        app_slug="bess-map",
+        agent_key="quant",
+        available=True,
+    )
 
-# --------------------------------------------------
-# AGENT STATUS
-# --------------------------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
 
-st.divider()
-st.subheader("Agent Status")
+# ── Row 2: Trader + Deal Structurer ──────────────────────────────────────
+col_trader, col_deal = st.columns(2)
 
-try:
-    df_agents = get_agent_status()
-    st.dataframe(df_agents, use_container_width=True)
-except Exception:
-    st.info("Agent status table not available.")
+with col_trader:
+    _render_agent_section(
+        icon="⚡",
+        name="Trader",
+        subtitle="Mengxi BESS Trading Operations · Pillar 3",
+        description=(
+            "Operations and trading analyst for the 4 Inner Mongolia BESS assets. "
+            "Tracks daily P&L attribution across the full 5-step waterfall — from "
+            "perfect-foresight upper bound down to actual cleared dispatch — and "
+            "identifies execution gaps."
+        ),
+        capabilities=[
+            "Daily P&L waterfall for SuYou, HangJinQi, SiZiWangQi, GuShanLiang",
+            "Dispatch quality: charge/discharge curves, SoC profile",
+            "Execution gap attribution (grid restriction, forecast error, nomination)",
+            "RT clearing price dynamics and market context",
+            "Strategy comparison: multi-strategy simulation",
+            "Auto-save memory: ops observations persist across sessions",
+        ],
+        app_slug="mengxi-dashboard",
+        agent_key="trader",
+        available=True,
+    )
 
-# --------------------------------------------------
-# DISPATCH PREVIEW
-# --------------------------------------------------
-
-st.divider()
-st.subheader("Dispatch Preview (Next 24h)")
-
-try:
-    df_dispatch = get_dispatch_preview()
-    st.dataframe(df_dispatch, use_container_width=True)
-except Exception:
-    st.info("Execution plan not available yet.")
-
-# --------------------------------------------------
-# MARKET PRICES
-# --------------------------------------------------
-
-st.divider()
-st.subheader("Market Prices")
-
-try:
-    df_prices = get_price_series()
-    st.line_chart(df_prices.set_index("timestamp"))
-except Exception as e:
-    st.info(f"Market prices not available yet: {e}")
+with col_deal:
+    _render_agent_section(
+        icon="🏦",
+        name="Deal Structurer",
+        subtitle="Investment Committee · Pillar 5",
+        description=(
+            "Orchestrates the investment committee process — aggregating market signals "
+            "from the Strategist, economics from the Quant, and ops benchmarks from the "
+            "Trader into a structured investment recommendation. Quick Ask available now; "
+            "full app coming in the next build."
+        ),
+        capabilities=[
+            "Market screen: province attractiveness assessment",
+            "Economics case: IRR vs hurdle rate (target: >12% equity IRR)",
+            "Ops benchmark: realisation rate vs IM asset portfolio",
+            "Risk factors: regulatory, curtailment, counterparty, grid access",
+            "Deal structure: equity/debt split, duration, subsidy, exit horizon",
+            "Investment memorandum drafting (full app TBD)",
+        ],
+        app_slug=None,
+        agent_key="deal_structurer",
+        available=False,
+    )
 
 # --------------------------------------------------
 # FOOTER
 # --------------------------------------------------
 
 st.divider()
-st.info(
-    """
-    **Platform Control Tower**
-
-    Applications provide operational tools.
-
-    AI Agents automate:
-
-    • Strategy generation  
-    • Portfolio optimization  
-    • Execution planning  
-    • Development workflows
-    """
+st.caption(
+    "Investment-Trading-Asset Intelligence and Decisions System · "
+    "BESS Platform · Powered by Claude"
 )

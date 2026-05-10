@@ -11,7 +11,8 @@ RUN pip install --no-cache-dir \
     pandas \
     sqlalchemy \
     psycopg2-binary \
-    boto3
+    boto3 \
+    "anthropic>=0.40"
 
 ENV PYTHONPATH=/app
 

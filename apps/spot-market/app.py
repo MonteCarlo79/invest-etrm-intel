@@ -97,7 +97,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_geo":              "Geo Map",
         "tab_interprov":        "Inter-Provincial Flow",
         "tab_fundamentals":     "Market Fundamentals",
-        "tab_agent":            "Agent",
+        "tab_agent":            "Strategist",
         "tab_mgmt":             "Data Management",
         "tab_intraday":         "Intraday Analysis",
         # intraday
@@ -152,6 +152,21 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "ANTHROPIC_API_KEY is not set. Please add it to your .env file.",
         "agent_clear":          "Clear chat",
         "agent_error":          "Agent error: {err}",
+        # knowledge base
+        "kb_title":             "Knowledge Base",
+        "kb_caption":           "Upload market rules, annual reports, and policy documents for the agent to reference.",
+        "kb_upload_label":      "Upload documents (PDF / PPTX / Word / Excel / TXT / Image)",
+        "kb_category_label":    "Category override",
+        "kb_category_auto":     "Auto-detect",
+        "kb_upload_btn":        "Process & Add",
+        "kb_success":           "{n} document(s) added to knowledge base.",
+        "kb_duplicate":         "{fname} is already in the knowledge base.",
+        "kb_failed":            "Failed to process {fname}: {err}",
+        "kb_doc_list_title":    "Registered Reference Documents",
+        "kb_doc_list_empty":    "No reference documents uploaded yet.",
+        "kb_delete":            "Remove",
+        "kb_pages":             "{n} pages",
+        "kb_chunks":            "chunks indexed",
         # memory
         "mem_saved_ok":         "Saved {n} memory item(s).",
         "mem_confirm_title":    "💡 Suggested memories from this conversation",
@@ -346,7 +361,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_geo":              "地理分布图",
         "tab_interprov":        "省间现货交易",
         "tab_fundamentals":     "市场基础数据",
-        "tab_agent":            "智能助手",
+        "tab_agent":            "策略分析师",
         "tab_mgmt":             "数据管理",
         "tab_intraday":         "日内价格分析",
         # intraday
@@ -391,7 +406,7 @@ _T: dict[str, dict[str, str]] = {
         "fund_generation_unit": "亿千瓦时",
         "fund_select_prompt":   "请至少选择一个省份。",
         # agent
-        "agent_title":          "现货市场智能助手",
+        "agent_title":          "现货市场策略分析师",
         "agent_caption":        "查询价格、走势、省间交易数据，或触发PDF导入流程。",
         "agent_welcome":        "您好！我可以查询现货市场价格、省间交易数据及每日市场摘要，也可以为新PDF运行导入流程。请问您想了解什么？",
         "agent_placeholder":    "例如：2026年4月山东日前价格是多少？",
@@ -401,6 +416,21 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "未设置 ANTHROPIC_API_KEY，请在 .env 文件中添加。",
         "agent_clear":          "清除对话",
         "agent_error":          "助手出错：{err}",
+        # knowledge base
+        "kb_title":             "知识库",
+        "kb_caption":           "上传交易规则、年度报告、政策文件等，供智能助手参考使用。",
+        "kb_upload_label":      "上传文档（PDF / PPTX / Word / Excel / TXT / 图片）",
+        "kb_category_label":    "手动指定类别",
+        "kb_category_auto":     "自动识别",
+        "kb_upload_btn":        "处理并添加",
+        "kb_success":           "已添加 {n} 个文档至知识库。",
+        "kb_duplicate":         "{fname} 已存在于知识库中。",
+        "kb_failed":            "处理 {fname} 失败：{err}",
+        "kb_doc_list_title":    "已注册的参考文档",
+        "kb_doc_list_empty":    "暂无参考文档，请上传。",
+        "kb_delete":            "删除",
+        "kb_pages":             "{n} 页",
+        "kb_chunks":            "个片段已索引",
         # memory
         "mem_saved_ok":         "已保存 {n} 条记忆。",
         "mem_confirm_title":    "💡 本次对话中发现的记忆建议",
@@ -2499,8 +2529,11 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
 3. For structural questions (fuel mix, capacity, renewables share, peak demand), call get_market_fundamentals.
 4. For inter-provincial flow questions (volumes, sending/receiving provinces), call get_interprov_flow.
 5. For qualitative market colour or key drivers, call get_market_summaries.
-6. Use markdown tables for multi-province or multi-period comparisons.
-7. If asked to ingest a new PDF, confirm the file path with the user before calling run_pipeline.
+6. For questions about market rules, trading procedures, settlement mechanisms, annual exchange reports, \
+or regulatory policy, call search_reference_docs — this searches the uploaded knowledge base documents \
+and past conversation logs (use category='conversation_log' to search previous Q&A history).
+7. Use markdown tables for multi-province or multi-period comparisons.
+8. If asked to ingest a new PDF, confirm the file path with the user before calling run_pipeline.
 """
 
     def _build_spot_system() -> str:
@@ -2638,6 +2671,38 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
                 "required": [],
             },
         },
+        {
+            "name": "search_reference_docs",
+            "description": (
+                "Search the uploaded reference document knowledge base — market rules, "
+                "annual exchange operations reports, policy documents, technical specs, "
+                "and research reports. Use this when the user asks about trading rules, "
+                "settlement procedures, market mechanisms, regulatory requirements, "
+                "or wants context from official documents rather than live price data."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query in Chinese or English, e.g. '结算周期' or 'DA price cap'",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": (
+                            "Optional category filter: market_rules | annual_report | "
+                            "policy_doc | technical_spec | research_report | other. "
+                            "Omit to search all categories."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of text chunks to return (default 5, max 10).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
     ]
 
     # ── Tool dispatcher ────────────────────────────────────────────────────────
@@ -2660,6 +2725,15 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
                 result = _rp(**inputs)
             elif name == "get_market_fundamentals":
                 result = _gmf(**inputs)
+            elif name == "search_reference_docs":
+                from services.knowledge_pool.knowledge_docs import search_reference_docs as _srd
+                _limit = min(int(inputs.get("limit", 5)), 10)
+                rows = _srd(
+                    query=inputs["query"],
+                    category=inputs.get("category"),
+                    limit=_limit,
+                )
+                result = {"count": len(rows), "chunks": rows}
             else:
                 result = {"error": f"Unknown tool: {name}"}
         except Exception as _e:
@@ -2716,7 +2790,7 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
             {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
         ]
     if "spot_mem_suggestions" not in st.session_state:
-        st.session_state["spot_mem_suggestions"] = []
+        st.session_state["spot_mem_suggestions"] = []  # kept for back-compat, unused
 
     st.subheader(_t("agent_title"))
     st.caption(_t("agent_caption"))
@@ -2727,7 +2801,6 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
         st.session_state["agent_display"] = [
             {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
         ]
-        st.session_state["spot_mem_suggestions"] = []
         st.rerun()
 
     # ── Render existing chat history ───────────────────────────────────────────
@@ -2745,29 +2818,6 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
         else:
             with st.chat_message(_msg["role"]):
                 st.markdown(_msg["content"])
-
-    # ── Memory suggestion panel ────────────────────────────────────────────────
-    if st.session_state["spot_mem_suggestions"]:
-        with st.expander(_t("mem_confirm_title"), expanded=True):
-            selected_idxs = []
-            for _i, _sug in enumerate(st.session_state["spot_mem_suggestions"]):
-                if st.checkbox(
-                    f"**[{_sug.get('category','')}]** {_sug.get('subject','')} — {_sug.get('content','')}",
-                    value=True,
-                    key=f"spot_mem_chk_{_i}",
-                ):
-                    selected_idxs.append(_i)
-            col_sv, col_dm = st.columns(2)
-            if col_sv.button(_t("mem_save_selected"), key="spot_mem_save_btn"):
-                for _idx in selected_idxs:
-                    _s = st.session_state["spot_mem_suggestions"][_idx]
-                    _save_spot_memory(_s["category"], _s["subject"], _s["content"], source="auto")
-                st.success(_t("mem_saved_ok", n=len(selected_idxs)))
-                st.session_state["spot_mem_suggestions"] = []
-                st.rerun()
-            if col_dm.button(_t("mem_dismiss"), key="spot_mem_dismiss_btn"):
-                st.session_state["spot_mem_suggestions"] = []
-                st.rerun()
 
     # ── Chat input ─────────────────────────────────────────────────────────────
     _user_input = st.chat_input(_t("agent_placeholder"), key="agent_input")
@@ -2808,11 +2858,23 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
             )
             st.markdown(_reply)
 
-        # ── Auto-extract memories ──────────────────────────────────────────────
-        _suggestions = _extract_spot_memories(_user_input, _reply)
-        if _suggestions:
-            st.session_state["spot_mem_suggestions"] = _suggestions
-            st.rerun()
+        # ── Auto-save memories + log conversation turn ─────────────────────────
+        try:
+            _suggestions = _extract_spot_memories(_user_input, _reply)
+            for _sug in _suggestions:
+                _save_spot_memory(
+                    _sug["category"], _sug["subject"], _sug["content"], source="auto"
+                )
+            if _suggestions:
+                st.toast(_t("mem_saved_ok", n=len(_suggestions)))
+        except Exception:
+            pass
+
+        try:
+            from services.knowledge_pool.knowledge_docs import log_conversation_turn as _log_turn
+            _log_turn(_user_input, _reply)
+        except Exception:
+            pass
 
     # ── Memory management (bottom of tab) ─────────────────────────────────────
     st.divider()
@@ -2828,6 +2890,85 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
                 _c2.markdown(f"**{_row.subject}** — {_row.content}")
                 if _c3.button(_t("mem_delete"), key=f"del_spot_mem_{_row.id}"):
                     _delete_spot_memory(_row.id)
+                    st.rerun()
+
+    # ── Knowledge Base ─────────────────────────────────────────────────────────
+    with st.expander(f"📚 {_t('kb_title')}", expanded=False):
+        from services.knowledge_pool.knowledge_docs import (
+            init_knowledge_tables as _kb_init,
+            register_and_ingest as _kb_ingest,
+            list_knowledge_docs as _kb_list,
+            delete_knowledge_doc as _kb_delete,
+            CATEGORY_LABELS as _KB_CATS,
+        )
+        _kb_init()
+
+        st.caption(_t("kb_caption"))
+
+        # ── Upload section ─────────────────────────────────────────────────────
+        _kb_files = st.file_uploader(
+            _t("kb_upload_label"),
+            type=["pdf", "pptx", "txt", "docx", "xlsx", "xls",
+                  "png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key="kb_uploader",
+        )
+        _cat_options = [_t("kb_category_auto")] + list(_KB_CATS.keys())
+        _cat_labels  = [_t("kb_category_auto")] + list(_KB_CATS.values())
+        _cat_sel_idx = st.selectbox(
+            _t("kb_category_label"),
+            options=range(len(_cat_options)),
+            format_func=lambda i: _cat_labels[i],
+            key="kb_cat_sel",
+        )
+        _cat_override = None if _cat_sel_idx == 0 else _cat_options[_cat_sel_idx]
+
+        if st.button(_t("kb_upload_btn"), key="kb_upload_btn", disabled=not _kb_files):
+            _api_key = _os.environ.get("ANTHROPIC_API_KEY")
+            _added, _dupes, _errors = 0, [], []
+            for _f in _kb_files:
+                _bytes = _f.read()
+                try:
+                    _doc_id, _is_new, _cat = _kb_ingest(
+                        _bytes, _f.name,
+                        category_override=_cat_override,
+                        api_key=_api_key,
+                    )
+                    if _is_new:
+                        _added += 1
+                    else:
+                        _dupes.append(_f.name)
+                except Exception as _exc:
+                    _errors.append((_f.name, str(_exc)))
+
+            if _added:
+                st.success(_t("kb_success", n=_added))
+            for _d in _dupes:
+                st.info(_t("kb_duplicate", fname=_d))
+            for _fn, _err in _errors:
+                st.error(_t("kb_failed", fname=_fn, err=_err))
+            st.rerun()
+
+        # ── Document list ──────────────────────────────────────────────────────
+        st.markdown(f"**{_t('kb_doc_list_title')}**")
+        _kb_docs = _kb_list()
+        if not _kb_docs:
+            st.info(_t("kb_doc_list_empty"))
+        else:
+            for _doc in _kb_docs:
+                _dc1, _dc2, _dc3, _dc4 = st.columns([3, 1, 1, 1])
+                _dc1.markdown(
+                    f"**{_doc['file_name']}**"
+                    + (f"  \n_{_doc['title']}_" if _doc.get('title') and _doc['title'] != _doc['file_name'] else "")
+                )
+                _dc2.markdown(f"`{_KB_CATS.get(_doc['category'], _doc['category'])}`")
+                _dc3.markdown(
+                    _t("kb_pages", n=_doc.get('page_count', 0))
+                    if _doc.get('ingest_status') == 'parsed'
+                    else f"_{_doc.get('ingest_status', '—')}_"
+                )
+                if _dc4.button(_t("kb_delete"), key=f"kb_del_{_doc['id']}"):
+                    _kb_delete(_doc['id'])
                     st.rerun()
 
 

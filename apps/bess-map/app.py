@@ -12,6 +12,7 @@ import os
 import sys
 import subprocess
 import datetime as dt
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -84,7 +85,7 @@ if _AUTH_AVAILABLE:
 # ── translations ──────────────────────────────────────────────────────────────
 _T: dict[str, dict[str, str]] = {
     "en": {
-        "app_title":            "🔋 BESS Asset Map — Pillar 2",
+        "app_title":            "Quant Analyst",
         "lang_label":           "🌐 Language",
         "filters":              "Filters",
         "date_range":           "Date range",
@@ -95,7 +96,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_dispatch":         "Dispatch & Economics",
         "tab_irr":              "IRR Calculator",
         "tab_mgmt":             "Data Management",
-        "tab_agent":            "Agent",
+        "tab_agent":            "Quant",
         # ranking
         "rank_title":           "BESS Investment Screening — Province Ranking",
         "rank_caption":         "Annual arbitrage revenue per MWh of **installed energy capacity** (= power_MW × duration_h). Based on LP perfect-foresight dispatch.",
@@ -210,7 +211,12 @@ _T: dict[str, dict[str, str]] = {
         # forecast method
         "forecast_method_label":   "Revenue basis",
         "forecast_theoretical":    "Theoretical (LP perfect foresight)",
-        "forecast_realized":       "Realized (OLS DA+Time)",
+        "forecast_realized":       "Realized (forecast model)",
+        # model selector
+        "model_selector_label":    "Forecast model",
+        "model_naive_ar17":        "Naive AR (D-1 & D-7 combined)",
+        "model_ols_time":          "OLS + Time (ARIMA proxy)",
+        "model_ols_fund":          "OLS + Fundamentals (D-1 bidding space)",
         # cycles
         "rank_col_cycles":         "Avg Daily Cycles",
         "rank_kpi_cycles":         "Avg Daily Cycles (4h)",
@@ -223,7 +229,7 @@ _T: dict[str, dict[str, str]] = {
         "geo_4h_title":            "4h BESS — Annual Revenue (¥/MWh/yr)",
     },
     "zh": {
-        "app_title":            "🔋 储能资产地图 — 第二支柱",
+        "app_title":            "量化分析师",
         "lang_label":           "🌐 语言",
         "filters":              "筛选条件",
         "date_range":           "日期范围",
@@ -233,7 +239,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_dispatch":         "调度与收益",
         "tab_irr":              "IRR计算器",
         "tab_mgmt":             "数据管理",
-        "tab_agent":            "智能助手",
+        "tab_agent":            "量化分析师",
         "rank_title":           "储能投资筛选 — 省份排名",
         "rank_caption":         "每MWh**安装能量容量**（= 功率MW × 时长h）的年度套利收益（元/MWh/年）。基于LP完美预见调度。",
         "rank_kpi_2h":          "最优省份（2h）",
@@ -315,7 +321,7 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_no_files":   "本次会话无已上传文件，请先在上方上传Excel文件。",
         "mgmt_fund_s3_needed":  "S3未配置——无法下载文件进行导入。",
         "mgmt_col_last_fund":   "最新基本面日期",
-        "agent_title":          "储能市场智能助手",
+        "agent_title":          "储能市场量化分析师",
         "agent_caption":        "询问省份储能经济性、IRR情景或调度表现。",
         "agent_welcome":        "您好！我可以查询储能经济数据、调度数据，并为任意省份计算IRR。请问您想了解什么？",
         "agent_placeholder":    "例如：在600元/kWh资本支出下，哪个省份的4h储能IRR最高？",
@@ -343,7 +349,12 @@ _T: dict[str, dict[str, str]] = {
         # forecast method
         "forecast_method_label":   "收益基准",
         "forecast_theoretical":    "理论值（LP完美预见）",
-        "forecast_realized":       "实际值（OLS日前+时段）",
+        "forecast_realized":       "实际值（预测模型）",
+        # model selector
+        "model_selector_label":    "预测模型",
+        "model_naive_ar17":        "朴素AR（D-1与D-7组合）",
+        "model_ols_time":          "OLS+时间特征（ARIMA代理）",
+        "model_ols_fund":          "OLS+基本面（D-1竞价空间）",
         # cycles
         "rank_col_cycles":         "日均循环次数",
         "rank_kpi_cycles":         "日均循环次数（4h）",
@@ -424,18 +435,32 @@ def _eng():
 
 # ── data loaders ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def load_province_ranking(_eng_key, start: str, end: str):
+def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_time_v1"):
+    # Theoretical LP profit is model-agnostic; fetch it without model filter so the
+    # ranking always shows even before a specific model's capture pipeline has run.
+    # Realized profit and capture rate are LEFT JOINed from the selected model only.
     sql = sql_text("""
-        SELECT province, duration_h,
-               ROUND((AVG(theoretical_profit_per_mwh_day) * 365)::numeric, 0) AS annual_theo,
-               ROUND((AVG(realized_profit_per_mwh_day)   * 365)::numeric, 0) AS annual_real,
-               ROUND((AVG(capture_rate) * 100)::numeric, 1)                   AS capture_pct,
-               COUNT(*)                                             AS days
-        FROM marketdata.bess_capture_daily
-        WHERE date BETWEEN :start AND :end
-        GROUP BY province, duration_h ORDER BY annual_theo DESC
+        SELECT t.province, t.duration_h, t.annual_theo, t.days,
+               r.annual_real, r.capture_pct
+        FROM (
+            SELECT province, duration_h,
+                   ROUND((AVG(theoretical_profit_per_mwh_day) * 365)::numeric, 0) AS annual_theo,
+                   COUNT(DISTINCT date) AS days
+            FROM marketdata.bess_capture_daily
+            WHERE date BETWEEN :start AND :end
+            GROUP BY province, duration_h
+        ) t
+        LEFT JOIN (
+            SELECT province, duration_h,
+                   ROUND((AVG(realized_profit_per_mwh_day)   * 365)::numeric, 0) AS annual_real,
+                   ROUND((AVG(NULLIF(capture_rate, 'NaN'::double precision)) * 100)::numeric, 1) AS capture_pct
+            FROM marketdata.bess_capture_daily
+            WHERE date BETWEEN :start AND :end AND model = :model
+            GROUP BY province, duration_h
+        ) r USING (province, duration_h)
+        ORDER BY annual_theo DESC NULLS LAST
     """)
-    return pd.read_sql(sql, _eng(), params={"start": start, "end": end})
+    return pd.read_sql(sql, _eng(), params={"start": start, "end": end, "model": model})
 
 @st.cache_data(ttl=3600)
 def load_intraday_spread(_eng_key, start: str, end: str):
@@ -452,20 +477,48 @@ def load_intraday_spread(_eng_key, start: str, end: str):
     return pd.read_sql(sql, _eng(), params={"start": start, "end": end})
 
 @st.cache_data(ttl=3600)
-def load_monthly_economics(_eng_key, province: str, duration_h: float, start: str, end: str):
+def load_monthly_economics(_eng_key, province: str, duration_h: float, start: str, end: str, model: str = "ols_rt_time_v1"):
+    # Theoretical is model-agnostic; realized/capture are model-specific.
     sql = sql_text("""
-        SELECT date_trunc('month', date)::date AS month, province,
-               ROUND(AVG(theoretical_profit_per_mwh_day)::numeric, 2) AS theo_avg,
-               ROUND(AVG(realized_profit_per_mwh_day)::numeric, 2)    AS real_avg,
-               ROUND((AVG(capture_rate) * 100)::numeric, 1)           AS capture_pct
-        FROM marketdata.bess_capture_daily
-        WHERE province = :p AND ABS(duration_h - :d) < 0.01
-          AND date BETWEEN :start AND :end
-        GROUP BY 1, 2 ORDER BY 1
+        SELECT t.month, t.province, t.theo_avg,
+               r.real_avg, r.capture_pct
+        FROM (
+            SELECT date_trunc('month', date)::date AS month, province,
+                   ROUND(AVG(theoretical_profit_per_mwh_day)::numeric, 2) AS theo_avg
+            FROM marketdata.bess_capture_daily
+            WHERE province = :p AND ABS(duration_h - :d) < 0.01
+              AND date BETWEEN :start AND :end
+            GROUP BY 1, 2
+        ) t
+        LEFT JOIN (
+            SELECT date_trunc('month', date)::date AS month, province,
+                   ROUND(AVG(realized_profit_per_mwh_day)::numeric, 2) AS real_avg,
+                   ROUND((AVG(NULLIF(capture_rate, 'NaN'::double precision)) * 100)::numeric, 1) AS capture_pct
+            FROM marketdata.bess_capture_daily
+            WHERE province = :p AND ABS(duration_h - :d) < 0.01
+              AND date BETWEEN :start AND :end AND model = :model
+            GROUP BY 1, 2
+        ) r USING (month, province)
+        ORDER BY 1
     """)
     return pd.read_sql(sql, _eng(),
-                       params={"p": province, "d": duration_h, "start": start, "end": end},
+                       params={"p": province, "d": duration_h, "start": start, "end": end, "model": model},
                        parse_dates=["month"])
+
+@st.cache_data(ttl=3600)
+def load_last_dispatch_date(_eng_key, province: str, duration_h: float) -> dt.date | None:
+    sql = sql_text("""
+        SELECT MAX(datetime::date) AS last_date
+        FROM marketdata.spot_dispatch_hourly_theoretical
+        WHERE province = :p AND ABS(duration_h - :d) < 0.01
+    """)
+    try:
+        row = pd.read_sql(sql, _eng(), params={"p": province, "d": duration_h}).iloc[0]
+        v = row["last_date"]
+        return v.date() if hasattr(v, "date") else (v if isinstance(v, dt.date) else None)
+    except Exception:
+        return None
+
 
 @st.cache_data(ttl=3600)
 def load_dispatch_day(_eng_key, province: str, duration_h: float, day: str):
@@ -829,6 +882,19 @@ with st.sidebar:
     dur_filter = st.radio(_t("duration_label"), ["2h", "4h", _t("all_durations")],
                           index=1, key="dur_filter")
     st.divider()
+    _MODEL_OPTS = {
+        "ols_rt_time_v1":      _t("model_ols_time"),
+        "naive_rt_ar17":       _t("model_naive_ar17"),
+        "ols_fundamentals_v1": _t("model_ols_fund"),
+    }
+    _model_label = st.selectbox(
+        _t("model_selector_label"),
+        options=list(_MODEL_OPTS.values()),
+        index=0,
+        key="model_selector",
+    )
+    sel_model = next(k for k, v in _MODEL_OPTS.items() if v == _model_label)
+    st.divider()
     forecast_method = st.radio(
         _t("forecast_method_label"),
         [_t("forecast_theoretical"), _t("forecast_realized")],
@@ -884,7 +950,7 @@ with tab_ranking:
     st.subheader(_t("rank_title"))
     st.caption(_t("rank_caption"))
 
-    rank_df = load_province_ranking(_ENG_KEY, sel_start, sel_end)
+    rank_df = load_province_ranking(_ENG_KEY, sel_start, sel_end, sel_model)
 
     if rank_df.empty:
         st.warning("No data in bess_capture_daily for this period.")
@@ -909,21 +975,25 @@ with tab_ranking:
         # KPI strip
         k1, k2, k3, k4 = st.columns(4)
         if not wide.empty:
-            best2 = wide.dropna(subset=[sort_2h]).iloc[0]
-            best4 = wide.dropna(subset=[sort_4h]).iloc[0]
-            avg_cap = rank_df["capture_pct"].mean()
-            k1.metric(_t("rank_kpi_2h"), f"{best2['province']}  ¥{best2[sort_2h]:,.0f}")
-            k2.metric(_t("rank_kpi_4h"), f"{best4['province']}  ¥{best4[sort_4h]:,.0f}")
-            k3.metric(_t("rank_kpi_capture"), f"{avg_cap:.1f}%")
+            _w2 = wide.dropna(subset=[sort_2h])
+            _w4 = wide.dropna(subset=[sort_4h])
+            best2 = _w2.iloc[0] if not _w2.empty else None
+            best4 = _w4.iloc[0] if not _w4.empty else None
+            avg_cap = rank_df["capture_pct"].dropna()
+            k1.metric(_t("rank_kpi_2h"),
+                      f"{best2['province']}  ¥{best2[sort_2h]:,.0f}" if best2 is not None else "—")
+            k2.metric(_t("rank_kpi_4h"),
+                      f"{best4['province']}  ¥{best4[sort_4h]:,.0f}" if best4 is not None else "—")
+            k3.metric(_t("rank_kpi_capture"), f"{avg_cap.mean():.1f}%" if not avg_cap.empty else "—")
             k4.metric(_t("rank_kpi_cycles"),
                       f"{avg_cycles_4h:.2f}/day" if avg_cycles_4h is not None else "—")
 
-        # Bar chart: 2h vs 4h grouped by province
+        # Bar chart: always sort by annual_theo so ordering is stable regardless of model coverage
         plot_df = rank_df.copy()
         plot_df["Duration"] = plot_df["duration_h"].map({2.0: "2h", 4.0: "4h"})
         if dur_filter != _t("all_durations"):
             plot_df = plot_df[plot_df["Duration"] == dur_filter]
-        plot_df = plot_df.sort_values(rank_annual_col, ascending=True)
+        plot_df = plot_df.sort_values("annual_theo", ascending=True)
 
         fig_rank = px.bar(
             plot_df, x=rank_annual_col, y="province", color="Duration",
@@ -991,7 +1061,7 @@ with tab_geo:
     )
     geo_capex = st.slider("Assumed capex for payback (¥/kWh)", 400, 900, 600, step=25,
                           key="geo_capex")
-    geo_rank_df = load_province_ranking(_ENG_KEY, sel_start, sel_end)
+    geo_rank_df = load_province_ranking(_ENG_KEY, sel_start, sel_end, sel_model)
     _geojson_bess, _geo_err = _load_china_geojson_bess()
     if _geo_err:
         st.warning(f"{_t('geo_unavailable')} ({_geo_err})")
@@ -1035,7 +1105,7 @@ with tab_dispatch:
     with col_dr:
         disp_dr = st.date_input(
             _t("disp_date_range"),
-            value=(dt.date(2025, 1, 1), dt.date(2026, 1, 31)),
+            value=(dt.date(2025, 1, 1), dt.date.today()),
             key="disp_dr",
         )
     if isinstance(disp_dr, (list, tuple)) and len(disp_dr) == 2:
@@ -1044,7 +1114,7 @@ with tab_dispatch:
         d_start, d_end = "2025-01-01", "2026-01-31"
     disp_dur_h = 2.0 if disp_dur == "2h" else 4.0
 
-    monthly = load_monthly_economics(_ENG_KEY, disp_prov, disp_dur_h, d_start, d_end)
+    monthly = load_monthly_economics(_ENG_KEY, disp_prov, disp_dur_h, d_start, d_end, sel_model)
 
     if monthly.empty:
         st.warning("No data for this selection.")
@@ -1072,8 +1142,10 @@ with tab_dispatch:
 
     # Dispatch detail: single day
     st.subheader(_t("disp_detail_title"))
+    _last_disp = load_last_dispatch_date(_ENG_KEY, disp_prov, disp_dur_h)
+    _detail_default = _last_disp if _last_disp else dt.date.today() - dt.timedelta(days=7)
     detail_date = st.date_input(_t("disp_detail_date"),
-                                value=dt.date(2025, 7, 1), key="detail_date")
+                                value=_detail_default, key="detail_date")
     detail_df = load_dispatch_day(_ENG_KEY, disp_prov, disp_dur_h, str(detail_date))
 
     if detail_df.empty:
@@ -1281,6 +1353,7 @@ with tab_mgmt:
         _t("mgmt_upload_help"), type="xlsx", accept_multiple_files=True,
         key="mgmt_upload",
     )
+    _local_upload_dir = Path(tempfile.gettempdir()) / "bess_uploads"
     if uploaded:
         if _s3 and S3_BUCKET:
             for f in uploaded:
@@ -1288,7 +1361,11 @@ with tab_mgmt:
             st.session_state["mgmt_uploaded_names"] = [f.name for f in uploaded]
             st.success(f"Uploaded {len(uploaded)} file(s) to S3.")
         else:
-            st.warning("S3 not configured — files uploaded but not saved. Set S3_BUCKET env var.")
+            _local_upload_dir.mkdir(parents=True, exist_ok=True)
+            for f in uploaded:
+                (_local_upload_dir / f.name).write_bytes(f.read())
+            st.session_state["mgmt_uploaded_names"] = [f.name for f in uploaded]
+            st.success(f"Saved {len(uploaded)} file(s) locally (S3 not configured).")
 
     # Ingest uploaded files → DB
     st.divider()
@@ -1299,20 +1376,19 @@ with tab_mgmt:
     if st.button(_t("mgmt_ingest_btn"), key="mgmt_ingest_run"):
         if not _uploaded_names:
             st.warning(_t("mgmt_ingest_no_files"))
-        elif not (_s3 and S3_BUCKET):
-            st.warning(_t("mgmt_ingest_s3_needed"))
         else:
             _ingest_script = _REPO / "services" / "bess_map" / "run_all_provinces.py"
             if not _ingest_script.exists():
                 st.error(f"Script not found: {_ingest_script}")
             else:
-                _local_dir = Path("/tmp/bess_uploads")
+                _local_dir = _local_upload_dir
                 _local_dir.mkdir(parents=True, exist_ok=True)
-                # Download uploaded files from S3
-                with st.spinner("Downloading files from S3..."):
-                    for _fname in _uploaded_names:
-                        _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
-                                          str(_local_dir / _fname))
+                if _s3 and S3_BUCKET:
+                    # Download uploaded files from S3
+                    with st.spinner("Downloading files from S3..."):
+                        for _fname in _uploaded_names:
+                            _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
+                                              str(_local_dir / _fname))
                 _cmd = [sys.executable, str(_ingest_script),
                         "--indir", str(_local_dir),
                         "--auto-cols", "--upload-db",
@@ -1321,7 +1397,9 @@ with tab_mgmt:
                 st.caption(f"Running: {' '.join(_cmd)}")
                 _log_area = st.empty()
                 _proc = subprocess.Popen(_cmd, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, text=True)
+                                         stderr=subprocess.STDOUT, text=True,
+                                         cwd=str(_REPO),
+                                         env={**os.environ, "PYTHONPATH": str(_REPO)})
                 _buf = ""
                 for _line in _proc.stdout:
                     _buf += _line
@@ -1343,19 +1421,18 @@ with tab_mgmt:
     if st.button(_t("mgmt_fund_btn"), key="mgmt_fund_run"):
         if not _uploaded_names:
             st.warning(_t("mgmt_fund_no_files"))
-        elif not (_s3 and S3_BUCKET):
-            st.warning(_t("mgmt_fund_s3_needed"))
         else:
             _fund_script = _REPO / "services" / "bess_map" / "run_fundamentals_ingest.py"
             if not _fund_script.exists():
                 st.error(f"Script not found: {_fund_script}")
             else:
-                _local_dir = Path("/tmp/bess_uploads")
+                _local_dir = _local_upload_dir
                 _local_dir.mkdir(parents=True, exist_ok=True)
-                with st.spinner("Downloading files from S3..."):
-                    for _fname in _uploaded_names:
-                        _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
-                                          str(_local_dir / _fname))
+                if _s3 and S3_BUCKET:
+                    with st.spinner("Downloading files from S3..."):
+                        for _fname in _uploaded_names:
+                            _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
+                                              str(_local_dir / _fname))
                 _cmd2 = [sys.executable, str(_fund_script),
                          "--indir", str(_local_dir),
                          "--env", "none", "--schema", "marketdata",
@@ -1363,7 +1440,9 @@ with tab_mgmt:
                 st.caption(f"Running: {' '.join(_cmd2)}")
                 _log_area2 = st.empty()
                 _proc2 = subprocess.Popen(_cmd2, stdout=subprocess.PIPE,
-                                          stderr=subprocess.STDOUT, text=True)
+                                          stderr=subprocess.STDOUT, text=True,
+                                          cwd=str(_REPO),
+                                          env={**os.environ, "PYTHONPATH": str(_REPO)})
                 _buf2 = ""
                 for _line2 in _proc2.stdout:
                     _buf2 += _line2
@@ -1405,6 +1484,13 @@ with tab_mgmt:
     )
     cap_dur   = st.radio(_t("mgmt_capture_dur"), ["2h", "4h", "Both"], horizontal=True, key="cap_dur")
     cap_force = st.checkbox(_t("mgmt_capture_force"), key="cap_force")
+    cap_model = st.selectbox(
+        _t("model_selector_label"),
+        options=list(_MODEL_OPTS.keys()),
+        format_func=lambda k: _MODEL_OPTS[k],
+        index=0,
+        key="cap_model_sel",
+    )
 
     if st.button(_t("mgmt_capture_btn"), type="primary"):
         _pipeline = _REPO / "services" / "bess_map" / "run_capture_pipeline.py"
@@ -1416,14 +1502,17 @@ with tab_mgmt:
             for dur in durations:
                 cmd = [sys.executable, str(_pipeline),
                        "--env", "none", "--schema", "marketdata",
-                       "--duration-h", dur]
+                       "--duration-h", dur,
+                       "--model", cap_model]
                 if cap_provs_sel:
                     cmd += ["--province-list", ",".join(cap_provs_sel)]
                 if cap_force:
                     cmd += ["--force", "--force-theoretical"]
                 st.caption(f"Running: {' '.join(cmd)}")
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True)
+                                        stderr=subprocess.STDOUT, text=True,
+                                        cwd=str(_REPO),
+                                        env={**os.environ, "PYTHONPATH": str(_REPO)})
                 buf = ""
                 for line in proc.stdout:
                     buf += line
@@ -1524,6 +1613,7 @@ with tab_agent:
                 _ENG_KEY,
                 inp.get("start_date", "2025-01-01"),
                 inp.get("end_date", str(dt.date.today())),
+                sel_model,
             )
             if inp.get("duration_h"):
                 df = df[abs(df["duration_h"] - float(inp["duration_h"])) < 0.01]

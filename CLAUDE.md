@@ -32,15 +32,17 @@ Read this file at the start of every session. Then read MEMORY.md and ERRORS.md 
 
 **Audience:** Renewable asset investors who care about investment returns and asset operations.
 
-**Architecture — 5 Pillars, 5 Agents:**
+**Architecture — 4 Agent Pillars + Investment Committee:**
 
-| Pillar | App | Based On | Focus |
-|--------|-----|----------|-------|
-| 1 | Market Map | `apps/spot-market` (china-spot) | Spot prices, inter-provincial flow, market fundamentals, system tightness |
-| 2 | Asset Map | Similar framework to china-spot | Asset valuation and modelling by type and region |
-| 3 | Asset Operations & Portfolio Optimisation | Inner Mongolia ops as foundation | Live asset data, dispatch strategy, invoice reconciliation |
-| 4 | Knowledge Pool | `services/knowledge_pool` | National + provincial power market policies, trading rules, regulatory expert |
-| 5 | Investment Committee | Orchestration layer | Aggregates opinions from all 4 agents to make investment decisions |
+| Pillar | Agent | App | Focus |
+|--------|-------|-----|-------|
+| 1 | **Strategist** | `apps/spot-market` | China spot prices, inter-provincial flow, market fundamentals, system tightness |
+| 2 | **Quant** | `apps/bess-map` | BESS investment economics, LP dispatch, IRR, province ranking |
+| 3 | **Trader** | `apps/mengxi-dashboard` | IM BESS asset trading ops, P&L attribution, dispatch quality |
+| 4 | **Knowledge Pool** | `services/knowledge_pool` | National + provincial market policies, trading rules, regulatory docs |
+| 5 | **Deal Structurer** | Portal Quick Ask (full app TBD) | Investment committee: aggregates P1–P3 insights into investment recommendations |
+
+**Portal** (`apps/portal`): Control tower with 4 agent sections, portfolio snapshot, Cognito user management (Admin only), and inline Quick Ask for all 4 personas.
 
 When any task touches more than one pillar, flag the cross-pillar impact before proceeding.
 
@@ -60,11 +62,17 @@ Using Claude Code, GitHub Copilot, and other AI tools for personal productivity.
 ### Stage 2 — AI Agent Building ✅ Built
 Agents with multi-turn tool-use loops, domain grounding, and business logic. Agents orchestrate data services and external tools to achieve business goals.
 
-**Current state:** Two domain agents deployed:
-- `apps/spot-market` — Agent tab with 5 tools (prices, inter-provincial flow, summaries, pipeline, fundamentals)
-- `apps/bess-map` — Agent tab with 3 tools (economics, dispatch detail, IRR estimate)
+**Current state:** Three domain agents deployed:
 
-Both agents have: explicit domain grounding rules (no external knowledge contamination), DB-backed conversation memory (`marketdata.agent_memory`), auto-extract via Haiku, memory injection into every session's system prompt. See **AI Agent Design Requirements** section for the full pattern.
+| Agent | App | Tab name | Tools | Memory app key |
+|-------|-----|----------|-------|----------------|
+| Strategist | `apps/spot-market` | "Strategist" / "策略分析师" | get_spot_prices, get_interprov_flow, get_market_summaries, run_pipeline, get_market_fundamentals, search_reference_docs | `spot_market` |
+| Quant | `apps/bess-map` | "Quant" / "量化分析师" | get_bess_economics, get_dispatch_detail, get_irr_estimate | `bess_map` |
+| Trader | `apps/mengxi-dashboard` | "Trader" | get_asset_pnl, get_dispatch_data, get_rt_prices | `mengxi_trader` |
+
+All agents use: explicit domain grounding rules (no external knowledge contamination), DB-backed conversation memory (`marketdata.agent_memory`), auto-extract via Haiku (no confirmation panel since v21), memory injection into every session's system prompt. See **AI Agent Design Requirements** section for the full pattern.
+
+**Portal Quick Ask:** Portal (`apps/portal`) has inline Quick Ask for all 4 personas (including Deal Structurer) — one-shot Claude calls, no tools, ≤300 tokens, for rapid conversational answers without opening a full app.
 
 ---
 
@@ -134,13 +142,13 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 
 **Key services and paths:**
 
-| Service | ECR repo | ALB path | Port |
-|---------|----------|----------|------|
-| Spot Market (Pillar 1) | `bess-spot-markets` | `/spot-markets/*` | 8505 |
-| BESS Asset Map (Pillar 2) | `bess-map` | `/bess-map/*` | 8503 |
-| Inner Mongolia dashboard | `bess-inner-mongolia` | `/inner-mongolia/*` | — |
-| Portal | `portal` | `/` | — |
-| PnL Attribution | `bess-pnl-attribution` | `/pnl-attribution/*` | — |
+| Service | Agent | ECR repo | ALB path | Local port | Current image |
+|---------|-------|----------|----------|------------|---------------|
+| Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v22 |
+| BESS Asset Map (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v38 |
+| Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v5 |
+| Portal | 4 Quick Ask personas | `portal` | `/portal/*` | 8500 | v24 |
+| PnL Attribution | — | `bess-pnl-attribution` | `/pnl-attribution/*` | — | — |
 
 ---
 
@@ -227,12 +235,56 @@ created_at TIMESTAMPTZ DEFAULT NOW(), active BOOLEAN DEFAULT TRUE
 
 ### Current agent inventory
 
-| App | Tab | System prompt | Tools | Memory table filter |
-|-----|-----|--------------|-------|-------------------|
-| `apps/spot-market/app.py` | Agent (tab 9) | `_SPOT_AGENT_BASE_SYSTEM` + `_build_spot_system()` | get_spot_prices, get_interprov_flow, get_market_summaries, run_pipeline, get_market_fundamentals | `app='spot_market'` |
-| `apps/bess-map/app.py` | Agent (tab 6) | `_AGENT_BASE_SYSTEM` + `_build_system()` | get_bess_economics, get_dispatch_detail, get_irr_estimate | `app='bess_map'` |
+| App | Tab label | System prompt constant | Tools | Memory app key |
+|-----|-----------|----------------------|-------|----------------|
+| `apps/spot-market/app.py` | "Strategist" / "策略分析师" | `_SPOT_AGENT_BASE_SYSTEM` | get_spot_prices, get_interprov_flow, get_market_summaries, run_pipeline, get_market_fundamentals, search_reference_docs | `spot_market` |
+| `apps/bess-map/app.py` | "Quant" / "量化分析师" | `_AGENT_BASE_SYSTEM` | get_bess_economics, get_dispatch_detail, get_irr_estimate | `bess_map` |
+| `apps/mengxi-dashboard/app.py` | "Trader" | `_TRADER_BASE_SYSTEM` | get_asset_pnl, get_dispatch_data, get_rt_prices | `mengxi_trader` |
 
-When building a new agent, copy this pattern exactly. Name the base system constant `_<APP>_AGENT_BASE_SYSTEM`, the builder `_build_<app>_system()`, and scope all memory reads/writes to a unique `app` value.
+**Auto-save memory pattern (v21+):** After every agent turn, call Haiku to extract `{category, subject, content}` items, auto-save to DB, show `st.toast()` notification. No confirmation panel. Use in all new agents.
+
+When building a new agent, use the `/new-agent` skill. Name the base system constant `_<APP>_AGENT_BASE_SYSTEM`, the builder `_build_<app>_system()`, and scope all memory reads/writes to a unique `app` value.
+
+### Knowledge Pool (Strategist only — v20+)
+- `services/knowledge_pool/knowledge_docs.py` — DB-backed FTS knowledge base
+- `staging.spot_knowledge_docs` / `staging.spot_knowledge_chunks` — tables
+- Supported formats: PDF, PPTX, DOCX, XLSX, XLS, TXT, PNG, JPG, JPEG, WEBP
+- Auto-categorization: keyword heuristic → Haiku fallback
+- Images/charts: Claude vision at upload time
+- Conversation logging: every Q&A turn saved as daily `conversation_log_YYYY-MM-DD.md`
+- Bulk ingestion: `scripts/ingest_knowledge_bulk.py --dir /path/to/folder`
+
+---
+
+## Agent Development Kit
+
+The project uses a 5-layer Claude Code dev team setup in `.claude/`.
+
+### Layer structure
+
+| Layer | Path | Purpose |
+|-------|------|---------|
+| L1 | `CLAUDE.md` | Project rules, architecture, agent patterns, deploy protocol |
+| L2 | `.claude/commands/` | Custom slash commands (skills): `/deploy`, `/session-end`, `/new-agent` |
+| L3 | `.claude/hooks/` | SessionStart hook: prints platform reminders on session open |
+| L4 | `.claude/agents/` | Subagent definition files (6 agents) |
+| L5 | `.claude/settings.json` | Hook registration |
+
+### Subagents available
+
+| Subagent | File | Use for |
+|----------|------|---------|
+| Strategist | `.claude/agents/strategist.md` | Pillar 1 code/data questions |
+| Quant | `.claude/agents/quant.md` | Pillar 2 code/data questions |
+| Trader | `.claude/agents/trader.md` | Pillar 3 code/data questions |
+| Deal Structurer | `.claude/agents/deal-structurer.md` | Pillar 5 design/investment questions |
+| code-reviewer | `.claude/agents/code-reviewer.md` | Review code changes vs CLAUDE.md rules |
+| test-runner | `.claude/agents/test-runner.md` | Run tests, report results |
+
+### Custom skills (slash commands)
+- `/deploy` — generates deployment checklist for modified apps
+- `/session-end` — writes session summary to MEMORY.md
+- `/new-agent` — scaffolds a new agent tab following the v21+ pattern
 
 ---
 
@@ -302,17 +354,26 @@ Every app dashboard must run in two modes:
 
 **Environment variables:** stored in `bess-platform/config/.env`. Load before running any app locally.
 
-**Local run — spot-market:**
-```bash
-cd bess-platform
-# PowerShell
+**Local run (PowerShell — load env first, then run each app in a separate terminal):**
+```powershell
+# Load env (run in each terminal)
 Get-Content config\.env | ForEach-Object { if ($_ -match '^([^#][^=]+)=(.+)$') { [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim()) } }
+
+# Portal (Terminal 1) — AUTH_MODE=dev bypasses Cognito, auto-logs in as Admin
+$env:AUTH_MODE="dev"
+streamlit run apps/portal/app.py --server.port 8500
+
+# Spot Market / Strategist (Terminal 2)
 streamlit run apps/spot-market/app.py --server.port 8505
 
-# bash
-set -a && source config/.env && set +a
-streamlit run apps/spot-market/app.py --server.port 8505
+# BESS Map / Quant (Terminal 3)
+streamlit run apps/bess-map/app.py --server.port 8503
+
+# Mengxi Dashboard / Trader (Terminal 4)
+streamlit run apps/mengxi-dashboard/app.py --server.port 8511
 ```
+
+Portal Open App links auto-resolve to localhost ports when `AUTH_MODE=dev` — no `APP_URL_MAP` needed.
 
 ---
 

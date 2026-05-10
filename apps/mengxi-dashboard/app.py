@@ -435,13 +435,14 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_market, tab_dispatch_pnl, tab_daily_ops, tab_strategy, tab_cockpit, tab_data_mgmt = st.tabs([
+tab_market, tab_dispatch_pnl, tab_daily_ops, tab_strategy, tab_cockpit, tab_data_mgmt, tab_trader = st.tabs([
     "Market Data",
     "Dispatch & P&L Waterfall",
     "Daily Ops",
     "Strategy Comparison",
     "Options Cockpit",
     "Data Management",
+    "Trader",
 ])
 
 # ---------------------------------------------------------------------------
@@ -794,3 +795,361 @@ with tab_data_mgmt:
 
             if any_success:
                 st.info("Upload complete. Click **Refresh now** above to update coverage stats.")
+
+# ---------------------------------------------------------------------------
+# Tab 7: Trader
+# ---------------------------------------------------------------------------
+with tab_trader:
+    import anthropic as _ant
+    import json as _json
+
+    _TRADER_APP = "mengxi_trader"
+    _TRADER_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+    if not _TRADER_API_KEY:
+        st.error("ANTHROPIC_API_KEY not set — Trader agent unavailable.")
+        st.stop()
+
+    _trader_client = _ant.Anthropic(api_key=_TRADER_API_KEY)
+
+    # ── memory helpers ────────────────────────────────────────────────────────
+    @st.cache_resource
+    def _ensure_trader_memory_table():
+        try:
+            from sqlalchemy import text as _sql_text
+            with _get_sqlalchemy_engine().begin() as _conn:
+                _conn.execute(_sql_text("""
+                    CREATE TABLE IF NOT EXISTS marketdata.agent_memory (
+                        id       SERIAL PRIMARY KEY,
+                        app      TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        subject  TEXT NOT NULL,
+                        content  TEXT NOT NULL,
+                        source   TEXT NOT NULL DEFAULT 'manual',
+                        active   BOOLEAN NOT NULL DEFAULT TRUE,
+                        saved    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """))
+                _conn.execute(_sql_text(
+                    "CREATE INDEX IF NOT EXISTS ix_agent_memory_app "
+                    "ON marketdata.agent_memory (app)"
+                ))
+        except Exception:
+            pass
+        return True
+
+    @st.cache_data(ttl=60)
+    def _load_trader_memories() -> pd.DataFrame:
+        try:
+            from sqlalchemy import text as _sql_text
+            return pd.read_sql(
+                _sql_text("""
+                    SELECT id, category, subject, content, source, saved
+                    FROM marketdata.agent_memory
+                    WHERE app = :app AND active = TRUE
+                    ORDER BY saved DESC
+                    LIMIT 100
+                """),
+                _get_sqlalchemy_engine(),
+                params={"app": _TRADER_APP},
+            )
+        except Exception:
+            return pd.DataFrame(columns=["id", "category", "subject", "content", "source", "saved"])
+
+    def _save_trader_memory(category: str, subject: str, content: str, source: str = "auto") -> None:
+        from sqlalchemy import text as _sql_text
+        with _get_sqlalchemy_engine().begin() as _conn:
+            _conn.execute(
+                _sql_text("INSERT INTO marketdata.agent_memory "
+                          "(app, category, subject, content, source) "
+                          "VALUES (:app, :cat, :sub, :con, :src)"),
+                {"app": _TRADER_APP, "cat": category, "sub": subject,
+                 "con": content, "src": source},
+            )
+        _load_trader_memories.clear()
+
+    # ── system prompt ─────────────────────────────────────────────────────────
+    _TRADER_BASE_SYSTEM = (
+        "You are the Trader — a BESS operations analyst specialising in Inner Mongolia "
+        "(Mengxi) dispatch performance, P&L attribution, and market trading analysis. "
+        "Your scope: 4 operating BESS assets — SuYou (景蓝乌尔图), HangJinQi (悦杭独贵), "
+        "SiZiWangQi (景通四益堂储), GuShanLiang (裕昭沙子坝). "
+        "You help the operations and trading team understand daily P&L drivers, "
+        "execution gaps, dispatch quality, and RT price dynamics.\n\n"
+        "Rules:\n"
+        "1. Use get_asset_pnl first before making any financial claims.\n"
+        "2. Use get_dispatch_data to analyse specific dispatch days.\n"
+        "3. Use get_rt_prices to contextualise market conditions.\n"
+        "4. Attribute losses clearly: PF Unrestricted → PF Grid-Feasible → "
+        "Forecast Optimal → Strategy → Nominated → Cleared Actual.\n"
+        "5. Respond concisely with actionable insights for the trading team.\n"
+        "6. Asset codes: suyou / hangjinqi / siziwangqi / gushanliang."
+    )
+
+    def _build_trader_system() -> str:
+        mem_df = _load_trader_memories()
+        if mem_df.empty:
+            mem_block = ""
+        else:
+            lines = [f"[{r.category}] {r.subject}: {r.content}"
+                     for r in mem_df.itertuples()]
+            mem_block = "\n\n## Memory from prior sessions:\n" + "\n".join(lines)
+        return _TRADER_BASE_SYSTEM + mem_block
+
+    # ── tools ─────────────────────────────────────────────────────────────────
+    _TRADER_TOOLS = [
+        {
+            "name": "get_asset_pnl",
+            "description": (
+                "Get daily P&L attribution for one or all BESS assets over a date range. "
+                "Returns: trade_date, asset_code, pf_unrestricted_pnl, pf_grid_feasible_pnl, "
+                "tt_forecast_optimal_pnl, tt_strategy_pnl, nominated_pnl, cleared_actual_pnl (CNY). "
+                "Use to analyse revenue performance and loss waterfall."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "asset_code": {
+                        "type": "string",
+                        "description": "suyou / hangjinqi / siziwangqi / gushanliang. Omit for all assets.",
+                    },
+                    "start_date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "end_date":   {"type": "string", "description": "YYYY-MM-DD"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "get_dispatch_data",
+            "description": (
+                "Get 15-min dispatch data for a BESS asset on a specific date. "
+                "Returns: interval_start, charge_mw, discharge_mw, soc_mwh, "
+                "cleared_price_yuan_mwh. Use to check dispatch quality and SoC profile."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "asset_code": {"type": "string",
+                                  "description": "suyou / hangjinqi / siziwangqi / gushanliang"},
+                    "date":       {"type": "string", "description": "YYYY-MM-DD"},
+                },
+                "required": ["asset_code", "date"],
+            },
+        },
+        {
+            "name": "get_rt_prices",
+            "description": (
+                "Get hourly average Mengxi province RT clearing prices (CNY/MWh) "
+                "for a date range. Use to contextualise market conditions."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "end_date":   {"type": "string", "description": "YYYY-MM-DD"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+    ]
+
+    def _dispatch_trader_tool(name: str, inp: dict) -> str:
+        from sqlalchemy import text as _sql_text
+        engine = _get_sqlalchemy_engine()
+
+        if name == "get_asset_pnl":
+            where_clauses = ["trade_date >= :start", "trade_date <= :end"]
+            params: dict = {"start": inp["start_date"], "end": inp["end_date"]}
+            if inp.get("asset_code"):
+                where_clauses.append("asset_code = :asset")
+                params["asset"] = inp["asset_code"]
+            where_sql = " AND ".join(where_clauses)
+            try:
+                df = pd.read_sql(
+                    _sql_text(f"""
+                        SELECT trade_date, asset_code,
+                               pf_unrestricted_pnl, pf_grid_feasible_pnl,
+                               tt_forecast_optimal_pnl, tt_strategy_pnl,
+                               nominated_pnl, cleared_actual_pnl
+                        FROM reports.bess_asset_daily_attribution
+                        WHERE {where_sql}
+                        ORDER BY trade_date, asset_code
+                        LIMIT 200
+                    """),
+                    engine, params=params,
+                )
+                return df.to_json(orient="records", default_handler=str)
+            except Exception as _e:
+                return f"Error querying P&L: {_e}"
+
+        elif name == "get_dispatch_data":
+            try:
+                df = pd.read_sql(
+                    _sql_text("""
+                        SELECT interval_start, asset_code,
+                               charge_mw, discharge_mw, soc_mwh,
+                               cleared_price_yuan_mwh
+                        FROM marketdata.ops_bess_dispatch_15min
+                        WHERE asset_code = :asset AND data_date = :dt
+                        ORDER BY interval_start
+                        LIMIT 100
+                    """),
+                    engine, params={"asset": inp["asset_code"], "dt": inp["date"]},
+                )
+                return df.to_json(orient="records", default_handler=str)
+            except Exception as _e:
+                return f"Error querying dispatch data: {_e}"
+
+        elif name == "get_rt_prices":
+            try:
+                df = _load_market_series(
+                    "hist_mengxi_provincerealtimeclearprice_15min",
+                    date.fromisoformat(inp["start_date"]),
+                    date.fromisoformat(inp["end_date"]),
+                    "hourly",
+                )
+                return df.to_json(orient="records", default_handler=str)
+            except Exception as _e:
+                return f"Error querying RT prices: {_e}"
+
+        return "Unknown tool"
+
+    # ── auto-extract memories ─────────────────────────────────────────────────
+    def _extract_trader_memories(user_msg: str, agent_reply: str) -> list[dict]:
+        try:
+            resp = _trader_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=600,
+                system=(
+                    "Extract key facts, operational observations, and decisions from "
+                    "BESS trading conversations worth remembering long-term. "
+                    "Output ONLY a JSON array (no markdown). Each item: "
+                    "{\"category\": one of [pnl_insight, asset_note, market_view, "
+                    "execution_gap, strategy_decision], "
+                    "\"subject\": short title (≤60 chars), "
+                    "\"content\": the key fact (≤200 chars)}. "
+                    "Return [] if nothing worth persisting."
+                ),
+                messages=[{"role": "user", "content":
+                    f"User: {user_msg}\n\nTrader: {agent_reply[:1500]}\n\n"
+                    "What facts or observations are worth persisting across sessions?"}],
+            )
+            raw = resp.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            return _json.loads(raw)
+        except Exception:
+            return []
+
+    # ── agent runner ──────────────────────────────────────────────────────────
+    def _run_trader_agent(messages: list[dict]) -> str:
+        system = _build_trader_system()
+        current_msgs = list(messages)
+        for _ in range(10):
+            resp = _trader_client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                system=system,
+                tools=_TRADER_TOOLS,
+                messages=current_msgs,
+            )
+            if resp.stop_reason == "end_turn":
+                return "\n".join(b.text for b in resp.content if hasattr(b, "text"))
+            tool_calls = [b for b in resp.content if b.type == "tool_use"]
+            if not tool_calls:
+                return "\n".join(b.text for b in resp.content if hasattr(b, "text"))
+            current_msgs.append({"role": "assistant", "content": resp.content})
+            tool_results = []
+            for tc in tool_calls:
+                result = _dispatch_trader_tool(tc.name, tc.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": str(result)[:8000],
+                })
+            current_msgs.append({"role": "user", "content": tool_results})
+        return "Agent loop reached max iterations."
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+    _ensure_trader_memory_table()
+
+    if "trader_msgs" not in st.session_state:
+        st.session_state["trader_msgs"] = []
+
+    hcol1, hcol2 = st.columns([6, 1])
+    with hcol1:
+        st.subheader("Mengxi BESS Trader")
+        st.caption(
+            "Analyse P&L attribution, dispatch quality, and RT market conditions "
+            "across the 4 Inner Mongolia BESS assets."
+        )
+    with hcol2:
+        if st.button("Clear chat", key="trader_clear_btn"):
+            st.session_state["trader_msgs"] = []
+            st.rerun()
+
+    for _tmsg in st.session_state["trader_msgs"]:
+        with st.chat_message(_tmsg["role"]):
+            st.markdown(_tmsg["content"])
+
+    if not st.session_state["trader_msgs"]:
+        with st.chat_message("assistant"):
+            st.markdown(
+                "Hello! I'm the Trader. I can analyse P&L attribution, dispatch quality, "
+                "and RT market conditions for SuYou, HangJinQi, SiZiWangQi, and GuShanLiang. "
+                "What would you like to investigate?"
+            )
+
+    if _trader_input := st.chat_input(
+        "Ask about asset P&L, dispatch, or market conditions…", key="trader_chat_input"
+    ):
+        st.session_state["trader_msgs"].append({"role": "user", "content": _trader_input})
+        with st.chat_message("user"):
+            st.markdown(_trader_input)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Analysing…"):
+                _trader_reply = _run_trader_agent(st.session_state["trader_msgs"])
+            st.markdown(_trader_reply)
+
+        st.session_state["trader_msgs"].append({"role": "assistant", "content": _trader_reply})
+
+        # auto-save memories
+        try:
+            _tmems = _extract_trader_memories(_trader_input, _trader_reply)
+            for _tm in _tmems:
+                _save_trader_memory(_tm["category"], _tm["subject"], _tm["content"], source="auto")
+            if _tmems:
+                st.toast(f"Saved {len(_tmems)} memory item(s).")
+        except Exception:
+            pass
+        st.rerun()
+
+    # ── memory management ─────────────────────────────────────────────────────
+    with st.expander("Memory Management", expanded=False):
+        st.caption("Persistent facts and observations auto-saved from Trader conversations.")
+        _tmem_df = _load_trader_memories()
+        if _tmem_df.empty:
+            st.info("No memories saved yet.")
+        else:
+            for _trow in _tmem_df.itertuples():
+                _tc1, _tc2 = st.columns([10, 1])
+                with _tc1:
+                    st.markdown(
+                        f"**[{_trow.category}]** {_trow.subject}: {_trow.content}"
+                    )
+                    st.caption(f"Saved: {_trow.saved}  |  Source: {_trow.source}")
+                with _tc2:
+                    if st.button("🗑", key=f"del_trader_mem_{_trow.id}"):
+                        from sqlalchemy import text as _tdel_text
+                        with _get_sqlalchemy_engine().begin() as _tdel_conn:
+                            _tdel_conn.execute(
+                                _tdel_text(
+                                    "UPDATE marketdata.agent_memory "
+                                    "SET active=FALSE WHERE id=:id AND app=:app"
+                                ),
+                                {"id": _trow.id, "app": _TRADER_APP},
+                            )
+                        _load_trader_memories.clear()
+                        st.rerun()
