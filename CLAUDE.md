@@ -145,10 +145,37 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v22 |
-| BESS Asset Map (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v38 |
+| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v38 |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v5 |
 | Portal | 4 Quick Ask personas | `portal` | `/portal/*` | 8500 | v24 |
-| PnL Attribution | — | `bess-pnl-attribution` | `/pnl-attribution/*` | — | — |
+
+**Retired services (2026-05-10):** `bess-pnl-attribution` (ECR repo deleted, ALB rule removed) — superseded by bess-map Data Management. `bess-uploader` (ECS service + ALB rule removed, `enable_uploader_service = false`) — superseded by bess-map Data Management.
+
+---
+
+## BESS Capture Pipeline — Forecast Models
+
+**Location:** `services/bess_map/`
+
+The capture pipeline (`run_capture_pipeline.py`) simulates RT realized revenue by dispatching against a forecast price. It stores results in `marketdata.bess_capture_daily` with a `model` column — multiple models coexist in the DB.
+
+**Theoretical profit** (LP optimal dispatch against actual RT prices) is model-agnostic. **Realized profit and capture rate** are model-specific.
+
+| Model | Type | When to use |
+|-------|------|-------------|
+| `ols_rt_time_v1` | Rolling OLS + time-of-day | **Default. Use for all provinces.** RT-only, no DA price needed. |
+| `naive_rt_ar17` | Rolling OLS + lag-1 + lag-7 same-hour | Combined AR(1,7) model for stable markets |
+| `naive_rt_lag1` | Yesterday same hour | Baseline benchmark |
+| `naive_rt_lag7` | Last-week same hour | Seasonal baseline |
+| `ols_da_time_v1` | Rolling OLS + time-of-day on DA | **Legacy / invalid for RT.** DA prices published after RT trading — artificially inflates capture ~100%. Do not use for RT strategy evaluation. |
+| `ols_fundamentals_v1` | OLS + D-1 fundamentals (bidding_space_d1_mw, load_d1_mw, renewable_d1_mw) | Requires `spot_fundamentals_hourly` data for province |
+
+**UI:** Quant Analyst (bess-map) sidebar has a model selector. Province Ranking and Dispatch & Economics tabs filter realized/capture by selected model; theoretical always shows via LEFT JOIN.
+
+**Re-run if data is stale or wrong model:** Data Management tab → Capture Pipeline Runner → select model → Run. Or:
+```bash
+python services/bess_map/run_capture_pipeline.py --province shandong --model ols_rt_time_v1 --force
+```
 
 ---
 
