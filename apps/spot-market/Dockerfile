@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir \
     "anthropic[bedrock]>=0.40" \
     boto3 \
     pdfplumber \
+    python-pptx \
+    python-docx \
+    xlrd \
     openpyxl \
     "statsmodels>=0.14"
 

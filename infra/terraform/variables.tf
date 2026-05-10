@@ -105,6 +105,12 @@ variable "desired_count_uploader" {
   default = 1
 }
 
+variable "enable_uploader_service" {
+  description = "Set to false to retire the bess-uploader service and remove its ALB route."
+  type        = bool
+  default     = false
+}
+
 
 variable "investor_password" {
   description = "Password for investor login"
