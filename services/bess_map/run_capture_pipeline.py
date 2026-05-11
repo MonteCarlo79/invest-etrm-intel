@@ -532,6 +532,9 @@ def main():
         if args.model == "ols_fundamentals_v1":
             fund = fetch_fundamentals(engine, args.schema, p)
             if not fund.empty:
+                if hasattr(fund.index, "tz") and fund.index.tz is not None:
+                    fund = fund.copy()
+                    fund.index = fund.index.tz_localize(None)
                 hourly = hourly.join(fund[["bidding_space_d1_mw", "load_d1_mw", "renewable_d1_mw"]], how="left")
             else:
                 print(f"[WARN] {p}: no fundamentals data — ols_fundamentals_v1 will fall back to naive_rt_lag1")
