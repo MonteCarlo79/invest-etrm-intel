@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY apps/bess-map/      ./apps/bess-map/
 COPY services/bess_map/  ./services/bess_map/
+COPY shared/             ./shared/
 COPY auth/               ./auth/
 
 ENV PYTHONPATH=/app
