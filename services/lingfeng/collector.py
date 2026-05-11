@@ -114,6 +114,9 @@ async def _collect_async(
             logger.info(f"Current market '{current_market}' ≠ '{market}' — selecting …")
             await page.locator(".ant-select-selector").nth(0).click()
             await page.wait_for_selector(".ant-select-item-option-content", timeout=10_000)
+            # Type to filter the virtual list so the target option is rendered
+            await page.keyboard.type(market, delay=50)
+            await page.wait_for_timeout(600)
             await page.locator(".ant-select-item-option-content").filter(
                 has_text=market
             ).first.click()

@@ -1,7 +1,7 @@
 # setup_schedule.ps1
 # ---------------------------------------------------------------------------
 # One-time setup: registers a Windows Task Scheduler task that runs the
-# LingFeng daily collection every day at 06:00 for all 29 provinces.
+# LingFeng daily collection every day at 04:00 for all 29 provinces.
 #
 # Run this script once from PowerShell (as the same user who will run it):
 #   .\services\lingfeng\setup_schedule.ps1
@@ -14,7 +14,7 @@
 param(
     [string]$RepoRoot    = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$TaskName    = "BESS-LingFeng-DailyCollection",
-    [string]$RunAt       = "06:00",            # daily trigger time
+    [string]$RunAt       = "04:00",            # daily trigger time
     [string]$PythonExe   = (Get-Command python -ErrorAction SilentlyContinue).Source,
     [string]$ScriptArgs  = "--markets all --models ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1"
 )
