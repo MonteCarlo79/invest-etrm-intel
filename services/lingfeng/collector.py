@@ -113,13 +113,21 @@ async def _collect_async(
         if current_market.strip() != market.strip():
             logger.info(f"Current market '{current_market}' ≠ '{market}' — selecting …")
             await page.locator(".ant-select-selector").nth(0).click()
-            await page.wait_for_selector(".ant-select-item-option-content", timeout=10_000)
-            # Type to filter the virtual list so the target option is rendered
-            await page.keyboard.type(market, delay=50)
-            await page.wait_for_timeout(600)
-            await page.locator(".ant-select-item-option-content").filter(
-                has_text=market
-            ).first.click()
+            await page.wait_for_selector(".ant-select-dropdown", timeout=10_000)
+            await page.wait_for_timeout(300)
+            # Scroll through the virtual list until the target option is rendered
+            _list = page.locator(".rc-virtual-list-holder").first
+            _found = False
+            for _step in range(50):
+                _opt = page.locator(".ant-select-item-option-content").filter(has_text=market)
+                if await _opt.count() > 0:
+                    await _opt.first.click()
+                    _found = True
+                    break
+                await _list.evaluate("el => { el.scrollTop += 120; }")
+                await page.wait_for_timeout(80)
+            if not _found:
+                raise RuntimeError(f"Market '{market}' not found in dropdown after scrolling")
             await page.wait_for_timeout(400)
         else:
             logger.info(f"Market already set to '{market}' — no change needed.")
