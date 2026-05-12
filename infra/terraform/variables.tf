@@ -535,3 +535,10 @@ variable "modo_api_key" {
   default     = ""
   sensitive   = true
 }
+
+variable "fengxing_api_key" {
+  description = "Fengxing SaaS API key for Shanxi nodal price data"
+  type        = string
+  default     = ""
+  sensitive   = true
+}

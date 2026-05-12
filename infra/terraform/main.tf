@@ -2022,6 +2022,14 @@ resource "aws_ecs_task_definition" "mengxi_dashboard" {
         {
           name  = "AWS_REGION"
           value = var.region
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+        {
+          name  = "FENGXING_API_KEY"
+          value = var.fengxing_api_key
         }
       ]
 

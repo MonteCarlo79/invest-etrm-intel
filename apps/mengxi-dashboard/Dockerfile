@@ -18,10 +18,10 @@ COPY apps/mengxi-dashboard/ ./apps/mengxi-dashboard/
 
 ENV PYTHONPATH=/app
 
-EXPOSE 8511
+EXPOSE 8505
 
 CMD ["streamlit", "run", "apps/mengxi-dashboard/app.py", \
-     "--server.port=8511", \
+     "--server.port=8505", \
      "--server.address=0.0.0.0", \
      "--server.baseUrlPath=mengxi-dashboard", \
      "--server.fileWatcherType=none", \

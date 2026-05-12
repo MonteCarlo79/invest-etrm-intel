@@ -43,11 +43,17 @@ import psycopg2
 import streamlit as st
 
 # ---------------------------------------------------------------------------
-# Ensure repo root is importable
+# Ensure repo root is importable + load .env for local dev
 # ---------------------------------------------------------------------------
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_repo_root, "config", ".env"), override=False)
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -862,6 +868,142 @@ with tab_data_mgmt:
 
             if any_success:
                 st.info("Upload complete. Click **Refresh now** above to update coverage stats.")
+
+    st.markdown("---")
+
+    # ── Section 6: Shanxi Nodal Prices (Fengxing API) ───────────────────────
+    st.subheader("Shanxi Nodal Prices — Fengxing API")
+    st.caption(
+        "Download 15-min avg nodal prices for all Shanxi nodes from the Fengxing API "
+        "and store in `marketdata.md_shanxi_nodal_price_96`. "
+        "API key is read from the `FENGXING_API_KEY` environment variable."
+    )
+
+    _fx_api_key = os.environ.get("FENGXING_API_KEY", "")
+    if not _fx_api_key:
+        st.warning(
+            "⚠️ `FENGXING_API_KEY` environment variable is not set. "
+            "Contact the ops team for the API key and add it to `config/.env`."
+        )
+
+    _fx_c1, _fx_c2, _fx_c3 = st.columns([2, 2, 2])
+    _fx_start = _fx_c1.date_input(
+        "Start date", value=date.today() - timedelta(days=7), key="fx_start"
+    )
+    _fx_end = _fx_c2.date_input(
+        "End date", value=date.today() - timedelta(days=1), key="fx_end"
+    )
+
+    # Coverage check — how many distinct dates already in DB for this range
+    @st.cache_data(ttl=60, show_spinner=False)
+    def _fx_coverage(start: date, end: date) -> tuple[int, int]:
+        """Return (dates_in_db, total_days) for the given range."""
+        try:
+            conn = _get_pg_conn()
+            df = pd.read_sql(
+                """
+                SELECT COUNT(DISTINCT metric_time::date) AS n
+                FROM marketdata.md_shanxi_nodal_price_96
+                WHERE metric_time::date >= %s AND metric_time::date <= %s
+                """,
+                conn,
+                params=(start, end),
+            )
+            n_in_db = int(df["n"].iloc[0])
+        except Exception:
+            n_in_db = 0
+        total = max((end - start).days + 1, 1)
+        return n_in_db, total
+
+    if _fx_api_key:
+        _fx_n_db, _fx_total = _fx_coverage(_fx_start, _fx_end)
+        _fx_badge = "🟢" if _fx_n_db >= _fx_total else ("🟡" if _fx_n_db > 0 else "🔴")
+        _fx_c3.metric(
+            f"{_fx_badge} DB coverage",
+            f"{_fx_n_db} / {_fx_total} days",
+        )
+
+    _fx_btn_col, _fx_probe_col = st.columns([2, 1])
+
+    if _fx_probe_col.button("🔌 Test connection", key="fx_probe_btn", disabled=not _fx_api_key):
+        from services.fengxing.nodal_price import probe as _fx_probe
+        with st.spinner("Testing API connectivity…"):
+            _probe_result = _fx_probe(_fx_api_key)
+        if _probe_result == "ok":
+            st.success("✅ API reachable.")
+        else:
+            st.error(f"❌ {_probe_result}")
+
+    if _fx_btn_col.button(
+        "⬇ Download nodal prices",
+        key="fx_download_btn",
+        type="primary",
+        disabled=not _fx_api_key or _fx_start > _fx_end,
+    ):
+        from services.fengxing.nodal_price import download_and_upsert as _fx_dl
+
+        _fx_n_days = (_fx_end - _fx_start).days + 1
+        _fx_progress = st.progress(0, text=f"0 / {_fx_n_days} days…")
+        _fx_log = st.empty()
+        _fx_done_count = [0]
+        _fx_log_lines: list[str] = []
+
+        def _fx_day_cb(day, status, n_rows, msg):
+            _fx_done_count[0] += 1
+            icon = "✅" if status == "ok" else "❌"
+            _fx_log_lines.append(f"{icon} {day}  {msg}")
+            pct = _fx_done_count[0] / _fx_n_days
+            _fx_progress.progress(pct, text=f"{_fx_done_count[0]} / {_fx_n_days} days…")
+            _fx_log.code("\n".join(_fx_log_lines[-20:]))   # show last 20 lines
+
+        try:
+            engine = _get_sqlalchemy_engine()
+            _fx_results = _fx_dl(
+                start_date=_fx_start,
+                end_date=_fx_end,
+                api_key=_fx_api_key,
+                engine=engine,
+                day_cb=_fx_day_cb,
+            )
+            _fx_progress.progress(1.0, text="Done.")
+            _ok = [r for r in _fx_results if r["status"] == "ok"]
+            _err = [r for r in _fx_results if r["status"] == "error"]
+            _total_rows = sum(r["rows"] for r in _ok)
+            if _err:
+                st.warning(
+                    f"✅ {len(_ok)} day(s) saved ({_total_rows:,} rows)  |  "
+                    f"❌ {len(_err)} day(s) failed — see log above."
+                )
+            else:
+                st.success(f"✅ {len(_ok)} day(s) saved, {_total_rows:,} rows total.")
+            _fx_coverage.clear()
+        except Exception as _fx_exc:
+            _fx_progress.empty()
+            st.error(f"Download failed: {_fx_exc}")
+
+    # Quick data preview
+    with st.expander("Preview stored data", expanded=False):
+        try:
+            _fx_prev = pd.read_sql(
+                """
+                SELECT metric_time, node_name, market_name, time_order_96, avg_node_price
+                FROM marketdata.md_shanxi_nodal_price_96
+                ORDER BY metric_time DESC, node_name
+                LIMIT 200
+                """,
+                _get_sqlalchemy_engine(),
+            )
+            if _fx_prev.empty:
+                st.info("No data yet.")
+            else:
+                st.dataframe(
+                    _fx_prev,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=300,
+                )
+        except Exception as _fx_prev_exc:
+            st.info(f"Table not yet created or empty. ({_fx_prev_exc})")
 
 # ---------------------------------------------------------------------------
 # Tab 7: Trader

@@ -86,13 +86,26 @@ def _guess_cols_from_header(xlsx_path: Path, province: str) -> Tuple[str, str]:
 
     rt_col = pick("实时")
 
+    # Some provinces (e.g. Shandong 2026+) renamed the RT clearing price column so
+    # the "实时" column is now suffixed with "临时数据" (temporary/unpublished) and
+    # contains all zeros, while the actual clearing prices live in a non-temporary
+    # province+price column (e.g. "中长期结算点电价").  Fall back to that column.
+    if "临时" in rt_col:
+        non_temp = [c for c in cols if province in c and "价" in c and "临时" not in c]
+        if non_temp:
+            rt_col = sorted(non_temp, key=lambda x: (-len(x), x))[0]
+            print(f"[auto-cols] RT col is 临时数据; falling back to '{rt_col}'", flush=True)
+
     # DA: prefer the other province+price column that is not RT (handles newer file formats
     # where DA column uses 结算价 or similar instead of the expected 日前 keyword)
     prov_price_cols = [c for c in cols if province in c and "价" in c and c != rt_col]
     if prov_price_cols:
         da_col = sorted(prov_price_cols, key=lambda x: (-len(x), x))[0]
     else:
-        da_col = pick("日前")
+        try:
+            da_col = pick("日前")
+        except KeyError:
+            da_col = rt_col  # single price series — use same for both RT and DA
 
     return rt_col, da_col
 
