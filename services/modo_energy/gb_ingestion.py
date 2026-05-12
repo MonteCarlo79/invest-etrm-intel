@@ -44,6 +44,8 @@ def _upsert(engine, table: str, df: pd.DataFrame, conflict_cols: list[str],
         return 0
     # Replace NaN/NaT with None so psycopg2 maps them to NULL
     df = df.where(df.notna(), other=None)
+    # Deduplicate by conflict key — API occasionally returns duplicate rows
+    df = df.drop_duplicates(subset=conflict_cols, keep="last")
     cols = list(df.columns)
     update_set = ", ".join(
         f"{c} = EXCLUDED.{c}" for c in cols if c not in conflict_cols
@@ -134,7 +136,7 @@ def ingest_monthly_index(client: ModoClient, engine, start: date, end: date) -> 
 
 def ingest_leaderboard(client: ModoClient, engine, start: date, end: date) -> int:
     total = 0
-    chunks = list(_chunk_dates(start, end, days=7))
+    chunks = list(_chunk_dates(start, end, days=3))
     for i, (d_from, d_to) in enumerate(chunks, 1):
         print(f"    leaderboard chunk {i}/{len(chunks)}: {d_from} → {d_to} ... ", end="", flush=True)
         records = client.get("/gb/modo/benchmarking/leaderboard-live", {

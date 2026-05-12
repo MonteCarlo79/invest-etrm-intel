@@ -45,12 +45,17 @@ class ModoClient:
         return results
 
     def _request(self, url: str, params: dict) -> dict | list:
-        for attempt in range(4):
-            r = self._session.get(url, params=params, timeout=30)
+        for attempt in range(6):
+            r = self._session.get(url, params=params, timeout=60)
             if r.status_code == 429:
                 wait = 60 / (attempt + 1)
                 time.sleep(wait)
                 continue
+            if r.status_code >= 500:
+                wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
+                print(f" [API {r.status_code} retry {attempt+1}/5 in {wait}s]", end="", flush=True)
+                time.sleep(wait)
+                continue
             r.raise_for_status()
             return r.json()
-        raise RuntimeError(f"Modo API rate-limited after retries: {url}")
+        raise RuntimeError(f"Modo API failed after retries: {url}")
