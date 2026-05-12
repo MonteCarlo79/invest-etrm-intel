@@ -59,7 +59,11 @@ except ImportError:
 VALID_APPS = {"shared", "strategist", "trader"}
 
 # Folder-name substrings that signal a document belongs to the Trader agent
-_TRADER_PATH_MARKERS = {"5-交易数据", "交易数据"}
+_TRADER_PATH_MARKERS = {
+    "5-交易数据", "交易数据",
+    "电力市场结算情况",   # monthly settlement reports
+    "调频结果数据",        # frequency regulation result data
+}
 
 
 def _resolve_app(path: Path, app_override: str | None) -> str:

@@ -14,28 +14,20 @@
 param(
     [string]$RepoRoot    = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$TaskName    = "BESS-LingFeng-DailyCollection",
-    [string]$RunAt       = "04:00",            # daily trigger time
-    [string]$PythonExe   = (Get-Command python -ErrorAction SilentlyContinue).Source,
-    [string]$ScriptArgs  = "--markets all --models ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1"
+    [string]$RunAt       = "04:00"             # daily trigger time
 )
 
-if (-not $PythonExe) {
-    Write-Error "python not found on PATH. Install Python and try again."
-    exit 1
-}
-
-$Script    = Join-Path $RepoRoot "services\lingfeng\run_daily.py"
-$EnvFile   = Join-Path $RepoRoot "config\.env"
+$BatFile   = Join-Path $RepoRoot "services\lingfeng\run_daily.bat"
 $LogFile   = Join-Path $RepoRoot "logs\lingfeng_daily.log"
 
 # Create logs dir if needed
 $LogDir = Split-Path $LogFile
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
 
-# Build the command.  We wrap in cmd /c so stdout goes to the log file.
+# Call the .bat wrapper — avoids cmd.exe /c multi-quote-stripping bug.
 $Action = New-ScheduledTaskAction `
     -Execute  "cmd.exe" `
-    -Argument "/c `"$PythonExe`" `"$Script`" $ScriptArgs >> `"$LogFile`" 2>&1" `
+    -Argument "/c `"$BatFile`"" `
     -WorkingDirectory $RepoRoot
 
 $Trigger = New-ScheduledTaskTrigger -Daily -At $RunAt
@@ -63,7 +55,7 @@ if ($existing) {
 Write-Host ""
 Write-Host "Task: $TaskName"
 Write-Host "Runs: daily at $RunAt (all 29 provinces, 3 models)"
-Write-Host "Args: $ScriptArgs"
+Write-Host "Bat:  $BatFile"
 Write-Host "Log:  $LogFile"
 Write-Host ""
 Write-Host "IMPORTANT — set credentials in system environment variables before first run:"

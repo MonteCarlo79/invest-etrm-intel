@@ -12,6 +12,7 @@ import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
+import re as _re
 
 import json
 import requests
@@ -279,6 +280,7 @@ _T: dict[str, dict[str, str]] = {
         "no_pdfs":              "No PDFs found in the selected date range.",
         "upload_pdf":           "Upload PDF report(s)",
         "upload_help":          "Upload PDFs here when running on AWS (no local data folder). Files are stored in S3 and immediately available for ingestion.",
+        "upload_btn":           "Upload {n} file(s) to S3",
         "upload_success":       "Uploaded {n} file(s) to S3.",
         "prog_starting":        "Starting…",
         "prog_parsing":         "Parsing {fname}…",
@@ -291,6 +293,14 @@ _T: dict[str, dict[str, str]] = {
         "col_interprov":        "Interprov rows",
         "col_ai":               "AI summaries",
         "col_error":            "Error",
+        # knowledge base sync
+        "kb_sync_title":        "Sync Knowledge Base from Market Fundamentals",
+        "kb_sync_caption":      "Scans data/market-fundamentals/ and ingests any new documents into the knowledge pool. Already-ingested files are skipped automatically.",
+        "kb_sync_unavailable":  "Knowledge base sync is only available in local mode (data/market-fundamentals/ not found).",
+        "kb_sync_no_files":     "No new files found — knowledge base is up to date.",
+        "kb_sync_btn":          "Sync {n} new file(s)",
+        "kb_sync_progress":     "Ingesting {i}/{n}: {fname}…",
+        "kb_sync_done":         "Sync complete — added: {added}  skipped: {skipped}  errors: {errors}",
         # chart labels
         "da_label":             "Day-Ahead (DA)",
         "rt_label":             "Real-Time (RT)",
@@ -543,6 +553,7 @@ _T: dict[str, dict[str, str]] = {
         "no_pdfs":              "所选日期范围内未找到PDF文件。",
         "upload_pdf":           "上传PDF报告",
         "upload_help":          "在AWS环境下（无本地数据文件夹时）上传PDF。文件保存至S3后即可导入。",
+        "upload_btn":           "上传 {n} 个文件至S3",
         "upload_success":       "已上传 {n} 个文件至S3。",
         "prog_starting":        "启动中…",
         "prog_parsing":         "解析 {fname}…",
@@ -555,6 +566,14 @@ _T: dict[str, dict[str, str]] = {
         "col_interprov":        "省间行数",
         "col_ai":               "AI摘要数",
         "col_error":            "错误",
+        # knowledge base sync
+        "kb_sync_title":        "从市场基础数据同步知识库",
+        "kb_sync_caption":      "扫描 data/market-fundamentals/ 文件夹，将新文档录入知识库。已录入的文件自动跳过。",
+        "kb_sync_unavailable":  "知识库同步仅在本地模式下可用（未找到 data/market-fundamentals/ 文件夹）。",
+        "kb_sync_no_files":     "未发现新文件——知识库已是最新。",
+        "kb_sync_btn":          "同步 {n} 个新文件",
+        "kb_sync_progress":     "正在录入 {i}/{n}：{fname}…",
+        "kb_sync_done":         "同步完成——新增：{added}  跳过：{skipped}  错误：{errors}",
         # chart labels
         "da_label":             "日前（DA）",
         "rt_label":             "实时（RT）",
@@ -2973,25 +2992,25 @@ and past conversation logs (use category='conversation_log' to search previous Q
                     st.rerun()
 
 
-# ── Tab 9: Data Management ────────────────────────────────────────────────────
-with tab_mgmt:
-    import re as _re
-    from pathlib import Path as _Path
+# ── Tab 9 helpers — module-level so @st.cache_data can hash them stably ───────
+PROVINCES_MAP: dict[str, str] = {
+    "山东": "Shandong", "山西": "Shanxi", "蒙西": "Mengxi", "内蒙古": "Mengxi",
+    "甘肃": "Gansu", "广东": "Guangdong", "四川": "Sichuan", "云南": "Yunnan",
+    "贵州": "Guizhou", "广西": "Guangxi", "湖南": "Hunan", "湖北": "Hubei",
+    "安徽": "Anhui", "浙江": "Zhejiang", "江苏": "Jiangsu", "福建": "Fujian",
+    "河南": "Henan", "陕西": "Shaanxi", "宁夏": "Ningxia", "新疆": "Xinjiang",
+    "辽宁": "Liaoning", "吉林": "Jilin", "黑龙江": "Heilongjiang", "蒙东": "Mengdong",
+    "河北": "Hebei", "冀北": "Hebei-North", "冀南": "Hebei-South",
+    "河北南网": "Hebei-South", "青海": "Qinghai",
+    "江西": "Jiangxi", "海南": "Hainan", "重庆": "Chongqing", "上海": "Shanghai",
+    "北京": "Beijing", "天津": "Tianjin",
+}
 
-    PROVINCES_MAP: dict[str, str] = {
-        "山东": "Shandong", "山西": "Shanxi", "蒙西": "Mengxi", "内蒙古": "Mengxi",
-        "甘肃": "Gansu", "广东": "Guangdong", "四川": "Sichuan", "云南": "Yunnan",
-        "贵州": "Guizhou", "广西": "Guangxi", "湖南": "Hunan", "湖北": "Hubei",
-        "安徽": "Anhui", "浙江": "Zhejiang", "江苏": "Jiangsu", "福建": "Fujian",
-        "河南": "Henan", "陕西": "Shaanxi", "宁夏": "Ningxia", "新疆": "Xinjiang",
-        "辽宁": "Liaoning", "吉林": "Jilin", "黑龙江": "Heilongjiang", "蒙东": "Mengdong",
-        "河北": "Hebei", "冀北": "Hebei-North", "冀南": "Hebei-South",
-        "河北南网": "Hebei-South", "青海": "Qinghai",
-        "江西": "Jiangxi", "海南": "Hainan", "重庆": "Chongqing", "上海": "Shanghai",
-        "北京": "Beijing", "天津": "Tianjin",
-    }
+_S3_BUCKET = _os.environ.get("UPLOADS_BUCKET", "bess-uploader-data-chen-singp-2026")
+_S3_PREFIX = "spot-reports"
 
-    def _parse_pdf_date_range(stem: str, year: int = 2026):
+
+def _parse_pdf_date_range(stem: str, year: int = 2026):
         stem = stem.strip().rstrip("）)） ")
 
         m = _re.fullmatch(r"(\d{2})(\d{2})(?:-(\d{2})(\d{2}))?", stem)
@@ -3022,71 +3041,73 @@ with tab_mgmt:
 
         return None
 
-    _S3_BUCKET = _os.environ.get("UPLOADS_BUCKET", "bess-uploader-data-chen-singp-2026")
-    _S3_PREFIX = "spot-reports"
 
-    @st.cache_data(ttl=60, show_spinner=False)
-    def _scan_pdf_inventory(year: int = 2026):
-        data_dir = _REPO / "data" / "spot reports" / str(year)
-        pdfs = []
+@st.cache_data(ttl=60, show_spinner=False)
+def _scan_pdf_inventory(year: int = 2026):
+    data_dir = _REPO / "data" / "spot reports" / str(year)
+    pdfs = []
 
-        if data_dir.exists():
-            for p in sorted(data_dir.glob("*.pdf")):
-                stem = p.stem
+    if data_dir.exists():
+        for p in sorted(data_dir.glob("*.pdf")):
+            stem = p.stem
+            m = _re.search(r"[（(]([^)）]+)[）)]", stem)
+            if not m:
+                continue
+            date_range_result = _parse_pdf_date_range(m.group(1).strip(), year)
+            if date_range_result:
+                pdfs.append((p.name, date_range_result[0], date_range_result[1], p))
+        return pdfs
+
+    # AWS: no local data dir — scan S3
+    import boto3 as _boto3
+    s3 = _boto3.client("s3")
+    prefix = f"{_S3_PREFIX}/{year}/"
+    try:
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=_S3_BUCKET, Prefix=prefix):
+            for obj in sorted(page.get("Contents", []), key=lambda o: o["Key"]):
+                key = obj["Key"]
+                fname = key.split("/")[-1]
+                if not fname.lower().endswith(".pdf"):
+                    continue
+                stem = Path(fname).stem
                 m = _re.search(r"[（(]([^)）]+)[）)]", stem)
                 if not m:
                     continue
                 date_range_result = _parse_pdf_date_range(m.group(1).strip(), year)
                 if date_range_result:
-                    pdfs.append((p.name, date_range_result[0], date_range_result[1], p))
-            return pdfs
+                    pdfs.append((fname, date_range_result[0], date_range_result[1], key))
+    except Exception:
+        pass
+    return pdfs
 
-        # AWS: no local data dir — scan S3
-        import boto3 as _boto3
-        s3 = _boto3.client("s3")
-        prefix = f"{_S3_PREFIX}/{year}/"
-        try:
-            paginator = s3.get_paginator("list_objects_v2")
-            for page in paginator.paginate(Bucket=_S3_BUCKET, Prefix=prefix):
-                for obj in sorted(page.get("Contents", []), key=lambda o: o["Key"]):
-                    key = obj["Key"]
-                    fname = key.split("/")[-1]
-                    if not fname.lower().endswith(".pdf"):
-                        continue
-                    stem = _Path(fname).stem
-                    m = _re.search(r"[（(]([^)）]+)[）)]", stem)
-                    if not m:
-                        continue
-                    date_range_result = _parse_pdf_date_range(m.group(1).strip(), year)
-                    if date_range_result:
-                        # path stored as str (S3 key) — distinguished from local Path
-                        pdfs.append((fname, date_range_result[0], date_range_result[1], key))
-        except Exception:
-            pass
-        return pdfs
 
-    @st.cache_data(ttl=30, show_spinner=False)
-    def _db_coverage(year: int = 2026):
-        cur = _conn().cursor()
-        cur.execute(
-            "SELECT DISTINCT report_date FROM spot_daily "
-            "WHERE report_date BETWEEN %s AND %s",
-            (date(year, 1, 1), date(year, 12, 31)),
-        )
-        return {r[0] for r in cur.fetchall()}
+@st.cache_data(ttl=30, show_spinner=False)
+def _db_coverage(year: int = 2026):
+    cur = _conn().cursor()
+    cur.execute(
+        "SELECT DISTINCT report_date FROM spot_daily "
+        "WHERE report_date BETWEEN %s AND %s",
+        (date(year, 1, 1), date(year, 12, 31)),
+    )
+    return {r[0] for r in cur.fetchall()}
 
-    @st.cache_data(ttl=30, show_spinner=False)
-    def _db_coverage_detail(year: int = 2026):
-        cur = _conn().cursor()
-        cur.execute(
-            """SELECT report_date::date, COUNT(da_avg), COUNT(rt_avg)
-               FROM spot_daily
-               WHERE report_date BETWEEN %s AND %s
-               GROUP BY 1""",
-            (date(year, 1, 1), date(year, 12, 31)),
-        )
-        return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _db_coverage_detail(year: int = 2026):
+    cur = _conn().cursor()
+    cur.execute(
+        """SELECT report_date::date, COUNT(da_avg), COUNT(rt_avg)
+           FROM spot_daily
+           WHERE report_date BETWEEN %s AND %s
+           GROUP BY 1""",
+        (date(year, 1, 1), date(year, 12, 31)),
+    )
+    return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+
+
+# ── Tab 9: Data Management ────────────────────────────────────────────────────
+with tab_mgmt:
     # ── Layout ────────────────────────────────────────────────────────────────
     st.subheader(_t("data_mgmt_title"))
 
@@ -3135,20 +3156,23 @@ with tab_mgmt:
                 label_visibility="collapsed",
             )
             if _uploaded:
-                import boto3 as _boto3
-                _s3 = _boto3.client("s3")
-                for _uf in _uploaded:
-                    _s3.put_object(
-                        Bucket=_S3_BUCKET,
-                        Key=f"{_S3_PREFIX}/{sel_year}/{_uf.name}",
-                        Body=_uf.read(),
-                    )
-                st.success(_t("upload_success", n=len(_uploaded)))
-                _scan_pdf_inventory.clear()
-                # Clear the uploader widget state so it resets to empty on rerun,
-                # preventing the same files from re-triggering the upload block.
-                st.session_state.pop(f"mgmt_upload_{sel_year}", None)
-                st.rerun()
+                if st.button(
+                    _t("upload_btn", n=len(_uploaded)),
+                    key=f"mgmt_do_upload_{sel_year}",
+                    type="primary",
+                ):
+                    import boto3 as _boto3
+                    _s3 = _boto3.client("s3")
+                    for _uf in _uploaded:
+                        _s3.put_object(
+                            Bucket=_S3_BUCKET,
+                            Key=f"{_S3_PREFIX}/{sel_year}/{_uf.name}",
+                            Body=_uf.read(),
+                        )
+                    st.success(_t("upload_success", n=len(_uploaded)))
+                    _scan_pdf_inventory.clear()
+                    st.session_state.pop(f"mgmt_upload_{sel_year}", None)
+                    st.rerun()
 
     st.divider()
 
@@ -3262,7 +3286,7 @@ with tab_mgmt:
                 # S3 path is a str key; local path is a _Path object
                 if isinstance(path, str):
                     import boto3 as _boto3
-                    _tmp_path = _Path(f"/tmp/{fname}")
+                    _tmp_path = Path(f"/tmp/{fname}")
                     _boto3.client("s3").download_file(_S3_BUCKET, path, str(_tmp_path))
                     actual_path = _tmp_path
                     _key_parts = path.split("/")
@@ -3339,3 +3363,86 @@ with tab_mgmt:
             _db_coverage.clear()
             _db_coverage_detail.clear()
             st.rerun()
+
+    # ── Knowledge Base Sync ────────────────────────────────────────────────────
+    st.divider()
+    with st.expander(f"📚 {_t('kb_sync_title')}", expanded=False):
+        _KB_SYNC_DIR = _REPO / "data" / "market-fundamentals"
+        _KB_SYNC_EXCLUDE = "各省现货价格及边界数据"
+        _KB_SUPPORTED_EXTS = {
+            ".pdf", ".pptx", ".ppt", ".docx", ".doc",
+            ".xlsx", ".xls", ".txt",
+            ".png", ".jpg", ".jpeg", ".webp",
+        }
+
+        st.caption(_t("kb_sync_caption"))
+
+        if not _KB_SYNC_DIR.exists():
+            st.info(_t("kb_sync_unavailable"))
+        else:
+            # Resolve app scope: trader for trading/settlement/frequency-result folders, else shared
+            _KBS_TRADER_MARKERS = ("5-交易数据", "交易数据", "电力市场结算情况", "调频结果数据")
+            def _kbs_resolve_app(p: Path) -> str:
+                p_str = str(p)
+                return "trader" if any(m in p_str for m in _KBS_TRADER_MARKERS) else "shared"
+
+            _api_key = _os.environ.get("ANTHROPIC_API_KEY")
+
+            # Scan is deferred to avoid freezing the tab on page load (3000+ files on network drive)
+            _kbs_scan_key = "kbs_scanned_files"
+            col_check, col_sync = st.columns([1, 1])
+
+            if col_check.button("🔍 Scan for new files", key="kb_sync_scan"):
+                _results = []
+                for _p in sorted(_KB_SYNC_DIR.rglob("*")):
+                    if not _p.is_file(): continue
+                    if _p.name.endswith("_Error.txt"): continue
+                    if _p.suffix.lower() not in _KB_SUPPORTED_EXTS: continue
+                    if _KB_SYNC_EXCLUDE in str(_p): continue
+                    _results.append(str(_p))
+                st.session_state[_kbs_scan_key] = _results
+
+            _kbs_paths = [Path(p) for p in st.session_state.get(_kbs_scan_key, [])]
+
+            if _kbs_paths:
+                st.markdown(f"**{len(_kbs_paths)}** file(s) found under `data/market-fundamentals/`")
+                _run_sync = col_sync.button(
+                    _t("kb_sync_btn", n=len(_kbs_paths)),
+                    type="primary",
+                    key="kb_sync_run",
+                )
+                if _run_sync:
+                    from services.knowledge_pool.knowledge_docs import (
+                        init_knowledge_tables as _kbs_init,
+                        register_and_ingest as _kbs_ingest,
+                    )
+                    _kbs_init()
+                    _kbs_added, _kbs_skipped, _kbs_errors = 0, 0, 0
+                    _kbs_total = len(_kbs_paths)
+                    _kbs_prog = st.progress(0, text=_t("prog_starting"))
+                    for _ki, _kp in enumerate(_kbs_paths):
+                        _kbs_prog.progress(
+                            _ki / _kbs_total,
+                            text=_t("kb_sync_progress", i=_ki + 1, n=_kbs_total, fname=_kp.name),
+                        )
+                        try:
+                            _kbs_app = _kbs_resolve_app(_kp)
+                            _, _is_new, _ = _kbs_ingest(
+                                file_bytes=_kp.read_bytes(),
+                                filename=_kp.name,
+                                app=_kbs_app,
+                                api_key=_api_key,
+                            )
+                            if _is_new:
+                                _kbs_added += 1
+                            else:
+                                _kbs_skipped += 1
+                        except Exception as _kbs_exc:
+                            _kbs_errors += 1
+                            st.warning(f"{_kp.name}: {_kbs_exc}")
+                    _kbs_prog.progress(1.0, text=_t("prog_done"))
+                    st.success(_t("kb_sync_done",
+                                   added=_kbs_added, skipped=_kbs_skipped, errors=_kbs_errors))
+                    st.session_state.pop(_kbs_scan_key, None)
+            else:
+                st.caption("Click 'Scan' to check for new files in data/market-fundamentals/")

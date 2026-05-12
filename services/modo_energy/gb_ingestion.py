@@ -32,31 +32,45 @@ from services.modo_energy.client import ModoClient
 # ---------------------------------------------------------------------------
 
 def _upsert(engine, table: str, df: pd.DataFrame, conflict_cols: list[str],
-            batch_size: int = 500):
-    """Bulk upsert via INSERT … ON CONFLICT DO UPDATE, in batches to avoid SSL timeouts."""
+            batch_size: int = 2000):
+    """Bulk upsert via psycopg2 execute_values (single multi-row INSERT per batch).
+
+    execute_values sends one SQL statement per page_size rows, reducing DB
+    round trips from O(rows) to O(rows/page_size). Retries on transient errors.
+    """
+    from psycopg2.extras import execute_values
+
     if df.empty:
         return 0
     # Replace NaN/NaT with None so psycopg2 maps them to NULL
     df = df.where(df.notna(), other=None)
     cols = list(df.columns)
-    placeholders = ", ".join(f":{c}" for c in cols)
     update_set = ", ".join(
         f"{c} = EXCLUDED.{c}" for c in cols if c not in conflict_cols
     )
     conflict = ", ".join(conflict_cols)
-    sql = f"""
-        INSERT INTO {table} ({", ".join(cols)})
-        VALUES ({placeholders})
-        ON CONFLICT ({conflict}) DO UPDATE SET {update_set}
-    """
-    records = df.to_dict(orient="records")
-    total = 0
-    for i in range(0, len(records), batch_size):
-        batch = records[i : i + batch_size]
-        with engine.begin() as conn:
-            conn.execute(sql_text(sql), batch)
-        total += len(batch)
-    return total
+    col_list = ", ".join(cols)
+    sql = (
+        f"INSERT INTO {table} ({col_list}) VALUES %s "
+        f"ON CONFLICT ({conflict}) DO UPDATE SET {update_set}"
+    )
+    rows = [tuple(row[c] for c in cols) for row in df.to_dict(orient="records")]
+    for attempt in range(5):
+        try:
+            with engine.begin() as conn:
+                raw = conn.connection
+                with raw.cursor() as cur:
+                    execute_values(cur, sql, rows, page_size=batch_size)
+            return len(rows)
+        except Exception:
+            if attempt == 4:
+                raise
+            import time
+            engine.dispose()
+            wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s — enough for DNS to recover
+            print(f" [retry {attempt+1}/4 in {wait}s]", end="", flush=True)
+            time.sleep(wait)
+    return 0
 
 
 def _chunk_dates(start: date, end: date, days: int = 90):
@@ -120,19 +134,24 @@ def ingest_monthly_index(client: ModoClient, engine, start: date, end: date) -> 
 
 def ingest_leaderboard(client: ModoClient, engine, start: date, end: date) -> int:
     total = 0
-    for d_from, d_to in _chunk_dates(start, end, days=14):
+    chunks = list(_chunk_dates(start, end, days=7))
+    for i, (d_from, d_to) in enumerate(chunks, 1):
+        print(f"    leaderboard chunk {i}/{len(chunks)}: {d_from} → {d_to} ... ", end="", flush=True)
         records = client.get("/gb/modo/benchmarking/leaderboard-live", {
             "settlement_date_from": d_from.isoformat(),
             "settlement_date_to": d_to.isoformat(),
         })
         if not records:
+            print("0 rows")
             continue
         df = pd.DataFrame(records)
         df["settlement_date"] = pd.to_datetime(df["settlement_date"]).dt.date
         df = df.drop(columns=["id"], errors="ignore")
         df["ingested_at"] = datetime.utcnow()
-        total += _upsert(engine, "intl_market.gb_bess_leaderboard", df,
-                         ["settlement_date", "settlement_period", "asset", "market"])
+        n = _upsert(engine, "intl_market.gb_bess_leaderboard", df,
+                    ["settlement_date", "settlement_period", "asset", "market"])
+        total += n
+        print(f"{n} rows (total {total})")
     return total
 
 
@@ -212,22 +231,37 @@ def ingest_dx_results(client: ModoClient, engine, start: date, end: date) -> int
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_gb_backfill(start: date, end: date, verbose: bool = True):
+def run_gb_backfill(start: date, end: date, verbose: bool = True,
+                    only: list[str] | None = None):
+    from sqlalchemy import create_engine as _create_engine
     client = ModoClient()
-    engine = get_engine()
+    # Use keepalives + pool_pre_ping so long API calls don't kill the DB connection
+    engine = _create_engine(
+        os.environ["PGURL"],
+        pool_pre_ping=True,
+        pool_recycle=120,
+        connect_args={
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+        },
+    )
 
     steps = [
-        ("Assets (static)",    lambda: ingest_assets(client, engine)),
-        ("Daily BESS index",   lambda: ingest_daily_index(client, engine, start, end)),
-        ("Monthly BESS index", lambda: ingest_monthly_index(client, engine, start, end)),
-        ("Leaderboard",        lambda: ingest_leaderboard(client, engine, start, end)),
-        ("System price",       lambda: ingest_system_price(client, engine, start, end)),
-        ("NIV",                lambda: ingest_niv(client, engine, start, end)),
-        ("EPEX DA HH",         lambda: ingest_epex_da_hh(client, engine, start, end)),
-        ("DX results",         lambda: ingest_dx_results(client, engine, start, end)),
+        ("assets",       "Assets (static)",    lambda: ingest_assets(client, engine)),
+        ("daily_index",  "Daily BESS index",   lambda: ingest_daily_index(client, engine, start, end)),
+        ("monthly_index","Monthly BESS index", lambda: ingest_monthly_index(client, engine, start, end)),
+        ("leaderboard",  "Leaderboard",        lambda: ingest_leaderboard(client, engine, start, end)),
+        ("system_price", "System price",       lambda: ingest_system_price(client, engine, start, end)),
+        ("niv",          "NIV",                lambda: ingest_niv(client, engine, start, end)),
+        ("epex",         "EPEX DA HH",         lambda: ingest_epex_da_hh(client, engine, start, end)),
+        ("dx",           "DX results",         lambda: ingest_dx_results(client, engine, start, end)),
     ]
 
-    for label, fn in steps:
+    for key, label, fn in steps:
+        if only and key not in only:
+            continue
         if verbose:
             print(f"  {label} ... ", end="", flush=True)
         n = fn()
@@ -246,14 +280,33 @@ if __name__ == "__main__":
         override=False,
     )
 
-    parser = argparse.ArgumentParser(description="Backfill GB market data from Modo Energy")
+    _STEP_KEYS = ["assets", "daily_index", "monthly_index", "leaderboard",
+                  "system_price", "niv", "epex", "dx"]
+
+    parser = argparse.ArgumentParser(
+        description="Backfill GB market data from Modo Energy",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"Step keys for --only: {', '.join(_STEP_KEYS)}",
+    )
     parser.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
     parser.add_argument("--end",   required=True, help="End date YYYY-MM-DD")
+    parser.add_argument(
+        "--only",
+        help="Comma-separated list of steps to run, e.g. --only leaderboard,system_price",
+        default=None,
+    )
     args = parser.parse_args()
 
     start_date = date.fromisoformat(args.start)
     end_date   = date.fromisoformat(args.end)
+    only_steps = [s.strip() for s in args.only.split(",")] if args.only else None
 
-    print(f"Backfilling GB data {start_date} → {end_date}")
-    run_gb_backfill(start_date, end_date)
+    if only_steps:
+        invalid = [s for s in only_steps if s not in _STEP_KEYS]
+        if invalid:
+            parser.error(f"Unknown step(s): {invalid}. Valid keys: {_STEP_KEYS}")
+
+    print(f"Backfilling GB data {start_date} → {end_date}"
+          + (f"  [only: {only_steps}]" if only_steps else ""))
+    run_gb_backfill(start_date, end_date, only=only_steps)
     print("Done.")

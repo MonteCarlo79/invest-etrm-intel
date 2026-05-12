@@ -183,6 +183,13 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_s3_needed":  "S3 not configured — cannot download files for ingestion.",
         "mgmt_col_last_fund":   "Last fundamentals date",
         "data_ops_log_title":   "Data Operations Log",
+        "mgmt_batch_title":     "Batch Backfill",
+        "mgmt_batch_caption":   "Download + ingest + capture for stale or missing provinces via the LingFeng scheduled pipeline.",
+        "mgmt_batch_lookback":  "Lookback days",
+        "mgmt_batch_markets":   "Provinces to backfill",
+        "mgmt_batch_btn":       "Run Batch Backfill",
+        "mgmt_batch_no_creds":  "LINGFENG_USERNAME / LINGFENG_PASSWORD not set — batch download will fail.",
+        "mgmt_advanced_title":  "Manual Data Steps (Advanced)",
         # agent
         "agent_title":          "BESS Market AI Agent",
         "agent_caption":        "Ask about province BESS economics, IRR scenarios, or dispatch performance.",
@@ -323,6 +330,13 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_s3_needed":  "S3未配置——无法下载文件进行导入。",
         "mgmt_col_last_fund":   "最新基本面日期",
         "data_ops_log_title":   "数据操作日志",
+        "mgmt_batch_title":     "批量补录",
+        "mgmt_batch_caption":   "对过旧或缺失数据的省份执行自动下载、导入和捕获流程。",
+        "mgmt_batch_lookback":  "回溯天数",
+        "mgmt_batch_markets":   "待补录省份",
+        "mgmt_batch_btn":       "运行批量补录",
+        "mgmt_batch_no_creds":  "未设置 LINGFENG_USERNAME / LINGFENG_PASSWORD，批量下载将失败。",
+        "mgmt_advanced_title":  "手动数据操作（高级）",
         "agent_title":          "储能市场量化分析师",
         "agent_caption":        "询问省份储能经济性、IRR情景或调度表现。",
         "agent_welcome":        "您好！我可以查询储能经济数据、调度数据，并为任意省份计算IRR。请问您想了解什么？",
@@ -1356,186 +1370,265 @@ with tab_mgmt:
     except ImportError:
         _s3 = None
 
-    # Upload
-    if "mgmt_uploaded_names" not in st.session_state:
-        st.session_state["mgmt_uploaded_names"] = []
-
-    st.subheader(_t("mgmt_upload_title"))
-    uploaded = st.file_uploader(
-        _t("mgmt_upload_help"), type="xlsx", accept_multiple_files=True,
-        key="mgmt_upload",
-    )
-    _local_upload_dir = Path(tempfile.gettempdir()) / "bess_uploads"
-    if uploaded:
-        if _s3 and S3_BUCKET:
-            for f in uploaded:
-                _s3.upload_fileobj(f, S3_BUCKET, f"uploads/{f.name}")
-            st.session_state["mgmt_uploaded_names"] = [f.name for f in uploaded]
-            st.success(f"Uploaded {len(uploaded)} file(s) to S3.")
-        else:
-            _local_upload_dir.mkdir(parents=True, exist_ok=True)
-            for f in uploaded:
-                (_local_upload_dir / f.name).write_bytes(f.read())
-            st.session_state["mgmt_uploaded_names"] = [f.name for f in uploaded]
-            st.success(f"Saved {len(uploaded)} file(s) locally (S3 not configured).")
-
-    # Ingest uploaded files → DB
-    st.divider()
-    st.subheader(_t("mgmt_ingest_title"))
-    _uploaded_names = st.session_state["mgmt_uploaded_names"]
-    if _uploaded_names:
-        st.caption(f"Files from this session: {', '.join(_uploaded_names)}")
-    if st.button(_t("mgmt_ingest_btn"), key="mgmt_ingest_run"):
-        if not _uploaded_names:
-            st.warning(_t("mgmt_ingest_no_files"))
-        else:
-            _ingest_script = _REPO / "services" / "bess_map" / "run_all_provinces.py"
-            if not _ingest_script.exists():
-                st.error(f"Script not found: {_ingest_script}")
-            else:
-                _local_dir = _local_upload_dir
-                _local_dir.mkdir(parents=True, exist_ok=True)
-                if _s3 and S3_BUCKET:
-                    # Download uploaded files from S3
-                    with st.spinner("Downloading files from S3..."):
-                        for _fname in _uploaded_names:
-                            _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
-                                              str(_local_dir / _fname))
-                _cmd = [sys.executable, str(_ingest_script),
-                        "--indir", str(_local_dir),
-                        "--auto-cols", "--upload-db",
-                        "--env", "none", "--schema", "marketdata",
-                        "--continue-on-error"]
-                st.caption(f"Running: {' '.join(_cmd)}")
-                _log_area = st.empty()
-                _proc = subprocess.Popen(_cmd, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, text=True,
-                                         cwd=str(_REPO),
-                                         env={**os.environ, "PYTHONPATH": str(_REPO)})
-                _buf = ""
-                for _line in _proc.stdout:
-                    _buf += _line
-                    _log_area.code(_buf[-8000:])
-                _proc.wait()
-                if _proc.returncode != 0:
-                    st.error(f"Ingestion failed (rc={_proc.returncode})")
-                else:
-                    st.success(f"Ingested {len(_uploaded_names)} file(s) into DB.")
-                    st.session_state["mgmt_uploaded_names"] = []
-                load_coverage.clear()
-                st.cache_data.clear()
-
-    # ── Fundamentals ingest ──────────────────────────────────────────────────
-    st.divider()
-    st.subheader(_t("mgmt_fund_title"))
-    if _uploaded_names:
-        st.caption(f"Files from this session: {', '.join(_uploaded_names)}")
-    if st.button(_t("mgmt_fund_btn"), key="mgmt_fund_run"):
-        if not _uploaded_names:
-            st.warning(_t("mgmt_fund_no_files"))
-        else:
-            _fund_script = _REPO / "services" / "bess_map" / "run_fundamentals_ingest.py"
-            if not _fund_script.exists():
-                st.error(f"Script not found: {_fund_script}")
-            else:
-                _local_dir = _local_upload_dir
-                _local_dir.mkdir(parents=True, exist_ok=True)
-                if _s3 and S3_BUCKET:
-                    with st.spinner("Downloading files from S3..."):
-                        for _fname in _uploaded_names:
-                            _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
-                                              str(_local_dir / _fname))
-                _cmd2 = [sys.executable, str(_fund_script),
-                         "--indir", str(_local_dir),
-                         "--env", "none", "--schema", "marketdata",
-                         "--continue-on-error"]
-                st.caption(f"Running: {' '.join(_cmd2)}")
-                _log_area2 = st.empty()
-                _proc2 = subprocess.Popen(_cmd2, stdout=subprocess.PIPE,
-                                          stderr=subprocess.STDOUT, text=True,
-                                          cwd=str(_REPO),
-                                          env={**os.environ, "PYTHONPATH": str(_REPO)})
-                _buf2 = ""
-                for _line2 in _proc2.stdout:
-                    _buf2 += _line2
-                    _log_area2.code(_buf2[-8000:])
-                _proc2.wait()
-                if _proc2.returncode != 0:
-                    st.error(f"Fundamentals ingest failed (rc={_proc2.returncode})")
-                else:
-                    st.success(f"Fundamentals ingested for {len(_uploaded_names)} province(s).")
-                load_coverage.clear()
-                st.cache_data.clear()
-
-    # DB coverage
-    st.divider()
+    # ── DB Coverage ───────────────────────────────────────────────────────────
     st.subheader(_t("mgmt_coverage_title"))
     cov = load_coverage(_ENG_KEY)
+    _today_dt = dt.date.today()
     if not cov.empty:
-        today_dt = dt.date.today()
         def _status(row):
             if pd.isna(row["last_capture"]):
                 return _t("mgmt_status_missing")
-            lag = (today_dt - row["last_capture"].date()).days if pd.notna(row["last_capture"]) else 999
+            lag = ((_today_dt - row["last_capture"].date()).days
+                   if pd.notna(row["last_capture"]) else 999)
             return _t("mgmt_status_ok") if lag <= 30 else _t("mgmt_status_stale")
         cov["status"] = cov.apply(_status, axis=1)
-        cov.columns = [_t("mgmt_col_province"), _t("mgmt_col_last_hourly"),
-                       _t("mgmt_col_last_capture"), _t("mgmt_col_last_fund"),
-                       _t("mgmt_col_status")]
-        st.dataframe(cov, use_container_width=True, hide_index=True)
+        cov_display = cov.copy()
+        cov_display.columns = [_t("mgmt_col_province"), _t("mgmt_col_last_hourly"),
+                                _t("mgmt_col_last_capture"), _t("mgmt_col_last_fund"),
+                                _t("mgmt_col_status")]
+        st.dataframe(cov_display, use_container_width=True, hide_index=True)
 
-    # Capture pipeline runner
+    # ── Batch Backfill ────────────────────────────────────────────────────────
     st.divider()
-    st.subheader(_t("mgmt_capture_title"))
-    _all_provs_for_cap = load_province_list(_ENG_KEY)
-    cap_provs_sel = st.multiselect(
-        _t("mgmt_capture_provs"),
-        options=_all_provs_for_cap,
-        placeholder="Leave empty to run all provinces",
-        key="cap_provs_sel",
+    st.subheader(_t("mgmt_batch_title"))
+    st.caption(_t("mgmt_batch_caption"))
+
+    # Pre-select stale/missing provinces (last_hourly older than 2 days ago or absent)
+    _threshold = _today_dt - dt.timedelta(days=2)
+    if not cov.empty:
+        _stale_mask = (
+            cov["last_hourly"].isna() |
+            (cov["last_hourly"].notna() &
+             (cov["last_hourly"].dt.date < _threshold))
+        )
+        _default_backfill = cov.loc[_stale_mask, "province"].tolist()
+        _all_provs_cov    = cov["province"].tolist()
+    else:
+        _default_backfill = []
+        _all_provs_cov    = []
+
+    _batch_markets = st.multiselect(
+        _t("mgmt_batch_markets"),
+        options=_all_provs_cov,
+        default=_default_backfill,
+        key="batch_markets_sel",
     )
-    cap_dur   = st.radio(_t("mgmt_capture_dur"), ["2h", "4h", "Both"], horizontal=True, key="cap_dur")
-    cap_force = st.checkbox(_t("mgmt_capture_force"), key="cap_force")
-    cap_model = st.selectbox(
+    _batch_lookback = st.number_input(
+        _t("mgmt_batch_lookback"), min_value=1, max_value=365, value=7,
+        key="batch_lookback",
+    )
+    _batch_models = st.multiselect(
         _t("model_selector_label"),
         options=list(_MODEL_OPTS.keys()),
+        default=list(_MODEL_OPTS.keys()),
         format_func=lambda k: _MODEL_OPTS[k],
-        index=0,
-        key="cap_model_sel",
+        key="batch_models_sel",
     )
 
-    if st.button(_t("mgmt_capture_btn"), type="primary"):
-        _pipeline = _REPO / "services" / "bess_map" / "run_capture_pipeline.py"
-        if not _pipeline.exists():
-            st.error(f"Pipeline script not found: {_pipeline}")
+    _has_creds = bool(
+        os.environ.get("LINGFENG_USERNAME") and os.environ.get("LINGFENG_PASSWORD")
+    )
+    if not _has_creds:
+        st.warning(_t("mgmt_batch_no_creds"))
+
+    if st.button(_t("mgmt_batch_btn"), type="primary",
+                 disabled=(not _batch_markets), key="batch_run_btn"):
+        _run_daily_script = _REPO / "services" / "lingfeng" / "run_daily.py"
+        if not _run_daily_script.exists():
+            st.error(f"Script not found: {_run_daily_script}")
         else:
-            durations = ["2", "4"] if cap_dur == "Both" else [cap_dur.replace("h", "")]
-            log_area = st.empty()
-            for dur in durations:
-                cmd = [sys.executable, str(_pipeline),
-                       "--env", "none", "--schema", "marketdata",
-                       "--duration-h", dur,
-                       "--model", cap_model]
-                if cap_provs_sel:
-                    cmd += ["--province-list", ",".join(cap_provs_sel)]
-                if cap_force:
-                    cmd += ["--force", "--force-theoretical"]
-                st.caption(f"Running: {' '.join(cmd)}")
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True,
-                                        cwd=str(_REPO),
-                                        env={**os.environ, "PYTHONPATH": str(_REPO)})
-                buf = ""
-                for line in proc.stdout:
-                    buf += line
-                    log_area.code(buf[-8000:])
-                proc.wait()
-                if proc.returncode != 0:
-                    st.error(f"Pipeline failed (rc={proc.returncode})")
-                else:
-                    st.success(f"{dur}h pipeline completed.")
+            _batch_cmd = [
+                sys.executable, str(_run_daily_script),
+                "--markets",  ",".join(_batch_markets),
+                "--lookback", str(int(_batch_lookback)),
+                "--models",   ",".join(_batch_models),
+            ]
+            st.caption(f"Running: {' '.join(_batch_cmd)}")
+            _batch_log = st.empty()
+            _batch_proc = subprocess.Popen(
+                _batch_cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, cwd=str(_REPO),
+                env={**os.environ, "PYTHONPATH": str(_REPO)},
+            )
+            _batch_buf = ""
+            for _ln in _batch_proc.stdout:
+                _batch_buf += _ln
+                _batch_log.code(_batch_buf[-8000:])
+            _batch_proc.wait()
+            if _batch_proc.returncode != 0:
+                st.error(f"Batch backfill failed (rc={_batch_proc.returncode})")
+            else:
+                st.success("Batch backfill complete.")
             load_coverage.clear()
             st.cache_data.clear()
+
+    # ── Manual Data Steps (Advanced) ─────────────────────────────────────────
+    st.divider()
+    with st.expander(_t("mgmt_advanced_title"), expanded=False):
+        if "mgmt_uploaded_names" not in st.session_state:
+            st.session_state["mgmt_uploaded_names"] = []
+        _local_upload_dir = Path(tempfile.gettempdir()) / "bess_uploads"
+        _uploaded_names   = st.session_state["mgmt_uploaded_names"]
+
+        # Upload
+        st.subheader(_t("mgmt_upload_title"))
+        uploaded = st.file_uploader(
+            _t("mgmt_upload_help"), type="xlsx", accept_multiple_files=True,
+            key="mgmt_upload",
+        )
+        if uploaded:
+            if _s3 and S3_BUCKET:
+                for f in uploaded:
+                    _s3.upload_fileobj(f, S3_BUCKET, f"uploads/{f.name}")
+                st.session_state["mgmt_uploaded_names"] = [f.name for f in uploaded]
+                st.success(f"Uploaded {len(uploaded)} file(s) to S3.")
+            else:
+                _local_upload_dir.mkdir(parents=True, exist_ok=True)
+                for f in uploaded:
+                    (_local_upload_dir / f.name).write_bytes(f.read())
+                st.session_state["mgmt_uploaded_names"] = [f.name for f in uploaded]
+                st.success(f"Saved {len(uploaded)} file(s) locally (S3 not configured).")
+            _uploaded_names = st.session_state["mgmt_uploaded_names"]
+
+        # Ingest uploaded files → DB
+        st.divider()
+        st.subheader(_t("mgmt_ingest_title"))
+        if _uploaded_names:
+            st.caption(f"Files from this session: {', '.join(_uploaded_names)}")
+        if st.button(_t("mgmt_ingest_btn"), key="mgmt_ingest_run"):
+            if not _uploaded_names:
+                st.warning(_t("mgmt_ingest_no_files"))
+            else:
+                _ingest_script = _REPO / "services" / "bess_map" / "run_all_provinces.py"
+                if not _ingest_script.exists():
+                    st.error(f"Script not found: {_ingest_script}")
+                else:
+                    _local_dir = _local_upload_dir
+                    _local_dir.mkdir(parents=True, exist_ok=True)
+                    if _s3 and S3_BUCKET:
+                        with st.spinner("Downloading files from S3..."):
+                            for _fname in _uploaded_names:
+                                _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
+                                                  str(_local_dir / _fname))
+                    _cmd = [sys.executable, str(_ingest_script),
+                            "--indir", str(_local_dir),
+                            "--auto-cols", "--upload-db",
+                            "--env", "none", "--schema", "marketdata",
+                            "--continue-on-error"]
+                    st.caption(f"Running: {' '.join(_cmd)}")
+                    _log_area = st.empty()
+                    _proc = subprocess.Popen(_cmd, stdout=subprocess.PIPE,
+                                             stderr=subprocess.STDOUT, text=True,
+                                             cwd=str(_REPO),
+                                             env={**os.environ, "PYTHONPATH": str(_REPO)})
+                    _buf = ""
+                    for _line in _proc.stdout:
+                        _buf += _line
+                        _log_area.code(_buf[-8000:])
+                    _proc.wait()
+                    if _proc.returncode != 0:
+                        st.error(f"Ingestion failed (rc={_proc.returncode})")
+                    else:
+                        st.success(f"Ingested {len(_uploaded_names)} file(s) into DB.")
+                        st.session_state["mgmt_uploaded_names"] = []
+                    load_coverage.clear()
+                    st.cache_data.clear()
+
+        # Fundamentals ingest
+        st.divider()
+        st.subheader(_t("mgmt_fund_title"))
+        if _uploaded_names:
+            st.caption(f"Files from this session: {', '.join(_uploaded_names)}")
+        if st.button(_t("mgmt_fund_btn"), key="mgmt_fund_run"):
+            if not _uploaded_names:
+                st.warning(_t("mgmt_fund_no_files"))
+            else:
+                _fund_script = _REPO / "services" / "bess_map" / "run_fundamentals_ingest.py"
+                if not _fund_script.exists():
+                    st.error(f"Script not found: {_fund_script}")
+                else:
+                    _local_dir = _local_upload_dir
+                    _local_dir.mkdir(parents=True, exist_ok=True)
+                    if _s3 and S3_BUCKET:
+                        with st.spinner("Downloading files from S3..."):
+                            for _fname in _uploaded_names:
+                                _s3.download_file(S3_BUCKET, f"uploads/{_fname}",
+                                                  str(_local_dir / _fname))
+                    _cmd2 = [sys.executable, str(_fund_script),
+                             "--indir", str(_local_dir),
+                             "--env", "none", "--schema", "marketdata",
+                             "--continue-on-error"]
+                    st.caption(f"Running: {' '.join(_cmd2)}")
+                    _log_area2 = st.empty()
+                    _proc2 = subprocess.Popen(_cmd2, stdout=subprocess.PIPE,
+                                              stderr=subprocess.STDOUT, text=True,
+                                              cwd=str(_REPO),
+                                              env={**os.environ, "PYTHONPATH": str(_REPO)})
+                    _buf2 = ""
+                    for _line2 in _proc2.stdout:
+                        _buf2 += _line2
+                        _log_area2.code(_buf2[-8000:])
+                    _proc2.wait()
+                    if _proc2.returncode != 0:
+                        st.error(f"Fundamentals ingest failed (rc={_proc2.returncode})")
+                    else:
+                        st.success(f"Fundamentals ingested for {len(_uploaded_names)} province(s).")
+                    load_coverage.clear()
+                    st.cache_data.clear()
+
+        # Capture pipeline runner
+        st.divider()
+        st.subheader(_t("mgmt_capture_title"))
+        _all_provs_for_cap = load_province_list(_ENG_KEY)
+        cap_provs_sel = st.multiselect(
+            _t("mgmt_capture_provs"),
+            options=_all_provs_for_cap,
+            placeholder="Leave empty to run all provinces",
+            key="cap_provs_sel",
+        )
+        cap_dur   = st.radio(_t("mgmt_capture_dur"), ["2h", "4h", "Both"], horizontal=True, key="cap_dur")
+        cap_force = st.checkbox(_t("mgmt_capture_force"), key="cap_force")
+        cap_model = st.selectbox(
+            _t("model_selector_label"),
+            options=list(_MODEL_OPTS.keys()),
+            format_func=lambda k: _MODEL_OPTS[k],
+            index=0,
+            key="cap_model_sel",
+        )
+
+        if st.button(_t("mgmt_capture_btn"), type="primary"):
+            _pipeline = _REPO / "services" / "bess_map" / "run_capture_pipeline.py"
+            if not _pipeline.exists():
+                st.error(f"Pipeline script not found: {_pipeline}")
+            else:
+                durations = ["2", "4"] if cap_dur == "Both" else [cap_dur.replace("h", "")]
+                log_area = st.empty()
+                for dur in durations:
+                    cmd = [sys.executable, str(_pipeline),
+                           "--env", "none", "--schema", "marketdata",
+                           "--duration-h", dur,
+                           "--model", cap_model]
+                    if cap_provs_sel:
+                        cmd += ["--province-list", ",".join(cap_provs_sel)]
+                    if cap_force:
+                        cmd += ["--force", "--force-theoretical"]
+                    st.caption(f"Running: {' '.join(cmd)}")
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                            stderr=subprocess.STDOUT, text=True,
+                                            cwd=str(_REPO),
+                                            env={**os.environ, "PYTHONPATH": str(_REPO)})
+                    buf = ""
+                    for line in proc.stdout:
+                        buf += line
+                        log_area.code(buf[-8000:])
+                    proc.wait()
+                    if proc.returncode != 0:
+                        st.error(f"Pipeline failed (rc={proc.returncode})")
+                    else:
+                        st.success(f"{dur}h pipeline completed.")
+                load_coverage.clear()
+                st.cache_data.clear()
 
     # ── Data Operations Log ──────────────────────────────────────────────────
     st.divider()
