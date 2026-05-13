@@ -502,7 +502,7 @@ def forecast_ols_fundamentals_v1(
             lag7_records.get((r["date"], int(r["hour"])), np.nan)
             for _, r in train_df.iterrows()
         ])
-        fund_train = train_df[_FUND_COLS].fillna(method="ffill").fillna(method="bfill").to_numpy(dtype=float)
+        fund_train = train_df[_FUND_COLS].ffill().bfill().to_numpy(dtype=float)
 
         valid = ~np.isnan(lag7_train) & ~np.any(np.isnan(fund_train), axis=1)
         if valid.sum() < min_train_days * 4:
