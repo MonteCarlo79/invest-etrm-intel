@@ -22,6 +22,11 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "config", ".env"))
 
+# Ensure repo root is on sys.path so all services.* packages are importable
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
@@ -89,6 +94,172 @@ def _ensure_memory_table():
     _conn().commit()
 
 
+def _ensure_ingestion_log_table():
+    cur = _conn().cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intl_market.gb_ingestion_log (
+            id SERIAL PRIMARY KEY,
+            run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            trigger TEXT NOT NULL,
+            date_from DATE,
+            date_to DATE,
+            status TEXT NOT NULL,
+            rows_ingested JSONB,
+            error_msg TEXT,
+            duration_seconds NUMERIC
+        )
+    """)
+    _conn().commit()
+
+
+def _ensure_knowledge_table():
+    cur = _conn().cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intl_market.gb_knowledge_docs (
+            id              SERIAL PRIMARY KEY,
+            source          TEXT NOT NULL,
+            doc_type        TEXT NOT NULL,
+            title           TEXT,
+            url             TEXT UNIQUE,
+            published_date  DATE,
+            content         TEXT NOT NULL,
+            fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            search_vector   TSVECTOR GENERATED ALWAYS AS (
+                                to_tsvector('english',
+                                    coalesce(title, '') || ' ' || left(content, 100000))
+                            ) STORED
+        )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS gb_knowledge_docs_fts "
+        "ON intl_market.gb_knowledge_docs USING GIN(search_vector)"
+    )
+    _conn().commit()
+
+
+@st.cache_data(ttl=60)
+def _search_knowledge(query: str, sources: list | None = None, limit: int = 8) -> pd.DataFrame:
+    try:
+        source_filter = ""
+        params: list = [query, query]
+        if sources:
+            source_filter = "AND source = ANY(%s)"
+            params.append(sources)
+        params.append(limit)
+        return _query(
+            "SELECT source, doc_type, title, url, published_date, "
+            "left(content, 1500) AS snippet, "
+            "ts_rank(search_vector, plainto_tsquery('english', %s)) AS rank "
+            "FROM intl_market.gb_knowledge_docs "
+            f"WHERE search_vector @@ plainto_tsquery('english', %s) {source_filter} "
+            "ORDER BY rank DESC LIMIT %s",
+            params,
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def _knowledge_doc_counts() -> pd.DataFrame:
+    try:
+        return _query(
+            "SELECT source, doc_type, COUNT(*) AS docs, MAX(fetched_at) AS last_fetch "
+            "FROM intl_market.gb_knowledge_docs "
+            "GROUP BY source, doc_type ORDER BY source, doc_type"
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+def _log_ingestion_run(trigger: str, date_from, date_to, status: str,
+                        rows: dict | None, error_msg: str | None, duration: float):
+    try:
+        cur = _conn().cursor()
+        cur.execute(
+            "INSERT INTO intl_market.gb_ingestion_log "
+            "(trigger, date_from, date_to, status, rows_ingested, error_msg, duration_seconds) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (trigger, date_from, date_to, status,
+             json.dumps(rows) if rows else None, error_msg, round(duration, 1)),
+        )
+        _conn().commit()
+    except Exception:
+        pass  # never crash the scheduler thread due to logging failure
+
+
+@st.cache_data(ttl=30)
+def _get_ingestion_logs(limit: int = 20) -> pd.DataFrame:
+    try:
+        return _query(
+            "SELECT id, run_at AT TIME ZONE 'Asia/Singapore' AS run_at_sgt, "
+            "trigger, date_from, date_to, status, rows_ingested, error_msg, duration_seconds "
+            "FROM intl_market.gb_ingestion_log "
+            "ORDER BY run_at DESC LIMIT %s",
+            (limit,),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+def _run_ingestion_job(date_from, date_to, trigger: str = "manual") -> dict:
+    """Run full GB ingestion; return result dict. Called by scheduler and UI button."""
+    import io, time
+    from contextlib import redirect_stdout
+
+    from services.modo_energy.gb_ingestion import run_gb_backfill
+
+    t0 = time.time()
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            run_gb_backfill(date_from, date_to)
+        duration = time.time() - t0
+        _log_ingestion_run(trigger, date_from, date_to, "success", None, None, duration)
+        return {"status": "success", "log": buf.getvalue(), "duration": duration}
+    except Exception as exc:
+        duration = time.time() - t0
+        _log_ingestion_run(trigger, date_from, date_to, "error", None, str(exc), duration)
+        return {"status": "error", "error": str(exc), "log": buf.getvalue(), "duration": duration}
+
+
+def _run_knowledge_ingest_job(only: list[str] | None = None, trigger: str = "manual") -> dict:
+    """Run knowledge base ingestion; return result dict."""
+    import time
+    t0 = time.time()
+    try:
+        from services.gb_knowledge.ingest import run_knowledge_ingest
+        results = run_knowledge_ingest(only=only, verbose=False)
+        duration = time.time() - t0
+        total = sum(results.values())
+        return {"status": "success", "results": results, "total": total, "duration": duration}
+    except Exception as exc:
+        duration = time.time() - t0
+        return {"status": "error", "error": str(exc), "duration": duration}
+
+
+@st.cache_resource
+def _start_scheduler():
+    """Start APScheduler background scheduler (runs once per process via cache_resource)."""
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    def _daily_market_job():
+        yesterday = date.today() - timedelta(days=1)
+        _run_ingestion_job(yesterday, yesterday, trigger="scheduled")
+        _table_counts.clear()
+        _get_ingestion_logs.clear()
+
+    def _daily_knowledge_job():
+        _run_knowledge_ingest_job(trigger="scheduled")
+
+    scheduler = BackgroundScheduler(timezone="Asia/Singapore")
+    scheduler.add_job(_daily_market_job, "cron", hour=3, minute=0,
+                      id="gb_daily_market", misfire_grace_time=3600)
+    scheduler.add_job(_daily_knowledge_job, "cron", hour=3, minute=30,
+                      id="gb_daily_knowledge", misfire_grace_time=3600)
+    scheduler.start()
+    return scheduler
+
+
 @st.cache_data(ttl=60)
 def _load_memories(app_key: str) -> pd.DataFrame:
     try:
@@ -122,7 +293,7 @@ def _delete_memory(mem_id: int):
 
 def _extract_memories(user_msg: str, agent_reply: str) -> list[dict]:
     resp = _client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         max_tokens=512,
         system=(
             "Extract memorable analyst preferences or domain facts from this GB power market "
@@ -268,12 +439,55 @@ _STRATEGIST_TOOLS = [
             "required": ["start_date", "end_date"],
         },
     },
+    {
+        "name": "search_knowledge_base",
+        "description": (
+            "Semantic full-text search over GB energy market knowledge: articles, reports, "
+            "market notices, regulatory changes, and commentary from Elexon, ENTSO-E, "
+            "Timera Energy, Modo Energy, and Meteologica. "
+            "Use this to answer questions about market context, policy changes, or research."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Keywords or natural language question to search for.",
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Filter by source. Options: elexon, entso_e, timera, modo, meteologica. "
+                        "Leave empty to search all sources."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
 def _dispatch_strategist(name: str, inputs: dict) -> str:
     try:
-        if name == "get_system_price":
+        if name == "search_knowledge_base":
+            results = _search_knowledge(
+                inputs["query"],
+                sources=inputs.get("sources") or None,
+                limit=6,
+            )
+            if results.empty:
+                return "No matching knowledge documents found."
+            out = []
+            for _, row in results.iterrows():
+                out.append(
+                    f"[{row['source']} / {row['doc_type']}] {row['title']} "
+                    f"({row['published_date']})\n{row['snippet']}"
+                )
+            return "\n\n---\n\n".join(out)
+
+        elif name == "get_system_price":
             df = _query(
                 "SELECT sp.date, sp.settlement_period, sp.system_price, n.niv "
                 "FROM intl_market.gb_system_price sp "
@@ -737,12 +951,47 @@ def _get_monthly_index_range(start: str, end: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def _get_asset_revenue_map(start: str, end: str, market: str) -> pd.DataFrame:
+    """Per-asset revenue per MW for the map colour scale."""
+    return _query(
+        "SELECT asset, "
+        "  SUM(revenue) / NULLIF(SUM(rated_power), 0) AS rev_per_mw, "
+        "  SUM(revenue) AS total_revenue "
+        "FROM intl_market.gb_bess_leaderboard "
+        "WHERE settlement_date BETWEEN %s AND %s AND market = %s "
+        "GROUP BY asset",
+        (start, end, market),
+    )
+
+
+@st.cache_data(ttl=300)
 def _get_leaderboard_range(start: str, end: str, top_n: int = 20) -> pd.DataFrame:
     return _query(
-        "SELECT asset, SUM(revenue) AS total_revenue, AVG(revspermw) AS avg_revspermw, "
-        "AVG(rated_power) AS rated_power_mw "
-        "FROM intl_market.gb_bess_leaderboard WHERE settlement_date BETWEEN %s AND %s "
-        "GROUP BY asset ORDER BY total_revenue DESC LIMIT %s",
+        "WITH lb AS ( "
+        "  SELECT asset, "
+        "    SUM(CASE WHEN market='total' THEN revenue ELSE 0 END) AS total_revenue, "
+        "    SUM(CASE WHEN market='wholesale' THEN revenue ELSE 0 END) AS wholesale, "
+        "    SUM(CASE WHEN market='frequency_response' THEN revenue ELSE 0 END) AS freq_response, "
+        "    SUM(CASE WHEN market='bm' THEN revenue ELSE 0 END) AS bm, "
+        "    SUM(CASE WHEN market='imbalance' THEN revenue ELSE 0 END) AS imbalance, "
+        "    SUM(CASE WHEN market='reserve' THEN revenue ELSE 0 END) AS reserve, "
+        "    AVG(CASE WHEN market='total' THEN revspermw END) AS avg_revspermw, "
+        "    AVG(CASE WHEN market='total' THEN revspermwh END) AS avg_revspermwh, "
+        "    AVG(CASE WHEN market='total' THEN rated_power END) AS rated_power_mw "
+        "  FROM intl_market.gb_bess_leaderboard "
+        "  WHERE settlement_date BETWEEN %s AND %s "
+        "  GROUP BY asset ORDER BY total_revenue DESC LIMIT %s "
+        "), "
+        "assets AS ( "
+        "  SELECT DISTINCT ON (asset) asset, developer, integrator "
+        "  FROM intl_market.gb_bess_assets "
+        "  WHERE history_table = 'rated_power' "
+        "  ORDER BY asset, valid_from DESC "
+        ") "
+        "SELECT lb.asset, a.developer, a.integrator, "
+        "  lb.total_revenue, lb.wholesale, lb.freq_response, lb.bm, lb.imbalance, lb.reserve, "
+        "  lb.avg_revspermw, lb.avg_revspermwh, lb.rated_power_mw "
+        "FROM lb LEFT JOIN assets a ON a.asset = lb.asset",
         (start, end, top_n),
     )
 
@@ -752,7 +1001,8 @@ def _get_assets() -> pd.DataFrame:
     return _query(
         "SELECT DISTINCT ON (asset) asset, "
         "CAST(value AS NUMERIC) AS rated_power_mw, latitude, longitude, "
-        "gsp, developer, manufacturer, commissioning_date, dno, is_co_located, co_located_type "
+        "gsp, developer, integrator, manufacturer, commissioning_date, dno, "
+        "is_co_located, co_located_type "
         "FROM intl_market.gb_bess_assets WHERE history_table = 'rated_power' "
         "ORDER BY asset, valid_from DESC"
     )
@@ -774,6 +1024,15 @@ def _table_counts() -> dict:
             out[t] = "error"
     return out
 
+
+# ---------------------------------------------------------------------------
+# App initialisation (runs once per process via cache_resource / explicit call)
+# ---------------------------------------------------------------------------
+
+_ensure_memory_table()
+_ensure_ingestion_log_table()
+_ensure_knowledge_table()
+_start_scheduler()  # no-op after first call (cache_resource)
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -799,9 +1058,9 @@ with st.sidebar:
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_overview, tab_ancillary, tab_bess, tab_map, tab_strategist, tab_quant, tab_mgmt = st.tabs([
+tab_overview, tab_ancillary, tab_bess, tab_map, tab_strategist, tab_quant, tab_knowledge, tab_mgmt = st.tabs([
     "Market Overview", "Ancillary Markets", "BESS Benchmarking",
-    "Asset Map", "Strategist", "Quant", "Data Management",
+    "Asset Map", "Strategist", "Quant", "Knowledge Base", "Data Management",
 ])
 
 # ---- Market Overview -------------------------------------------------------
@@ -933,19 +1192,27 @@ with tab_bess:
         if daily_idx.empty:
             st.info("No daily index data.")
         else:
+            _daily_components = daily_idx[daily_idx["market"] != "total"]
+            _daily_total = daily_idx[daily_idx["market"] == "total"].sort_values("settlement_date")
             fig = px.bar(
-                daily_idx,
+                _daily_components,
                 x="settlement_date", y="revenue_permw", color="market",
                 labels={"revenue_permw": "£/MW/day", "settlement_date": ""},
-                barmode="stack",
+                barmode="relative",
             )
+            if not _daily_total.empty:
+                fig.add_scatter(
+                    x=_daily_total["settlement_date"], y=_daily_total["revenue_permw"],
+                    mode="lines", name="total",
+                    line=dict(color="black", width=2, dash="dash"),
+                )
             fig.update_layout(height=350, margin=dict(l=0, r=0, t=0, b=0))
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         st.subheader("Market Avg (£/MW/day)")
         if not daily_idx.empty:
-            mkt_avg = daily_idx.groupby("market")["revenue_permw"].mean().round(2).reset_index()
+            mkt_avg = daily_idx[daily_idx["market"] != "total"].groupby("market")["revenue_permw"].mean().round(2).reset_index()
             mkt_avg.columns = ["Market", "Avg £/MW/day"]
             mkt_avg = mkt_avg.sort_values("Avg £/MW/day", ascending=False)
             st.dataframe(mkt_avg, use_container_width=True, hide_index=True)
@@ -957,7 +1224,7 @@ with tab_bess:
         st.info("No monthly index data.")
     else:
         fig2 = px.bar(
-            monthly_idx,
+            monthly_idx[monthly_idx["market"] != "total"],
             x="month", y="revenue_permw", color="market",
             labels={"revenue_permw": "£/MW/month", "month": ""},
             barmode="stack",
@@ -970,13 +1237,36 @@ with tab_bess:
     if leader_df.empty:
         st.info("No leaderboard data.")
     else:
-        leader_df["total_revenue"] = leader_df["total_revenue"].round(0)
-        leader_df["avg_revspermw"] = leader_df["avg_revspermw"].round(4)
+        for col in ["total_revenue", "wholesale", "freq_response", "bm", "imbalance", "reserve",
+                    "avg_revspermw", "avg_revspermwh", "rated_power_mw"]:
+            if col in leader_df.columns:
+                leader_df[col] = pd.to_numeric(leader_df[col], errors="coerce")
+        for col in ["total_revenue", "wholesale", "freq_response", "bm", "imbalance", "reserve"]:
+            if col in leader_df.columns:
+                leader_df[col] = leader_df[col].round(0)
+        leader_df["avg_revspermw"] = leader_df["avg_revspermw"].round(2)
+        leader_df["avg_revspermwh"] = leader_df["avg_revspermwh"].round(2)
         leader_df["rated_power_mw"] = leader_df["rated_power_mw"].round(1)
-        leader_df.columns = ["Asset", "Total Revenue (£)", "Avg £/MW/SP", "Rated Power (MW)"]
+        # Reorder: asset, owner, operator first, then financials
+        cols_order = ["asset", "developer", "integrator",
+                      "total_revenue", "wholesale", "freq_response", "bm", "imbalance", "reserve",
+                      "avg_revspermw", "avg_revspermwh", "rated_power_mw"]
+        leader_df = leader_df[[c for c in cols_order if c in leader_df.columns]]
+        leader_df.columns = [
+            {"asset": "Asset", "developer": "Owner/Developer", "integrator": "Operator",
+             "total_revenue": "Total (£)", "wholesale": "Wholesale (£)",
+             "freq_response": "Freq Response (£)", "bm": "BM (£)",
+             "imbalance": "Imbalance (£)", "reserve": "Reserve (£)",
+             "avg_revspermw": "£/MW/SP", "avg_revspermwh": "£/MWh/SP",
+             "rated_power_mw": "Rated Power (MW)"}.get(c, c)
+            for c in leader_df.columns
+        ]
         st.dataframe(leader_df, use_container_width=True, hide_index=True)
 
 # ---- Asset Map -------------------------------------------------------------
+_REV_COLOR_SCALE = [[0, "#d73027"], [0.5, "#fee08b"], [1, "#1a9850"]]  # red → yellow → green
+_MAP_MARKETS = ["total", "wholesale", "frequency_response", "bm", "imbalance", "reserve"]
+
 with tab_map:
     st.header("GB BESS Asset Map")
 
@@ -989,33 +1279,155 @@ with tab_map:
         col1.metric("Total Assets", len(assets_df))
         col2.metric("Total Capacity", f"{assets_df['rated_power_mw'].sum():.0f} MW")
         col3.metric("Transmission-connected",
-                    len(assets_df[assets_df.get("transmission_connected", pd.Series(False))]))
+                    int(assets_df["transmission_connected"].sum()) if "transmission_connected" in assets_df.columns else 0)
 
-        # Map
+        # Revenue colour controls
+        st.markdown("---")
+        mc1, mc2, mc3 = st.columns([2, 2, 2])
+        map_from = mc1.date_input("From", value=date.today() - timedelta(days=90), key="map_from")
+        map_to   = mc2.date_input("To",   value=date.today() - timedelta(days=1),  key="map_to")
+        map_mkt  = mc3.selectbox("Colour by revenue source", _MAP_MARKETS, key="map_mkt")
+
+        rev_df = _get_asset_revenue_map(map_from.isoformat(), map_to.isoformat(), map_mkt)
         map_df = assets_df.dropna(subset=["latitude", "longitude", "rated_power_mw"])
-        fig_map = px.scatter_mapbox(
-            map_df,
-            lat="latitude", lon="longitude",
-            size="rated_power_mw",
-            color="developer",
-            hover_name="asset",
-            hover_data={"rated_power_mw": True, "gsp": True,
-                        "commissioning_date": True, "latitude": False, "longitude": False},
-            zoom=5,
-            center={"lat": 53.5, "lon": -1.5},
-            mapbox_style="open-street-map",
-            height=550,
-        )
-        fig_map.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-        st.plotly_chart(fig_map, use_container_width=True)
+
+        if not rev_df.empty:
+            map_df = map_df.merge(rev_df[["asset", "rev_per_mw"]], on="asset", how="left")
+        else:
+            map_df["rev_per_mw"] = float("nan")
+
+        has_rev = "rev_per_mw" in map_df.columns and map_df["rev_per_mw"].notna().any()
+
+        col_map, col_rank = st.columns([3, 1])
+
+        with col_map:
+            _hover_common = {
+                "rated_power_mw": ":.0f", "gsp": True,
+                "developer": True, "integrator": True,
+                "commissioning_date": True,
+                "latitude": False, "longitude": False,
+            }
+            if has_rev:
+                fig_map = px.scatter_mapbox(
+                    map_df,
+                    lat="latitude", lon="longitude",
+                    size="rated_power_mw",
+                    color="rev_per_mw",
+                    color_continuous_scale=_REV_COLOR_SCALE,
+                    hover_name="asset",
+                    hover_data={**_hover_common, "rev_per_mw": ":.2f"},
+                    labels={"rev_per_mw": f"£/MW ({map_mkt})", "rated_power_mw": "MW",
+                            "developer": "Owner", "integrator": "Operator"},
+                    zoom=5, center={"lat": 53.5, "lon": -1.5},
+                    mapbox_style="open-street-map", height=580,
+                )
+            else:
+                fig_map = px.scatter_mapbox(
+                    map_df,
+                    lat="latitude", lon="longitude",
+                    size="rated_power_mw",
+                    color="developer",
+                    hover_name="asset",
+                    hover_data=_hover_common,
+                    labels={"developer": "Owner", "integrator": "Operator",
+                            "rated_power_mw": "MW"},
+                    zoom=5, center={"lat": 53.5, "lon": -1.5},
+                    mapbox_style="open-street-map", height=580,
+                )
+            fig_map.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+            st.plotly_chart(fig_map, use_container_width=True)
+
+        with col_rank:
+            if has_rev:
+                rank_df = (
+                    map_df[["asset", "rev_per_mw"]].dropna()
+                    .sort_values("rev_per_mw", ascending=True)
+                    .tail(30)
+                )
+                fig_rank = px.bar(
+                    rank_df,
+                    x="rev_per_mw", y="asset",
+                    orientation="h",
+                    color="rev_per_mw",
+                    color_continuous_scale=_REV_COLOR_SCALE,
+                    labels={"rev_per_mw": f"£/MW", "asset": ""},
+                    title=f"Top assets — {map_mkt}",
+                )
+                fig_rank.update_layout(
+                    coloraxis_showscale=False,
+                    margin=dict(l=0, r=10, t=30, b=0),
+                    height=580,
+                    yaxis=dict(tickfont=dict(size=9)),
+                )
+                st.plotly_chart(fig_rank, use_container_width=True)
+            else:
+                st.info("No revenue data for the selected period/market.")
 
         # Table
         with st.expander("Asset details"):
-            show_df = assets_df[["asset", "rated_power_mw", "gsp", "developer",
-                                  "manufacturer", "commissioning_date", "dno"]].copy()
-            show_df.columns = ["Asset", "Power (MW)", "GSP", "Developer",
-                                "Manufacturer", "Commissioned", "DNO"]
+            detail_cols = ["asset", "rated_power_mw", "developer", "integrator",
+                           "gsp", "manufacturer", "commissioning_date", "dno"]
+            show_df = assets_df[[c for c in detail_cols if c in assets_df.columns]].copy()
+            show_df.rename(columns={
+                "asset": "Asset", "rated_power_mw": "Power (MW)",
+                "developer": "Owner/Developer", "integrator": "Operator",
+                "gsp": "GSP", "manufacturer": "Manufacturer",
+                "commissioning_date": "Commissioned", "dno": "DNO",
+            }, inplace=True)
             st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+# ---- Knowledge Base --------------------------------------------------------
+with tab_knowledge:
+    st.header("GB Market Knowledge Base")
+    st.caption("Articles, reports, and market commentary from Elexon, ENTSO-E, Timera, Modo, Meteologica")
+
+    # Coverage table
+    kc1, kc2 = st.columns([2, 1])
+    with kc1:
+        kb_counts = _knowledge_doc_counts()
+        if kb_counts.empty:
+            st.info("Knowledge base is empty. Run ingestion from Data Management tab.")
+        else:
+            st.dataframe(kb_counts, use_container_width=True, hide_index=True)
+
+    with kc2:
+        if st.button("Refresh knowledge stats"):
+            _knowledge_doc_counts.clear()
+            st.rerun()
+        if st.button("Run knowledge ingest now", type="primary"):
+            with st.spinner("Fetching from all knowledge sources…"):
+                result = _run_knowledge_ingest_job(trigger="manual")
+            if result["status"] == "success":
+                st.success(f"Done — {result['total']} new docs in {result['duration']:.1f}s")
+                if result.get("results"):
+                    st.json(result["results"])
+            else:
+                st.error(f"Failed: {result['error']}")
+            _knowledge_doc_counts.clear()
+            st.rerun()
+
+    st.divider()
+    st.subheader("Search Knowledge Base")
+    kb_query = st.text_input("Search query", placeholder="e.g. BESS frequency response market trends 2025")
+    kb_sources = st.multiselect(
+        "Filter by source (all if empty)",
+        ["elexon", "entso_e", "timera", "modo", "meteologica"],
+    )
+    if kb_query:
+        _search_knowledge.clear()
+        results_df = _search_knowledge(kb_query, sources=kb_sources or None, limit=10)
+        if results_df.empty:
+            st.info("No results found.")
+        else:
+            for _, row in results_df.iterrows():
+                with st.expander(
+                    f"[{row['source']}] {row['title'] or 'Untitled'}  —  {row['published_date']}",
+                    expanded=False,
+                ):
+                    if row.get("url"):
+                        st.markdown(f"[View source]({row['url']})")
+                    st.text(row["snippet"])
+
 
 # ---- Strategist Agent ------------------------------------------------------
 with tab_strategist:
@@ -1041,10 +1453,14 @@ with tab_strategist:
                     {"role": m["role"], "content": m["content"]}
                     for m in st.session_state["strat_history"]
                 ]
-                reply, updated, tool_events = _run_agent_turn(
-                    api_messages, _build_strategist_system(),
-                    _STRATEGIST_TOOLS, _dispatch_strategist,
-                )
+                try:
+                    reply, updated, tool_events = _run_agent_turn(
+                        api_messages, _build_strategist_system(),
+                        _STRATEGIST_TOOLS, _dispatch_strategist,
+                    )
+                except Exception as _agent_err:
+                    reply = f"⚠️ API error: {_agent_err}. Please try again."
+                    tool_events = []
 
             st.markdown(reply)
 
@@ -1090,10 +1506,14 @@ with tab_quant:
                     {"role": m["role"], "content": m["content"]}
                     for m in st.session_state["quant_history"]
                 ]
-                reply_q, _, tool_events_q = _run_agent_turn(
-                    api_messages_q, _build_quant_system(),
-                    _QUANT_TOOLS, _dispatch_quant,
-                )
+                try:
+                    reply_q, _, tool_events_q = _run_agent_turn(
+                        api_messages_q, _build_quant_system(),
+                        _QUANT_TOOLS, _dispatch_quant,
+                    )
+                except Exception as _agent_err:
+                    reply_q = f"⚠️ API error: {_agent_err}. Please try again."
+                    tool_events_q = []
 
             st.markdown(reply_q)
 
@@ -1137,20 +1557,75 @@ with tab_mgmt:
         bf_end   = st.date_input("Backfill to",   value=date.today(), key="bf_end")
         if st.button("Run Backfill", type="primary"):
             with st.spinner("Fetching from Modo Energy API…"):
-                try:
-                    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-                    from services.modo_energy.gb_ingestion import run_gb_backfill
-                    import io
-                    from contextlib import redirect_stdout
-                    buf = io.StringIO()
-                    with redirect_stdout(buf):
-                        run_gb_backfill(bf_start, bf_end)
-                    st.success("Backfill complete")
-                    st.code(buf.getvalue())
-                    _table_counts.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Backfill failed: {e}")
+                result = _run_ingestion_job(bf_start, bf_end, trigger="manual")
+            if result["status"] == "success":
+                st.success(f"Backfill complete in {result['duration']:.1f}s")
+            else:
+                st.error(f"Backfill failed: {result['error']}")
+            if result.get("log"):
+                st.code(result["log"])
+            _table_counts.clear()
+            _get_ingestion_logs.clear()
+            st.rerun()
+
+    st.divider()
+    st.subheader("Knowledge Base Ingest")
+    kb_col1, kb_col2 = st.columns(2)
+    with kb_col1:
+        kb_only = st.multiselect(
+            "Sources (all if empty)",
+            ["elexon", "entso_e", "timera", "modo", "meteologica"],
+            key="kb_only",
+        )
+    with kb_col2:
+        if st.button("Run Knowledge Ingest", type="secondary"):
+            with st.spinner("Fetching knowledge from all sources…"):
+                kr = _run_knowledge_ingest_job(
+                    only=kb_only or None, trigger="manual"
+                )
+            if kr["status"] == "success":
+                st.success(f"{kr['total']} new docs in {kr['duration']:.1f}s")
+                if kr.get("results"):
+                    st.json(kr["results"])
+            else:
+                st.error(f"Knowledge ingest failed: {kr['error']}")
+            _knowledge_doc_counts.clear()
+
+    st.divider()
+    st.subheader("Scheduled Downloads")
+
+    # Scheduler status
+    try:
+        sched = _start_scheduler()
+        jobs = sched.get_jobs()
+        if jobs:
+            job = jobs[0]
+            next_run = job.next_run_time
+            next_str = next_run.strftime("%Y-%m-%d %H:%M SGT") if next_run else "—"
+            st.success(f"Scheduler running · Next run: **{next_str}** (daily 03:00 SGT)")
+        else:
+            st.warning("Scheduler has no active jobs.")
+    except Exception as e:
+        st.error(f"Scheduler error: {e}")
+
+    st.caption("Recent ingestion runs (auto-refreshes every 30s)")
+    if st.button("Refresh logs"):
+        _get_ingestion_logs.clear()
+    logs_df = _get_ingestion_logs(limit=20)
+    if logs_df.empty:
+        st.info("No ingestion runs recorded yet.")
+    else:
+        for _, row in logs_df.iterrows():
+            status_icon = "✅" if row["status"] == "success" else "❌"
+            with st.expander(
+                f"{status_icon} {row['run_at_sgt']}  [{row['trigger']}]  "
+                f"{row['date_from']} → {row['date_to']}  ({row['duration_seconds']}s)",
+                expanded=(row["status"] == "error"),
+            ):
+                if row["status"] == "error" and row["error_msg"]:
+                    st.error(row["error_msg"])
+                if row["rows_ingested"]:
+                    st.json(row["rows_ingested"])
 
     st.divider()
     st.subheader("Agent Memory")

@@ -11,7 +11,10 @@ RUN pip install --no-cache-dir \
     "python-dotenv==1.0.1" \
     "anthropic>=0.40" \
     "requests==2.32.3" \
-    openpyxl
+    openpyxl \
+    "apscheduler==3.10.4" \
+    "beautifulsoup4>=4.12" \
+    lxml
 
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
