@@ -49,8 +49,9 @@ def _get_conn():
         or os.environ.get("DATABASE_URL")
         or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
     )
-    return psycopg2.connect(url, keepalives=1, keepalives_idle=60,
-                            keepalives_interval=10, keepalives_count=5)
+    return psycopg2.connect(url, connect_timeout=10, keepalives=1,
+                            keepalives_idle=60, keepalives_interval=10,
+                            keepalives_count=5)
 
 
 def _conn():

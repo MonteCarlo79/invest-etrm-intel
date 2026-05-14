@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk 
 COPY apps/gb-market/        ./apps/gb-market/
 COPY services/modo_energy/  ./services/modo_energy/
 COPY services/common/       ./services/common/
+COPY services/gb_knowledge/ ./services/gb_knowledge/
 
 ENV PYTHONPATH=/app
 
