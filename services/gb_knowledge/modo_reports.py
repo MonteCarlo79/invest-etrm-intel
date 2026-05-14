@@ -50,14 +50,9 @@ _API_PROBE_PATHS = [
     "/articles",
 ]
 
-# Candidate public website URLs (Modo's site may have changed structure).
-# We try each in order and use the first that returns content.
+# Confirmed-working public listing URLs for Modo Energy website.
 _WEBSITE_LISTING_URLS = [
     ("article", "https://modoenergy.com/research"),
-    ("article", "https://modoenergy.com/blog"),
-    ("article", "https://modoenergy.com/insights"),
-    ("report",  "https://modoenergy.com/resources"),
-    ("report",  "https://modoenergy.com/reports"),
 ]
 
 MAX_PAGES = 5
@@ -422,7 +417,7 @@ class ModoReportsConnector(BaseConnector):
         content = self._extract_body(soup)
 
         if not content:
-            logger.warning("[modo] Empty content for %s", url)
+            logger.debug("[modo] Empty content for %s", url)
             return None
 
         return {
@@ -533,7 +528,11 @@ class ModoReportsConnector(BaseConnector):
             logger.warning("[modo] Request error for %s: %s", url, exc)
             return None
         if resp.status_code != 200:
-            logger.warning("[modo] HTTP %s for %s", resp.status_code, url)
+            logger.debug("[modo] HTTP %s for %s", resp.status_code, url)
+            return None
+        # Silently skip sign-in redirects (paywalled content)
+        if "/sign-in" in resp.url or "/login" in resp.url:
+            logger.debug("[modo] Redirected to auth page for %s — skipping", url)
             return None
         resp.encoding = resp.apparent_encoding or "utf-8"
         return BeautifulSoup(resp.text, "html.parser")

@@ -359,7 +359,7 @@ class EntsoEConnector(BaseConnector):
             resp.raise_for_status()
             return resp.text
         except requests.RequestException as exc:
-            logger.warning("Failed to fetch HTML %s: %s", url, exc)
+            logger.debug("Failed to fetch HTML %s: %s", url, exc)
             return None
 
     # ------------------------------------------------------------------

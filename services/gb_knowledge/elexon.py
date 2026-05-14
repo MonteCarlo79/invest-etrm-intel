@@ -16,8 +16,12 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterator
 
+import logging
+
 import requests
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Allow running as a top-level script from the repo root
@@ -77,8 +81,6 @@ class ElexonConnector(BaseConnector):
     def fetch(self) -> Iterator[dict]:
         """Yield document dicts compatible with BaseConnector.run()."""
         yield from self._fetch_syswarn()
-        time.sleep(_INTER_REQUEST_SLEEP)
-        yield from self._fetch_nto()
         time.sleep(_INTER_REQUEST_SLEEP)
         yield from self._fetch_news()
 
@@ -250,7 +252,7 @@ class ElexonConnector(BaseConnector):
             try:
                 resp = self._html_get(url)
             except Exception as exc:
-                print(f"[elexon] News index page {page_num} failed: {exc}")
+                logger.debug("[elexon] News index page %d failed: %s", page_num, exc)
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")

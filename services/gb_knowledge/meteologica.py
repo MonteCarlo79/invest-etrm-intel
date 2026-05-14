@@ -38,9 +38,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 METEOLOGICA_API_BASE = "https://forecasts.meteologica.com/api"
-METEOLOGICA_BLOG_URL = "https://www.meteologica.com/blog/"
 GB_WIND_ASSET = "GB_WIND_TOTAL"   # adjust to your subscription's asset ID
 GB_SOLAR_ASSET = "GB_SOLAR_TOTAL"
+
+# Cornwall Insight — free listing page used as fallback when no Meteologica key.
+# Articles are paywalled but titles + URLs are publicly visible on the listing page.
+_CI_BLOG_URL = "https://cornwall-insight.com/blog/"
+_CI_BASE = "https://www.cornwall-insight.com"
 
 # ---------------------------------------------------------------------------
 # API helpers
@@ -172,106 +176,65 @@ def _build_forecast_doc(
 
 
 # ---------------------------------------------------------------------------
-# Public blog scraper (fallback)
+# Cornwall Insight listing scraper (fallback when no Meteologica API key)
 # ---------------------------------------------------------------------------
 
 
-def _scrape_blog(session: requests.Session, request_delay: float) -> Iterator[dict]:
-    """Yield knowledge docs from Meteologica's public blog articles."""
-    for page in range(1, 3):
-        url = METEOLOGICA_BLOG_URL if page == 1 else f"{METEOLOGICA_BLOG_URL}page/{page}/"
-        try:
-            resp = session.get(url, timeout=20)
-            resp.raise_for_status()
-            html = resp.text
-        except requests.RequestException as exc:
-            logger.warning("Failed to fetch Meteologica blog page %d: %s", page, exc)
-            break
+def _scrape_cornwall_insight(session: requests.Session) -> Iterator[dict]:
+    """Yield knowledge doc stubs from Cornwall Insight's insight-articles listing.
 
-        time.sleep(request_delay)
-        soup = BeautifulSoup(html, "html.parser")
+    Cornwall Insight publishes GB energy market analysis. The full articles are
+    paywalled but titles and URLs are visible on the listing page.  We store
+    title + URL so the agent can cite relevant research topics.
+    """
+    try:
+        resp = session.get(_CI_BLOG_URL, timeout=20)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning("Cornwall Insight listing fetch failed: %s", exc)
+        return
 
-        # Try standard WordPress blog card selectors
-        articles = (
-            soup.select("article.post")
-            or soup.select("article")
-            or soup.select("div.blog-post")
-            or soup.select("div.entry")
-        )
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-        if not articles:
-            # Fallback: any <a> inside a list/card that looks like a blog post
-            links = soup.find_all("a", href=lambda h: h and "/blog/" in h and h != METEOLOGICA_BLOG_URL)
-            for link in links[:20]:
-                title = link.get_text(strip=True)
-                href = link.get("href", "")
-                if len(title) < 15 or not href:
-                    continue
-                content = (
-                    f"Meteologica market insight: {title}. "
-                    f"Source: Meteologica blog. URL: {href}"
-                )
-                yield {
-                    "doc_type": "report",
-                    "title": title,
-                    "url": href,
-                    "published_date": None,
-                    "content": content,
-                }
+    for h in soup.find_all(["h2", "h3", "h4"]):
+        a = h.find("a", href=True)
+        if a is None:
+            continue
+        href = a.get("href", "").strip()
+        if "insight" not in href and "blog" not in href:
+            continue
+        if not href.startswith("http"):
+            href = _CI_BASE + href
+
+        title = h.get_text(strip=True)
+        if len(title) < 15:
             continue
 
-        for article in articles:
-            # Title
-            title_el = (
-                article.find("h1")
-                or article.find("h2")
-                or article.find("h3")
-            )
-            title = title_el.get_text(strip=True) if title_el else ""
-            if not title:
-                continue
-
-            # URL
-            link_el = article.find("a", href=True)
-            href = link_el["href"] if link_el else ""
-
-            # Date
-            date_el = article.find("time") or article.find(
-                class_=lambda c: c and "date" in str(c).lower()
-            )
-            pub_date: date | None = None
-            if date_el:
-                raw = (
-                    date_el.get("datetime")
-                    or date_el.get_text(strip=True)
-                    or ""
-                )
-                for fmt in ("%Y-%m-%d", "%B %d, %Y", "%d %B %Y", "%d/%m/%Y"):
+        # Try to find a date near the heading
+        pub_date: date | None = None
+        parent = h.parent
+        if parent:
+            time_el = parent.find("time")
+            if time_el:
+                raw = time_el.get("datetime", "") or time_el.get_text(strip=True)
+                for fmt in ("%Y-%m-%d", "%B %d, %Y", "%d %B %Y"):
                     try:
                         pub_date = datetime.strptime(raw[:20].strip(), fmt).date()
                         break
                     except ValueError:
                         continue
 
-            # Summary
-            summary_el = article.find("p") or article.find(
-                class_=lambda c: c and "excerpt" in str(c).lower()
-            )
-            summary = summary_el.get_text(strip=True) if summary_el else ""
-
-            content = f"Meteologica blog: {title}."
-            if summary:
-                content += f" {summary}"
-            if href:
-                content += f" Source URL: {href}"
-
-            yield {
-                "doc_type": "report",
-                "title": title,
-                "url": href or None,
-                "published_date": pub_date,
-                "content": content,
-            }
+        content = (
+            f"Cornwall Insight GB energy market analysis: {title}. "
+            f"Source: Cornwall Insight insight article. URL: {href}"
+        )
+        yield {
+            "doc_type": "article",
+            "title": title,
+            "url": href,
+            "published_date": pub_date,
+            "content": content,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -356,14 +319,14 @@ class MeteologicaConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     def fetch(self) -> Iterator[dict]:
-        """Yield all documents: API forecasts (if key set) or blog fallback."""
+        """Yield all documents: API forecasts (if key set) or Cornwall Insight fallback."""
         if self._api_key:
             yield from self._fetch_api_docs()
         else:
             logger.info(
-                "METEOLOGICA_API_KEY not set — falling back to blog scrape."
+                "METEOLOGICA_API_KEY not set — falling back to Cornwall Insight listing."
             )
-            yield from _scrape_blog(self._session, self._delay)
+            yield from _scrape_cornwall_insight(self._session)
 
 
 # ---------------------------------------------------------------------------

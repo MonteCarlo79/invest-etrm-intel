@@ -39,8 +39,12 @@ HEADERS = {
 
 LISTING_SECTIONS = [
     ("article", "https://timera-energy.com/blog/"),
-    ("report",  "https://timera-energy.com/reports/"),
+    ("report",  "https://timera-energy.com/publications/"),
 ]
+
+# The publications page lists PDF documents rather than HTML articles.
+# We parse the card metadata directly instead of following article links.
+_PUBLICATIONS_URL = "https://timera-energy.com/publications/"
 
 MAX_PAGES = 5
 ARTICLE_SLEEP = 1.0          # seconds between article fetches
@@ -174,7 +178,86 @@ class TimeraConnector(BaseConnector):
     def fetch(self) -> Iterator[dict]:
         """Yield one dict per article/report with keys expected by BaseConnector."""
         for doc_type, base_url in LISTING_SECTIONS:
-            yield from self._fetch_section(doc_type, base_url)
+            if "publications" in base_url:
+                yield from self._fetch_publications_listing(base_url)
+            else:
+                yield from self._fetch_section(doc_type, base_url)
+
+    # ------------------------------------------------------------------
+    # Publications page — PDF card listing
+    # ------------------------------------------------------------------
+
+    def _fetch_publications_listing(self, base_url: str) -> Iterator[dict]:
+        """Parse the Timera publications page which lists PDF documents.
+
+        Each card contains: category tag, date, title (h2-h4), description (p),
+        and a PDF link.  We build one knowledge doc per card from the card
+        metadata; we do not attempt to read the PDF itself.
+        """
+        soup = self._get_html(base_url)
+        if soup is None:
+            logger.warning("[timera] Could not fetch publications page %s", base_url)
+            return
+
+        for pdf_link in soup.find_all("a", href=lambda h: h and ".pdf" in h.lower()):
+            href = pdf_link.get("href", "").strip()
+            if not href:
+                continue
+
+            # Walk up the DOM to find the enclosing card element.
+            card = pdf_link
+            for _ in range(8):
+                parent = card.parent
+                if parent is None:
+                    break
+                text_len = len(parent.get_text(strip=True))
+                if text_len > 80:
+                    card = parent
+                    break
+                card = parent
+
+            # Title — prefer an explicit heading tag inside the card.
+            title_el = (
+                card.find("h2") or card.find("h3") or card.find("h4") or card.find("h5")
+            )
+            title = title_el.get_text(strip=True) if title_el else pdf_link.get_text(strip=True)
+            if not title:
+                continue
+
+            # Date — look for a <time> tag or a text matching a date pattern.
+            pub_date: date | None = None
+            time_el = card.find("time")
+            if time_el:
+                raw = time_el.get("datetime", "") or time_el.get_text(strip=True)
+                pub_date = _parse_date(raw[:20].strip())
+            if pub_date is None:
+                card_text = card.get_text(" ", strip=True)
+                date_m = re.search(
+                    r"\b(\d{1,2}\s+\w+\s+20\d{2}|\d{4}-\d{2}-\d{2})\b", card_text
+                )
+                if date_m:
+                    pub_date = _parse_date(date_m.group(1))
+
+            # Description — first <p> tag in the card (excluding the title heading).
+            desc = ""
+            for p in card.find_all("p"):
+                txt = p.get_text(strip=True)
+                if len(txt) > 20 and txt.lower() != title.lower():
+                    desc = txt
+                    break
+
+            content = f"Timera Energy publication: {title}."
+            if desc:
+                content += f" {desc}"
+            content += f" PDF: {href}"
+
+            yield {
+                "doc_type": "report",
+                "title": title,
+                "url": href,
+                "published_date": pub_date,
+                "content": content,
+            }
 
     # ------------------------------------------------------------------
     # Section-level pagination

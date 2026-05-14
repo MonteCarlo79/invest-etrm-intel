@@ -46,7 +46,16 @@ class ModoClient:
 
     def _request(self, url: str, params: dict) -> dict | list:
         for attempt in range(6):
-            r = self._session.get(url, params=params, timeout=60)
+            try:
+                r = self._session.get(url, params=params, timeout=60)
+            except requests.exceptions.ConnectionError as exc:
+                wait = 15 * (2 ** attempt)   # 15s, 30s, 60s, 120s, 240s, 480s
+                print(f" [ConnectionError retry {attempt+1}/6 in {wait}s: {exc}]", end="", flush=True)
+                time.sleep(wait)
+                # Recreate session in case the connection pool is broken
+                self._session = requests.Session()
+                self._session.headers.update({"X-Token": self._api_key})
+                continue
             if r.status_code == 429:
                 wait = 60 / (attempt + 1)
                 time.sleep(wait)
