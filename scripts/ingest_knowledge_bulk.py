@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -146,6 +147,7 @@ def _ingest_file(
             category_override=category_override,
             app=app,
             api_key=api_key,
+            synthesize=False,  # ECS synthesis task handles this; avoid burst-limit 403s
         )
         if is_new:
             return "added", f"{path.name}  [app={app}  category={category}  doc_id={doc_id}]"
@@ -177,6 +179,14 @@ def main() -> None:
                         help="Force an app scope for all files (default: auto-detect). "
                              "Files under '5-交易数据' folders are auto-tagged 'trader'; "
                              "everything else defaults to 'shared'.")
+    parser.add_argument("--checkpoint", default=None,
+                        help="Path to checkpoint file tracking completed files. "
+                             "Defaults to <dir>/.ingest_checkpoint.log. "
+                             "Files recorded here are skipped instantly without any DB query.")
+    parser.add_argument("--prebuild-checkpoint", action="store_true",
+                        help="Pre-populate the checkpoint from the DB (filename match), "
+                             "then exit. Run this once after a large ingest to avoid "
+                             "redundant DB queries on future runs.")
     args = parser.parse_args()
 
     root = Path(args.dir)
@@ -203,13 +213,74 @@ def main() -> None:
 
     exclude_patterns = [p.strip() for p in args.exclude.split(",")] if args.exclude else None
 
+    # Resolve checkpoint file
+    checkpoint_path = Path(args.checkpoint) if args.checkpoint else root / ".ingest_checkpoint.log"
+    checkpoint_lock = threading.Lock()
+
+    # Load checkpoint — skip these files entirely (no DB query)
+    completed_paths: set[str] = set()
+    if checkpoint_path.exists():
+        with open(checkpoint_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    completed_paths.add(line)
+
+    def _mark_checkpoint(path: Path) -> None:
+        with checkpoint_lock:
+            with open(checkpoint_path, "a", encoding="utf-8") as fh:
+                fh.write(str(path) + "\n")
+
+    # ── Pre-build checkpoint from DB ─────────────────────────────────────────
+    if args.prebuild_checkpoint:
+        from shared.agents.db import run_query
+        print("Querying DB for all ingested filenames...")
+        df = run_query(
+            "SELECT DISTINCT file_name FROM staging.spot_knowledge_docs "
+            "WHERE ingest_status != 'failed'"
+        )
+        if df.empty:
+            print("No ingested documents found in DB.")
+            sys.exit(0)
+        ingested_names: set[str] = set(df["file_name"].tolist())
+        print(f"Found {len(ingested_names)} ingested filenames in DB. Walking directory...")
+
+        all_files = _collect_files(root, SUPPORTED_EXTENSIONS, exclude_patterns)
+        # Load existing checkpoint to avoid duplicates
+        already_in_checkpoint: set[str] = set(completed_paths)
+        new_entries = 0
+        with open(checkpoint_path, "a", encoding="utf-8") as fh:
+            for f in all_files:
+                if str(f) not in already_in_checkpoint and f.name in ingested_names:
+                    fh.write(str(f) + "\n")
+                    already_in_checkpoint.add(str(f))
+                    new_entries += 1
+
+        print(
+            f"Checkpoint pre-built: {new_entries} new entries written "
+            f"({len(already_in_checkpoint)} total) → {checkpoint_path}"
+        )
+        print("Re-run without --prebuild-checkpoint to ingest remaining files.")
+        sys.exit(0)
+
     # Discover files
     files = _collect_files(root, allowed_exts, exclude_patterns)
     if not files:
         print(f"No matching files found under: {root}")
         sys.exit(0)
 
-    print(f"Found {len(files)} file(s) under {root}")
+    # Apply checkpoint filter before any DB work
+    checkpoint_skipped = 0
+    if completed_paths:
+        filtered = [f for f in files if str(f) not in completed_paths]
+        checkpoint_skipped = len(files) - len(filtered)
+        files = filtered
+
+    print(f"Found {len(files) + checkpoint_skipped} file(s) under {root}")
+    if checkpoint_skipped:
+        print(f"Checkpoint: skipping {checkpoint_skipped} already-completed file(s) "
+              f"({checkpoint_path.name})")
+
     if args.dry_run:
         print("[DRY RUN] The following files would be ingested:")
         for f in files:
@@ -237,12 +308,16 @@ def main() -> None:
             icon = {"added": "[ADDED]", "skip": "[SKIP ]", "error": "[ERROR]"}.get(status, status)
             pct = done / len(files) * 100
             print(f"{icon}  ({done:>4}/{len(files)}, {pct:4.0f}%)  {msg}")
+            # Record completed files so future runs skip them without a DB query
+            if status in ("added", "skip"):
+                _mark_checkpoint(futures[future])
 
     elapsed = time.time() - t0
     print(
         f"\nDone in {elapsed:.1f}s — "
         f"added: {counts.get('added', 0)}  "
         f"skipped: {counts.get('skip', 0)}  "
+        f"checkpoint-skipped: {checkpoint_skipped}  "
         f"errors: {counts.get('error', 0)}"
     )
     if counts.get("error", 0) > 0:

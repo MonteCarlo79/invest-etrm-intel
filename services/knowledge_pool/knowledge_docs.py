@@ -412,7 +412,7 @@ def auto_categorize(
 # ── Text chunking ─────────────────────────────────────────────────────────────
 
 def _chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list[str]:
-    text = text.strip()
+    text = text.replace("\x00", "").strip()
     if not text:
         return []
     chunks = []
@@ -441,6 +441,7 @@ def register_and_ingest(
     category_override: Optional[str] = None,
     app: str = "shared",
     api_key: Optional[str] = None,
+    synthesize: bool = True,
 ) -> tuple[int, bool, str]:
     """
     Register and ingest a document from raw bytes (e.g. from Streamlit uploader).
@@ -528,6 +529,21 @@ def register_and_ingest(
                     inserts,
                 )
         conn.commit()
+
+    # Phase 1 hook: synthesize in background (best-effort, non-blocking)
+    # Disabled during bulk ingestion (synthesize=False) to avoid burst-limit 403s;
+    # the ECS synthesis task handles those docs instead.
+    if api_key and synthesize:
+        try:
+            import threading
+            from .synthesis import synthesize_on_ingest
+            threading.Thread(
+                target=synthesize_on_ingest,
+                args=(doc_id, api_key),
+                daemon=True,
+            ).start()
+        except Exception:
+            pass
 
     return doc_id, True, category
 
