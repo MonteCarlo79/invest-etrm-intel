@@ -542,3 +542,4 @@ variable "fengxing_api_key" {
   default     = ""
   sensitive   = true
 }
+

@@ -14,7 +14,13 @@ RUN pip install --no-cache-dir \
     openpyxl \
     "apscheduler==3.10.4" \
     "beautifulsoup4>=4.12" \
-    lxml
+    lxml \
+    "pypdf>=4.0" \
+    "python-docx>=1.1" \
+    "python-pptx>=0.6" \
+    "reportlab>=4.0" \
+    "scikit-learn>=1.4" \
+    "scipy>=1.12"
 
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*

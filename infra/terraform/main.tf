@@ -1641,6 +1641,30 @@ resource "aws_ecs_task_definition" "gb_market" {
         {
           name  = "MODO_API_KEY"
           value = var.modo_api_key
+        },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "REPORT_FROM_EMAIL"
+          value = var.smtp_user
+        },
+        {
+          name  = "REPORT_TO_EMAIL"
+          value = var.report_email_to
         }
       ]
 
@@ -2030,6 +2054,22 @@ resource "aws_ecs_task_definition" "mengxi_dashboard" {
         {
           name  = "FENGXING_API_KEY"
           value = var.fengxing_api_key
+        },
+        {
+          name  = "ECS_CLUSTER"
+          value = aws_ecs_cluster.this.name
+        },
+        {
+          name  = "PIPELINE_TASK_DEF"
+          value = aws_ecs_task_definition.inner_pipeline.arn
+        },
+        {
+          name  = "PRIVATE_SUBNETS"
+          value = join(",", var.private_subnet_ids)
+        },
+        {
+          name  = "TASK_SECURITY_GROUPS"
+          value = aws_security_group.ecs_tasks.id
         }
       ]
 

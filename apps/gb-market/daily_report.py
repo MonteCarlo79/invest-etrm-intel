@@ -1,0 +1,750 @@
+"""Daily GB Market Report — PDF generation and email delivery.
+
+Generates a three-section PDF:
+  1. Top 10 BESS performers (yesterday)
+  2. Daily average revenue breakdown by market stream
+  3. Market summary (system price, EPEX DA, NIV, DX ancillary clearing prices)
+
+Email is sent via SMTP.  Configure with env vars:
+  SMTP_HOST          (default: smtp.gmail.com)
+  SMTP_PORT          (default: 587)
+  SMTP_USER          — sender email address / SMTP username
+  SMTP_PASSWORD      — SMTP password or app password
+  REPORT_FROM_EMAIL  — From: address (defaults to SMTP_USER)
+  REPORT_TO_EMAIL    — override recipient (defaults to chen_dpeng@hotmail.com)
+"""
+from __future__ import annotations
+
+import logging
+import os
+import smtplib
+import ssl
+from datetime import date, timedelta
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from io import BytesIO
+
+import pandas as pd
+import psycopg2
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import (
+    HRFlowable,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_RECIPIENT = "chen_dpeng@hotmail.com"
+
+
+# ---------------------------------------------------------------------------
+# AI market commentary
+# ---------------------------------------------------------------------------
+
+def _generate_ai_commentary(
+    report_date: date,
+    performers: pd.DataFrame,
+    revenue: pd.DataFrame,
+    market: dict,
+    prev_revenue: pd.DataFrame | None = None,
+) -> str:
+    """Call Claude to generate a 3–4 paragraph market analytics commentary.
+
+    Returns plain text. Returns empty string on any error (report still sends).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.warning("ANTHROPIC_API_KEY not set — skipping AI commentary")
+        return ""
+
+    try:
+        import anthropic as _anthropic
+    except ImportError:
+        logger.warning("anthropic package not available — skipping AI commentary")
+        return ""
+
+    # ── Build data snapshot for the prompt ───────────────────────────────────
+    lines: list[str] = [f"GB BESS market data for {report_date.strftime('%d %b %Y')}:"]
+
+    # EPEX DA prices
+    epex_df = market.get("epex", pd.DataFrame())
+    if not epex_df.empty:
+        r = epex_df.iloc[0]
+        lines.append(
+            f"EPEX DA: baseload £{r.get('baseload', 0):.2f}/MWh, "
+            f"peak £{r.get('peakload', 0):.2f}/MWh, "
+            f"off-peak £{r.get('offpeak', 0):.2f}/MWh"
+        )
+        pk = r.get("peakload") or 0
+        op = r.get("offpeak") or 0
+        if pk and op:
+            lines.append(f"Peak/off-peak spread: £{pk - op:.2f}/MWh")
+
+    # System price
+    sp_df = market.get("system_price", pd.DataFrame())
+    if not sp_df.empty:
+        r = sp_df.iloc[0]
+        lines.append(
+            f"System price: avg £{r.get('avg', 0):.2f}/MWh, "
+            f"min £{r.get('min', 0):.2f}/MWh, "
+            f"max £{r.get('max', 0):.2f}/MWh, "
+            f"std dev £{r.get('stddev', 0):.2f}/MWh"
+        )
+
+    # NIV
+    niv_df = market.get("niv", pd.DataFrame())
+    if not niv_df.empty and not pd.isna(niv_df.iloc[0].get("avg_niv")):
+        niv = niv_df.iloc[0]["avg_niv"]
+        direction = "long (over-generation)" if niv > 0 else "short (under-generation)"
+        lines.append(f"Average NIV: {niv:.1f} MWh per SP — system was {direction}")
+
+    # DX ancillary
+    dx_df = market.get("dx", pd.DataFrame())
+    if not dx_df.empty:
+        dx_summary = "; ".join(
+            f"{row['service']} £{row.get('avg_price', 0):.2f}/MW ({row.get('avg_volume', 0):.0f} MW)"
+            for _, row in dx_df.iterrows()
+        )
+        lines.append(f"DX ancillary clearing: {dx_summary}")
+
+    # Revenue breakdown (today)
+    if not revenue.empty:
+        rev_row = revenue.iloc[0] if len(revenue) > 0 else None
+        if rev_row is not None:
+            mkts = ["wholesale", "frequency_response", "bm", "imbalance"]
+            rev_parts = [
+                f"{m}: £{rev_row.get(m, 0):,.0f}" for m in mkts if rev_row.get(m)
+            ]
+            if rev_parts:
+                lines.append(f"Market revenue breakdown: {', '.join(rev_parts)}")
+
+    # Day-on-day revenue change
+    if prev_revenue is not None and not prev_revenue.empty and not revenue.empty:
+        try:
+            today_total = revenue.groupby("market")["revenue"].sum().get("wholesale", 0)
+            prev_total  = prev_revenue.groupby("market")["revenue"].sum().get("wholesale", 0)
+            if prev_total:
+                pct = (today_total - prev_total) / abs(prev_total) * 100
+                lines.append(f"Wholesale revenue day-on-day change: {pct:+.1f}%")
+        except Exception:
+            pass
+
+    # Top 3 performers
+    if not performers.empty:
+        top3 = performers.head(3)
+        perf_parts = [
+            f"{row.get('asset', '?')} (£{row.get('total_rev', 0):,.0f}, "
+            f"{row.get('rated_power', 0):.0f} MW)"
+            for _, row in top3.iterrows()
+        ]
+        lines.append(f"Top 3 assets: {'; '.join(perf_parts)}")
+
+    data_snapshot = "\n".join(lines)
+
+    prompt = (
+        "You are a senior GB electricity market analyst writing the analytics section of a "
+        "daily BESS (battery energy storage) market briefing. Write exactly 3 paragraphs — "
+        "no bullet points, no headers — covering:\n"
+        "1. Price environment: EPEX DA level and spread, system price volatility, "
+        "   and what they imply for BESS DA arbitrage opportunity.\n"
+        "2. System balance and ancillary markets: NIV direction and magnitude, "
+        "   DX clearing prices relative to recent norms, and fleet revenue mix.\n"
+        "3. Asset performance: highlight any notable patterns among top performers, "
+        "   day-on-day changes, and a brief forward-looking comment on market conditions.\n\n"
+        "Be concise (≤120 words per paragraph), use precise market terminology, "
+        "and anchor every claim to the numbers provided. Do not speculate beyond the data.\n\n"
+        f"Data:\n{data_snapshot}"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = msg.content[0].text.strip()
+        logger.info("AI commentary generated (%d chars)", len(text))
+        return text
+    except Exception as exc:
+        logger.warning("AI commentary generation failed: %s", exc)
+        return ""
+
+# ---------------------------------------------------------------------------
+# DB helpers (standalone, no Streamlit cache)
+# ---------------------------------------------------------------------------
+
+def _get_conn():
+    url = (
+        os.environ.get("PGURL")
+        or os.environ.get("DATABASE_URL")
+        or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
+    )
+    conn = psycopg2.connect(url, connect_timeout=10)
+    conn.autocommit = True
+    return conn
+
+
+def _query(conn, sql: str, params=None) -> pd.DataFrame:
+    return pd.read_sql(sql, conn, params=params)
+
+
+# ---------------------------------------------------------------------------
+# Data queries
+# ---------------------------------------------------------------------------
+
+def _get_top_performers(conn, report_date: date, top_n: int = 10) -> pd.DataFrame:
+    return _query(
+        conn,
+        "WITH per_sp AS ( "
+        "  SELECT settlement_date, settlement_period, asset, "
+        "    SUM(revenue) AS total_rev, "
+        "    AVG(rated_power) AS rated_power, "
+        "    SUM(CASE WHEN market='wholesale'          THEN revenue ELSE 0 END) AS wholesale, "
+        "    SUM(CASE WHEN market='frequency_response' THEN revenue ELSE 0 END) AS freq_response, "
+        "    SUM(CASE WHEN market='bm'                 THEN revenue ELSE 0 END) AS bm, "
+        "    SUM(CASE WHEN market='imbalance'          THEN revenue ELSE 0 END) AS imbalance, "
+        "    SUM(CASE WHEN market='reserve'            THEN revenue ELSE 0 END) AS reserve "
+        "  FROM intl_market.gb_bess_leaderboard "
+        "  WHERE settlement_date = %s "
+        "  GROUP BY settlement_date, settlement_period, asset "
+        "), "
+        "lb AS ( "
+        "  SELECT asset, "
+        "    SUM(total_rev) AS total_revenue, "
+        "    SUM(wholesale) AS wholesale, SUM(freq_response) AS freq_response, "
+        "    SUM(bm) AS bm, SUM(imbalance) AS imbalance, SUM(reserve) AS reserve, "
+        "    AVG(rated_power) AS rated_power_mw "
+        "  FROM per_sp GROUP BY asset ORDER BY total_revenue DESC LIMIT %s "
+        "), "
+        "op AS ( "
+        "  SELECT DISTINCT ON (asset) asset, value AS operator "
+        "  FROM intl_market.gb_bess_assets WHERE history_table='operator' "
+        "  ORDER BY asset, valid_from DESC "
+        "), "
+        "ow AS ( "
+        "  SELECT DISTINCT ON (asset) asset, value AS owner "
+        "  FROM intl_market.gb_bess_assets WHERE history_table='owner' "
+        "  ORDER BY asset, valid_from DESC "
+        ") "
+        "SELECT lb.asset, ow.owner, op.operator, lb.rated_power_mw, "
+        "  lb.total_revenue, lb.wholesale, lb.freq_response, lb.bm, lb.imbalance, lb.reserve "
+        "FROM lb LEFT JOIN op ON op.asset=lb.asset LEFT JOIN ow ON ow.asset=lb.asset",
+        (report_date, top_n),
+    )
+
+
+def _get_revenue_breakdown(conn, report_date: date) -> pd.DataFrame:
+    """Market avg revenue breakdown for a single date (duration='*' = any duration)."""
+    return _query(
+        conn,
+        "SELECT market, revenue_permw, revenue_permwh "
+        "FROM intl_market.gb_bess_daily_index "
+        "WHERE settlement_date = %s AND duration = '*' "
+        "ORDER BY market",
+        (report_date,),
+    )
+
+
+def _get_market_summary(conn, report_date: date) -> dict:
+    """System price stats, EPEX DA, NIV, DX clearing prices for a single date."""
+    # System price
+    sp = _query(
+        conn,
+        "SELECT AVG(system_price) AS avg, MIN(system_price) AS min, "
+        "MAX(system_price) AS max, STDDEV(system_price) AS stddev "
+        "FROM intl_market.gb_system_price WHERE date = %s",
+        (report_date,),
+    )
+    # EPEX DA
+    epex = _query(
+        conn,
+        "SELECT MAX(daily_baseload) AS baseload, MAX(daily_peakload) AS peakload, "
+        "MAX(daily_offpeak) AS offpeak "
+        "FROM intl_market.gb_epex_da_hh WHERE delivery_date = %s",
+        (report_date,),
+    )
+    # NIV
+    niv = _query(
+        conn,
+        "SELECT AVG(niv) AS avg_niv FROM intl_market.gb_niv WHERE date = %s",
+        (report_date,),
+    )
+    # DX ancillary — avg clearing price per service
+    dx = _query(
+        conn,
+        "SELECT service, AVG(clearing_price) AS avg_price, "
+        "AVG(cleared_volume) AS avg_volume "
+        "FROM intl_market.gb_dx_results WHERE efa_date = %s "
+        "GROUP BY service ORDER BY service",
+        (report_date,),
+    )
+    return {"system_price": sp, "epex": epex, "niv": niv, "dx": dx}
+
+
+def _get_prev_data_date(conn, report_date: date) -> date | None:
+    """Most recent settlement date before report_date that has leaderboard data."""
+    df = _query(
+        conn,
+        "SELECT MAX(settlement_date) AS prev FROM intl_market.gb_bess_leaderboard "
+        "WHERE settlement_date < %s",
+        (report_date,),
+    )
+    if df.empty or pd.isna(df.iloc[0]["prev"]):
+        return None
+    return pd.Timestamp(df.iloc[0]["prev"]).date()
+
+
+def _get_all_rankings(conn, ref_date: date) -> dict:
+    """Returns {asset: rank} for ref_date ranked by total revenue desc."""
+    df = _query(
+        conn,
+        "SELECT asset, SUM(revenue) AS total_rev "
+        "FROM intl_market.gb_bess_leaderboard WHERE settlement_date = %s "
+        "GROUP BY asset ORDER BY total_rev DESC",
+        (ref_date,),
+    )
+    return {row["asset"]: i + 1 for i, row in df.iterrows()}
+
+
+# ---------------------------------------------------------------------------
+# PDF builder
+# ---------------------------------------------------------------------------
+
+_PAGE_W, _PAGE_H = A4
+_MARGIN = 2 * cm
+
+_GREY_HEADER  = colors.HexColor("#1F3864")
+_GREY_ALT     = colors.HexColor("#EBF0FA")
+_ACCENT       = colors.HexColor("#2E75B6")
+_LIGHT_BORDER = colors.HexColor("#B8CCE4")
+_GREEN        = colors.HexColor("#1a7f37")
+_RED          = colors.HexColor("#cf222e")
+
+def _styles():
+    ss = getSampleStyleSheet()
+    title   = ParagraphStyle("rpt_title",  parent=ss["Title"],  fontSize=20, textColor=_GREY_HEADER, spaceAfter=6)
+    h1      = ParagraphStyle("rpt_h1",     parent=ss["Heading1"], fontSize=13, textColor=_GREY_HEADER, spaceBefore=14, spaceAfter=4)
+    h2      = ParagraphStyle("rpt_h2",     parent=ss["Heading2"], fontSize=11, textColor=_ACCENT, spaceBefore=8, spaceAfter=3)
+    body    = ParagraphStyle("rpt_body",   parent=ss["Normal"],   fontSize=9)
+    caption = ParagraphStyle("rpt_caption",parent=ss["Normal"],   fontSize=8, textColor=colors.grey, spaceAfter=4)
+    return title, h1, h2, body, caption
+
+
+def _fmt(val, decimals=1, prefix="", suffix=""):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return "—"
+    return f"{prefix}{val:,.{decimals}f}{suffix}"
+
+
+def _make_table(headers: list[str], rows: list[list], col_widths: list[float],
+                extra_styles: list | None = None) -> Table:
+    data = [headers] + rows
+    tbl = Table(data, colWidths=col_widths, repeatRows=1)
+    style = [
+        ("BACKGROUND",  (0, 0), (-1, 0),  _GREY_HEADER),
+        ("TEXTCOLOR",   (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",    (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",    (0, 0), (-1, 0),  8),
+        ("FONTNAME",    (0, 1), (-1, -1), "Helvetica"),
+        ("FONTSIZE",    (0, 1), (-1, -1), 8),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, _GREY_ALT]),
+        ("GRID",        (0, 0), (-1, -1), 0.4, _LIGHT_BORDER),
+        ("VALIGN",      (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",  (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING",(0, 0),(-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING",(0, 0), (-1, -1), 5),
+    ]
+    if extra_styles:
+        style.extend(extra_styles)
+    tbl.setStyle(TableStyle(style))
+    return tbl
+
+
+def _build_pdf(buf: BytesIO, report_date: date,
+               performers: pd.DataFrame,
+               revenue: pd.DataFrame,
+               market: dict,
+               prev_rankings: dict | None = None,
+               prev_revenue: pd.DataFrame | None = None,
+               ai_commentary: str = "") -> None:
+    title_s, h1_s, h2_s, body_s, caption_s = _styles()
+    usable_w = _PAGE_W - 2 * _MARGIN
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=_MARGIN, rightMargin=_MARGIN,
+        topMargin=_MARGIN, bottomMargin=_MARGIN,
+    )
+    story = []
+
+    # ── Title block ──────────────────────────────────────────────────────────
+    story.append(Paragraph("GB BESS Daily Market Report", title_s))
+    story.append(Paragraph(
+        f"Report date: <b>{report_date.strftime('%A, %d %B %Y')}</b> &nbsp;|&nbsp; "
+        f"Generated: {date.today().strftime('%d %b %Y')}",
+        body_s,
+    ))
+    story.append(HRFlowable(width="100%", thickness=2, color=_GREY_HEADER, spaceAfter=10))
+
+    # ── Section 1: Top 10 BESS performers ────────────────────────────────────
+    story.append(Paragraph("1. Top 10 BESS Performers", h1_s))
+    story.append(Paragraph(
+        f"Total revenue by asset for {report_date.strftime('%d %b %Y')}. "
+        "Revenue (£) is the sum across all settlement periods.",
+        caption_s,
+    ))
+
+    if performers.empty:
+        story.append(Paragraph("No leaderboard data available for this date.", body_s))
+    else:
+        # col 0="#", col 1="Prev", col 2="Asset" … widths sum to 16.4 cm
+        headers = ["#", "Prev", "Asset", "Owner", "Operator", "MW",
+                   "Total £", "Wholesale", "Freq Resp", "BM", "Imbalance", "Reserve"]
+        col_w = [w * cm for w in [0.5, 0.9, 2.8, 2.2, 2.2, 0.8, 1.3, 1.3, 1.3, 0.8, 1.2, 1.1]]
+        rows = []
+        extra_s = []
+        for rank, (_, row) in enumerate(performers.iterrows(), 1):
+            asset = str(row.get("asset", ""))
+            prev_rank = (prev_rankings or {}).get(asset)
+            if prev_rank is None:
+                prev_cell = "—"
+            else:
+                prev_cell = str(prev_rank)
+                tbl_row = rank  # header is row 0; data rows start at 1
+                if rank < prev_rank:
+                    extra_s.append(("TEXTCOLOR", (1, tbl_row), (1, tbl_row), _GREEN))
+                elif rank > prev_rank:
+                    extra_s.append(("TEXTCOLOR", (1, tbl_row), (1, tbl_row), _RED))
+            rows.append([
+                str(rank),
+                prev_cell,
+                asset,
+                str(row.get("owner") or ""),
+                str(row.get("operator") or ""),
+                _fmt(row.get("rated_power_mw"), 0),
+                _fmt(row.get("total_revenue"), 0, "£"),
+                _fmt(row.get("wholesale"), 0, "£"),
+                _fmt(row.get("freq_response"), 0, "£"),
+                _fmt(row.get("bm"), 0, "£"),
+                _fmt(row.get("imbalance"), 0, "£"),
+                _fmt(row.get("reserve"), 0, "£"),
+            ])
+        story.append(_make_table(headers, rows, col_w, extra_styles=extra_s))
+
+    story.append(Spacer(1, 0.4 * cm))
+
+    # ── Section 2: Revenue breakdown by market stream ────────────────────────
+    story.append(Paragraph("2. Daily Average Revenue Breakdown", h1_s))
+    story.append(Paragraph(
+        "Market index average revenue per MW and per MWh of installed capacity.",
+        caption_s,
+    ))
+
+    if revenue.empty:
+        story.append(Paragraph("No revenue index data available for this date.", body_s))
+    else:
+        _MARKET_LABELS = {
+            "wholesale": "Wholesale (EPEX)",
+            "frequency_response": "Frequency Response",
+            "bm": "Balancing Mechanism",
+            "imbalance": "Imbalance",
+            "reserve": "Reserve",
+            "total": "Total (all markets)",
+        }
+        # Separate out 'total' row and sort remainder
+        non_total = revenue[revenue["market"] != "total"].sort_values("revenue_permw", ascending=False)
+        total_row = revenue[revenue["market"] == "total"]
+
+        # col 2 = current £/MWh/yr (with ↑↓), col 3 = prev £/MWh/yr
+        headers2 = ["Market Stream", "£/MW/day", "£/MWh/yr", "Prev £/MWh/yr"]
+        col_w2   = [6.0 * cm, 2.8 * cm, 4.1 * cm, 4.1 * cm]
+        rows2 = []
+        extra_s2 = []
+
+        def _rev_row(market_key, label, permw, permwh):
+            curr_val = float(permwh) * 365 if pd.notna(permwh) else None
+            prev_val = None
+            if prev_revenue is not None and not prev_revenue.empty:
+                pm = prev_revenue[prev_revenue["market"] == market_key]
+                if not pm.empty and pd.notna(pm.iloc[0].get("revenue_permwh")):
+                    prev_val = float(pm.iloc[0]["revenue_permwh"]) * 365
+            if curr_val is not None and prev_val is not None:
+                if curr_val > prev_val:
+                    curr_str = f"↑ {_fmt(curr_val, 0, '£')}"
+                    color = _GREEN
+                elif curr_val < prev_val:
+                    curr_str = f"↓ {_fmt(curr_val, 0, '£')}"
+                    color = _RED
+                else:
+                    curr_str = _fmt(curr_val, 0, "£")
+                    color = None
+            else:
+                curr_str = _fmt(curr_val, 0, "£")
+                color = None
+            return [label, _fmt(permw, 2, "£"), curr_str, _fmt(prev_val, 0, "£")], color
+
+        for _, row in non_total.iterrows():
+            data_row_idx = len(rows2) + 1  # +1 for header
+            cells, color = _rev_row(
+                row["market"],
+                _MARKET_LABELS.get(row["market"], row["market"]),
+                row["revenue_permw"],
+                row.get("revenue_permwh"),
+            )
+            rows2.append(cells)
+            if color:
+                extra_s2.append(("TEXTCOLOR", (2, data_row_idx), (2, data_row_idx), color))
+
+        if not total_row.empty:
+            tr = total_row.iloc[0]
+            data_row_idx = len(rows2) + 1
+            cells, color = _rev_row(
+                "total", "— Total —", tr["revenue_permw"], tr.get("revenue_permwh"),
+            )
+            rows2.append(cells)
+            if color:
+                extra_s2.append(("TEXTCOLOR", (2, data_row_idx), (2, data_row_idx), color))
+
+        tbl2 = _make_table(headers2, rows2, col_w2, extra_styles=extra_s2)
+        # Bold the last row (Total)
+        if not total_row.empty:
+            last = len(rows2)
+            tbl2.setStyle(TableStyle([
+                ("FONTNAME",   (0, last), (-1, last), "Helvetica-Bold"),
+                ("BACKGROUND", (0, last), (-1, last), colors.HexColor("#D6E4F0")),
+            ]))
+        story.append(tbl2)
+
+    story.append(Spacer(1, 0.4 * cm))
+
+    # ── Section 3: Market summary ─────────────────────────────────────────────
+    story.append(Paragraph("3. Market Summary", h1_s))
+
+    # System price
+    story.append(Paragraph("System Price (£/MWh)", h2_s))
+    sp_df = market["system_price"]
+    if sp_df.empty or sp_df.iloc[0].isna().all():
+        story.append(Paragraph("No system price data.", body_s))
+    else:
+        r = sp_df.iloc[0]
+        sp_rows = [[
+            _fmt(r.get("avg"), 2, "£"),
+            _fmt(r.get("min"), 2, "£"),
+            _fmt(r.get("max"), 2, "£"),
+            _fmt(r.get("stddev"), 2, "£"),
+        ]]
+        story.append(_make_table(
+            ["Avg £/MWh", "Min £/MWh", "Max £/MWh", "Std Dev"],
+            sp_rows,
+            [4.0 * cm] * 4,
+        ))
+
+    story.append(Spacer(1, 0.2 * cm))
+
+    # EPEX DA
+    story.append(Paragraph("EPEX Day-Ahead Prices (£/MWh)", h2_s))
+    epex_df = market["epex"]
+    if epex_df.empty or epex_df.iloc[0].isna().all():
+        story.append(Paragraph("No EPEX DA data.", body_s))
+    else:
+        r = epex_df.iloc[0]
+        ep_rows = [[
+            _fmt(r.get("baseload"), 2, "£"),
+            _fmt(r.get("peakload"), 2, "£"),
+            _fmt(r.get("offpeak"), 2, "£"),
+        ]]
+        story.append(_make_table(
+            ["Baseload", "Peak", "Off-peak"],
+            ep_rows,
+            [5.0 * cm, 5.0 * cm, 6.0 * cm],
+        ))
+
+    story.append(Spacer(1, 0.2 * cm))
+
+    # NIV
+    story.append(Paragraph("Net Imbalance Volume (MWh)", h2_s))
+    niv_df = market["niv"]
+    if niv_df.empty or pd.isna(niv_df.iloc[0].get("avg_niv")):
+        story.append(Paragraph("No NIV data.", body_s))
+    else:
+        niv_val = niv_df.iloc[0]["avg_niv"]
+        story.append(Paragraph(f"Average NIV per settlement period: <b>{_fmt(niv_val, 1)} MWh</b>", body_s))
+
+    story.append(Spacer(1, 0.2 * cm))
+
+    # DX Ancillary
+    story.append(Paragraph("DX Ancillary Clearing Prices", h2_s))
+    dx_df = market["dx"]
+    if dx_df.empty:
+        story.append(Paragraph("No DX ancillary data.", body_s))
+    else:
+        dx_rows = []
+        for _, row in dx_df.iterrows():
+            dx_rows.append([
+                str(row.get("service", "")),
+                _fmt(row.get("avg_price"), 2, "£"),
+                _fmt(row.get("avg_volume"), 1, suffix=" MW"),
+            ])
+        story.append(_make_table(
+            ["Service", "Avg Clearing Price (£/MW)", "Avg Cleared Volume"],
+            dx_rows,
+            [6.0 * cm, 5.5 * cm, 4.5 * cm],
+        ))
+
+    # ── Section 4: AI Market Analytics ───────────────────────────────────────
+    if ai_commentary:
+        story.append(Spacer(1, 0.4 * cm))
+        story.append(Paragraph("4. Market Analytics", h1_s))
+        story.append(Paragraph(
+            "AI-generated commentary based on today's market data. "
+            "Powered by Claude (Anthropic).",
+            caption_s,
+        ))
+        story.append(Spacer(1, 0.1 * cm))
+        # Split into paragraphs and render each
+        for para_text in [p.strip() for p in ai_commentary.split("\n\n") if p.strip()]:
+            story.append(Paragraph(para_text, body_s))
+            story.append(Spacer(1, 0.15 * cm))
+
+    story.append(Spacer(1, 0.6 * cm))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
+    story.append(Paragraph(
+        "This report is generated automatically by the GB Market Intelligence platform. "
+        "Data sourced from Modo Energy, Elexon, and EPEX SPOT.",
+        caption_s,
+    ))
+
+    doc.build(story)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def _get_latest_data_date(conn) -> date:
+    """Return the most recent date that has leaderboard data in the DB."""
+    df = _query(
+        conn,
+        "SELECT MAX(settlement_date) AS latest FROM intl_market.gb_bess_leaderboard",
+    )
+    if df.empty or pd.isna(df.iloc[0]["latest"]):
+        return date.today() - timedelta(days=1)
+    return pd.Timestamp(df.iloc[0]["latest"]).date()
+
+
+def generate_report_pdf(report_date: date | None = None) -> bytes:
+    """Generate the daily GB market report PDF. Returns PDF bytes."""
+    conn = _get_conn()
+    try:
+        if report_date is None:
+            report_date = _get_latest_data_date(conn)
+
+        logger.info("Generating daily report for %s", report_date)
+        performers  = _get_top_performers(conn, report_date)
+        revenue     = _get_revenue_breakdown(conn, report_date)
+        market_data = _get_market_summary(conn, report_date)
+
+        prev_date     = _get_prev_data_date(conn, report_date)
+        prev_rankings = _get_all_rankings(conn, prev_date) if prev_date else None
+        prev_revenue  = _get_revenue_breakdown(conn, prev_date) if prev_date else None
+        logger.info("Prev data date: %s", prev_date)
+    finally:
+        conn.close()
+
+    ai_commentary = _generate_ai_commentary(
+        report_date, performers, revenue, market_data, prev_revenue
+    )
+
+    buf = BytesIO()
+    _build_pdf(buf, report_date, performers, revenue, market_data,
+               prev_rankings=prev_rankings, prev_revenue=prev_revenue,
+               ai_commentary=ai_commentary)
+    pdf_bytes = buf.getvalue()
+    logger.info("PDF generated: %d bytes", len(pdf_bytes))
+    return pdf_bytes, ai_commentary
+
+
+def send_daily_report_email(
+    pdf_bytes: bytes,
+    report_date: date,
+    to_email: str | None = None,
+    ai_commentary: str = "",
+) -> None:
+    """Send the PDF report via SMTP."""
+    to_email    = to_email or os.environ.get("REPORT_TO_EMAIL", _DEFAULT_RECIPIENT)
+    smtp_host   = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port   = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user   = os.environ.get("SMTP_USER", "")
+    smtp_pass   = os.environ.get("SMTP_PASSWORD", "")
+    from_email  = os.environ.get("REPORT_FROM_EMAIL", smtp_user)
+
+    if not smtp_user or not smtp_pass:
+        raise RuntimeError(
+            "SMTP credentials not configured. "
+            "Set SMTP_USER and SMTP_PASSWORD environment variables."
+        )
+
+    subject = f"GB BESS Daily Market Report — {report_date.strftime('%d %b %Y')}"
+    filename = f"gb_market_report_{report_date.isoformat()}.pdf"
+
+    msg = MIMEMultipart()
+    msg["From"]    = from_email
+    msg["To"]      = to_email
+    msg["Subject"] = subject
+
+    body_text = (
+        f"Please find attached the GB BESS Daily Market Report for {report_date.strftime('%d %b %Y')}.\n\n"
+        "Contents:\n"
+        "  1. Top 10 BESS performers (yesterday)\n"
+        "  2. Daily average revenue breakdown by market stream\n"
+        "  3. Market summary (system price, EPEX DA, NIV, DX ancillary)\n"
+        "  4. AI Market Analytics (Claude)\n\n"
+    )
+    if ai_commentary:
+        body_text += "── Market Analytics ──\n\n" + ai_commentary + "\n\n"
+    body_text += "Generated by GB Market Intelligence platform."
+    msg.attach(MIMEText(body_text, "plain"))
+
+    attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+    attachment.add_header("Content-Disposition", "attachment", filename=filename)
+    msg.attach(attachment)
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.ehlo()
+        server.starttls(context=context)
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_email, to_email, msg.as_string())
+
+    logger.info("Report emailed to %s", to_email)
+
+
+def run_daily_report(to_email: str | None = None) -> dict:
+    """End-to-end: generate PDF and send email. Returns status dict."""
+    import time
+    t0 = time.time()
+    report_date = None
+    try:
+        # Resolve latest available data date rather than blindly using yesterday.
+        _conn = _get_conn()
+        try:
+            report_date = _get_latest_data_date(_conn)
+        finally:
+            _conn.close()
+        pdf_bytes, ai_commentary = generate_report_pdf(report_date)
+        send_daily_report_email(pdf_bytes, report_date, to_email, ai_commentary=ai_commentary)
+        return {"status": "success", "date": str(report_date), "size_bytes": len(pdf_bytes),
+                "duration": round(time.time() - t0, 1)}
+    except Exception as exc:
+        logger.error("Daily report failed: %s", exc, exc_info=True)
+        return {"status": "error", "date": str(report_date), "error": str(exc),
+                "duration": round(time.time() - t0, 1)}
