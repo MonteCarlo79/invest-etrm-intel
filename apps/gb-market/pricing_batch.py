@@ -12,7 +12,11 @@ Can also be triggered manually from the Data Management tab.
 
 GB-specific parameters:
   - Settlement periods: 48 × 30-min per day (SP 1 = 00:00–00:30)
-  - Peak SPs: 15–46 (07:00–23:00); offpeak: 1–14, 47–48
+  - Peak: EPEX standard peakload product — Mon–Fri 08:00–20:00 (SP 17–40 inclusive)
+  - Offpeak: Mon–Fri 00:00–08:00 and 20:00–24:00 (SP 1–16, 41–48); weekends are offpeak-only
+  - The pre-computed daily_peakload / daily_offpeak columns from gb_epex_da_hh are used
+    directly for Kirk calibration (daily_peakload is NULL on weekends/holidays, which are
+    automatically excluded from the peak series).
   - Currency: £/MWh (models are currency-agnostic)
 """
 from __future__ import annotations
@@ -50,8 +54,9 @@ CREATE TABLE IF NOT EXISTS intl_market.gb_pricing_results (
 );
 """
 
-# GB peak/offpeak definition: SP 15-46 = 07:00-23:00
-_PEAK_SPS = set(range(15, 47))  # SP 15 to SP 46 inclusive (1-indexed)
+# EPEX standard peakload: Mon–Fri 08:00–20:00 = SP 17–40 inclusive (1-indexed)
+# Used as a fallback when daily_peakload column is unavailable.
+_PEAK_SPS = set(range(17, 41))
 
 
 # ---------------------------------------------------------------------------
@@ -90,29 +95,43 @@ def compute_options_value(
 ) -> float:
     """Kirk/Margrabe spread call strip value (£) for a GB BESS asset.
 
-    Calibrated from EPEX DA price history (delivery_date, settlement_period, price).
+    Calibrated from EPEX DA price history. Uses the pre-computed daily_peakload /
+    daily_offpeak columns when available (EPEX standard: Mon–Fri 08:00–20:00 peak,
+    weekends excluded from the peak series). Falls back to SP 17–40 grouping.
     Returns total strip value £ for the asset (not per MW).
     """
     if epex_history_df.empty or len(epex_history_df) < 48:
         return 0.0
 
-    df = epex_history_df.copy()
-    df["is_peak"] = df["settlement_period"].apply(lambda sp: sp in _PEAK_SPS)
+    # Prefer pre-computed EPEX product columns (NULL on weekends → auto-excluded)
+    if "daily_peakload" in epex_history_df.columns and "daily_offpeak" in epex_history_df.columns:
+        daily = (
+            epex_history_df
+            .groupby("delivery_date")
+            .agg(peak=("daily_peakload", "first"), offpeak=("daily_offpeak", "first"))
+            .dropna(subset=["peak", "offpeak"])  # drops weekends / holidays
+        )
+    else:
+        # Fallback: classify SPs — weekday filter not applied, so slightly less accurate
+        df = epex_history_df.copy()
+        df["is_peak"] = df["settlement_period"].isin(_PEAK_SPS)
+        raw = (
+            df.groupby(["delivery_date", "is_peak"])["price"]
+            .mean()
+            .unstack("is_peak")
+            .dropna()
+        )
+        if True not in raw.columns or False not in raw.columns:
+            return 0.0
+        daily = raw.rename(columns={True: "peak", False: "offpeak"})
 
-    daily = (
-        df.groupby(["delivery_date", "is_peak"])["price"]
-        .mean()
-        .unstack("is_peak")
-        .dropna()
-    )
-    # Columns: False=offpeak, True=peak
-    if True not in daily.columns or False not in daily.columns:
+    if "peak" not in daily.columns or "offpeak" not in daily.columns or len(daily) < 5:
         return 0.0
 
-    peak_forward = float(daily[True].mean())
-    offpeak_forward = float(daily[False].mean())
-    peak_vol = _ann_vol(daily[True])
-    offpeak_vol = _ann_vol(daily[False])
+    peak_forward = float(daily["peak"].mean())
+    offpeak_forward = float(daily["offpeak"].mean())
+    peak_vol = _ann_vol(daily["peak"])
+    offpeak_vol = _ann_vol(daily["offpeak"])
 
     # Kirk substitution: F2_eff = offpeak_forward / eta + om_cost
     eta = roundtrip_eff
@@ -451,7 +470,8 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
     epex_cutoff = (batch_date - timedelta(days=60)).isoformat()
     try:
         epex_hist = pd.read_sql(
-            "SELECT delivery_date, settlement_period, price "
+            "SELECT delivery_date, settlement_period, price, "
+            "  daily_peakload, daily_offpeak "
             "FROM intl_market.gb_epex_da_hh "
             "WHERE delivery_date BETWEEN %s AND %s "
             "ORDER BY delivery_date, settlement_period",

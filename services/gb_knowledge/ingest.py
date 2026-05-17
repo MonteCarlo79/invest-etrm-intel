@@ -67,6 +67,13 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
         if verbose:
             print(f"  [skip] meteologica: {e}")
 
+    try:
+        from services.gb_knowledge.modo_ai import ModoAIConnector
+        connectors.append(("modo_ai", "Modo Energy AI (distillation)", ModoAIConnector()))
+    except ImportError as e:
+        if verbose:
+            print(f"  [skip] modo_ai: {e}")
+
     results = {}
     for key, label, connector in connectors:
         if only and key not in only:
@@ -88,7 +95,7 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
 
 
 if __name__ == "__main__":
-    _SOURCE_KEYS = ["elexon", "entso_e", "timera", "modo", "meteologica"]
+    _SOURCE_KEYS = ["elexon", "entso_e", "timera", "modo", "meteologica", "modo_ai"]
 
     parser = argparse.ArgumentParser(description="Ingest GB knowledge base")
     parser.add_argument(

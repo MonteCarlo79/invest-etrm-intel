@@ -1,0 +1,79 @@
+.git
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+node_modules/
+*.log
+*.dump
+.pytest_cache/
+**/.pytest_cache/
+
+# Large data / output directories
+data/
+debug/
+logs/
+knowledge/
+docs/
+memo/
+reports/
+outputs/
+samples/
+extract/
+archived/
+backup/
+ar/
+tmp/
+bess-marketdata-ingestion/
+claw-code-main/
+claw-code-main.zip
+
+# Infrastructure
+infra/
+scripts/
+config/
+db/
+
+# Apps not needed by portal
+apps/gb-market/
+apps/inner-mongolia/
+apps/spot-watcher/
+apps/uploader/
+apps/mengxi-dashboard/
+apps/model-catalogue/
+apps/options-cockpit/
+apps/strategy-agent/
+apps/portfolio-agent/
+apps/execution-agent/
+apps/trading-performance-agent/
+apps/it-dev-agent/
+apps/dev-agent/
+apps/mengxi-trading-ops/
+apps/pnl-attribution/
+apps/spot-agent/
+apps/spot-market/
+apps/bess-inner-mongolia/
+
+# Services not needed by portal
+services/
+
+# Libs not needed by portal
+libs/
+
+# Large file types
+*.xlsx
+*.csv
+*.parquet
+*.zip
+*.tar
+*.tar.gz
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db

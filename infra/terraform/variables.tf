@@ -455,6 +455,12 @@ variable "smtp_from" {
   default = ""
 }
 
+variable "wecom_webhook_url" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 variable "image_strategy_agent" {
   description = "Docker image for strategy agent"
   type        = string
@@ -531,6 +537,20 @@ variable "desired_count_gb_market" {
 
 variable "modo_api_key" {
   description = "Modo Energy public API token"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "modo_email" {
+  description = "Modo Energy web app login email (for AI agent distillation)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "modo_password" {
+  description = "Modo Energy web app login password (for AI agent distillation)"
   type        = string
   default     = ""
   sensitive   = true

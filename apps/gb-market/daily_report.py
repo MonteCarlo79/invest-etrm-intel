@@ -72,19 +72,32 @@ def _generate_ai_commentary(
         return ""
 
     # ── Build data snapshot for the prompt ───────────────────────────────────
+    # Helper: coerce None/NaN to a safe numeric default for format specs
+    def _n(v, d=0.0):
+        if v is None:
+            return d
+        try:
+            f = float(v)
+            return d if f != f else f   # f != f is True only for NaN
+        except (TypeError, ValueError):
+            return d
+
     lines: list[str] = [f"GB BESS market data for {report_date.strftime('%d %b %Y')}:"]
 
     # EPEX DA prices
     epex_df = market.get("epex", pd.DataFrame())
     if not epex_df.empty:
         r = epex_df.iloc[0]
-        lines.append(
-            f"EPEX DA: baseload £{r.get('baseload', 0):.2f}/MWh, "
-            f"peak £{r.get('peakload', 0):.2f}/MWh, "
-            f"off-peak £{r.get('offpeak', 0):.2f}/MWh"
-        )
-        pk = r.get("peakload") or 0
-        op = r.get("offpeak") or 0
+        bl = _n(r.get("baseload"))
+        pk = _n(r.get("peakload"))
+        op = _n(r.get("offpeak"))
+        if bl:
+            msg = f"EPEX DA: baseload £{bl:.2f}/MWh"
+            if pk:
+                msg += f", peak £{pk:.2f}/MWh"
+            if op:
+                msg += f", off-peak £{op:.2f}/MWh"
+            lines.append(msg)
         if pk and op:
             lines.append(f"Peak/off-peak spread: £{pk - op:.2f}/MWh")
 
@@ -92,48 +105,65 @@ def _generate_ai_commentary(
     sp_df = market.get("system_price", pd.DataFrame())
     if not sp_df.empty:
         r = sp_df.iloc[0]
-        lines.append(
-            f"System price: avg £{r.get('avg', 0):.2f}/MWh, "
-            f"min £{r.get('min', 0):.2f}/MWh, "
-            f"max £{r.get('max', 0):.2f}/MWh, "
-            f"std dev £{r.get('stddev', 0):.2f}/MWh"
-        )
+        avg = _n(r.get("avg"))
+        if avg:
+            lines.append(
+                f"System price: avg £{avg:.2f}/MWh, "
+                f"min £{_n(r.get('min')):.2f}/MWh, "
+                f"max £{_n(r.get('max')):.2f}/MWh, "
+                f"std dev £{_n(r.get('stddev')):.2f}/MWh"
+            )
 
     # NIV
     niv_df = market.get("niv", pd.DataFrame())
-    if not niv_df.empty and not pd.isna(niv_df.iloc[0].get("avg_niv")):
-        niv = niv_df.iloc[0]["avg_niv"]
-        direction = "long (over-generation)" if niv > 0 else "short (under-generation)"
-        lines.append(f"Average NIV: {niv:.1f} MWh per SP — system was {direction}")
+    if not niv_df.empty:
+        niv = _n(niv_df.iloc[0].get("avg_niv"))
+        if niv:
+            direction = "long (over-generation)" if niv > 0 else "short (under-generation)"
+            lines.append(f"Average NIV: {niv:.1f} MWh per SP — system was {direction}")
 
     # DX ancillary
     dx_df = market.get("dx", pd.DataFrame())
     if not dx_df.empty:
-        dx_summary = "; ".join(
-            f"{row['service']} £{row.get('avg_price', 0):.2f}/MW ({row.get('avg_volume', 0):.0f} MW)"
-            for _, row in dx_df.iterrows()
-        )
-        lines.append(f"DX ancillary clearing: {dx_summary}")
+        dx_parts = []
+        for _, row in dx_df.iterrows():
+            svc = row.get("service", "")
+            p   = _n(row.get("avg_price"))
+            v   = _n(row.get("avg_volume"))
+            if svc and p:
+                dx_parts.append(f"{svc} £{p:.2f}/MW ({v:.0f} MW)")
+        if dx_parts:
+            lines.append(f"DX ancillary clearing: {'; '.join(dx_parts)}")
 
-    # Revenue breakdown (today)
+    # Revenue breakdown (today) — gb_bess_daily_index has one row per market
     if not revenue.empty:
-        rev_row = revenue.iloc[0] if len(revenue) > 0 else None
-        if rev_row is not None:
-            mkts = ["wholesale", "frequency_response", "bm", "imbalance"]
+        try:
+            rev_dict = {
+                k: _n(v)
+                for k, v in revenue.set_index("market")["revenue_permw"].to_dict().items()
+            }
+            key_mkts = ["wholesale", "bm", "dch", "dcl", "dmh", "dml"]
             rev_parts = [
-                f"{m}: £{rev_row.get(m, 0):,.0f}" for m in mkts if rev_row.get(m)
+                f"{m}: £{rev_dict[m]:,.2f}/MW"
+                for m in key_mkts
+                if m in rev_dict and rev_dict[m]
             ]
             if rev_parts:
-                lines.append(f"Market revenue breakdown: {', '.join(rev_parts)}")
+                lines.append(f"Market revenue index (£/MW): {', '.join(rev_parts)}")
+        except Exception:
+            pass
 
-    # Day-on-day revenue change
+    # Day-on-day wholesale revenue change
     if prev_revenue is not None and not prev_revenue.empty and not revenue.empty:
         try:
-            today_total = revenue.groupby("market")["revenue"].sum().get("wholesale", 0)
-            prev_total  = prev_revenue.groupby("market")["revenue"].sum().get("wholesale", 0)
-            if prev_total:
-                pct = (today_total - prev_total) / abs(prev_total) * 100
-                lines.append(f"Wholesale revenue day-on-day change: {pct:+.1f}%")
+            def _ws(df):
+                d = {k: _n(v) for k, v in df.set_index("market")["revenue_permw"].to_dict().items()}
+                return d.get("wholesale", 0.0)
+            today_ws = _ws(revenue)
+            prev_ws  = _ws(prev_revenue)
+            if prev_ws:
+                pct = (today_ws - prev_ws) / abs(prev_ws) * 100
+                lines.append(f"Wholesale £/MW day-on-day change: {pct:+.1f}%")
         except Exception:
             pass
 
@@ -141,8 +171,9 @@ def _generate_ai_commentary(
     if not performers.empty:
         top3 = performers.head(3)
         perf_parts = [
-            f"{row.get('asset', '?')} (£{row.get('total_rev', 0):,.0f}, "
-            f"{row.get('rated_power', 0):.0f} MW)"
+            f"{row.get('asset', '?')} "
+            f"(£{_n(row.get('total_revenue')):,.0f}, "
+            f"{_n(row.get('rated_power_mw')):.0f} MW)"
             for _, row in top3.iterrows()
         ]
         lines.append(f"Top 3 assets: {'; '.join(perf_parts)}")
@@ -206,13 +237,14 @@ def _get_top_performers(conn, report_date: date, top_n: int = 10) -> pd.DataFram
         conn,
         "WITH per_sp AS ( "
         "  SELECT settlement_date, settlement_period, asset, "
-        "    SUM(revenue) AS total_rev, "
+        "    SUM(CASE WHEN market != '_test_' THEN revenue ELSE 0 END) AS total_rev, "
         "    AVG(rated_power) AS rated_power, "
-        "    SUM(CASE WHEN market='wholesale'          THEN revenue ELSE 0 END) AS wholesale, "
-        "    SUM(CASE WHEN market='frequency_response' THEN revenue ELSE 0 END) AS freq_response, "
-        "    SUM(CASE WHEN market='bm'                 THEN revenue ELSE 0 END) AS bm, "
-        "    SUM(CASE WHEN market='imbalance'          THEN revenue ELSE 0 END) AS imbalance, "
-        "    SUM(CASE WHEN market='reserve'            THEN revenue ELSE 0 END) AS reserve "
+        "    SUM(CASE WHEN market='wholesale' THEN revenue ELSE 0 END) AS wholesale, "
+        "    SUM(CASE WHEN market IN ('dch','dcl','dmh','dml','drh','drl') THEN revenue ELSE 0 END) AS ancillary, "
+        "    SUM(CASE WHEN market='bm' THEN revenue ELSE 0 END) AS bm, "
+        "    SUM(CASE WHEN market IN ('nbr','nqr','nsr','pbr','pqr','psr') THEN revenue ELSE 0 END) AS reserve, "
+        "    SUM(CASE WHEN market NOT IN ('wholesale','dch','dcl','dmh','dml','drh','drl','bm',"
+        "      'nbr','nqr','nsr','pbr','pqr','psr','_test_') THEN revenue ELSE 0 END) AS other "
         "  FROM intl_market.gb_bess_leaderboard "
         "  WHERE settlement_date = %s "
         "  GROUP BY settlement_date, settlement_period, asset "
@@ -220,8 +252,8 @@ def _get_top_performers(conn, report_date: date, top_n: int = 10) -> pd.DataFram
         "lb AS ( "
         "  SELECT asset, "
         "    SUM(total_rev) AS total_revenue, "
-        "    SUM(wholesale) AS wholesale, SUM(freq_response) AS freq_response, "
-        "    SUM(bm) AS bm, SUM(imbalance) AS imbalance, SUM(reserve) AS reserve, "
+        "    SUM(wholesale) AS wholesale, SUM(ancillary) AS ancillary, "
+        "    SUM(bm) AS bm, SUM(reserve) AS reserve, SUM(other) AS other, "
         "    AVG(rated_power) AS rated_power_mw "
         "  FROM per_sp GROUP BY asset ORDER BY total_revenue DESC LIMIT %s "
         "), "
@@ -234,10 +266,22 @@ def _get_top_performers(conn, report_date: date, top_n: int = 10) -> pd.DataFram
         "  SELECT DISTINCT ON (asset) asset, value AS owner "
         "  FROM intl_market.gb_bess_assets WHERE history_table='owner' "
         "  ORDER BY asset, valid_from DESC "
+        "), "
+        "dur AS ( "
+        "  SELECT DISTINCT ON (asset) asset, "
+        "    CAST(value AS NUMERIC) AS energy_mwh "
+        "  FROM intl_market.gb_bess_assets WHERE history_table='energy_capacity' "
+        "  ORDER BY asset, valid_from DESC "
         ") "
         "SELECT lb.asset, ow.owner, op.operator, lb.rated_power_mw, "
-        "  lb.total_revenue, lb.wholesale, lb.freq_response, lb.bm, lb.imbalance, lb.reserve "
-        "FROM lb LEFT JOIN op ON op.asset=lb.asset LEFT JOIN ow ON ow.asset=lb.asset",
+        "  CASE WHEN dur.energy_mwh > 0 AND lb.rated_power_mw > 0 "
+        "       THEN dur.energy_mwh / lb.rated_power_mw ELSE NULL END AS duration_h, "
+        "  lb.total_revenue, lb.wholesale, lb.ancillary, lb.bm, lb.reserve, lb.other "
+        "FROM lb "
+        "LEFT JOIN op  ON op.asset  = lb.asset "
+        "LEFT JOIN ow  ON ow.asset  = lb.asset "
+        "LEFT JOIN dur ON dur.asset = lb.asset "
+        "ORDER BY lb.total_revenue DESC",
         (report_date, top_n),
     )
 
@@ -336,7 +380,21 @@ def _styles():
     h2      = ParagraphStyle("rpt_h2",     parent=ss["Heading2"], fontSize=11, textColor=_ACCENT, spaceBefore=8, spaceAfter=3)
     body    = ParagraphStyle("rpt_body",   parent=ss["Normal"],   fontSize=9)
     caption = ParagraphStyle("rpt_caption",parent=ss["Normal"],   fontSize=8, textColor=colors.grey, spaceAfter=4)
-    return title, h1, h2, body, caption
+    cell    = ParagraphStyle("rpt_cell",   parent=ss["Normal"],   fontSize=7.5, leading=9)
+    return title, h1, h2, body, caption, cell
+
+
+def _c_rate(duration_h) -> str:
+    """Return C-rate string for a given duration in hours (e.g. 2h → '0.5C')."""
+    if duration_h is None or (isinstance(duration_h, float) and pd.isna(duration_h)):
+        return "—"
+    d = float(duration_h)
+    if d <= 0:
+        return "—"
+    c = 1.0 / d
+    # Format: drop trailing zeros — 1.0 → "1C", 0.5 → "0.5C", 0.25 → "0.25C"
+    c_str = f"{c:.4g}"
+    return f"{c_str}C"
 
 
 def _fmt(val, decimals=1, prefix="", suffix=""):
@@ -377,7 +435,7 @@ def _build_pdf(buf: BytesIO, report_date: date,
                prev_rankings: dict | None = None,
                prev_revenue: pd.DataFrame | None = None,
                ai_commentary: str = "") -> None:
-    title_s, h1_s, h2_s, body_s, caption_s = _styles()
+    title_s, h1_s, h2_s, body_s, caption_s, cell_s = _styles()
     usable_w = _PAGE_W - 2 * _MARGIN
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
@@ -398,45 +456,49 @@ def _build_pdf(buf: BytesIO, report_date: date,
     # ── Section 1: Top 10 BESS performers ────────────────────────────────────
     story.append(Paragraph("1. Top 10 BESS Performers", h1_s))
     story.append(Paragraph(
-        f"Total revenue by asset for {report_date.strftime('%d %b %Y')}. "
-        "Revenue (£) is the sum across all settlement periods.",
+        f"Total revenue by asset for {report_date.strftime('%d %b %Y')}, "
+        "ranked by total £ across all settlement periods (excl. test data). "
+        "Dur. = storage C-rate (1C = 1 h, 0.5C = 2 h, 0.25C = 4 h). "
+        "Ancillary = DC/DM/DR products; Reserve = balancing reserve products; "
+        "Other = CM, Triads, Imbalance, SOC, etc. Total = sum of all columns.",
         caption_s,
     ))
 
     if performers.empty:
         story.append(Paragraph("No leaderboard data available for this date.", body_s))
     else:
-        # col 0="#", col 1="Prev", col 2="Asset" … widths sum to 16.4 cm
-        headers = ["#", "Prev", "Asset", "Owner", "Operator", "MW",
-                   "Total £", "Wholesale", "Freq Resp", "BM", "Imbalance", "Reserve"]
-        col_w = [w * cm for w in [0.5, 0.9, 2.8, 2.2, 2.2, 0.8, 1.3, 1.3, 1.3, 0.8, 1.2, 1.1]]
+        # 12 columns; widths sum to 17.0 cm (A4 portrait, 2 cm margins each side)
+        headers = ["#", "Asset", "Owner", "Operator", "MW", "Dur.",
+                   "Total £", "Wholesale", "Ancillary", "BM", "Reserve", "Other"]
+        col_w = [w * cm for w in [0.5, 3.3, 2.0, 1.8, 0.8, 1.3,
+                                   1.5, 1.4, 1.3, 1.2, 1.2, 0.7]]
+        # Ensure sorted by total_revenue descending (belt-and-suspenders over SQL ORDER BY)
+        performers = performers.sort_values("total_revenue", ascending=False).reset_index(drop=True)
         rows = []
         extra_s = []
         for rank, (_, row) in enumerate(performers.iterrows(), 1):
             asset = str(row.get("asset", ""))
+            # Colour rank cell green/red if rank changed vs prior day
             prev_rank = (prev_rankings or {}).get(asset)
-            if prev_rank is None:
-                prev_cell = "—"
-            else:
-                prev_cell = str(prev_rank)
-                tbl_row = rank  # header is row 0; data rows start at 1
+            tbl_row = rank  # header is row 0; data rows start at 1
+            if prev_rank is not None:
                 if rank < prev_rank:
-                    extra_s.append(("TEXTCOLOR", (1, tbl_row), (1, tbl_row), _GREEN))
+                    extra_s.append(("TEXTCOLOR", (0, tbl_row), (0, tbl_row), _GREEN))
                 elif rank > prev_rank:
-                    extra_s.append(("TEXTCOLOR", (1, tbl_row), (1, tbl_row), _RED))
+                    extra_s.append(("TEXTCOLOR", (0, tbl_row), (0, tbl_row), _RED))
             rows.append([
                 str(rank),
-                prev_cell,
-                asset,
-                str(row.get("owner") or ""),
-                str(row.get("operator") or ""),
+                Paragraph(asset, cell_s),
+                Paragraph(str(row.get("owner") or ""), cell_s),
+                Paragraph(str(row.get("operator") or ""), cell_s),
                 _fmt(row.get("rated_power_mw"), 0),
+                _c_rate(row.get("duration_h")),
                 _fmt(row.get("total_revenue"), 0, "£"),
                 _fmt(row.get("wholesale"), 0, "£"),
-                _fmt(row.get("freq_response"), 0, "£"),
+                _fmt(row.get("ancillary"), 0, "£"),
                 _fmt(row.get("bm"), 0, "£"),
-                _fmt(row.get("imbalance"), 0, "£"),
                 _fmt(row.get("reserve"), 0, "£"),
+                _fmt(row.get("other"), 0, "£"),
             ])
         story.append(_make_table(headers, rows, col_w, extra_styles=extra_s))
 
@@ -445,7 +507,10 @@ def _build_pdf(buf: BytesIO, report_date: date,
     # ── Section 2: Revenue breakdown by market stream ────────────────────────
     story.append(Paragraph("2. Daily Average Revenue Breakdown", h1_s))
     story.append(Paragraph(
-        "Market index average revenue per MW and per MWh of installed capacity.",
+        "Modo industry-average index for all GB BESS (any duration). "
+        "£/MW/day = revenue per rated MW for the date. "
+        "£/MWh/yr = revenue per installed MWh of storage capacity, annualised "
+        "(today's £/MWh × 365) — standard BESS revenue yield metric.",
         caption_s,
     ))
 
@@ -677,15 +742,24 @@ def send_daily_report_email(
     pdf_bytes: bytes,
     report_date: date,
     to_email: str | None = None,
+    from_email: str | None = None,
     ai_commentary: str = "",
 ) -> None:
-    """Send the PDF report via SMTP."""
-    to_email    = to_email or os.environ.get("REPORT_TO_EMAIL", _DEFAULT_RECIPIENT)
-    smtp_host   = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-    smtp_port   = int(os.environ.get("SMTP_PORT", "587"))
-    smtp_user   = os.environ.get("SMTP_USER", "")
-    smtp_pass   = os.environ.get("SMTP_PASSWORD", "")
-    from_email  = os.environ.get("REPORT_FROM_EMAIL", smtp_user)
+    """Send the PDF report via SMTP.
+
+    ``to_email`` accepts a single address or a comma-separated list.
+    The ``REPORT_TO_EMAIL`` env var likewise accepts comma-separated addresses.
+    ``from_email`` overrides the REPORT_FROM_EMAIL env var when provided.
+    """
+    raw_to     = to_email or os.environ.get("REPORT_TO_EMAIL", _DEFAULT_RECIPIENT)
+    to_list    = [e.strip() for e in raw_to.split(",") if e.strip()]
+    if not to_list:
+        to_list = [_DEFAULT_RECIPIENT]
+    smtp_host  = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port  = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user  = os.environ.get("SMTP_USER", "")
+    smtp_pass  = os.environ.get("SMTP_PASSWORD", "")
+    from_email = from_email or os.environ.get("REPORT_FROM_EMAIL", smtp_user)
 
     if not smtp_user or not smtp_pass:
         raise RuntimeError(
@@ -698,7 +772,7 @@ def send_daily_report_email(
 
     msg = MIMEMultipart()
     msg["From"]    = from_email
-    msg["To"]      = to_email
+    msg["To"]      = ", ".join(to_list)
     msg["Subject"] = subject
 
     body_text = (
@@ -723,9 +797,94 @@ def send_daily_report_email(
         server.ehlo()
         server.starttls(context=context)
         server.login(smtp_user, smtp_pass)
-        server.sendmail(from_email, to_email, msg.as_string())
+        server.sendmail(from_email, to_list, msg.as_string())
 
-    logger.info("Report emailed to %s", to_email)
+    logger.info("Report emailed to %s", ", ".join(to_list))
+
+
+def send_daily_report_wecom(
+    pdf_bytes: bytes,
+    report_date: date,
+    webhook_url: str | None = None,
+    ai_commentary: str = "",
+) -> None:
+    """Send the daily report to one or more WeCom groups via bot webhook.
+
+    ``webhook_url`` accepts a single URL or a comma-separated list of URLs.
+    Falls back to the ``WECOM_WEBHOOK_URL`` env var (also comma-separated).
+    Each webhook receives its own file upload + markdown + file message.
+    """
+    import re
+    import requests
+
+    raw = webhook_url or os.environ.get("WECOM_WEBHOOK_URL", "")
+    if not raw:
+        raise RuntimeError(
+            "WeCom webhook URL not configured. "
+            "Set WECOM_WEBHOOK_URL environment variable or pass webhook_url."
+        )
+
+    urls = [u.strip() for u in raw.split(",") if u.strip()]
+    if not urls:
+        raise RuntimeError("No valid WeCom webhook URLs found.")
+
+    filename = f"gb_market_report_{report_date.isoformat()}.pdf"
+    header = f"## GB BESS Daily Market Report — {report_date.strftime('%d %b %Y')}\n\n"
+    if ai_commentary:
+        body = ai_commentary[:3500]
+        if len(ai_commentary) > 3500:
+            body += "\n\n*(truncated — see attached PDF for full report)*"
+    else:
+        body = "See attached PDF for top performers, revenue breakdown, and market summary."
+    markdown_content = header + body
+
+    errors = []
+    for url in urls:
+        m = re.search(r"key=([0-9a-f-]+)", url)
+        if not m:
+            errors.append(f"Could not extract key from URL: {url}")
+            continue
+        key = m.group(1)
+        try:
+            # Upload PDF (each webhook needs its own media_id)
+            upload_resp = requests.post(
+                f"https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key={key}&type=file",
+                files={"media": (filename, pdf_bytes, "application/pdf")},
+                timeout=30,
+            )
+            upload_resp.raise_for_status()
+            upload_data = upload_resp.json()
+            if upload_data.get("errcode", 0) != 0:
+                raise RuntimeError(f"Upload failed: {upload_data}")
+            media_id = upload_data["media_id"]
+
+            # Markdown summary
+            md_resp = requests.post(
+                url,
+                json={"msgtype": "markdown", "markdown": {"content": markdown_content}},
+                timeout=10,
+            )
+            md_resp.raise_for_status()
+            if md_resp.json().get("errcode", 0) != 0:
+                logger.warning("[daily_report] WeCom markdown warning (%s): %s", key[:8], md_resp.json())
+
+            # PDF file
+            file_resp = requests.post(
+                url,
+                json={"msgtype": "file", "file": {"media_id": media_id}},
+                timeout=10,
+            )
+            file_resp.raise_for_status()
+            if file_resp.json().get("errcode", 0) != 0:
+                raise RuntimeError(f"File send failed: {file_resp.json()}")
+
+            logger.info("[daily_report] WeCom report sent for %s (key=...%s)", report_date, key[-8:])
+        except Exception as exc:
+            logger.error("[daily_report] WeCom send failed for key=...%s: %s", key[-8:], exc)
+            errors.append(str(exc))
+
+    if errors and len(errors) == len(urls):
+        raise RuntimeError(f"All WeCom sends failed: {errors}")
 
 
 def run_daily_report(to_email: str | None = None) -> dict:

@@ -1665,6 +1665,18 @@ resource "aws_ecs_task_definition" "gb_market" {
         {
           name  = "REPORT_TO_EMAIL"
           value = var.report_email_to
+        },
+        {
+          name  = "MODO_EMAIL"
+          value = var.modo_email
+        },
+        {
+          name  = "MODO_PASSWORD"
+          value = var.modo_password
+        },
+        {
+          name  = "WECOM_WEBHOOK_URL"
+          value = var.wecom_webhook_url
         }
       ]
 

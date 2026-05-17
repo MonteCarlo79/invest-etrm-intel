@@ -467,8 +467,28 @@ def _start_scheduler():
         _spec = importlib.util.spec_from_file_location("daily_report", _rpt_path)
         _mod  = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
-        result = _mod.run_daily_report()
-        logger.info("Daily report job: %s", result)
+
+        # Generate PDF once; send via email and WeCom
+        _rpt_date = _mod._get_latest_data_date(_mod._get_conn())
+        pdf_bytes, ai_commentary = _mod.generate_report_pdf(_rpt_date)
+
+        # Email
+        try:
+            _mod.send_daily_report_email(pdf_bytes, _rpt_date, ai_commentary=ai_commentary)
+            logger.info("Daily report emailed for %s (%d bytes)", _rpt_date, len(pdf_bytes))
+        except Exception as _email_exc:
+            logger.error("Daily report email failed: %s", _email_exc)
+
+        # WeCom (optional — only if webhook URL is configured)
+        _wecom_url = os.environ.get("WECOM_WEBHOOK_URL", "")
+        if _wecom_url:
+            try:
+                _mod.send_daily_report_wecom(pdf_bytes, _rpt_date,
+                                             webhook_url=_wecom_url,
+                                             ai_commentary=ai_commentary)
+                logger.info("Daily report sent to WeCom for %s", _rpt_date)
+            except Exception as _wc_exc:
+                logger.error("Daily report WeCom send failed: %s", _wc_exc)
 
     def _pricing_batch_job():
         import importlib.util, pathlib
@@ -483,11 +503,27 @@ def _start_scheduler():
         except Exception as _pb_exc:
             logger.error("Pricing batch failed: %s", _pb_exc)
 
+    def _modo_ai_job():
+        """Distill daily GB BESS intelligence from Modo Energy's AI agent."""
+        try:
+            from services.gb_knowledge.modo_ai import ModoAIConnector
+            from services.gb_knowledge.base import get_db_conn, ensure_table, upsert_doc
+            conn = get_db_conn()
+            ensure_table(conn)
+            connector = ModoAIConnector()
+            n = connector.run(conn)
+            conn.close()
+            logger.info("Modo AI distillation: %d new docs inserted", n)
+        except Exception as _ma_exc:
+            logger.error("Modo AI distillation failed: %s", _ma_exc)
+
     scheduler = BackgroundScheduler(timezone="Asia/Singapore")
     scheduler.add_job(_daily_market_job, "cron", hour=3, minute=0,
                       id="gb_daily_market", misfire_grace_time=3600)
     scheduler.add_job(_daily_knowledge_job, "cron", hour=3, minute=30,
                       id="gb_daily_knowledge", misfire_grace_time=3600)
+    scheduler.add_job(_modo_ai_job, "cron", hour=4, minute=0,
+                      id="gb_modo_ai_distill", misfire_grace_time=3600)
     scheduler.add_job(_pricing_batch_job, "cron", hour=4, minute=30,
                       id="gb_pricing_batch", misfire_grace_time=3600)
     scheduler.add_job(_daily_report_job, "cron", hour=6, minute=0,
@@ -1359,6 +1395,44 @@ def _get_epex_range(start: str, end: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def _get_pricing_missing_dates(start: str, end: str) -> list[str]:
+    """Return ISO date strings in [start, end] with no rows in gb_pricing_results."""
+    from datetime import date as _d, timedelta as _td
+    have = set()
+    try:
+        df = _query(
+            "SELECT DISTINCT settlement_date FROM intl_market.gb_pricing_results "
+            "WHERE settlement_date BETWEEN %s AND %s",
+            (start, end),
+        )
+        have = {str(r) for r in df["settlement_date"]}
+    except Exception:
+        pass
+    s, e = _d.fromisoformat(start), _d.fromisoformat(end)
+    return [str(s + _td(days=i)) for i in range((e - s).days + 1)
+            if str(s + _td(days=i)) not in have]
+
+
+@st.cache_data(ttl=300)
+def _get_fuel_mix_missing_dates(start: str, end: str) -> list[str]:
+    """Return ISO date strings in [start, end] with no rows in gb_fuel_mix."""
+    from datetime import date as _d, timedelta as _td
+    have = set()
+    try:
+        df = _query(
+            "SELECT DISTINCT settlement_date FROM intl_market.gb_fuel_mix "
+            "WHERE settlement_date BETWEEN %s AND %s",
+            (start, end),
+        )
+        have = {str(r) for r in df["settlement_date"]}
+    except Exception:
+        pass
+    s, e = _d.fromisoformat(start), _d.fromisoformat(end)
+    return [str(s + _td(days=i)) for i in range((e - s).days + 1)
+            if str(s + _td(days=i)) not in have]
+
+
+@st.cache_data(ttl=300)
 def _get_dx_range(start: str, end: str) -> pd.DataFrame:
     return _query(
         "SELECT efa_date, efa, service, clearing_price, cleared_volume "
@@ -1887,6 +1961,13 @@ with tab_overview:
             else:
                 st.info("No NIV data in range.")
 
+    st.caption(
+        "**SBP** (System Buy Price) = price paid by short parties; "
+        "**SSP** (System Sell Price) = price received by long parties. "
+        "SBP > SSP when the system is short (Elexon buys energy to balance). "
+        "**EPEX DA** = day-ahead auction clearing price settled at gate closure (11:00 D-1)."
+    )
+
     st.subheader("EPEX Day-Ahead Prices — Heatmap (£/MWh)")
     epex_df = _get_epex_range(date_start, date_end)
     if epex_df.empty:
@@ -1918,6 +1999,16 @@ with tab_overview:
         daily_epex.columns = ["Date", "Baseload (£/MWh)", "Peak (£/MWh)", "Offpeak (£/MWh)"]
         st.dataframe(daily_epex.tail(14).sort_values("Date", ascending=False),
                      use_container_width=True, hide_index=True)
+        st.caption(
+            "**EPEX product definitions** — "
+            "**Baseload**: simple 24-hour average (all 48 SPs). "
+            "**Peak**: Mon–Fri 08:00–20:00 only (SP 17–40); no peak product on weekends or public holidays. "
+            "**Offpeak**: Mon–Fri 00:00–08:00 and 20:00–24:00 (SP 1–16, 41–48); "
+            "weekends and holidays are treated as offpeak-only days. "
+            "⚠️ In the current GB market, peak prices are frequently *lower* than offpeak — "
+            "midday solar (duck curve effect) suppresses SP 20–36 prices while the evening gas ramp "
+            "(SP 33–38, 16:30–19:00) and overnight gas baseload (SP 1–8) keep offpeak prices elevated."
+        )
 
     # ---- Fuel Mix, Bidding Space & EPEX DA (shared date selector) ----------
     st.markdown("---")
@@ -2022,6 +2113,46 @@ with tab_overview:
                 legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0),
             )
             st.plotly_chart(fig_bs_epex, use_container_width=True)
+
+    st.subheader("Bidding Space vs EPEX DA Price")
+    st.caption("Each point = one settlement period across selected dates. Colour = date.")
+    if not _sel_dates:
+        st.info("Select at least one date above.")
+    else:
+        _bs_sc = _get_bidding_space_hh_dates(_sel_dates)
+        _ep_sc = _get_epex_hh_dates(_sel_dates)
+        if _bs_sc.empty or _ep_sc.empty:
+            st.info("No overlapping bidding space / EPEX DA data for the selected dates.")
+        else:
+            _ep_sc = _ep_sc.rename(columns={"delivery_date": "settlement_date"})
+            _ep_sc["settlement_date"] = pd.to_datetime(_ep_sc["settlement_date"]).dt.date
+            _bs_sc["settlement_date"] = pd.to_datetime(_bs_sc["settlement_date"]).dt.date
+            _scatter_df = _bs_sc.merge(_ep_sc, on=["settlement_date", "settlement_period"])
+            if _scatter_df.empty:
+                st.info("No overlapping data between bidding space and EPEX DA for these dates.")
+            else:
+                _scatter_df["date_str"] = _scatter_df["settlement_date"].astype(str)
+                fig_scat = px.scatter(
+                    _scatter_df,
+                    x="bidding_space_mw",
+                    y="price",
+                    color="date_str",
+                    opacity=0.65,
+                    trendline="ols",
+                    labels={
+                        "bidding_space_mw": "Bidding Space (MW)",
+                        "price": "EPEX DA (£/MWh)",
+                        "date_str": "Date",
+                    },
+                )
+                fig_scat.update_layout(
+                    height=340,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis_title="Bidding Space (MW)",
+                    yaxis_title="EPEX DA Price (£/MWh)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                )
+                st.plotly_chart(fig_scat, use_container_width=True)
 
 # ---- Ancillary Markets -----------------------------------------------------
 with tab_ancillary:
@@ -2768,7 +2899,7 @@ with tab_mgmt:
     with kb_col1:
         kb_only = st.multiselect(
             "Sources (all if empty)",
-            ["elexon", "entso_e", "timera", "modo", "meteologica"],
+            ["elexon", "entso_e", "timera", "modo", "meteologica", "modo_ai"],
             key="kb_only",
         )
     with kb_col2:
@@ -2784,6 +2915,27 @@ with tab_mgmt:
             else:
                 st.error(f"Knowledge ingest failed: {kr['error']}")
             _knowledge_doc_counts.clear()
+
+    st.divider()
+    st.subheader("Modo AI Distillation")
+    st.caption(
+        "Logs into app.modoenergy.com and asks 8 standard GB BESS market questions. "
+        "Answers are stored as `modo_ai` knowledge docs and used by the Strategist agent. "
+        "Runs automatically at 04:00 SGT nightly."
+    )
+    if st.button("Run Modo AI Distillation Now", type="secondary", key="modo_ai_btn"):
+        with st.spinner("Opening Modo app and querying AI agent (≈2–3 min)…"):
+            try:
+                from services.gb_knowledge.modo_ai import ModoAIConnector
+                from services.gb_knowledge.base import get_db_conn, ensure_table
+                _ma_conn = get_db_conn()
+                ensure_table(_ma_conn)
+                _ma_n = ModoAIConnector().run(_ma_conn)
+                _ma_conn.close()
+                st.success(f"Modo AI distillation complete — {_ma_n} new docs inserted.")
+            except Exception as _ma_e:
+                st.error(f"Modo AI distillation failed: {_ma_e}")
+        _knowledge_doc_counts.clear()
 
     st.divider()
     st.subheader("Upload Documents to Knowledge Base")
@@ -2856,17 +3008,18 @@ with tab_mgmt:
         "is emailed every day at **06:00 SGT**. "
         "Use the button below to send a test report for any date."
     )
-    rpt_col1, rpt_col2, rpt_col3 = st.columns([2, 2, 2])
+    rpt_col1, rpt_col2 = st.columns(2)
     with rpt_col1:
         rpt_date = st.date_input(
             "Report date", value=date.today() - timedelta(days=1), key="rpt_date"
         )
-    with rpt_col2:
         rpt_email = st.text_input(
-            "Send to", value="chen_dpeng@hotmail.com", key="rpt_email"
+            "Send to (comma-separated)", value="chen_dpeng@hotmail.com", key="rpt_email"
         )
-    with rpt_col3:
-        st.write("")  # vertical spacer to align button
+    with rpt_col2:
+        _smtp_user_default = os.environ.get("SMTP_USER", "dipengchen@gmail.com")
+        rpt_from = _smtp_user_default
+        st.text(f"Send from: {rpt_from}")
         st.write("")
         send_rpt = st.button("Send Report Now", type="primary", key="send_rpt_btn")
 
@@ -2888,13 +3041,53 @@ with tab_mgmt:
                     _spec.loader.exec_module(_mod)
                     pdf_bytes, _ai_cmnt = _mod.generate_report_pdf(rpt_date)
                     _mod.send_daily_report_email(pdf_bytes, rpt_date, rpt_email,
+                                                 from_email=rpt_from,
                                                  ai_commentary=_ai_cmnt)
                     st.success(
-                        f"Report sent to {rpt_email}  "
+                        f"Report sent to {rpt_email} (from {rpt_from})  "
                         f"({len(pdf_bytes):,} bytes)"
                     )
                 except Exception as _rpt_exc:
                     st.error(f"Report failed: {_rpt_exc}")
+
+    # --- WeCom send ---
+    _wecom_default = os.environ.get("WECOM_WEBHOOK_URL", "")
+    wecom_col1, wecom_col2 = st.columns([3, 1])
+    with wecom_col1:
+        wecom_url = st.text_input(
+            "WeCom webhook URL(s)",
+            value=_wecom_default,
+            type="password",
+            key="wecom_url",
+            help="企业微信群机器人 webhook URL — comma-separated for multiple groups",
+        )
+    with wecom_col2:
+        st.write("")
+        st.write("")
+        send_wecom = st.button("Send to WeCom", key="send_wecom_btn")
+
+    if send_wecom:
+        if not wecom_url:
+            st.error("WeCom webhook URL is required.")
+        else:
+            with st.spinner("Generating PDF and sending to WeCom…"):
+                try:
+                    import importlib.util, pathlib
+                    _rpt_path2 = pathlib.Path(__file__).with_name("daily_report.py")
+                    _spec2 = importlib.util.spec_from_file_location("daily_report_wc", _rpt_path2)
+                    _mod2 = importlib.util.module_from_spec(_spec2)
+                    _spec2.loader.exec_module(_mod2)
+                    pdf_bytes2, _ai_cmnt2 = _mod2.generate_report_pdf(rpt_date)
+                    _mod2.send_daily_report_wecom(
+                        pdf_bytes2, rpt_date,
+                        webhook_url=wecom_url,
+                        ai_commentary=_ai_cmnt2,
+                    )
+                    st.success(
+                        f"Report sent to WeCom group  ({len(pdf_bytes2):,} bytes)"
+                    )
+                except Exception as _wc_exc:
+                    st.error(f"WeCom send failed: {_wc_exc}")
 
     st.divider()
     st.subheader("Pricing Batch")
@@ -2906,6 +3099,10 @@ with tab_mgmt:
         st.write("")
         st.write("")
         run_pb = st.button("Run Pricing Batch", key="run_pb_btn")
+    _pb_missing = _get_pricing_missing_dates(pb_from.isoformat(), pb_to.isoformat())
+    if _pb_missing:
+        st.warning(f"**{len(_pb_missing)} date(s) missing** from gb_pricing_results: "
+                   + ", ".join(_pb_missing))
     if run_pb:
         pb_dates = [pb_from + timedelta(days=i) for i in range((pb_to - pb_from).days + 1)]
         total_processed = 0
@@ -2944,6 +3141,10 @@ with tab_mgmt:
         st.write("")
         st.write("")
         run_fm = st.button("Run Fuel Mix Backfill", key="run_fm_btn")
+    _fm_missing = _get_fuel_mix_missing_dates(fm_from.isoformat(), fm_to.isoformat())
+    if _fm_missing:
+        st.warning(f"**{len(_fm_missing)} date(s) missing** from gb_fuel_mix: "
+                   + ", ".join(_fm_missing))
     if run_fm:
         with st.spinner("Fetching fuel mix from NESO CKAN…"):
             try:

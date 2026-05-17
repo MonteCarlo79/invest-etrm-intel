@@ -304,6 +304,14 @@ _QUICK_ASK_SYSTEM = {
         "and investment memorandum framing for China renewable assets. "
         "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
     ),
+    "gb_analyst": (
+        "You are the GB Analyst — Great Britain BESS market intelligence specialist. "
+        "You give concise, expert answers on: GB BESS leaderboard performance, EPEX DA "
+        "prices and arbitrage spreads, Balancing Mechanism (BM) revenues, ancillary "
+        "markets (FFR, DCL, DCH, reserve), system price and NIV dynamics, asset "
+        "owner/operator benchmarking, and BESS options valuation and dispatch modelling. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
 }
 
 
@@ -587,7 +595,7 @@ if CAN_MANAGE_USERS:
 
 st.subheader("Your Intelligence Team")
 st.caption(
-    "Four specialist agents covering the full investment lifecycle. "
+    "Five specialist agents covering the full investment lifecycle. "
     "Open an app for deep analysis, or Quick Ask for instant answers."
 )
 
@@ -694,6 +702,36 @@ with col_deal:
         app_slug=None,
         agent_key="deal_structurer",
         available=False,
+    )
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── Row 3: GB Analyst (full width) ───────────────────────────────────────────
+col_gb, _ = st.columns(2)
+
+with col_gb:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/gb.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="GB Analyst",
+        subtitle="Great Britain BESS Market Intelligence · GB Market",
+        description=(
+            "Live intelligence platform for the GB battery storage market. "
+            "Tracks daily asset performance across the full GB BESS fleet, covering "
+            "wholesale arbitrage, Balancing Mechanism, ancillary services (FFR, DC), "
+            "and reserve markets. Includes AI-generated market commentary, pricing "
+            "models, and automated daily reports delivered by email and WeCom."
+        ),
+        capabilities=[
+            "Daily BESS leaderboard: revenue by asset, owner, operator",
+            "EPEX DA prices: baseload, peak/off-peak, arbitrage spreads",
+            "Balancing Mechanism & system price / NIV analysis",
+            "Ancillary markets: FFR, DCL, DCH, reserve clearing prices",
+            "Pricing models: BESS options value, PF dispatch, OLS forecast",
+            "Automated daily PDF report via email & WeCom",
+        ],
+        app_slug="gb-market",
+        agent_key="gb_analyst",
+        available=True,
     )
 
 # --------------------------------------------------

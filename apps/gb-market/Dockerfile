@@ -20,10 +20,16 @@ RUN pip install --no-cache-dir \
     "python-pptx>=0.6" \
     "reportlab>=4.0" \
     "scikit-learn>=1.4" \
-    "scipy>=1.12"
+    "scipy>=1.12" \
+    "statsmodels>=0.14" \
+    "playwright>=1.44" \
+    "playwright-stealth>=1.0"
 
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Playwright Chromium browser + its system dependencies
+RUN playwright install --with-deps chromium
 
 COPY apps/gb-market/        ./apps/gb-market/
 COPY services/modo_energy/  ./services/modo_energy/
