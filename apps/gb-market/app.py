@@ -1384,12 +1384,38 @@ def _get_system_price_range(start: str, end: str) -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _get_epex_range(start: str, end: str) -> pd.DataFrame:
     return _query(
         "SELECT delivery_date, settlement_period, price, daily_baseload, daily_peakload, daily_offpeak "
         "FROM intl_market.gb_epex_da_hh WHERE delivery_date BETWEEN %s AND %s "
         "ORDER BY delivery_date, settlement_period",
+        (start, end),
+    )
+
+
+@st.cache_data(ttl=3600)
+def _get_system_price_daily(start: str, end: str) -> pd.DataFrame:
+    """Daily avg system price + avg NIV — fast overview query (30 rows vs 1,440)."""
+    return _query(
+        "SELECT sp.date, AVG(sp.system_price) AS avg_system_price, "
+        "AVG(n.niv) AS avg_niv "
+        "FROM intl_market.gb_system_price sp "
+        "LEFT JOIN intl_market.gb_niv n "
+        "  ON sp.date = n.date AND sp.settlement_period = n.settlement_period "
+        "WHERE sp.date BETWEEN %s AND %s GROUP BY sp.date ORDER BY sp.date",
+        (start, end),
+    )
+
+
+@st.cache_data(ttl=3600)
+def _get_epex_overview(start: str, end: str) -> pd.DataFrame:
+    """Daily baseload/peakload/offpeak only — fast overview query (30 rows vs 1,440)."""
+    return _query(
+        "SELECT delivery_date, MAX(daily_baseload) AS daily_baseload, "
+        "MAX(daily_peakload) AS daily_peakload, MAX(daily_offpeak) AS daily_offpeak "
+        "FROM intl_market.gb_epex_da_hh WHERE delivery_date BETWEEN %s AND %s "
+        "GROUP BY delivery_date ORDER BY delivery_date",
         (start, end),
     )
 
@@ -1912,29 +1938,23 @@ with tab_overview:
 
     with col1:
         st.subheader("System Price (SBP/SSP) + EPEX DA (£/MWh)")
-        sp_df = _get_system_price_range(date_start, date_end)
-        _ov_epex_df = _get_epex_range(date_start, date_end)
+        sp_df = _get_system_price_daily(date_start, date_end)
+        _ov_epex_df = _get_epex_overview(date_start, date_end)
         if sp_df.empty and _ov_epex_df.empty:
             st.info("No system price data. Run a backfill in Data Management.")
         else:
             fig = go.Figure()
             if not sp_df.empty:
-                sp_df["datetime"] = pd.to_datetime(sp_df["date"].astype(str)) + pd.to_timedelta(
-                    (sp_df["settlement_period"] - 1) * 30, unit="min"
-                )
                 fig.add_trace(go.Scatter(
-                    x=sp_df["datetime"], y=sp_df["system_price"],
-                    mode="lines", name="SBP/SSP",
-                    line=dict(color="#d62728", width=1),
+                    x=pd.to_datetime(sp_df["date"].astype(str)), y=sp_df["avg_system_price"],
+                    mode="lines", name="SBP/SSP (daily avg)",
+                    line=dict(color="#d62728", width=1.5),
                 ))
             if not _ov_epex_df.empty:
-                _ov_epex_df["datetime"] = (
-                    pd.to_datetime(_ov_epex_df["delivery_date"].astype(str))
-                    + pd.to_timedelta((_ov_epex_df["settlement_period"] - 1) * 30, unit="min")
-                )
                 fig.add_trace(go.Scatter(
-                    x=_ov_epex_df["datetime"], y=_ov_epex_df["price"],
-                    mode="lines", name="EPEX DA",
+                    x=pd.to_datetime(_ov_epex_df["delivery_date"].astype(str)),
+                    y=_ov_epex_df["daily_baseload"],
+                    mode="lines", name="EPEX DA (baseload)",
                     line=dict(color="#2ca02c", width=2),
                 ))
             fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
@@ -1946,16 +1966,17 @@ with tab_overview:
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.subheader("Net Imbalance Volume (MW)")
+        st.subheader("Net Imbalance Volume (MW, daily avg)")
         if sp_df.empty:
             st.info("No NIV data.")
         else:
-            niv_df = sp_df.dropna(subset=["niv"])
+            niv_df = sp_df.dropna(subset=["avg_niv"])
             if not niv_df.empty:
-                niv_df["colour"] = niv_df["niv"].apply(lambda x: "short" if x < 0 else "long")
-                fig2 = px.bar(niv_df, x="datetime", y="niv", color="colour",
+                niv_df = niv_df.copy()
+                niv_df["colour"] = niv_df["avg_niv"].apply(lambda x: "short" if x < 0 else "long")
+                fig2 = px.bar(niv_df, x="date", y="avg_niv", color="colour",
                               color_discrete_map={"short": "#d62728", "long": "#2ca02c"},
-                              labels={"niv": "MW", "datetime": ""})
+                              labels={"avg_niv": "MW", "date": ""})
                 fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=300, showlegend=False)
                 st.plotly_chart(fig2, use_container_width=True)
             else:
