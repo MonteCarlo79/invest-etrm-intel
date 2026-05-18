@@ -1579,6 +1579,36 @@ def _get_epex_overview(start: str, end: str) -> pd.DataFrame:
     )
 
 
+@st.cache_data(ttl=3600)
+def _get_system_price_hourly(start: str, end: str) -> pd.DataFrame:
+    """Hourly system price — avg of the two half-hourly SPs within each clock-hour."""
+    return _query(
+        "SELECT date, "
+        "  (FLOOR((settlement_period - 1) / 2))::int AS hour_of_day, "
+        "  AVG(system_price) AS system_price "
+        "FROM intl_market.gb_system_price "
+        "WHERE date BETWEEN %s AND %s "
+        "GROUP BY date, hour_of_day "
+        "ORDER BY date, hour_of_day",
+        (start, end),
+    )
+
+
+@st.cache_data(ttl=3600)
+def _get_epex_hourly(start: str, end: str) -> pd.DataFrame:
+    """Hourly EPEX DA price — avg of the two half-hourly SPs within each clock-hour."""
+    return _query(
+        "SELECT delivery_date, "
+        "  (FLOOR((settlement_period - 1) / 2))::int AS hour_of_day, "
+        "  AVG(price) AS price "
+        "FROM intl_market.gb_epex_da_hh "
+        "WHERE delivery_date BETWEEN %s AND %s "
+        "GROUP BY delivery_date, hour_of_day "
+        "ORDER BY delivery_date, hour_of_day",
+        (start, end),
+    )
+
+
 @st.cache_data(ttl=300)
 def _get_pricing_missing_dates(start: str, end: str) -> list[str]:
     """Return ISO date strings in [start, end] with no rows in gb_pricing_results."""
@@ -1752,13 +1782,15 @@ def _get_pricing_table(start: str, end: str, top_n: int = 20) -> pd.DataFrame:
             "), "
             "pricing AS ( "
             "  SELECT asset_name, "
-            "    AVG(options_value_gbp_per_mw) AS options_val_per_mw, "
-            "    AVG(pf_actual_da_pnl_gbp)     AS pf_actual, "
-            "    AVG(duration_h)               AS duration_h, "
-            "    MAX(settlement_date)          AS latest_batch_date, "
+            "    AVG(options_value_gbp_per_mw)   AS options_val_per_mw, "
+            "    AVG(pf_actual_da_pnl_gbp)       AS pf_actual_da, "
+            "    AVG(COALESCE(pf_actual_sp_pnl_gbp, pf_actual_da_pnl_gbp)) AS pf_actual, "
+            "    AVG(duration_h)                 AS duration_h, "
+            "    MAX(settlement_date)            AS latest_batch_date, "
             "    AVG(COALESCE("
             "      (SELECT SUM(-LEAST(elem::numeric, 0)) * 0.5 "
-            "       FROM jsonb_array_elements_text(pf_actual_dispatch_48) AS elem), "
+            "       FROM jsonb_array_elements_text("
+            "         COALESCE(pf_actual_sp_dispatch_48, pf_actual_dispatch_48)) AS elem), "
             "      0)) AS avg_charged_mwh "
             "  FROM intl_market.gb_pricing_results "
             "  WHERE settlement_date BETWEEN %s AND %s "
@@ -1786,7 +1818,9 @@ def _get_dispatch_comparison(asset: str, settlement_date: str) -> pd.DataFrame:
     try:
         df = _query(
             "SELECT pf_actual_dispatch_48, pf_forecast_dispatch_48, "
-            "actual_epex_48, forecast_epex_48 "
+            "actual_epex_48, forecast_epex_48, "
+            "COALESCE(pf_actual_sp_dispatch_48, pf_actual_dispatch_48) AS pf_sp_dispatch_48, "
+            "COALESCE(actual_sp_48, actual_epex_48) AS actual_sp_48 "
             "FROM intl_market.gb_pricing_results "
             "WHERE asset_name = %s AND settlement_date = %s",
             (asset, settlement_date),
@@ -2097,24 +2131,35 @@ with tab_overview:
 
     with col1:
         st.subheader("System Price (SBP/SSP) + EPEX DA (£/MWh)")
-        sp_df = _get_system_price_daily(date_start, date_end)
-        _ov_epex_df = _get_epex_overview(date_start, date_end)
-        if sp_df.empty and _ov_epex_df.empty:
+        sp_df = _get_system_price_daily(date_start, date_end)   # kept for NIV in col2
+        _sp_hourly   = _get_system_price_hourly(date_start, date_end)
+        _epex_hourly = _get_epex_hourly(date_start, date_end)
+        if _sp_hourly.empty and _epex_hourly.empty:
             st.info("No system price data. Run a backfill in Data Management.")
         else:
+            # Build datetime index: date + hour
+            if not _sp_hourly.empty:
+                _sp_hourly["ts"] = (
+                    pd.to_datetime(_sp_hourly["date"].astype(str))
+                    + pd.to_timedelta(_sp_hourly["hour_of_day"].astype(int), unit="h")
+                )
+            if not _epex_hourly.empty:
+                _epex_hourly["ts"] = (
+                    pd.to_datetime(_epex_hourly["delivery_date"].astype(str))
+                    + pd.to_timedelta(_epex_hourly["hour_of_day"].astype(int), unit="h")
+                )
             fig = go.Figure()
-            if not sp_df.empty:
+            if not _sp_hourly.empty:
                 fig.add_trace(go.Scatter(
-                    x=pd.to_datetime(sp_df["date"].astype(str)), y=sp_df["avg_system_price"],
-                    mode="lines", name="SBP/SSP (daily avg)",
-                    line=dict(color="#d62728", width=1.5),
+                    x=_sp_hourly["ts"], y=_sp_hourly["system_price"],
+                    mode="lines", name="System Price (hourly)",
+                    line=dict(color="#d62728", width=1),
                 ))
-            if not _ov_epex_df.empty:
+            if not _epex_hourly.empty:
                 fig.add_trace(go.Scatter(
-                    x=pd.to_datetime(_ov_epex_df["delivery_date"].astype(str)),
-                    y=_ov_epex_df["daily_baseload"],
-                    mode="lines", name="EPEX DA (baseload)",
-                    line=dict(color="#2ca02c", width=2),
+                    x=_epex_hourly["ts"], y=_epex_hourly["price"],
+                    mode="lines", name="EPEX DA (hourly)",
+                    line=dict(color="#2ca02c", width=1.5),
                 ))
             fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
             fig.update_layout(
@@ -2568,7 +2613,7 @@ with tab_pricing:
             "power_mw":             "Rated MW",
             "wholesale_per_mwh":    "Wholesale (£/MWh/yr)",
             "options_per_mwh":      "Options (£/MWh/yr)",
-            "pf_actual_per_mwh":    "PF Actual DA (£/MWh/yr)",
+            "pf_actual_per_mwh":    "PF SP (£/MWh/yr)",
             "price_spread_gbp_mwh": "PF Price Spread (£/MWh)",
             "cycles_per_day":       "Cycles/Day",
         }
@@ -2579,7 +2624,7 @@ with tab_pricing:
             "Rated MW":                 "{:.0f}",
             "Wholesale (£/MWh/yr)":     "{:,.0f}",
             "Options (£/MWh/yr)":       "{:,.0f}",
-            "PF Actual DA (£/MWh/yr)":  "{:,.0f}",
+            "PF SP (£/MWh/yr)":         "{:,.0f}",
             "PF Price Spread (£/MWh)":  "{:.1f}",
             "Cycles/Day":               "{:.2f}",
         }
@@ -2593,7 +2638,8 @@ with tab_pricing:
             )
         st.caption(
             f"Revenue annualised per MWh installed capacity ({n_days}-day window × 365/n). "
-            "Options = Kirk/Margrabe annual strip. "
+            "Options = Kirk/Margrabe scaled by model Cycles/Day (fixes 1-cycle undercount). "
+            "PF SP = perfect-foresight dispatch on half-hourly system prices (intraday proxy). "
             "Price Spread = PF P&L ÷ avg daily charged MWh. "
             "Cycles/Day = avg daily charged MWh ÷ energy capacity."
         )
@@ -2627,37 +2673,52 @@ with tab_pricing:
                     return []
 
             pf_actual_disp   = _parse_json_col(row.get("pf_actual_dispatch_48"))
+            pf_sp_disp       = _parse_json_col(row.get("pf_sp_dispatch_48"))
             pf_forecast_disp = _parse_json_col(row.get("pf_forecast_dispatch_48"))
             actual_epex      = _parse_json_col(row.get("actual_epex_48"))
+            actual_sp        = _parse_json_col(row.get("actual_sp_48"))
             forecast_epex    = _parse_json_col(row.get("forecast_epex_48"))
             sps = list(range(1, 49))
 
-            # Check for stale data (EPEX DA zeros = batch ran before v32 fix)
+            _sp_nonzero   = any(v != 0 for v in actual_sp)   if actual_sp   else False
             _epex_nonzero = any(v != 0 for v in actual_epex) if actual_epex else False
-            if actual_epex and not _epex_nonzero:
+            if actual_epex and not _epex_nonzero and not _sp_nonzero:
                 st.warning(
-                    "EPEX DA prices for this date are all zero — this row was computed before "
-                    "the v32 fix. Re-run the pricing batch for this date range in Data Management "
-                    "to refresh."
+                    "Prices for this date are all zero — re-run the pricing batch for this "
+                    "date range in Data Management to refresh."
                 )
 
             fig_disp = go.Figure()
             # Dispatch traces — primary Y-axis (left, MW)
+            if pf_sp_disp:
+                fig_disp.add_trace(go.Scatter(
+                    x=sps, y=pf_sp_disp, mode="lines",
+                    name="PF Dispatch (System Price)",
+                    line=dict(color="#1f77b4", width=2),
+                    yaxis="y1",
+                ))
             if pf_actual_disp:
                 fig_disp.add_trace(go.Scatter(
                     x=sps, y=pf_actual_disp, mode="lines",
-                    name="PF Dispatch (Actual DA)",
-                    line=dict(color="#1f77b4", width=2),
+                    name="PF Dispatch (EPEX DA ref)",
+                    line=dict(color="#aec7e8", width=1.5, dash="dash"),
                     yaxis="y1",
                 ))
             if pf_forecast_disp:
                 fig_disp.add_trace(go.Scatter(
                     x=sps, y=pf_forecast_disp, mode="lines",
                     name="PF Dispatch (OLS Forecast)",
-                    line=dict(color="#ff7f0e", width=2, dash="dash"),
+                    line=dict(color="#ff7f0e", width=1.5, dash="dash"),
                     yaxis="y1",
                 ))
             # Price traces — secondary Y-axis (right, £/MWh)
+            if actual_sp and _sp_nonzero:
+                fig_disp.add_trace(go.Scatter(
+                    x=sps, y=actual_sp, mode="lines",
+                    name="System Price",
+                    line=dict(color="#d62728", width=2),
+                    yaxis="y2",
+                ))
             if actual_epex and _epex_nonzero:
                 fig_disp.add_trace(go.Scatter(
                     x=sps, y=actual_epex, mode="lines",

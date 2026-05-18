@@ -38,18 +38,21 @@ logger = logging.getLogger(__name__)
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS intl_market.gb_pricing_results (
-    settlement_date          DATE    NOT NULL,
-    asset_name               TEXT    NOT NULL,
-    power_mw                 NUMERIC,
-    duration_h               NUMERIC,
-    options_value_gbp_per_mw NUMERIC,
-    pf_actual_da_pnl_gbp     NUMERIC,
-    pf_forecast_da_pnl_gbp   NUMERIC,
-    pf_actual_dispatch_48    JSONB,
-    pf_forecast_dispatch_48  JSONB,
-    actual_epex_48           JSONB,
-    forecast_epex_48         JSONB,
-    computed_at              TIMESTAMPTZ DEFAULT NOW(),
+    settlement_date              DATE    NOT NULL,
+    asset_name                   TEXT    NOT NULL,
+    power_mw                     NUMERIC,
+    duration_h                   NUMERIC,
+    options_value_gbp_per_mw     NUMERIC,  -- Kirk/Margrabe scaled by SP-based cycles/day
+    pf_actual_da_pnl_gbp         NUMERIC,  -- PF on EPEX DA (reference only)
+    pf_actual_sp_pnl_gbp         NUMERIC,  -- PF on system prices (intraday proxy)
+    pf_forecast_da_pnl_gbp       NUMERIC,  -- PF on OLS DA forecast
+    pf_actual_dispatch_48        JSONB,    -- dispatch for DA PF
+    pf_actual_sp_dispatch_48     JSONB,    -- dispatch for SP PF
+    pf_forecast_dispatch_48      JSONB,
+    actual_epex_48               JSONB,
+    actual_sp_48                 JSONB,    -- system prices used for SP PF
+    forecast_epex_48             JSONB,
+    computed_at                  TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (settlement_date, asset_name)
 );
 """
@@ -443,9 +446,42 @@ def _get_top_wholesale_assets(conn, ref_start: str, ref_end: str, top_n: int = 5
 # Main batch runner
 # ---------------------------------------------------------------------------
 
+def _get_system_prices_48(conn, target_date: date) -> list[float]:
+    """Fetch 48 half-hourly system prices for target_date from gb_system_price.
+
+    Returns list of 48 floats (zeros for missing SPs).
+    System price is a better proxy for intraday settlement than EPEX DA.
+    """
+    try:
+        df = pd.read_sql(
+            "SELECT settlement_period, system_price "
+            "FROM intl_market.gb_system_price "
+            "WHERE date = %s ORDER BY settlement_period",
+            conn,
+            params=(target_date.isoformat(),),
+        )
+        if df.empty:
+            return [0.0] * 48
+        sp_map = dict(zip(df["settlement_period"].astype(int), df["system_price"].astype(float)))
+        return [float(sp_map.get(sp, 0.0) or 0.0) for sp in range(1, 49)]
+    except Exception as exc:
+        logger.warning("System price query failed for %s: %s", target_date, exc)
+        return [0.0] * 48
+
+
 def _ensure_table(conn) -> None:
     cur = conn.cursor()
     cur.execute(_CREATE_TABLE_SQL)
+    # Idempotent migration: add columns introduced after initial deploy
+    for col_sql in [
+        "pf_actual_sp_pnl_gbp     NUMERIC",
+        "pf_actual_sp_dispatch_48 JSONB",
+        "actual_sp_48             JSONB",
+    ]:
+        cur.execute(
+            f"ALTER TABLE intl_market.gb_pricing_results "
+            f"ADD COLUMN IF NOT EXISTS {col_sql}"
+        )
 
 
 def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
@@ -482,7 +518,7 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
         logger.error("Pricing batch: EPEX history query failed: %s", exc)
         return {"processed": 0, "errors": [str(exc)], "date": str(batch_date)}
 
-    # Target day's EPEX DA prices (48 SPs)
+    # Target day's EPEX DA prices (48 SPs) — used for options calibration + DA PF reference
     target_epex_48: list[float] = []
     if not epex_hist.empty:
         day_prices = epex_hist[pd.to_datetime(epex_hist["delivery_date"]).dt.date == batch_date]
@@ -493,6 +529,13 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
     if len(target_epex_48) < 48:
         logger.info("Pricing batch: no EPEX DA prices for %s — filling zeros", batch_date)
         target_epex_48 = [0.0] * 48
+
+    # System prices (48 SPs) — intraday proxy for SP-based PF
+    target_sp_48 = _get_system_prices_48(conn, batch_date)
+    sp_available = any(p != 0.0 for p in target_sp_48)
+    if not sp_available:
+        logger.info("Pricing batch: no system prices for %s — SP PF will use EPEX DA", batch_date)
+        target_sp_48 = target_epex_48
 
     # OLS forecast
     forecast_48 = compute_ols_forecast(batch_date, conn) or target_epex_48
@@ -508,22 +551,36 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
         eff        = 0.85  # standard roundtrip efficiency
 
         try:
-            # 1. Options value
-            options_val = compute_options_value(
+            # 1. Options value (1-cycle base, calibrated on EPEX DA peak/offpeak)
+            options_val_base = compute_options_value(
                 power_mw=power_mw,
                 duration_h=duration_h,
                 roundtrip_eff=eff,
                 epex_history_df=epex_hist,
                 n_days_remaining=365,
             )
-            options_per_mw = options_val / power_mw if power_mw > 0 else 0.0
+            options_per_mw_base = options_val_base / power_mw if power_mw > 0 else 0.0
 
-            # 2. PF dispatch on actual DA prices
-            pf_actual_pnl, pf_actual_dispatch = _pf_dispatch_48(
+            # 2. PF dispatch on EPEX DA prices (reference benchmark)
+            pf_da_pnl, pf_da_dispatch = _pf_dispatch_48(
                 target_epex_48, power_mw, duration_h, eff
             )
 
-            # 3. PF dispatch on OLS forecast prices
+            # 3. PF dispatch on system prices (intraday proxy — better matches actual wholesale)
+            pf_sp_pnl, pf_sp_dispatch = _pf_dispatch_48(
+                target_sp_48, power_mw, duration_h, eff
+            )
+
+            # Derive cycles/day from SP PF dispatch (charged MWh / energy capacity)
+            # This scales the options model to match the asset's actual cycling behaviour.
+            charged_mwh_sp = sum(max(0.0, -d) * 0.5 for d in pf_sp_dispatch)
+            cycles_per_day = charged_mwh_sp / e_cap if e_cap > 0 else 1.0
+            cycles_per_day = max(1.0, cycles_per_day)  # floor at 1 so options never shrinks below base
+
+            # Scale options by cycles (Kirk assumes 1 cycle; real assets do 1–3)
+            options_per_mw_scaled = options_per_mw_base * cycles_per_day
+
+            # 4. PF dispatch on OLS forecast prices
             pf_forecast_pnl, pf_forecast_dispatch = _pf_dispatch_48(
                 forecast_48, power_mw, duration_h, eff
             )
@@ -534,33 +591,42 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
                 """
                 INSERT INTO intl_market.gb_pricing_results
                     (settlement_date, asset_name, power_mw, duration_h,
-                     options_value_gbp_per_mw, pf_actual_da_pnl_gbp,
-                     pf_forecast_da_pnl_gbp, pf_actual_dispatch_48,
-                     pf_forecast_dispatch_48, actual_epex_48, forecast_epex_48)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     options_value_gbp_per_mw,
+                     pf_actual_da_pnl_gbp, pf_actual_sp_pnl_gbp,
+                     pf_forecast_da_pnl_gbp,
+                     pf_actual_dispatch_48, pf_actual_sp_dispatch_48,
+                     pf_forecast_dispatch_48,
+                     actual_epex_48, actual_sp_48, forecast_epex_48)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (settlement_date, asset_name) DO UPDATE SET
-                    power_mw                 = EXCLUDED.power_mw,
-                    duration_h               = EXCLUDED.duration_h,
-                    options_value_gbp_per_mw = EXCLUDED.options_value_gbp_per_mw,
-                    pf_actual_da_pnl_gbp     = EXCLUDED.pf_actual_da_pnl_gbp,
-                    pf_forecast_da_pnl_gbp   = EXCLUDED.pf_forecast_da_pnl_gbp,
-                    pf_actual_dispatch_48    = EXCLUDED.pf_actual_dispatch_48,
-                    pf_forecast_dispatch_48  = EXCLUDED.pf_forecast_dispatch_48,
-                    actual_epex_48           = EXCLUDED.actual_epex_48,
-                    forecast_epex_48         = EXCLUDED.forecast_epex_48,
-                    computed_at              = NOW()
+                    power_mw                  = EXCLUDED.power_mw,
+                    duration_h                = EXCLUDED.duration_h,
+                    options_value_gbp_per_mw  = EXCLUDED.options_value_gbp_per_mw,
+                    pf_actual_da_pnl_gbp      = EXCLUDED.pf_actual_da_pnl_gbp,
+                    pf_actual_sp_pnl_gbp      = EXCLUDED.pf_actual_sp_pnl_gbp,
+                    pf_forecast_da_pnl_gbp    = EXCLUDED.pf_forecast_da_pnl_gbp,
+                    pf_actual_dispatch_48     = EXCLUDED.pf_actual_dispatch_48,
+                    pf_actual_sp_dispatch_48  = EXCLUDED.pf_actual_sp_dispatch_48,
+                    pf_forecast_dispatch_48   = EXCLUDED.pf_forecast_dispatch_48,
+                    actual_epex_48            = EXCLUDED.actual_epex_48,
+                    actual_sp_48              = EXCLUDED.actual_sp_48,
+                    forecast_epex_48          = EXCLUDED.forecast_epex_48,
+                    computed_at               = NOW()
                 """,
                 (
                     batch_date.isoformat(),
                     asset_name,
                     round(power_mw, 2),
                     round(duration_h, 2),
-                    round(options_per_mw, 2),
-                    round(pf_actual_pnl, 2),
+                    round(options_per_mw_scaled, 2),
+                    round(pf_da_pnl, 2),
+                    round(pf_sp_pnl, 2),
                     round(pf_forecast_pnl, 2),
-                    json.dumps([round(v, 4) for v in pf_actual_dispatch]),
+                    json.dumps([round(v, 4) for v in pf_da_dispatch]),
+                    json.dumps([round(v, 4) for v in pf_sp_dispatch]),
                     json.dumps([round(v, 4) for v in pf_forecast_dispatch]),
                     json.dumps([round(v, 4) for v in target_epex_48]),
+                    json.dumps([round(v, 4) for v in target_sp_48]),
                     json.dumps([round(v, 4) for v in forecast_48]),
                 ),
             )
