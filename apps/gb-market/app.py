@@ -635,6 +635,93 @@ def _list_recent_sessions(limit: int = 3) -> pd.DataFrame:
     _load_memories.clear()
 
 
+def _generate_interview_questions() -> list[dict]:
+    """
+    Review current insight pool + KB coverage, identify knowledge gaps,
+    return up to 5 targeted questions for the user to answer.
+    """
+    summary = _query(
+        "SELECT insight_type, confidence, COUNT(*) AS n "
+        "FROM intl_market.gb_expert_insights WHERE active = TRUE "
+        "GROUP BY insight_type, confidence ORDER BY n DESC"
+    )
+    kb_cov = _query(
+        "SELECT source, COUNT(*) AS n "
+        "FROM intl_market.gb_knowledge_docs GROUP BY source ORDER BY n DESC"
+    )
+    sample = _query(
+        "SELECT insight_text, insight_type "
+        "FROM intl_market.gb_expert_insights WHERE active = TRUE "
+        "ORDER BY id DESC LIMIT 15"
+    )
+
+    ctx_lines = ["Current expert insight pool:"]
+    if not summary.empty:
+        for _, r in summary.iterrows():
+            ctx_lines.append(f"  {r['insight_type']} ({r['confidence']}): {int(r['n'])} insights")
+    else:
+        ctx_lines.append("  (empty)")
+
+    ctx_lines.append("\nKnowledge base coverage:")
+    if not kb_cov.empty:
+        for _, r in kb_cov.iterrows():
+            ctx_lines.append(f"  {r['source']}: {int(r['n'])} docs")
+
+    ctx_lines.append("\nSample of already-known insights (do NOT duplicate):")
+    if not sample.empty:
+        for _, r in sample.iterrows():
+            ctx_lines.append(f"  [{r['insight_type']}] {str(r['insight_text'])[:120]}")
+
+    system = """\
+You are the GB BESS market strategist agent auditing your own knowledge base to find gaps.
+Identify the 5 most valuable areas where knowledge is THIN, UNCERTAIN, or MISSING.
+Generate one precise expert interview question per gap — something only a practitioner
+with hands-on GB BESS experience can answer from their own observation.
+
+Prioritise gaps in these areas (in order):
+1. Specific operational nuances of top-performing BESS assets (dispatch strategies, SoC management)
+2. Counterintuitive market patterns the expert has personally observed (NIV chasing, BM dynamics)
+3. Upcoming or recent regulatory changes with concrete operational implications
+4. Revenue stack combinations that differentiate the top 10% of assets from the median
+5. Grid constraint or locational patterns that affect BESS dispatch or revenue
+
+Do NOT generate questions that are already answered in the sample insights above.
+Do NOT generate generic textbook questions about UK power markets.
+
+Respond ONLY with valid JSON:
+{"questions": [{"question": "...", "topic": "market_structure|regulation|operations|bess_economics|grid_services", "why_asking": "one sentence on what knowledge gap this fills"}]}
+"""
+    try:
+        resp = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=900,
+            system=system,
+            messages=[{"role": "user", "content": "\n".join(ctx_lines)}],
+        )
+        raw = resp.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw).get("questions", [])[:5]
+    except Exception as exc:
+        logger.warning("Gap analysis failed: %s", exc)
+        return []
+
+
+def _store_interview_answer(question: str, answer: str, topic: str) -> None:
+    """Store a user's expert interview answer as a high-confidence insight."""
+    insight_text = f"[Expert interview] Q: {question[:150]} | A: {answer}"
+    cur = _conn().cursor()
+    cur.execute(
+        "INSERT INTO intl_market.gb_expert_insights "
+        "(insight_text, insight_type, confidence, source_session) "
+        "VALUES (%s, %s, 'high', %s)",
+        (insight_text[:1000], topic, date.today().isoformat()),
+    )
+    _conn().commit()
+
+
 def _extract_memories(user_msg: str, agent_reply: str) -> list[dict]:
     resp = _client.messages.create(
         model="claude-haiku-4-5",
@@ -2863,6 +2950,158 @@ with tab_strategist:
         f"Grounded on DB data only · Memory persists across sessions · "
         f"Expert memory: {_n_insights} accumulated insights from KB + conversations"
     )
+
+    # ── Knowledge Gap Interview ──────────────────────────────────────────────
+    with st.expander("Teach the Agent — Knowledge Gap Interview", expanded=False):
+        # Initialise all interview state keys
+        for _k, _v in [
+            ("interview_questions", []),
+            ("interview_idx", 0),
+            ("interview_answers", 0),
+            ("interview_modo_queried", False),
+            ("interview_modo_results", {}),   # {question: answer_or_None}
+            ("interview_pending_qs", []),     # questions Modo couldn't answer
+        ]:
+            if _k not in st.session_state:
+                st.session_state[_k] = _v
+
+        _iq  = st.session_state["interview_questions"]
+        _ii  = st.session_state["interview_idx"]
+        _pqs = st.session_state["interview_pending_qs"]   # user Q&A queue
+
+        # ── Stage 0: no questions yet ──────────────────────────────────────
+        if not _iq:
+            st.markdown(
+                "The agent audits its knowledge base, identifies gaps, then tries "
+                "**Modo AI first** to fill them — saving your time for questions "
+                "only you can answer from direct experience."
+            )
+            if st.button("Generate Knowledge Gap Questions", key="gen_interview"):
+                with st.spinner("Auditing knowledge base and identifying gaps…"):
+                    _new_qs = _generate_interview_questions()
+                if _new_qs:
+                    st.session_state["interview_questions"]    = _new_qs
+                    st.session_state["interview_idx"]          = 0
+                    st.session_state["interview_answers"]      = 0
+                    st.session_state["interview_modo_queried"] = False
+                    st.session_state["interview_modo_results"] = {}
+                    st.session_state["interview_pending_qs"]   = []
+                    st.rerun()
+                else:
+                    st.error("Could not generate questions — check API key or try again.")
+
+        # ── Stage 1: questions ready, Modo not yet queried ─────────────────
+        elif not st.session_state["interview_modo_queried"]:
+            st.markdown("**Generated knowledge gap questions:**")
+            for _qi, _qo in enumerate(_iq):
+                st.markdown(f"{_qi+1}. **[{_qo['topic']}]** {_qo['question']}")
+                st.caption(f"   *{_qo.get('why_asking','')}*")
+
+            st.divider()
+            _col_m, _col_u = st.columns(2)
+            with _col_m:
+                if st.button(
+                    "Query Modo AI First (recommended)",
+                    key="interview_modo_query", type="primary",
+                ):
+                    with st.spinner(
+                        "Querying Modo AI for each gap question… (~2–4 min, "
+                        "uses Modo credits only for unanswered gaps)"
+                    ):
+                        try:
+                            from services.gb_knowledge.modo_ai import distill_gap_questions
+                            from services.gb_knowledge.expert_memory import digest_kb_docs
+                            _qs_text = [_qo["question"] for _qo in _iq]
+                            _mres = distill_gap_questions(_qs_text)
+                            # Digest the new docs into expert insights
+                            digest_kb_docs(_ANTHROPIC_KEY, limit=len(_iq) + 5)
+                        except Exception as _me:
+                            st.error(f"Modo query failed: {_me}")
+                            _mres = {}
+                    st.session_state["interview_modo_results"] = _mres
+                    # Pending = questions Modo couldn't answer
+                    st.session_state["interview_pending_qs"] = [
+                        _qo for _qo in _iq if not _mres.get(_qo["question"])
+                    ]
+                    st.session_state["interview_modo_queried"] = True
+                    st.session_state["interview_idx"] = 0
+                    st.rerun()
+
+            with _col_u:
+                if st.button("Answer Yourself (skip Modo)", key="interview_skip_modo"):
+                    st.session_state["interview_pending_qs"]   = list(_iq)
+                    st.session_state["interview_modo_queried"] = True
+                    st.session_state["interview_idx"]          = 0
+                    st.rerun()
+
+        # ── Stage 2: show Modo results + user Q&A for unanswered ──────────
+        elif _ii >= len(_pqs):
+            # All pending questions done — show summary
+            _mres   = st.session_state["interview_modo_results"]
+            _n_modo = sum(1 for v in _mres.values() if v)
+            _n_user = st.session_state["interview_answers"]
+            if _n_modo:
+                st.success(
+                    f"Modo AI answered **{_n_modo}** gap question(s) — insights auto-digested. "
+                    f"You answered **{_n_user}** additional question(s). "
+                    f"All stored as high-confidence insights."
+                )
+                with st.expander("View Modo AI answers", expanded=False):
+                    for _qo in _iq:
+                        _ans_text = _mres.get(_qo["question"])
+                        if _ans_text:
+                            st.markdown(f"**Q: {_qo['question']}**")
+                            st.markdown(_ans_text[:600] + ("…" if len(_ans_text) > 600 else ""))
+                            st.divider()
+            else:
+                st.success(
+                    f"Interview complete — {_n_user} expert answers stored as high-confidence insights."
+                )
+            if st.button("Start New Interview", key="new_interview"):
+                for _k2 in ["interview_questions", "interview_pending_qs",
+                             "interview_modo_results"]:
+                    st.session_state[_k2] = []  if _k2 != "interview_modo_results" else {}
+                st.session_state["interview_idx"]          = 0
+                st.session_state["interview_answers"]      = 0
+                st.session_state["interview_modo_queried"] = False
+                st.rerun()
+
+        else:
+            # User Q&A for questions Modo couldn't answer
+            _q  = _pqs[_ii]
+            _mres = st.session_state["interview_modo_results"]
+            # Show Modo result for previously answered questions (context)
+            if _ii == 0 and _mres:
+                _n_auto = sum(1 for v in _mres.values() if v)
+                if _n_auto:
+                    st.info(
+                        f"Modo AI answered {_n_auto} of {len(_iq)} questions automatically. "
+                        f"Please answer the remaining {len(_pqs)}."
+                    )
+            st.progress(_ii / max(len(_pqs), 1), text=f"Question {_ii + 1} of {len(_pqs)}")
+            st.markdown(f"**[{_q['topic']}]** {_q['question']}")
+            st.caption(f"*Why this matters: {_q.get('why_asking', '')}*")
+            _ans = st.text_area(
+                "Your answer:", key=f"interview_ans_{_ii}", height=120,
+                placeholder="Share what you know from experience…",
+            )
+            _col_submit, _col_skip = st.columns([2, 1])
+            with _col_submit:
+                if st.button("Submit Answer", key=f"interview_submit_{_ii}", type="primary"):
+                    if _ans.strip():
+                        try:
+                            _store_interview_answer(_q["question"], _ans.strip(), _q["topic"])
+                            st.session_state["interview_idx"]     += 1
+                            st.session_state["interview_answers"] += 1
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Failed to store answer: {_e}")
+                    else:
+                        st.warning("Please enter an answer before submitting.")
+            with _col_skip:
+                if st.button("Skip", key=f"interview_skip_{_ii}"):
+                    st.session_state["interview_idx"] += 1
+                    st.rerun()
 
     # Session ID management
     if "strat_session_id" not in st.session_state:

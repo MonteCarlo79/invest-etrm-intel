@@ -446,6 +446,93 @@ class ModoAIConnector(BaseConnector):
                 pass
 
     # ------------------------------------------------------------------
+    # Custom question list (gap-targeted queries)
+    # ------------------------------------------------------------------
+
+    def fetch_custom(self, questions: list[str], url_prefix: str = "gap-questions") -> Iterator[dict]:
+        """Send a custom list of questions to Modo AI.
+
+        URL scheme: modo_ai://{url_prefix}/{YYYY-MM-DD}/q{i:02d}
+        Suitable for credit-efficient, gap-targeted queries.
+        """
+        if not self._email or not self._password:
+            logger.warning("[modo_ai] MODO_EMAIL / MODO_PASSWORD not set — skipping")
+            return
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("[modo_ai] playwright not installed — skipping")
+            return
+
+        today = date.today()
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            ctx = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                ),
+                locale="en-GB",
+                timezone_id="Asia/Singapore",
+            )
+            page = ctx.new_page()
+            page.on("console", lambda _: None)
+            try:
+                from playwright_stealth import stealth_sync
+                stealth_sync(page)
+            except ImportError:
+                pass
+
+            try:
+                if not self._login(page):
+                    logger.error("[modo_ai] Login failed — aborting custom distillation")
+                    return
+
+                for i, question in enumerate(questions):
+                    url = f"modo_ai://{url_prefix}/{today.isoformat()}/q{i:02d}"
+                    logger.info(
+                        "[modo_ai] Custom Q %d/%d: %s…",
+                        i + 1, len(questions), question[:60],
+                    )
+                    try:
+                        answer = self._ask_fresh(page, question)
+                    except Exception as exc:
+                        logger.warning("[modo_ai] Custom Q%d error: %s", i, exc)
+                        continue
+
+                    if not answer or len(answer) < 30:
+                        logger.warning("[modo_ai] No substantive answer for custom Q%d", i)
+                        continue
+
+                    yield {
+                        "doc_type": "ai_insight",
+                        "title":    f"Modo AI (gap) — {question[:80]}",
+                        "url":      url,
+                        "published_date": today,
+                        "content":  f"Q: {question}\n\nA: {answer}",
+                        "_question": question,
+                        "_answer":   answer,
+                    }
+
+                    if i < len(questions) - 1:
+                        pause = random.uniform(10, 30)
+                        logger.debug("[modo_ai] Pausing %.0fs", pause)
+                        time.sleep(pause)
+
+            finally:
+                try:
+                    ctx.close()
+                    browser.close()
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------
     # Response extraction
     # ------------------------------------------------------------------
 
@@ -569,6 +656,50 @@ def _save_screenshot(page, name: str) -> None:
         logger.info("[modo_ai] Screenshot saved: %s", path)
     except Exception as exc:
         logger.debug("[modo_ai] Screenshot failed (%s): %s", name, exc)
+
+
+def distill_gap_questions(questions: list[str]) -> dict[str, str | None]:
+    """Push gap questions to Modo AI, store answers in gb_knowledge_docs.
+
+    Returns {question: answer} for each question; value is None if Modo
+    gave no substantive answer (< 30 chars or timeout).
+    Upserts via base.upsert_doc so re-runs on the same day are no-ops.
+    """
+    from services.gb_knowledge.base import get_db_conn, ensure_table, upsert_doc
+
+    results: dict[str, str | None] = {q: None for q in questions}
+
+    connector = ModoAIConnector()
+    conn = get_db_conn()
+    try:
+        ensure_table(conn)
+        for doc in connector.fetch_custom(questions):
+            q_text   = doc.pop("_question", "")
+            a_text   = doc.pop("_answer",   "")
+            inserted = upsert_doc(
+                conn, "modo_ai",
+                doc["doc_type"], doc.get("title", ""),
+                doc.get("url"), doc.get("published_date"), doc["content"],
+            )
+            if q_text and a_text:
+                # Match back to original question (exact or prefix)
+                for orig_q in questions:
+                    if orig_q == q_text or orig_q[:80] == q_text[:80]:
+                        results[orig_q] = a_text
+                        break
+            logger.info("[modo_ai] Gap doc stored=%s url=%s", inserted, doc.get("url"))
+    except Exception as exc:
+        logger.error("[modo_ai] distill_gap_questions failed: %s", exc)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+    answered = sum(1 for v in results.values() if v)
+    logger.info("[modo_ai] Gap distillation: %d/%d questions answered", answered, len(questions))
+    return results
 
 
 def _clean_response(text: str, pre_text: str) -> str:
