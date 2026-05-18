@@ -1,30 +1,109 @@
 .git
 .gitignore
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 .env
 .venv
+venv/
 node_modules
+*.log
+*.dump
+.pytest_cache/
+**/.pytest_cache/
+
+# Large data / output directories — not needed in any container
+data/
+debug/
+logs/
+knowledge/
+docs/
+memo/
+reports/
+outputs/
+samples/
+extract/
+archived/
+archived md/
+backup/
+ar/
+tmp/
+bess-marketdata-ingestion/
+claw-code-main/
+claw-code-main.zip
+
+# Infrastructure and scripts
+infra/
+scripts/
+config/
+auth/
+db/
+shared/
+agents/
+
+# Large files that sneak in
 *.xlsx
 *.csv
 *.parquet
-*.log
-.dump
-*.dump
+*.zip
+*.tar
+*.tar.gz
 
-# Large directories not needed in any container
-infra/
-archived/
-backup/
-data/
-!data/market-fundamentals/
-!data/market-fundamentals/*.xlsx
-tmp/
-outputs/
-reports/
-knowledge/
-docs/
-claw-code-main/
-bess-marketdata-ingestion/
+# Apps / services not used by gb-market image
+# (gb-market only COPYs: apps/gb-market/, services/modo_energy/,
+#  services/common/, services/gb_knowledge/)
+apps/portal/
+apps/inner-mongolia/
+apps/spot-watcher/
+apps/uploader/
+apps/mengxi-dashboard/
+apps/model-catalogue/
+apps/options-cockpit/
+apps/strategy-agent/
+apps/portfolio-agent/
+apps/portfolio-risk-agent/
+apps/execution-agent/
+apps/trading-performance-agent/
+apps/it-dev-agent/
+apps/dev-agent/
+apps/mengxi-trading-ops/
+apps/pnl-attribution/
+apps/spot-agent/
+apps/spot-market/
+apps/trading/
+apps/dashboard/
+
+services/bess_inner_mongolia/
+services/bess-inner-mongolia/
+services/bess_map/
+services/bess_mcp/
+services/data_ingestion/
+services/decision_models/
+services/document_intake/
+services/fengxing/
+services/knowledge_pool/
+services/lingfeng/
+services/loader/
+services/market_fundamentals/
+services/mengxi_ingestion/
+services/monitoring/
+services/ops/
+services/ops_ingestion/
+services/portal/
+services/spot_ingest/
+services/spot_mcp/
+services/trading/
+
+# libs not used by gb-market image
+libs/
+
+# bess-inner-mongolia app
+apps/bess-inner-mongolia/
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db

@@ -167,31 +167,55 @@ def _generate_ai_commentary(
         except Exception:
             pass
 
-    # Top 3 performers
+    # Top performers with revenue mix
     if not performers.empty:
-        top3 = performers.head(3)
-        perf_parts = [
-            f"{row.get('asset', '?')} "
-            f"(£{_n(row.get('total_revenue')):,.0f}, "
-            f"{_n(row.get('rated_power_mw')):.0f} MW)"
-            for _, row in top3.iterrows()
-        ]
-        lines.append(f"Top 3 assets: {'; '.join(perf_parts)}")
+        top = performers.head(10)
+        top1 = top.iloc[0]
+        t1_rev   = _n(top1.get("total_revenue"))
+        t1_anc   = _n(top1.get("ancillary"))
+        t1_ws    = _n(top1.get("wholesale"))
+        t1_bm    = _n(top1.get("bm"))
+        t1_res   = _n(top1.get("reserve"))
+        t1_other = _n(top1.get("other"))
+        t1_total = t1_anc + t1_ws + t1_bm + t1_res + t1_other or 1
+        lines.append(
+            f"#1 asset: {top1.get('asset','?')} "
+            f"£{t1_rev:,.0f} "
+            f"[ancillary {t1_anc/t1_total*100:.0f}%, "
+            f"wholesale {t1_ws/t1_total*100:.0f}%, "
+            f"BM {t1_bm/t1_total*100:.0f}%, "
+            f"reserve {t1_res/t1_total*100:.0f}%]"
+        )
+        rest = top.iloc[1:]
+        if not rest.empty:
+            r_anc   = rest["ancillary"].apply(_n).mean()
+            r_ws    = rest["wholesale"].apply(_n).mean()
+            r_bm    = rest["bm"].apply(_n).mean()
+            r_res   = rest["reserve"].apply(_n).mean()
+            r_other = rest["other"].apply(_n).mean()
+            r_total = r_anc + r_ws + r_bm + r_res + r_other or 1
+            r_rev   = rest["total_revenue"].apply(_n).mean()
+            lines.append(
+                f"Avg #2-{len(rest)+1}: "
+                f"£{r_rev:,.0f} "
+                f"[ancillary {r_anc/r_total*100:.0f}%, "
+                f"wholesale {r_ws/r_total*100:.0f}%, "
+                f"BM {r_bm/r_total*100:.0f}%, "
+                f"reserve {r_res/r_total*100:.0f}%]"
+            )
+            rev_premium = (t1_rev / r_rev - 1) * 100 if r_rev else 0
+            lines.append(f"#1 revenue premium over avg rest: {rev_premium:+.0f}%")
 
     data_snapshot = "\n".join(lines)
 
     prompt = (
-        "You are a senior GB electricity market analyst writing the analytics section of a "
-        "daily BESS (battery energy storage) market briefing. Write exactly 3 paragraphs — "
-        "no bullet points, no headers — covering:\n"
-        "1. Price environment: EPEX DA level and spread, system price volatility, "
-        "   and what they imply for BESS DA arbitrage opportunity.\n"
-        "2. System balance and ancillary markets: NIV direction and magnitude, "
-        "   DX clearing prices relative to recent norms, and fleet revenue mix.\n"
-        "3. Asset performance: highlight any notable patterns among top performers, "
-        "   day-on-day changes, and a brief forward-looking comment on market conditions.\n\n"
-        "Be concise (≤120 words per paragraph), use precise market terminology, "
-        "and anchor every claim to the numbers provided. Do not speculate beyond the data.\n\n"
+        "You are a GB BESS market analyst. Write a single summary under 100 words.\n\n"
+        "Focus ONLY on:\n"
+        "1. Top performer: name, rank, and what revenue mix drove its lead "
+        "(e.g. heavy ancillary vs wholesale vs BM — be specific with %s).\n"
+        "2. How the #1 revenue combination differs from the rest of the top 10.\n"
+        "3. One sentence on what the market data (price/NIV/DX) implies for BESS today.\n\n"
+        "No headers, no bullets, no preamble. Precise numbers only. Under 100 words.\n\n"
         f"Data:\n{data_snapshot}"
     )
 
@@ -199,7 +223,7 @@ def _generate_ai_commentary(
         client = _anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=600,
+            max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
         )
         text = msg.content[0].text.strip()

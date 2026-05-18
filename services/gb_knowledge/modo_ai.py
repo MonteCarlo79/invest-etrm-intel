@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Standard questions sent to Modo AI each night
 # ---------------------------------------------------------------------------
+# Asked every night — time-sensitive market intelligence.
 STANDARD_QUESTIONS: list[str] = [
     "What are the most important GB BESS market developments from the last 24 hours?",
     "Which revenue streams are performing best for GB BESS assets right now — "
@@ -36,6 +37,44 @@ STANDARD_QUESTIONS: list[str] = [
     "Which GB BESS assets or operators are showing standout performance this week and why?",
     "What are the key market risks and opportunities for GB BESS investors right now?",
     "How is the GB grid stability and curtailment environment affecting BESS revenues?",
+]
+
+# Asked once (or when missing from KB) — foundational knowledge that doesn't change daily.
+FOUNDATIONAL_QUESTIONS: list[str] = [
+    "Give me a detailed explanation of how the UK power market mechanism works, "
+    "covering the wholesale market, balancing mechanism, system operator role, "
+    "settlement, and how prices are formed.",
+    "Give me a comprehensive list of all BESS-relevant policies and regulations in the UK "
+    "with a brief description of each — including capacity market, ancillary services "
+    "framework, grid connection rules, planning policy, and any storage-specific legislation.",
+    "How does NIV chasing work for GB BESS — what is net imbalance volume, how do "
+    "batteries exploit it, what are the risks, and how has National Grid/NESO responded?",
+    "Explain the GB Dynamic Containment, Dynamic Moderation, and Dynamic Regulation "
+    "ancillary services — how they differ, procurement mechanisms, and typical BESS revenues.",
+    "What is the GB Capacity Market and how does a BESS asset participate — T-4/T-1 auctions, "
+    "de-rating factors, obligations, and penalty regime?",
+    "How does EPEX day-ahead price formation work in Great Britain — auction timeline, "
+    "participants, relationship to system price, and implications for BESS wholesale trading?",
+]
+
+# Asked every night — draw specifically on Modo's proprietary research, forecasts, and data.
+MODO_RESEARCH_QUESTIONS: list[str] = [
+    "Based on Modo's latest GB BESS revenue forecast, what is the outlook for total merchant "
+    "revenues over the next 12 months, and which markets (wholesale, BM, ancillary) are "
+    "expected to grow or decline?",
+    "What are the key findings from Modo's most recent GB storage market report or outlook — "
+    "including any changes to Modo's revenue index or forward curve assumptions?",
+    "According to Modo's pipeline and deployment data, how much new GB BESS capacity is "
+    "expected to come online in the next 12–24 months, and what does this mean for "
+    "per-MW revenues as the market matures?",
+    "What does Modo's research say about optimal BESS duration strategy in the current "
+    "GB market — is 1h, 2h, or 4h duration showing better risk-adjusted returns, "
+    "and how is this expected to shift?",
+    "According to Modo's data, which ancillary service markets (DC, DR, FFR) currently "
+    "offer the best risk-adjusted returns for GB BESS, and how have clearing prices trended?",
+    "What does Modo's research show about the long-term impact of increasing BESS "
+    "penetration on GB ancillary service prices — at what fleet size does Modo expect "
+    "significant price cannibalisation?",
 ]
 
 # Timeouts (ms)
@@ -108,32 +147,51 @@ class ModoAIConnector(BaseConnector):
                     logger.error("[modo_ai] Login failed — aborting distillation")
                     return
 
-                for i, question in enumerate(STANDARD_QUESTIONS):
+                all_questions = [
+                    # (question_text, url, is_last)
+                    # Daily market intelligence — date-keyed, refreshed every night
+                    (q, f"modo_ai://{today.isoformat()}/q{i:02d}", False)
+                    for i, q in enumerate(STANDARD_QUESTIONS)
+                ] + [
+                    # Modo proprietary research — date-keyed, refreshed every night
+                    (q, f"modo_ai://{today.isoformat()}/research{i:02d}", False)
+                    for i, q in enumerate(MODO_RESEARCH_QUESTIONS)
+                ] + [
+                    # Foundational knowledge — fixed URL, inserted once only
+                    (q, f"modo_ai://foundational/q{i:02d}", False)
+                    for i, q in enumerate(FOUNDATIONAL_QUESTIONS)
+                ]
+                # Mark last question
+                if all_questions:
+                    all_questions[-1] = (all_questions[-1][0], all_questions[-1][1], True)
+
+                total_q = len(all_questions)
+                for idx, (question, url, is_last) in enumerate(all_questions):
                     logger.info(
                         "[modo_ai] Question %d/%d: %s…",
-                        i + 1, len(STANDARD_QUESTIONS), question[:60],
+                        idx + 1, total_q, question[:60],
                     )
                     try:
                         answer = self._ask_fresh(page, question)
                     except Exception as exc:
-                        logger.warning("[modo_ai] Question %d error: %s", i + 1, exc)
+                        logger.warning("[modo_ai] Question %d error: %s", idx + 1, exc)
                         continue
 
                     if not answer or len(answer) < 30:
-                        logger.warning("[modo_ai] No substantive answer for q%d (got: %r)", i, answer)
+                        logger.warning("[modo_ai] No substantive answer for q%d (got: %r)", idx, answer)
                         continue
 
                     yield {
                         "doc_type": "ai_insight",
                         "title":    f"Modo AI — {question[:80]}",
-                        "url":      f"modo_ai://{today.isoformat()}/q{i:02d}",
+                        "url":      url,
                         "published_date": today,
                         "content":  f"Q: {question}\n\nA: {answer}",
                     }
 
                     # Random pause between questions (15–45 s) to avoid
                     # looking like automated traffic
-                    if i < len(STANDARD_QUESTIONS) - 1:
+                    if not is_last:
                         pause = random.uniform(15, 45)
                         logger.debug("[modo_ai] Pausing %.0fs before next question", pause)
                         time.sleep(pause)
@@ -255,6 +313,7 @@ class ModoAIConnector(BaseConnector):
             pass  # fall through; _is_authenticated() decides
 
         page.wait_for_timeout(3_000)
+        self._dismiss_cookie_banner(page)
         _save_screenshot(page, "05_after_submit")
 
         if self._is_authenticated(page):
@@ -297,11 +356,16 @@ class ModoAIConnector(BaseConnector):
         # Brief settle for dynamic content to render
         page.wait_for_timeout(2_000)
 
+        # Dismiss cookie consent banner if present
+        self._dismiss_cookie_banner(page)
+
         # Try to open AI chat if there's a trigger button
         self._try_open_chat(page)
 
-        # Find the chat input
+        # Find the chat input — Modo home uses "What are you looking for?"
         input_sel = _first_visible(page, [
+            'input[placeholder*="looking" i]',   # "What are you looking for?"
+            'input[placeholder*="what" i]',
             'textarea[placeholder*="ask" i]',
             'textarea[placeholder*="question" i]',
             'textarea[placeholder*="message" i]',
@@ -311,9 +375,11 @@ class ModoAIConnector(BaseConnector):
             'input[placeholder*="ask" i]',
             'input[placeholder*="question" i]',
             'input[placeholder*="message" i]',
+            'input[placeholder*="search" i]',
             'div[contenteditable="true"][data-placeholder*="ask" i]',
             'div[contenteditable="true"]',
             'textarea',
+            'input[type="text"]',   # generic fallback
         ])
         if not input_sel:
             logger.warning("[modo_ai] Chat input not found — page source snippet:\n%s",
@@ -342,6 +408,26 @@ class ModoAIConnector(BaseConnector):
 
         # Wait for response
         return self._wait_for_settled_response(page, pre_text)
+
+    def _dismiss_cookie_banner(self, page) -> None:
+        """Dismiss cookie consent popup if visible — prevents it blocking clicks."""
+        dismiss_sel = _first_visible(page, [
+            'button:has-text("Accept All")',
+            'button:has-text("Accept all")',
+            'button:has-text("Accept")',
+            'button:has-text("Reject All")',
+            'button:has-text("OK")',
+            'button:has-text("Got it")',
+            '[aria-label*="accept" i]',
+            '[aria-label*="cookie" i]',
+        ])
+        if dismiss_sel:
+            try:
+                page.click(dismiss_sel)
+                page.wait_for_timeout(500)
+                logger.info("[modo_ai] Cookie banner dismissed")
+            except Exception:
+                pass
 
     def _try_open_chat(self, page) -> None:
         """Click a chat-open button if present (e.g. floating AI icon)."""

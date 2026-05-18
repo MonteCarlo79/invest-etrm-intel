@@ -67,6 +67,7 @@ def cmd_download(args):
     with open(csv_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
+        fh.flush()
 
         d = start
         while d <= end:

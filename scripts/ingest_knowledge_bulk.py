@@ -57,6 +57,10 @@ try:
 except ImportError:
     pass
 
+# Suppress pdfminer font-descriptor warnings (harmless, just noisy)
+import logging
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+
 VALID_APPS = {"shared", "strategist", "trader"}
 
 # Folder-name substrings that signal a document belongs to the Trader agent

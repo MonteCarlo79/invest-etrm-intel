@@ -1,28 +1,17 @@
 """
-Pillar 3 — Mengxi BESS Trading Operations Dashboard
+Mengxi Province Trading Management
 
-Purpose: Break down BESS revenue into attribution components across the full
-dispatch chain, from perfect-foresight upper bound to actual cleared dispatch.
-
-P&L Waterfall:
-  PF Unrestricted (true upper bound)
-  → [grid restriction loss]
-  PF Grid-Feasible
-  → [forecast error loss]
-  Forecast Optimal (LP on forecast prices)
-  → [nomination gap loss]
-  Nomination P&L (申报曲线 × nodal price)
-  → [market clearing loss]
-  Trading Cleared (md_id_cleared_energy × cleared price)
-  → [execution loss]
-  Actual Cleared (实际充放曲线 × nodal price)
+Province-level BESS & wind trading intelligence for Inner Mongolia (Mengxi).
 
 Tabs:
-  1. Market Data          — provincial RT prices, wind/solar, load, capacity
-  2. Dispatch & P&L       — hero: 5-step P&L waterfall + dispatch chart
-  3. Daily Ops            — 4-asset daily strategy comparison + LP benchmark
-  4. Strategy Comparison  — multi-day strategy analysis + YTD reporting
-  5. Options Cockpit      — spread call strip valuation + realization overlay
+  1. Market Fundamentals  — provincial RT prices, wind/solar, load, capacity
+  2. BESS Market Ranking  — all-BESS arbitrage ranking (async ECS pipeline)
+  3. Our BESS Portfolio   — P&L waterfall · daily ops · strategy comparison
+  4. Options Pricing      — spread call strip valuation + realization overlay
+  5. Wind Farm Ranking    — all-wind generation & revenue ranking
+  6. Wind Farm Trading    — placeholder for future wind trading management
+  7. Data Management      — table freshness, coverage, manual upload
+  8. Trader               — Claude agent for P&L attribution + market analysis
 
 Run locally:
   set -a && source config/.env && set +a
@@ -59,7 +48,7 @@ except ImportError:
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Mengxi BESS Trading Ops",
+    page_title="Mengxi Province Trading Management",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -440,8 +429,8 @@ def _load_missing_dates(table_fqn: str, date_col: str, start_date: str) -> tuple
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("⚡ Mengxi BESS Trading Ops")
-    st.caption("Pillar 3 — Asset Operations & Portfolio Optimisation")
+    st.title("⚡ Mengxi Province Trading")
+    st.caption("Inner Mongolia BESS & Wind — Market Intelligence")
     st.markdown("---")
 
     # Global asset + date controls (used by Dispatch & P&L tab)
@@ -508,12 +497,13 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_market, tab_dispatch_pnl, tab_daily_ops, tab_strategy, tab_cockpit, tab_data_mgmt, tab_trader = st.tabs([
-    "Market Data",
-    "Dispatch & P&L Waterfall",
-    "Daily Ops",
-    "Strategy Comparison",
-    "Options Cockpit",
+tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_trading, tab_data_mgmt, tab_trader = st.tabs([
+    "Market Fundamentals",
+    "BESS Market Ranking",
+    "Our BESS Portfolio",
+    "Options Pricing",
+    "Wind Farm Ranking",
+    "Wind Farm Trading",
     "Data Management",
     "Trader",
 ])
@@ -522,7 +512,7 @@ tab_market, tab_dispatch_pnl, tab_daily_ops, tab_strategy, tab_cockpit, tab_data
 # Tab 1: Market Data
 # ---------------------------------------------------------------------------
 with tab_market:
-    st.title("Mengxi Provincial Market Data")
+    st.title("Mengxi Province — Market Fundamentals")
     st.caption(
         f"Period: **{mkt_start}** → **{mkt_end}** | Granularity: **{mkt_freq}** | "
         f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
@@ -631,35 +621,60 @@ with tab_market:
             st.caption(f"Excel export error: {_exc}")
 
 # ---------------------------------------------------------------------------
-# Tab 2: Dispatch & P&L Waterfall — HERO TAB
+# Tab 2: BESS Market Ranking
 # ---------------------------------------------------------------------------
-with tab_dispatch_pnl:
-    from libs.decision_models.adapters.app.dispatch_pnl_page import render_dispatch_pnl_page
-    render_dispatch_pnl_page(selected_asset, selected_date)
+with tab_bess_rank:
+    from bess_market_tab import render as _render_bess_rank
+    _render_bess_rank(_get_sqlalchemy_engine())
 
 # ---------------------------------------------------------------------------
-# Tab 3: Daily Ops
+# Tab 3: Our BESS Portfolio — P&L Waterfall · Daily Ops · Strategy Comparison
 # ---------------------------------------------------------------------------
-with tab_daily_ops:
-    from libs.decision_models.adapters.app.daily_ops_page import render_daily_ops_page
-    render_daily_ops_page()
+with tab_portfolio:
+    sub_pnl, sub_daily, sub_strategy = st.tabs([
+        "P&L Waterfall",
+        "Daily Ops",
+        "Strategy Comparison",
+    ])
+
+    with sub_pnl:
+        from libs.decision_models.adapters.app.dispatch_pnl_page import render_dispatch_pnl_page
+        render_dispatch_pnl_page(selected_asset, selected_date)
+
+    with sub_daily:
+        from libs.decision_models.adapters.app.daily_ops_page import render_daily_ops_page
+        render_daily_ops_page()
+
+    with sub_strategy:
+        from libs.decision_models.adapters.app.strategy_comparison_page import render_strategy_comparison_page
+        render_strategy_comparison_page()
 
 # ---------------------------------------------------------------------------
-# Tab 4: Strategy Comparison
-# ---------------------------------------------------------------------------
-with tab_strategy:
-    from libs.decision_models.adapters.app.strategy_comparison_page import render_strategy_comparison_page
-    render_strategy_comparison_page()
-
-# ---------------------------------------------------------------------------
-# Tab 5: Options Cockpit
+# Tab 4: Options Pricing
 # ---------------------------------------------------------------------------
 with tab_cockpit:
     from libs.decision_models.adapters.app.cockpit_page import render_cockpit_page
     render_cockpit_page()
 
 # ---------------------------------------------------------------------------
-# Tab 6: Data Management
+# Tab 5: Wind Farm Ranking
+# ---------------------------------------------------------------------------
+with tab_wind_rank:
+    from wind_farm_tab import render as _render_wind_rank
+    _render_wind_rank(_get_sqlalchemy_engine())
+
+# ---------------------------------------------------------------------------
+# Tab 6: Wind Farm Trading (placeholder)
+# ---------------------------------------------------------------------------
+with tab_wind_trading:
+    st.subheader("Wind Farm Trading Management")
+    st.info(
+        "Coming soon — active wind farm trading management, dispatch optimisation, "
+        "and curtailment analysis for Mengxi wind assets."
+    )
+
+# ---------------------------------------------------------------------------
+# Tab 7: Data Management
 # ---------------------------------------------------------------------------
 with tab_data_mgmt:
     st.title("Data Management")
@@ -1006,7 +1021,7 @@ with tab_data_mgmt:
             st.info(f"Table not yet created or empty. ({_fx_prev_exc})")
 
 # ---------------------------------------------------------------------------
-# Tab 7: Trader
+# Tab 8: Trader
 # ---------------------------------------------------------------------------
 with tab_trader:
     import anthropic as _ant

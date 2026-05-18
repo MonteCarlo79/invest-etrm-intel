@@ -115,10 +115,10 @@ def _load_trading_cleared_pnl(asset_code: str, trade_date: datetime.date) -> Opt
     """
     from sqlalchemy import text
     sql = text("""
-        SELECT COALESCE(SUM(cleared_energy_mwh_15min * cleared_price), 0) AS trading_cleared_pnl
+        SELECT COALESCE(SUM(cleared_energy_mwh * cleared_price), 0) AS trading_cleared_pnl
         FROM marketdata.md_id_cleared_energy
         WHERE asset_code = :asset
-          AND time::date = :dt
+          AND datetime::date = :dt
     """)
     try:
         df = pd.read_sql(sql, _engine(), params={"asset": asset_code, "dt": trade_date})
@@ -167,13 +167,13 @@ def _load_trading_cleared_dispatch(asset_code: str, trade_date: datetime.date) -
     from sqlalchemy import text
     sql = text("""
         SELECT
-            time,
-            cleared_energy_mwh_15min  AS cleared_mwh,
+            datetime AS time,
+            cleared_energy_mwh  AS cleared_mwh,
             cleared_price
         FROM marketdata.md_id_cleared_energy
         WHERE asset_code = :asset
-          AND time::date = :dt
-        ORDER BY time
+          AND datetime::date = :dt
+        ORDER BY datetime
     """)
     try:
         df = pd.read_sql(sql, _engine(), params={"asset": asset_code, "dt": trade_date},

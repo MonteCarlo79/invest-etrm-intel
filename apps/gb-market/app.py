@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 
 logger = logging.getLogger(__name__)
 from datetime import date, datetime, timedelta
@@ -524,6 +525,18 @@ def _start_scheduler():
                       id="gb_daily_knowledge", misfire_grace_time=3600)
     scheduler.add_job(_modo_ai_job, "cron", hour=4, minute=0,
                       id="gb_modo_ai_distill", misfire_grace_time=3600)
+
+    def _kb_digest_job():
+        """Digest unprocessed KB docs into structured expert insights."""
+        try:
+            from services.gb_knowledge.expert_memory import digest_kb_docs
+            n = digest_kb_docs(_ANTHROPIC_KEY, limit=100)
+            logger.info("KB digest: %d new insights extracted", n)
+        except Exception as _exc:
+            logger.error("KB digest failed: %s", _exc)
+
+    scheduler.add_job(_kb_digest_job, "cron", hour=3, minute=45,
+                      id="gb_kb_digest", misfire_grace_time=3600)
     scheduler.add_job(_pricing_batch_job, "cron", hour=4, minute=30,
                       id="gb_pricing_batch", misfire_grace_time=3600)
     scheduler.add_job(_daily_report_job, "cron", hour=6, minute=0,
@@ -560,6 +573,65 @@ def _delete_memory(mem_id: int):
     cur = _conn().cursor()
     cur.execute("UPDATE marketdata.agent_memory SET active = FALSE WHERE id = %s", (mem_id,))
     _conn().commit()
+
+
+# ── Session persistence (Strategist chat history survives page reload) ────────
+
+def _ensure_sessions_table():
+    cur = _conn().cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intl_market.gb_analyst_sessions (
+            session_id TEXT PRIMARY KEY,
+            messages   JSONB NOT NULL DEFAULT '[]',
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    _conn().commit()
+
+
+def _save_session(session_id: str, messages: list):
+    try:
+        _ensure_sessions_table()
+        cur = _conn().cursor()
+        cur.execute(
+            "INSERT INTO intl_market.gb_analyst_sessions (session_id, messages, updated_at) "
+            "VALUES (%s, %s::jsonb, NOW()) "
+            "ON CONFLICT (session_id) DO UPDATE "
+            "  SET messages = EXCLUDED.messages, updated_at = NOW()",
+            (session_id, json.dumps(messages)),
+        )
+        _conn().commit()
+    except Exception as _exc:
+        logger.debug("_save_session failed: %s", _exc)
+
+
+def _load_session(session_id: str) -> list:
+    try:
+        _ensure_sessions_table()
+        cur = _conn().cursor()
+        cur.execute(
+            "SELECT messages FROM intl_market.gb_analyst_sessions WHERE session_id = %s",
+            (session_id,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def _list_recent_sessions(limit: int = 3) -> pd.DataFrame:
+    try:
+        return _query(
+            "SELECT session_id, jsonb_array_length(messages) AS msg_count, updated_at "
+            "FROM intl_market.gb_analyst_sessions "
+            "WHERE jsonb_array_length(messages) > 0 "
+            "ORDER BY updated_at DESC LIMIT %s",
+            (limit,),
+        )
+    except Exception:
+        return pd.DataFrame()
     _load_memories.clear()
 
 
@@ -2299,7 +2371,7 @@ with tab_bess:
         fig2.update_layout(height=320, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig2, use_container_width=True)
 
-    st.subheader(f"Asset Leaderboard — Top 20 by Revenue")
+    st.subheader(f"Asset Leaderboard — Top 20, Sorted by £/MWh/year")
     leader_df = _get_leaderboard_range(_bess_start, _bess_end)
     if leader_df.empty:
         st.info("No leaderboard data.")
@@ -2328,6 +2400,8 @@ with tab_bess:
                     return label
             return f"{h:.1f}h"
         leader_df["duration"] = leader_df.apply(_duration_label, axis=1)
+        # Sort by £/MWh/year (capacity-normalised, descending)
+        leader_df = leader_df.sort_values("avg_revspermwh", ascending=False, na_position="last").reset_index(drop=True)
         # Reorder: asset identity first, then financials
         cols_order = ["asset", "owner", "operator", "integrator", "duration",
                       "total_revenue", "wholesale", "freq_response", "bm", "imbalance", "reserve",
@@ -2779,10 +2853,37 @@ with tab_knowledge:
 # ---- Strategist Agent ------------------------------------------------------
 with tab_strategist:
     st.header("Strategist — GB Market Analysis")
-    st.caption("Grounded on DB data only · Memory persists across sessions")
 
+    # Show accumulated insight pool count
+    _insight_pool_df = _query(
+        "SELECT COUNT(*) AS n FROM intl_market.gb_expert_insights WHERE active = TRUE"
+    )
+    _n_insights = int(_insight_pool_df.iloc[0]["n"]) if not _insight_pool_df.empty else 0
+    st.caption(
+        f"Grounded on DB data only · Memory persists across sessions · "
+        f"Expert memory: {_n_insights} accumulated insights from KB + conversations"
+    )
+
+    # Session ID management
+    if "strat_session_id" not in st.session_state:
+        st.session_state["strat_session_id"] = str(uuid.uuid4())
     if "strat_history" not in st.session_state:
         st.session_state["strat_history"] = []
+
+    # Offer resume only when current chat is empty
+    if not st.session_state["strat_history"]:
+        _recent_sessions = _list_recent_sessions()
+        if not _recent_sessions.empty:
+            with st.expander("Resume a previous conversation?", expanded=False):
+                for _, _srow in _recent_sessions.iterrows():
+                    _sess_label = (
+                        f"{_srow['updated_at'].strftime('%Y-%m-%d %H:%M')} — "
+                        f"{int(_srow['msg_count'])} messages"
+                    )
+                    if st.button(_sess_label, key=f"resume_{_srow['session_id']}"):
+                        st.session_state["strat_session_id"] = _srow["session_id"]
+                        st.session_state["strat_history"] = _load_session(_srow["session_id"])
+                        st.rerun()
 
     for msg in st.session_state["strat_history"]:
         with st.chat_message(msg["role"]):
@@ -2818,6 +2919,12 @@ with tab_strategist:
 
         st.session_state["strat_history"].append({"role": "assistant", "content": reply})
 
+        # Persist session to DB
+        try:
+            _save_session(st.session_state["strat_session_id"], st.session_state["strat_history"])
+        except Exception:
+            pass
+
         # Extract structured expert insights (stored in intl_market.gb_expert_insights)
         try:
             from services.gb_knowledge.expert_memory import extract_gb_insights
@@ -2829,6 +2936,7 @@ with tab_strategist:
 
     if st.session_state["strat_history"] and st.button("Clear chat", key="clear_strat"):
         st.session_state["strat_history"] = []
+        st.session_state["strat_session_id"] = str(uuid.uuid4())
         st.rerun()
 
 # ---- Quant Agent -----------------------------------------------------------
@@ -2953,10 +3061,44 @@ with tab_mgmt:
                 ensure_table(_ma_conn)
                 _ma_n = ModoAIConnector().run(_ma_conn)
                 _ma_conn.close()
-                st.success(f"Modo AI distillation complete — {_ma_n} new docs inserted.")
+                if _ma_n == 0:
+                    st.warning("Modo AI distillation complete — 0 new docs inserted. Check debug screenshots below.")
+                else:
+                    st.success(f"Modo AI distillation complete — {_ma_n} new docs inserted.")
             except Exception as _ma_e:
                 st.error(f"Modo AI distillation failed: {_ma_e}")
         _knowledge_doc_counts.clear()
+
+    # Debug screenshots — written by the login/ask flow to /tmp
+    import os as _os
+    _debug_shots = sorted([
+        f"/tmp/modo_{s}.png"
+        for s in ["01_after_nav", "02_no_email", "03_after_email_submit",
+                  "04_no_pass", "05_after_submit"]
+        if _os.path.exists(f"/tmp/modo_{s}.png")
+    ])
+    if _debug_shots:
+        with st.expander("Debug screenshots (last run)", expanded=False):
+            for _shot_path in _debug_shots:
+                st.caption(_shot_path)
+                st.image(_shot_path)
+
+    st.divider()
+    st.subheader("Expert Memory — KB Digestion")
+    st.caption(
+        "Reads all undigested KB docs and uses Claude to extract durable market insights "
+        "into the expert memory pool. These insights are injected into the Strategist's "
+        "context at query time, so it 'knows' what it has read. Runs automatically at "
+        "03:45 SGT nightly (after KB ingest)."
+    )
+    if st.button("Digest KB into Expert Memory", key="digest_kb_btn"):
+        with st.spinner("Extracting insights from KB docs (1–2 min)…"):
+            try:
+                from services.gb_knowledge.expert_memory import digest_kb_docs
+                _dk_n = digest_kb_docs(_ANTHROPIC_KEY, limit=200)
+                st.success(f"Extracted {_dk_n} new insights from KB docs.")
+            except Exception as _dk_e:
+                st.error(f"KB digest failed: {_dk_e}")
 
     st.divider()
     st.subheader("Upload Documents to Knowledge Base")

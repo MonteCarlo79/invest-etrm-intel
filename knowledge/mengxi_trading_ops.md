@@ -3,16 +3,25 @@
 **App:** `apps/mengxi-dashboard`  
 **Pillar:** 3 — Asset Operations & Portfolio Optimisation  
 **URL:** `https://www.pjh-etrm.ai/mengxi-dashboard`  
-**Port:** 8511  
+**Port:** 8505 (ECS/production); 8511 for local `streamlit run` only  
 **ECR repo:** `bess-mengxi-dashboard`  
-**Current image:** `bess-mengxi-dashboard:v6` (deployed 2026-05-12)  
+**Current image:** `bess-mengxi-dashboard:v7` (deployed 2026-05-13 23:17 SGT, digest sha256:c22f5a96e2a4)  
+**Next image:** `bess-mengxi-dashboard:v8` (8-tab province-level restructuring — pending build & deploy)  
 **Ingestion image:** `bess-mengxi-ingestion:v19` (deployed 2026-05-08)
 
 ---
 
 ## Purpose
 
-Break down BESS revenue into P&L attribution components. Starting from the theoretical perfect-foresight upper bound, each step reveals where value is being lost:
+Province-level trading management app for Inner Mongolia (Mengxi). Combines:
+1. Market fundamentals (prices, wind/solar, load)
+2. Market-wide BESS ranking (delegated to inner_pipeline ECS task)
+3. Our 4-asset BESS portfolio deep-dive (P&L waterfall, daily ops, strategy)
+4. Wind farm performance ranking (inline query)
+5. Options pricing, data management, Trader AI agent
+
+**BESS P&L waterfall** — break down BESS revenue into attribution components:
+
 
 ```
 PF Unrestricted       ← LP on actual RT prices, no grid constraints (true ceiling)
@@ -43,16 +52,20 @@ Actual Cleared        ← 实际充放曲线 × nodal_price (ops Excel)
 
 ---
 
-## Tabs
+## Tabs (v8 — 8-tab province layout)
 
 | Tab | Purpose | Key data source |
 |-----|---------|-----------------|
-| Market Data | Provincial RT prices, wind/solar, load, bidding space | `public.hist_mengxi_*_15min` |
-| Dispatch & P&L Waterfall | Hero tab — 5-step P&L cascade + dispatch chart | `reports.bess_asset_daily_attribution`, `marketdata.md_id_cleared_energy`, `marketdata.ops_bess_dispatch_15min`, `canon.nodal_rt_price_15min` |
-| Daily Ops | 4-asset daily strategy comparison + LP benchmark | `reports.bess_strategy_daily_*`, `marketdata.ops_bess_dispatch_15min` |
-| Strategy Comparison | Multi-day YTD strategy analysis + report export | `reports.bess_asset_daily_attribution` |
-| Options Cockpit | Kirk/Margrabe spread call strip valuation | `canon.nodal_rt_price_15min` |
-| Data Management | Table freshness, missing dates coverage, pipeline logs | `marketdata.data_quality_status`, `marketdata.md_load_log` |
+| Market Fundamentals | Provincial RT prices, wind/solar, load, bidding space | `public.hist_mengxi_*_15min` |
+| BESS Market Ranking | All-BESS arbitrage ranking via async ECS pipeline (`inner_pipeline`) | `marketdata.inner_mongolia_bess_results`, `marketdata.inner_mongolia_nodal_clusters` |
+| Our BESS Portfolio → P&L Waterfall | 5-step P&L cascade + dispatch chart | `reports.bess_asset_daily_attribution`, `marketdata.md_id_cleared_energy`, `marketdata.ops_bess_dispatch_15min`, `canon.nodal_rt_price_15min` |
+| Our BESS Portfolio → Daily Ops | 4-asset daily strategy comparison + LP benchmark | `reports.bess_strategy_daily_*`, `marketdata.ops_bess_dispatch_15min` |
+| Our BESS Portfolio → Strategy Comparison | Multi-day YTD strategy analysis + report export | `reports.bess_asset_daily_attribution` |
+| Options Pricing | Kirk/Margrabe spread call strip valuation | `canon.nodal_rt_price_15min` |
+| Wind Farm Ranking | All wind farm generation + revenue ranking (inline query) | `marketdata.md_id_cleared_energy` |
+| Wind Farm Trading | Placeholder — future wind dispatch management | — |
+| Data Management | Table freshness, coverage, pipeline logs, manual upload, Shanxi nodal download | `marketdata.data_quality_status`, `marketdata.md_load_log`, `marketdata.md_shanxi_nodal_price_96` |
+| Trader | Claude agent (sonnet-4-6) for P&L attribution + dispatch analysis + KB search + GB benchmark | `reports.bess_asset_daily_attribution`, `marketdata.ops_bess_dispatch_15min`, `marketdata.agent_memory`, `staging.spot_knowledge_docs` |
 
 ---
 
@@ -72,7 +85,7 @@ Actual Cleared        ← 实际充放曲线 × nodal_price (ops Excel)
 | `marketdata.md_settlement_ref_price` | Settlement reference price | `data_date` | 0d |
 
 **Ingestion pipeline:** `bess-marketdata-ingestion/providers/mengxi/`  
-**Schedule:** EventBridge cron `0 20 * * ? *` (UTC, = 04:00 CST) → Lambda `bess-mengxi-launcher` → ECS task `bess-mengxi-reconcile`  
+**Schedule:** EventBridge cron `0 12 * * ? *` (UTC = 20:00 CST) — moved from 08:30 CST because API returns empty files in the morning (data published in the afternoon). Defined in `infra/terraform/trading-bess-mengxi/schedules.tf`. Downstream schedules (tt-province-loader 09:10 CST, pnl-refresh 10:10 CST) use prior-night's ingest — acceptable given MARKET_LAG_DAYS=1 built-in lag.  
 **Source API:** `https://app-portal-cn-ft.enos-iot.com/mengxi-data-sync/v1/api/details/6.52`  
 **Min file size:** 3–4 MB (files below threshold skipped as corrupted)  
 **Modes:** `daily` (latest available), `reconcile` (gap-fill window), `remediation` (targeted dates)
@@ -180,6 +193,9 @@ cd infra/terraform && terraform apply
 | Component | Path |
 |-----------|------|
 | Main app | `apps/mengxi-dashboard/app.py` |
+| BESS Market Ranking tab | `apps/mengxi-dashboard/bess_market_tab.py` |
+| Wind Farm Ranking tab | `apps/mengxi-dashboard/wind_farm_tab.py` |
+| Inner-Mongolia helpers (shared) | `apps/mengxi-dashboard/inner_mongolia_helpers.py` |
 | P&L Waterfall page | `libs/decision_models/adapters/app/dispatch_pnl_page.py` |
 | Daily Ops page | `libs/decision_models/adapters/app/daily_ops_page.py` |
 | Strategy Comparison page | `libs/decision_models/adapters/app/strategy_comparison_page.py` |
@@ -189,4 +205,31 @@ cd infra/terraform && terraform apply
 | Excel loader | `bess-marketdata-ingestion/providers/mengxi/load_excel_to_marketdata.py` |
 | Batch downloader | `bess-marketdata-ingestion/providers/mengxi/batch_downloader.py` |
 | Manual upload loader (shared) | `services/mengxi_ingestion/loader.py` |
-| Ingestion infra | `infra/terraform/mengxi-ingestion/` |
+| Ingestion infra (schedule) | `infra/terraform/trading-bess-mengxi/schedules.tf` |
+| **Fengxing nodal price client** | `services/fengxing/nodal_price.py` |
+| **Fengxing download script** | `scripts/download_shanxi_nodal.py` |
+
+---
+
+## Shanxi Nodal Prices (Fengxing API)
+
+**DB table:** `marketdata.md_shanxi_nodal_price_96`  
+**PK:** `(node_name, metric_time, time_order_96)`  
+**API endpoint:** `POST https://lingfeng-saas.tradingthink.cn/api/base/metrics/data/query`  
+**Auth:** `X-API-KEY-SECRET` header — key in `FENGXING_API_KEY` env var  
+**Metric:** `avg_node_price`  
+**Columns requested:** `market_name`, `node_name`, `metric_time`, `time_order_96`  
+  ⚠️ Do NOT include `avg_node_price` in `columns` — it is returned automatically as the metric and causes error 10000 "metric repeated" if listed again.
+
+**IP whitelist:** API requires the caller's public IP to be whitelisted. ECS tasks have dynamic IPs — run download locally.  
+**Local outgoing IP:** `138.113.14.246` (confirmed 2026-05-13)  
+**Download workflow (local → RDS):**
+```powershell
+# Step 1: download to CSV (fast, no DB round-trips)
+py scripts/download_shanxi_nodal.py --start 2026-01-01 --end 2026-05-12 --csv-only
+
+# Step 2: upload CSV to RDS
+py scripts/download_shanxi_nodal.py --from-csv shanxi_nodal_2026-01-01_2026-05-12.csv
+```
+
+**ECS env vars required:** `ANTHROPIC_API_KEY`, `FENGXING_API_KEY` — already wired in `main.tf` as of 2026-05-13.
