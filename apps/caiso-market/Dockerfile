@@ -1,0 +1,46 @@
+FROM python:3.11-slim
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    "streamlit>=1.32" \
+    "plotly==6.0.1" \
+    pandas \
+    "psycopg2-binary==2.9.10" \
+    "sqlalchemy>=2.0" \
+    numpy \
+    "python-dotenv==1.0.1" \
+    "anthropic>=0.40" \
+    "requests==2.32.3" \
+    openpyxl \
+    "apscheduler==3.10.4" \
+    "beautifulsoup4>=4.12" \
+    lxml \
+    "pypdf>=4.0" \
+    "python-docx>=1.1" \
+    "reportlab>=4.0" \
+    "playwright>=1.44" \
+    "playwright-stealth>=1.0"
+
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN playwright install --with-deps chromium
+
+COPY apps/caiso-market/            ./apps/caiso-market/
+COPY services/modo_energy/         ./services/modo_energy/
+COPY services/common/              ./services/common/
+COPY services/caiso_knowledge/     ./services/caiso_knowledge/
+COPY services/intl_market_common/  ./services/intl_market_common/
+
+ENV PYTHONPATH=/app
+
+EXPOSE 8512
+
+CMD ["streamlit", "run", "apps/caiso-market/app.py", \
+     "--server.port=8512", \
+     "--server.address=0.0.0.0", \
+     "--server.baseUrlPath=caiso-market", \
+     "--server.enableCORS=false", \
+     "--server.enableXsrfProtection=false", \
+     "--server.headless=true", \
+     "--server.fileWatcherType=none"]

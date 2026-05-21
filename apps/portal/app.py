@@ -312,6 +312,33 @@ _QUICK_ASK_SYSTEM = {
         "owner/operator benchmarking, and BESS options valuation and dispatch modelling. "
         "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
     ),
+    "au_analyst": (
+        "You are the AU Analyst — Australia NEM BESS market intelligence specialist. "
+        "You give concise, expert answers on: NEM spot prices, FCAS regulation and "
+        "contingency services, BESS dispatch strategy, MLFs, regional constraints "
+        "(QLD/NSW/VIC/SA), Capacity Investment Scheme, AEMO market notices, and "
+        "BESS revenue benchmarking. Keep answers under 150 words. No tool calls."
+    ),
+    "ercot_analyst": (
+        "You are the ERCOT Analyst — Texas BESS market intelligence specialist. "
+        "You give concise, expert answers on: ERCOT real-time and day-ahead LMPs, "
+        "ancillary services (Reg-Up/Down, RRS, ECRS, Non-Spin), BESS revenue stacks, "
+        "grid emergencies, nodal pricing, and BESS benchmarking. "
+        "Keep answers under 150 words. No tool calls."
+    ),
+    "pjm_analyst": (
+        "You are the PJM Analyst — US East BESS market intelligence specialist. "
+        "You give concise, expert answers on: PJM LMP nodal prices, capacity market "
+        "(RPM), regulation (RegD/RegA), synchronised reserve, BESS performance, "
+        "and ancillary service revenues. Keep answers under 150 words. No tool calls."
+    ),
+    "caiso_analyst": (
+        "You are the CAISO Analyst — California BESS market intelligence specialist. "
+        "You give concise, expert answers on: CAISO real-time and day-ahead LMPs, "
+        "ancillary services (Regulation, Spinning/Non-Spin), Resource Adequacy, "
+        "duck curve dynamics, BESS benchmarking, and storage policy. "
+        "Keep answers under 150 words. No tool calls."
+    ),
 }
 
 
@@ -342,6 +369,10 @@ _DEV_PORTS = {
     "bess-map":         "8503",
     "mengxi-dashboard": "8511",
     "gb-market":        "8508",
+    "au-market":        "8509",
+    "ercot-market":     "8510",
+    "pjm-market":       "8511",
+    "caiso-market":     "8512",
 }
 
 
@@ -733,6 +764,96 @@ with col_gb:
         agent_key="gb_analyst",
         available=True,
     )
+
+    st.markdown("### International Markets")
+    intl_cols = st.columns(2)
+    with intl_cols[0]:
+        _render_agent_section(
+            icon='🇦🇺',
+            name="Australia (NEM) Market Intelligence",
+            subtitle="AEMO · NEM spot · FCAS · AI Strategist",
+            description=(
+                "Real-time NEM BESS intelligence: spot prices by region (QLD/NSW/VIC/SA), "
+                "FCAS regulation and contingency markets, BESS leaderboard, and Strategist agent "
+                "grounded on Modo Energy data."
+            ),
+            capabilities=[
+                "NEM spot price by region (QLD/NSW/VIC/SA)",
+                "FCAS regulation and contingency clearing prices",
+                "BESS daily and monthly revenue index",
+                "Asset leaderboard: revenue by owner/operator",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: AEMO notices + Modo research",
+            ],
+            app_slug="au-market",
+            agent_key="au_analyst",
+            available=True,
+        )
+    with intl_cols[1]:
+        _render_agent_section(
+            icon='🇺🇸',
+            name="ERCOT (Texas) Market Intelligence",
+            subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
+            description=(
+                "Texas BESS intelligence: real-time and day-ahead LMPs, ancillary services "
+                "(Reg-Up/Down, RRS, ECRS), BESS revenue benchmarking, and Strategist agent."
+            ),
+            capabilities=[
+                "ERCOT RT and DA nodal LMP prices",
+                "Ancillary services: Reg-Up/Down, RRS, ECRS, Non-Spin",
+                "BESS daily and monthly revenue index",
+                "Asset leaderboard by owner/operator",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: ERCOT market notices + Modo research",
+            ],
+            app_slug="ercot-market",
+            agent_key="ercot_analyst",
+            available=True,
+        )
+
+    intl_cols2 = st.columns(2)
+    with intl_cols2[0]:
+        _render_agent_section(
+            icon='🇺🇸',
+            name="PJM (US East) Market Intelligence",
+            subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
+            description=(
+                "PJM BESS intelligence: nodal LMPs, capacity market, regulation (RegD/RegA), "
+                "synchronised reserve, BESS revenue benchmarking, and Strategist agent."
+            ),
+            capabilities=[
+                "PJM nodal LMP prices by zone",
+                "Ancillary services: Regulation (RegD/RegA), Sync Reserve",
+                "Capacity market (RPM) context",
+                "BESS daily and monthly revenue index",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: PJM market notices + Modo research",
+            ],
+            app_slug="pjm-market",
+            agent_key="pjm_analyst",
+            available=True,
+        )
+    with intl_cols2[1]:
+        _render_agent_section(
+            icon='🇺🇸',
+            name="CAISO (California) Market Intelligence",
+            subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
+            description=(
+                "California BESS intelligence: CAISO LMPs, ancillary services (Regulation, "
+                "Spinning/Non-Spin), duck curve dynamics, Resource Adequacy, and Strategist agent."
+            ),
+            capabilities=[
+                "CAISO RT and DA LMP prices",
+                "Ancillary services: Regulation, Spinning/Non-Spin reserve",
+                "Duck curve and solar curtailment context",
+                "BESS daily and monthly revenue index",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: CAISO market notices + Modo research",
+            ],
+            app_slug="caiso-market",
+            agent_key="caiso_analyst",
+            available=True,
+        )
 
 # --------------------------------------------------
 # FOOTER
