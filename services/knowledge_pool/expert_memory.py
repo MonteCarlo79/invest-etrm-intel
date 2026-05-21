@@ -251,6 +251,296 @@ def inject_expert_memory(insights: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# ── Per-turn insight extraction (Strategist chat) ────────────────────────────
+
+_TURN_EXTRACT_MODEL = "claude-haiku-4-5-20251001"
+
+_TURN_EXTRACT_SYSTEM = """\
+Extract durable expert insights from this China electricity market analyst conversation turn.
+
+Extract ONLY insights that are ALL of the following:
+1. Non-obvious — not trivially found by searching policy document titles
+2. Validated — the user confirmed, corrected, or accepted the agent's analysis
+3. Durable — likely to remain relevant for weeks or months (not today's single price)
+4. Domain-specific — about China electricity markets, BESS operations, regulation,
+   provincial dispatch mechanics, FM/ancillary markets, or investment economics
+
+DO NOT extract:
+- Ephemeral facts (today's price, a single day's result)
+- Process instructions or UI navigation steps
+- Questions without clear answers
+- Generic observations obvious from public market documentation
+
+For each insight, provide:
+- insight: 1-3 precise, actionable sentences
+- type: market_structure | price_driver | regulation | risk | opportunity |
+        dispatch_economics | investment | operations
+- province: province name in English (e.g. "Shanxi") or null if national/general
+- confidence: high | medium | low
+
+Respond ONLY with valid JSON:
+{"insights": [{"insight": "...", "type": "...", "province": "...", "confidence": "..."}]}
+
+If no durable insights are found, return {"insights": []}.
+"""
+
+
+def extract_spot_insights(user_msg: str, agent_reply: str, api_key: str) -> int:
+    """
+    Extract durable insights from a single Strategist conversation turn and store them.
+
+    Called after each agent response in the Strategist tab.
+    Returns number of insights stored (0 if none or on error — never raises).
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        resp = client.messages.create(
+            model=_TURN_EXTRACT_MODEL,
+            max_tokens=800,
+            system=_TURN_EXTRACT_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f"User: {user_msg}\n\nAgent: {agent_reply[:2000]}",
+            }],
+        )
+        raw = resp.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        insights = json.loads(raw).get("insights", [])
+    except Exception as exc:
+        logger.debug("Spot insight extraction failed: %s", exc)
+        return 0
+
+    if not insights:
+        return 0
+
+    stored = 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for item in insights:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO staging.kp_expert_insights
+                            (insight_text, insight_type, province, confidence,
+                             source_session, validated_at)
+                        VALUES (%s, %s, %s, %s, %s, NOW())
+                        """,
+                        (
+                            item.get("insight", "")[:1000],
+                            item.get("type", "other"),
+                            item.get("province") or None,
+                            item.get("confidence", "medium"),
+                            date.today().isoformat(),
+                        ),
+                    )
+                    stored += 1
+                except Exception as exc:
+                    logger.debug("Failed to store insight: %s", exc)
+        conn.commit()
+
+    return stored
+
+
+# ── KB document digest → expert insights ─────────────────────────────────────
+
+_DIGEST_MODEL = "claude-haiku-4-5-20251001"
+
+_DIGEST_SYSTEM = """\
+Extract 3-7 durable China electricity market insights from this synthesized document.
+
+Each insight must be ALL of the following:
+- Non-obvious: not trivially found by searching policy document titles
+- Specific: contains concrete facts, figures, mechanisms, or named entities
+- Actionable: useful for a BESS operator, trader, or investor making decisions
+- Durable: will remain relevant for weeks or months
+
+Focus on: market mechanics, BESS revenue drivers, provincial dispatch rules, regulatory
+developments, price patterns, operational strategies, ancillary service dynamics,
+capacity payment rules, curtailment patterns, settlement mechanisms, policy changes.
+
+DO NOT extract:
+- Ephemeral daily price readings or single-day events
+- Generic descriptions obvious from public market documentation
+- Questions without clear answers
+
+For each insight, provide:
+- insight: 1-3 precise, actionable sentences
+- type: market_structure | price_driver | regulation | risk | opportunity |
+        dispatch_economics | investment | operations
+- province: province name in English or null if national/general
+- confidence: high | medium | low
+
+Respond ONLY with valid JSON:
+{"insights": [{"insight": "...", "type": "...", "province": "...", "confidence": "..."}]}
+
+If no durable insights can be extracted, return {"insights": []}.
+"""
+
+
+def digest_spot_kb_docs(
+    api_key: str,
+    limit: int = 50,
+    doc_ids: Optional[list[int]] = None,
+) -> int:
+    """
+    Digest unprocessed synthesis docs into structured expert insights.
+
+    Reads from staging.kp_doc_synthesis + staging.kp_qa_pairs for docs whose
+    doc_id is not yet referenced in staging.kp_expert_insights.source_doc_id.
+
+    Args:
+        api_key: Anthropic API key
+        limit:   Max number of docs to process in this run
+        doc_ids: If provided, only process these specific doc IDs (for immediate
+                 post-upload digest)
+
+    Returns:
+        Total number of new insights stored.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Ensure source_doc_id column exists (idempotent)
+            cur.execute(
+                "ALTER TABLE staging.kp_expert_insights "
+                "ADD COLUMN IF NOT EXISTS source_doc_id INT"
+            )
+        conn.commit()
+
+        with conn.cursor() as cur:
+            if doc_ids:
+                cur.execute(
+                    """
+                    SELECT s.doc_id, s.summary_text, d.file_name, d.category
+                    FROM staging.kp_doc_synthesis s
+                    JOIN staging.spot_knowledge_docs d ON d.id = s.doc_id
+                    WHERE s.doc_id = ANY(%s)
+                      AND s.doc_id NOT IN (
+                          SELECT DISTINCT source_doc_id
+                          FROM staging.kp_expert_insights
+                          WHERE source_doc_id IS NOT NULL
+                      )
+                    """,
+                    (doc_ids,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT s.doc_id, s.summary_text, d.file_name, d.category
+                    FROM staging.kp_doc_synthesis s
+                    JOIN staging.spot_knowledge_docs d ON d.id = s.doc_id
+                    WHERE s.doc_id NOT IN (
+                        SELECT DISTINCT source_doc_id
+                        FROM staging.kp_expert_insights
+                        WHERE source_doc_id IS NOT NULL
+                    )
+                    ORDER BY s.doc_id DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+            rows = cur.fetchall()
+
+    if not rows:
+        logger.info("[kb_digest] No undigested synthesis docs found.")
+        return 0
+
+    logger.info("[kb_digest] Digesting %d docs…", len(rows))
+    client = anthropic.Anthropic(api_key=api_key)
+    total = 0
+    today = date.today().isoformat()
+
+    for doc_id, summary_text, file_name, category in rows:
+        # Fetch Q&A pairs for this doc
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT question, answer FROM staging.kp_qa_pairs "
+                    "WHERE doc_id = %s LIMIT 10",
+                    (doc_id,),
+                )
+                qa_pairs = cur.fetchall()
+
+        if not summary_text and not qa_pairs:
+            continue
+
+        # Build prompt
+        prompt_parts = [
+            f"Document: {file_name}  [category: {category}]",
+            f"\nSummary:\n{summary_text or '(no summary)'}",
+        ]
+        if qa_pairs:
+            prompt_parts.append("\nKey Q&A pairs:")
+            for q, a in qa_pairs:
+                prompt_parts.append(f"Q: {q}\nA: {a}")
+        prompt = "\n".join(prompt_parts)[:4000]
+
+        try:
+            resp = client.messages.create(
+                model=_DIGEST_MODEL,
+                max_tokens=800,
+                system=_DIGEST_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = resp.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```", 2)[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            insights = json.loads(raw).get("insights", [])
+        except Exception as exc:
+            logger.debug("[kb_digest] doc_id=%d extraction failed: %s", doc_id, exc)
+            continue
+
+        if not insights:
+            # Mark as processed (no insights) with a sentinel row to avoid re-processing
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO staging.kp_expert_insights
+                            (insight_text, insight_type, confidence, source_session,
+                             source_doc_id, active)
+                        VALUES ('(no insights extracted)', 'other', 'low', %s, %s, FALSE)
+                        """,
+                        (today, doc_id),
+                    )
+                conn.commit()
+            continue
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for item in insights:
+                    try:
+                        cur.execute(
+                            """
+                            INSERT INTO staging.kp_expert_insights
+                                (insight_text, insight_type, province, confidence,
+                                 source_session, source_doc_id, validated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                            """,
+                            (
+                                item.get("insight", "")[:1000],
+                                item.get("type", "other"),
+                                item.get("province") or None,
+                                item.get("confidence", "medium"),
+                                today,
+                                doc_id,
+                            ),
+                        )
+                        total += 1
+                    except Exception as exc:
+                        logger.debug("[kb_digest] insert failed: %s", exc)
+            conn.commit()
+
+        logger.info("[kb_digest] doc_id=%d → %d insights", doc_id, len(insights))
+
+    logger.info("[kb_digest] Done — %d total insights from %d docs", total, len(rows))
+    return total
+
+
 def get_memory_stats() -> dict:
     """Return summary statistics about the expert memory store."""
     with get_conn() as conn:

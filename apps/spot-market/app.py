@@ -999,7 +999,7 @@ def chart_heatmap(df: pd.DataFrame, metric: str) -> go.Figure:
     title_key = "da_heatmap_title" if metric == "da" else "rt_heatmap_title"
     fig = go.Figure(go.Heatmap(
         z=pivot.values,
-        x=pivot.columns.strftime("%m-%d"),
+        x=pivot.columns.strftime("%Y-%m-%d"),   # full date so Plotly shows correct year
         y=pivot.index.tolist(),
         colorscale="RdYlGn_r",
         colorbar=dict(title=_t("price_unit"), thickness=12),
@@ -1010,7 +1010,7 @@ def chart_heatmap(df: pd.DataFrame, metric: str) -> go.Figure:
         height=max(350, len(pivot) * 24),
         title=dict(text=_t(title_key), font=dict(size=13)),
         margin=dict(l=120, r=20, t=45, b=60),
-        xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=10), type="date"),
         yaxis=dict(tickfont=dict(size=11)),
     )
     return fig
@@ -1475,7 +1475,35 @@ with tab_spread:
 # ── Tab 3: Heatmap ────────────────────────────────────────────────────────────
 with tab_heatmap:
     hm_metric = st.radio(_t("metric_label"), ["DA", "RT"], horizontal=True)
-    fig_hm = chart_heatmap(df[df["province_en"].isin(selected_provs)], hm_metric.lower())
+
+    # Local date range — independent of the sidebar, defaults to last 90 days of df
+    _hm_df_base = df[df["province_en"].isin(selected_provs)]
+    _hm_min = _hm_df_base["report_date"].min() if not _hm_df_base.empty else d_start
+    _hm_max = _hm_df_base["report_date"].max() if not _hm_df_base.empty else d_end
+    _hm_default_start = max(_hm_min, _hm_max - pd.Timedelta(days=89))
+
+    _hm_col1, _hm_col2, _hm_col3 = st.columns([2, 2, 4])
+    with _hm_col1:
+        hm_start = st.date_input(
+            _t("start_date"), value=_hm_default_start.date() if hasattr(_hm_default_start, "date") else _hm_default_start,
+            min_value=_hm_min.date() if hasattr(_hm_min, "date") else _hm_min,
+            max_value=_hm_max.date() if hasattr(_hm_max, "date") else _hm_max,
+            key="hm_start",
+        )
+    with _hm_col2:
+        hm_end = st.date_input(
+            _t("end_date"), value=_hm_max.date() if hasattr(_hm_max, "date") else _hm_max,
+            min_value=_hm_min.date() if hasattr(_hm_min, "date") else _hm_min,
+            max_value=_hm_max.date() if hasattr(_hm_max, "date") else _hm_max,
+            key="hm_end",
+        )
+
+    _hm_df = _hm_df_base[
+        (_hm_df_base["report_date"] >= pd.Timestamp(hm_start)) &
+        (_hm_df_base["report_date"] <= pd.Timestamp(hm_end))
+    ]
+
+    fig_hm = chart_heatmap(_hm_df, hm_metric.lower())
     if fig_hm.data:
         st.plotly_chart(fig_hm, use_container_width=True)
     else:
@@ -2461,6 +2489,7 @@ with tab_fundamentals:
 with tab_agent:
     import os as _os
     import json as _json
+    import uuid as _uuid
     import anthropic as _anthropic
 
     # ── Memory infrastructure ──────────────────────────────────────────────────
@@ -2525,6 +2554,204 @@ with tab_agent:
 
     _ensure_spot_memory_table()
 
+    # ── Session persistence ────────────────────────────────────────────────────
+
+    def _ensure_spot_sessions_table():
+        conn = _conn()
+        with conn.cursor() as _cur:
+            _cur.execute("""
+                CREATE TABLE IF NOT EXISTS staging.spot_analyst_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    messages JSONB NOT NULL DEFAULT '[]',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+        conn.commit()
+
+    def _save_spot_session(session_id: str, display_messages: list):
+        try:
+            _ensure_spot_sessions_table()
+            conn = _conn()
+            with conn.cursor() as _cur:
+                _payload = _json.dumps(display_messages)
+                _cur.execute(
+                    "INSERT INTO staging.spot_analyst_sessions "
+                    "(session_id, messages, updated_at) VALUES (%s, %s, NOW()) "
+                    "ON CONFLICT (session_id) DO UPDATE "
+                    "SET messages=%s, updated_at=NOW()",
+                    (session_id, _payload, _payload),
+                )
+            conn.commit()
+        except Exception:
+            pass
+
+    def _load_spot_session(session_id: str) -> list:
+        try:
+            _ensure_spot_sessions_table()
+            conn = _conn()
+            with conn.cursor() as _cur:
+                _cur.execute(
+                    "SELECT messages FROM staging.spot_analyst_sessions "
+                    "WHERE session_id = %s",
+                    (session_id,),
+                )
+                row = _cur.fetchone()
+                return _json.loads(row[0]) if row else []
+        except Exception:
+            return []
+
+    def _list_recent_spot_sessions(limit: int = 3) -> pd.DataFrame:
+        try:
+            _ensure_spot_sessions_table()
+            return pd.read_sql(
+                "SELECT session_id, jsonb_array_length(messages) AS msg_count, "
+                "updated_at AT TIME ZONE 'Asia/Singapore' AS updated_at "
+                "FROM staging.spot_analyst_sessions "
+                "WHERE jsonb_array_length(messages) > 0 "
+                "ORDER BY updated_at DESC LIMIT %s",
+                _conn(), params=(limit,),
+            )
+        except Exception:
+            return pd.DataFrame()
+
+    def _display_from_session(session_messages: list) -> list:
+        """Reconstruct agent_display list from saved display messages."""
+        return session_messages if session_messages else [
+            {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
+        ]
+
+    def _api_messages_from_display(display: list) -> list:
+        """Reconstruct lean API message list (text only) from display messages for context."""
+        return [
+            {"role": m["role"], "content": m["content"]}
+            for m in display
+            if m.get("role") in ("user", "assistant") and m.get("content")
+        ]
+
+    # ── Knowledge gap interview helpers ────────────────────────────────────────
+
+    def _generate_spot_interview_questions() -> list[dict]:
+        """Audit kp_expert_insights pool, identify gaps, return up to 5 questions."""
+        try:
+            _summary = pd.read_sql(
+                "SELECT insight_type, confidence, COUNT(*) AS n "
+                "FROM staging.kp_expert_insights WHERE active = TRUE "
+                "GROUP BY insight_type, confidence ORDER BY n DESC",
+                _conn(),
+            )
+        except Exception:
+            _summary = pd.DataFrame()
+        try:
+            _sample = pd.read_sql(
+                "SELECT insight_text, insight_type "
+                "FROM staging.kp_expert_insights WHERE active = TRUE "
+                "ORDER BY id DESC LIMIT 15",
+                _conn(),
+            )
+        except Exception:
+            _sample = pd.DataFrame()
+
+        _ctx = ["Current expert insight pool:"]
+        if not _summary.empty:
+            for _, _r in _summary.iterrows():
+                _ctx.append(f"  {_r['insight_type']} ({_r['confidence']}): {int(_r['n'])} insights")
+        else:
+            _ctx.append("  (empty — knowledge gaps in all areas)")
+        _ctx.append("\nSample of already-known insights (do NOT duplicate):")
+        if not _sample.empty:
+            for _, _r in _sample.iterrows():
+                _ctx.append(f"  [{_r['insight_type']}] {str(_r['insight_text'])[:120]}")
+
+        _system = """\
+You are the China electricity market strategist agent auditing your own knowledge base.
+Identify the 5 most valuable areas where knowledge is THIN, UNCERTAIN, or MISSING.
+Generate one precise expert interview question per gap — something only a practitioner
+with hands-on China electricity market experience can answer from observation.
+
+Prioritise gaps in these areas (in order):
+1. Province-specific dispatch mechanics (curtailment triggers, peak-shaving rules, settlement quirks)
+2. FM/ancillary market nuances in Inner Mongolia, Shanxi, Shandong, or Guangdong
+3. BESS capacity payment rules or recent policy changes with concrete operational implications
+4. Counterintuitive DA/RT spread patterns the expert has personally observed
+5. Revenue stacking strategies that differentiate top-performing BESS assets from median
+
+Do NOT generate questions already answered in the sample insights above.
+Do NOT generate generic textbook questions about Chinese power markets.
+
+Respond ONLY with valid JSON:
+{"questions": [{"question": "...", "topic": "market_structure|regulation|operations|dispatch_economics|investment", "why_asking": "one sentence on what knowledge gap this fills"}]}
+"""
+        try:
+            _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+            if not _api_key:
+                return []
+            _haiku = _anthropic.Anthropic(api_key=_api_key)
+            _resp = _haiku.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=900,
+                system=_system,
+                messages=[{"role": "user", "content": "\n".join(_ctx)}],
+            )
+            _raw = _resp.content[0].text.strip()
+            if _raw.startswith("```"):
+                _raw = _raw.split("```", 2)[1]
+                if _raw.startswith("json"):
+                    _raw = _raw[4:]
+            return _json.loads(_raw).get("questions", [])[:5]
+        except Exception:
+            return []
+
+    def _answer_from_kb(question: str) -> str | None:
+        """Try to answer a gap question from the knowledge base. Returns text answer or None."""
+        try:
+            from services.knowledge_pool.knowledge_docs import search_reference_docs as _srd
+            _chunks = _srd(query=question, app="strategist", limit=5)
+            if not _chunks or len(_chunks) < 2:
+                return None
+            _combined = "\n\n".join(c.get("chunk_text", "") for c in _chunks[:5])
+            if len(_combined) < 150:
+                return None
+            _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+            if not _api_key:
+                return None
+            _haiku = _anthropic.Anthropic(api_key=_api_key)
+            _resp = _haiku.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                system=(
+                    "Answer the question using only the provided knowledge base excerpts. "
+                    "Be concise and specific (2-4 sentences). If the excerpts do not contain "
+                    "enough information to answer confidently, respond with exactly: INSUFFICIENT"
+                ),
+                messages=[{"role": "user", "content": (
+                    f"Question: {question}\n\nKB Excerpts:\n{_combined[:3000]}"
+                )}],
+            )
+            _answer = _resp.content[0].text.strip()
+            if "INSUFFICIENT" in _answer.upper() or len(_answer) < 40:
+                return None
+            return _answer
+        except Exception:
+            return None
+
+    def _store_spot_interview_answer(question: str, answer: str, topic: str,
+                                      confidence: str = "high") -> None:
+        """Store a user or KB-sourced expert interview answer as an insight."""
+        _text = f"[Expert interview] Q: {question[:150]} | A: {answer}"
+        try:
+            conn = _conn()
+            with conn.cursor() as _cur:
+                _cur.execute(
+                    "INSERT INTO staging.kp_expert_insights "
+                    "(insight_text, insight_type, confidence, source_session, validated_at) "
+                    "VALUES (%s, %s, %s, %s, NOW())",
+                    (_text[:1000], topic, confidence, date.today().isoformat()),
+                )
+            conn.commit()
+        except Exception as _e:
+            raise _e
+
     # ── Base system prompt ─────────────────────────────────────────────────────
     _SPOT_AGENT_BASE_SYSTEM = """\
 You are a specialist analyst for China's spot electricity market. \
@@ -2555,17 +2782,48 @@ and past conversation logs (use category='conversation_log' to search previous Q
 8. If asked to ingest a new PDF, confirm the file path with the user before calling run_pipeline.
 """
 
-    def _build_spot_system() -> str:
+    def _build_spot_system(query: str = "") -> str:
+        base = _SPOT_AGENT_BASE_SYSTEM
+        _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+
+        if query:
+            # Inject structured expert insights from kp_expert_insights (FTS-retrieved)
+            try:
+                from services.knowledge_pool.expert_memory import (
+                    get_relevant_insights as _get_insights,
+                    inject_expert_memory as _inject_memory,
+                )
+                _insights = _get_insights(query=query, limit=5)
+                _mem_block = _inject_memory(_insights)
+                if _mem_block:
+                    base += f"\n\n{_mem_block}"
+            except Exception:
+                pass
+
+            # Inject advanced retrieval context (HyDE + reranking) from knowledge pool
+            if _api_key:
+                try:
+                    from services.knowledge_pool.advanced_retrieval import retrieve_for_agent as _retrieve
+                    _kb_ctx = _retrieve(
+                        query=query, api_key=_api_key, app="shared",
+                        use_hyde=True, use_rerank=True, top_k=5,
+                    )
+                    if _kb_ctx:
+                        base += f"\n\n{_kb_ctx}"
+                except Exception:
+                    pass
+
+        # Inject flat analyst preferences from agent_memory
         mems = _load_spot_memories(_SPOT_MEM_KEY)
-        if mems.empty:
-            lang_suffix = "\n\n请用中文（简体）回复所有问题。" if st.session_state.get("lang_radio") == "中文" else "\n\nRespond in English."
-            return _SPOT_AGENT_BASE_SYSTEM + lang_suffix
-        mem_lines = "\n".join(
-            f"- [{r.category}] {r.subject}: {r.content}"
-            for r in mems.itertuples()
-        )
+        if not mems.empty:
+            mem_lines = "\n".join(
+                f"- [{r.category}] {r.subject}: {r.content}"
+                for r in mems.itertuples()
+            )
+            base += f"\n\n## Analyst preferences & domain knowledge\n{mem_lines}"
+
         lang_suffix = "\n\n请用中文（简体）回复所有问题。" if st.session_state.get("lang_radio") == "中文" else "\n\nRespond in English."
-        return _SPOT_AGENT_BASE_SYSTEM + f"\n\n## Analyst preferences & domain knowledge\n{mem_lines}" + lang_suffix
+        return base + lang_suffix
 
     def _extract_spot_memories(user_msg: str, agent_reply: str) -> list[dict]:
         """Use Haiku to extract memorable facts/preferences from a conversation turn."""
@@ -2803,6 +3061,8 @@ and past conversation logs (use category='conversation_log' to search previous Q
             messages = messages + [{"role": "user", "content": tool_results}]
 
     # ── Session state ──────────────────────────────────────────────────────────
+    if "spot_strat_session_id" not in st.session_state:
+        st.session_state["spot_strat_session_id"] = str(_uuid.uuid4())
     if "agent_messages" not in st.session_state:
         st.session_state["agent_messages"] = []
     if "agent_display" not in st.session_state:
@@ -2813,15 +3073,46 @@ and past conversation logs (use category='conversation_log' to search previous Q
         st.session_state["spot_mem_suggestions"] = []  # kept for back-compat, unused
 
     st.subheader(_t("agent_title"))
-    st.caption(_t("agent_caption"))
+    try:
+        from services.knowledge_pool.expert_memory import get_memory_stats as _get_mem_stats
+        _mstats = _get_mem_stats()
+        _n_ins = _mstats.get("total", 0) or 0
+        st.caption(
+            f"{_t('agent_caption')} · "
+            f"{_n_ins} expert insight{'s' if _n_ins != 1 else ''} accumulated"
+        )
+    except Exception:
+        st.caption(_t("agent_caption"))
 
-    # ── Clear button ───────────────────────────────────────────────────────────
+    # ── Clear button (generates new session UUID, old session preserved in DB) ─
     if st.button(_t("agent_clear"), key="agent_clear_btn"):
+        st.session_state["spot_strat_session_id"] = str(_uuid.uuid4())
         st.session_state["agent_messages"] = []
         st.session_state["agent_display"] = [
             {"role": "assistant", "content": _t("agent_welcome"), "tool": None}
         ]
         st.rerun()
+
+    # ── Resume previous session (only when current chat is empty) ─────────────
+    if not st.session_state["agent_messages"]:
+        _recent_sessions = _list_recent_spot_sessions()
+        if not _recent_sessions.empty:
+            with st.expander("Resume a previous conversation?", expanded=False):
+                for _, _srow in _recent_sessions.iterrows():
+                    _sess_label = (
+                        f"{_srow['updated_at'].strftime('%Y-%m-%d %H:%M')} — "
+                        f"{int(_srow['msg_count'])} messages"
+                    )
+                    if st.button(_sess_label, key=f"resume_spot_{_srow['session_id']}"):
+                        _loaded_display = _load_spot_session(_srow["session_id"])
+                        st.session_state["spot_strat_session_id"] = _srow["session_id"]
+                        st.session_state["agent_display"] = (
+                            _display_from_session(_loaded_display)
+                        )
+                        st.session_state["agent_messages"] = (
+                            _api_messages_from_display(_loaded_display)
+                        )
+                        st.rerun()
 
     # ── Render existing chat history ───────────────────────────────────────────
     for _msg in st.session_state["agent_display"]:
@@ -2858,7 +3149,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
                 try:
                     _reply, _new_msgs, _tool_events = _run_agent_turn(
                         st.session_state["agent_messages"],
-                        _build_spot_system(),
+                        _build_spot_system(_user_input),
                     )
                 except Exception as _exc:
                     _reply = _t("agent_error", err=str(_exc))
@@ -2890,6 +3181,24 @@ and past conversation logs (use category='conversation_log' to search previous Q
         except Exception:
             pass
 
+        # ── Extract structured expert insights into kp_expert_insights ─────────
+        try:
+            from services.knowledge_pool.expert_memory import extract_spot_insights as _ext_insights
+            _api_key_ins = _os.environ.get("ANTHROPIC_API_KEY", "")
+            if _api_key_ins:
+                _n_insights = _ext_insights(_user_input, _reply, _api_key_ins)
+        except Exception:
+            pass
+
+        # ── Persist session display to DB ──────────────────────────────────────
+        try:
+            _save_spot_session(
+                st.session_state["spot_strat_session_id"],
+                st.session_state["agent_display"],
+            )
+        except Exception:
+            pass
+
         try:
             from services.knowledge_pool.knowledge_docs import log_conversation_turn as _log_turn
             _log_turn(_user_input, _reply)
@@ -2912,6 +3221,141 @@ and past conversation logs (use category='conversation_log' to search previous Q
                     _delete_spot_memory(_row.id)
                     st.rerun()
 
+    # ── Knowledge Gap Interview ────────────────────────────────────────────────
+    with st.expander("🎓 Teach the Strategist — Knowledge Gap Interview", expanded=False):
+        for _ik in [("interview_questions", []), ("interview_idx", 0),
+                    ("interview_answers", 0), ("interview_kb_queried", False),
+                    ("interview_kb_results", {}), ("interview_pending_qs", [])]:
+            if _ik[0] not in st.session_state:
+                st.session_state[_ik[0]] = _ik[1]
+
+        _iq  = st.session_state["interview_questions"]
+        _ii  = st.session_state["interview_idx"]
+        _pqs = st.session_state["interview_pending_qs"]
+
+        # Stage 0: Generate questions
+        if not _iq:
+            st.markdown(
+                "The agent audits its knowledge base, identifies gaps in China electricity "
+                "market expertise, then searches the knowledge pool for answers before "
+                "asking you only the questions it couldn't resolve."
+            )
+            if st.button("Generate Knowledge Gap Questions", key="gen_spot_interview"):
+                with st.spinner("Auditing knowledge base and identifying gaps…"):
+                    _new_qs = _generate_spot_interview_questions()
+                st.session_state["interview_questions"]   = _new_qs
+                st.session_state["interview_idx"]         = 0
+                st.session_state["interview_answers"]     = 0
+                st.session_state["interview_kb_queried"]  = False
+                st.session_state["interview_kb_results"]  = {}
+                st.session_state["interview_pending_qs"]  = []
+                st.rerun()
+
+        # Stage 1: KB search first-pass
+        elif not st.session_state["interview_kb_queried"]:
+            st.markdown("**Generated knowledge gap questions:**")
+            for _qi, _qo in enumerate(_iq):
+                st.markdown(f"{_qi+1}. **[{_qo['topic']}]** {_qo['question']}")
+                st.caption(f"*Why: {_qo.get('why_asking', '')}*")
+            st.divider()
+            _col_kb, _col_skip = st.columns([2, 1])
+            with _col_kb:
+                if st.button("Search KB First", key="interview_kb_search", type="primary"):
+                    _kbres = {}
+                    with st.spinner("Searching knowledge pool for each gap question…"):
+                        for _qo in _iq:
+                            _ans = _answer_from_kb(_qo["question"])
+                            _kbres[_qo["question"]] = _ans
+                            if _ans:
+                                try:
+                                    _store_spot_interview_answer(
+                                        _qo["question"], _ans, _qo["topic"],
+                                        confidence="medium",
+                                    )
+                                except Exception:
+                                    pass
+                    st.session_state["interview_kb_results"]  = _kbres
+                    st.session_state["interview_pending_qs"]  = [
+                        _qo for _qo in _iq if not _kbres.get(_qo["question"])
+                    ]
+                    st.session_state["interview_kb_queried"]  = True
+                    st.session_state["interview_idx"]         = 0
+                    st.rerun()
+            with _col_skip:
+                if st.button("Answer Yourself (skip KB)", key="interview_skip_kb"):
+                    st.session_state["interview_pending_qs"]  = list(_iq)
+                    st.session_state["interview_kb_queried"]  = True
+                    st.session_state["interview_idx"]         = 0
+                    st.rerun()
+
+        # Stage 3: All questions done — summary
+        elif _ii >= len(_pqs):
+            _kbres = st.session_state["interview_kb_results"]
+            _n_kb  = sum(1 for v in _kbres.values() if v)
+            _n_usr = st.session_state["interview_answers"]
+            if _n_kb:
+                st.success(
+                    f"KB answered **{_n_kb}** gap question(s) — stored as medium-confidence insights. "
+                    f"You answered **{_n_usr}** additional question(s) as high-confidence insights."
+                )
+                with st.expander("View KB answers", expanded=False):
+                    for _qo in _iq:
+                        _ans = _kbres.get(_qo["question"])
+                        if _ans:
+                            st.markdown(f"**Q: {_qo['question']}**")
+                            st.markdown(_ans[:500] + ("…" if len(_ans) > 500 else ""))
+                            st.divider()
+            else:
+                st.success(
+                    f"Interview complete — {_n_usr} expert answer(s) stored as high-confidence insights."
+                )
+            if st.button("Start New Interview", key="new_spot_interview"):
+                for _k2 in ["interview_questions", "interview_pending_qs"]:
+                    st.session_state[_k2] = []
+                st.session_state["interview_kb_results"]  = {}
+                st.session_state["interview_idx"]         = 0
+                st.session_state["interview_answers"]     = 0
+                st.session_state["interview_kb_queried"]  = False
+                st.rerun()
+
+        # Stage 2: User Q&A for unanswered questions
+        else:
+            _q = _pqs[_ii]
+            _kbres = st.session_state["interview_kb_results"]
+            if _ii == 0 and _kbres:
+                _n_auto = sum(1 for v in _kbres.values() if v)
+                if _n_auto:
+                    st.info(
+                        f"KB answered {_n_auto} of {len(_iq)} questions. "
+                        f"Please answer the remaining {len(_pqs)}."
+                    )
+            st.progress(_ii / max(len(_pqs), 1), text=f"Question {_ii + 1} of {len(_pqs)}")
+            st.markdown(f"**[{_q['topic']}]** {_q['question']}")
+            st.caption(f"*Why this matters: {_q.get('why_asking', '')}*")
+            _ans = st.text_area(
+                "Your answer:", key=f"spot_interview_ans_{_ii}", height=120,
+                placeholder="Share what you know from hands-on experience…",
+            )
+            _col_sub, _col_ski = st.columns([2, 1])
+            with _col_sub:
+                if st.button("Submit Answer", key=f"spot_interview_submit_{_ii}", type="primary"):
+                    if _ans.strip():
+                        try:
+                            _store_spot_interview_answer(
+                                _q["question"], _ans.strip(), _q["topic"], confidence="high"
+                            )
+                            st.session_state["interview_idx"]     += 1
+                            st.session_state["interview_answers"] += 1
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Failed to store answer: {_e}")
+                    else:
+                        st.warning("Please enter an answer before submitting.")
+            with _col_ski:
+                if st.button("Skip", key=f"spot_interview_skip_{_ii}"):
+                    st.session_state["interview_idx"] += 1
+                    st.rerun()
+
     # ── Knowledge Base ─────────────────────────────────────────────────────────
     with st.expander(f"📚 {_t('kb_title')}", expanded=False):
         from services.knowledge_pool.knowledge_docs import (
@@ -2921,7 +3365,10 @@ and past conversation logs (use category='conversation_log' to search previous Q
             delete_knowledge_doc as _kb_delete,
             CATEGORY_LABELS as _KB_CATS,
         )
-        _kb_init()
+        try:
+            _kb_init()
+        except Exception as _kbi_exc:
+            st.warning(f"KB table init: {_kbi_exc}")
 
         st.caption(_t("kb_caption"))
 
@@ -2946,6 +3393,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
         if st.button(_t("kb_upload_btn"), key="kb_upload_btn", disabled=not _kb_files):
             _api_key = _os.environ.get("ANTHROPIC_API_KEY")
             _added, _dupes, _errors = 0, [], []
+            _new_doc_ids = []
             for _f in _kb_files:
                 _bytes = _f.read()
                 try:
@@ -2956,6 +3404,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
                     )
                     if _is_new:
                         _added += 1
+                        _new_doc_ids.append(_doc_id)
                     else:
                         _dupes.append(_f.name)
                 except Exception as _exc:
@@ -2963,6 +3412,15 @@ and past conversation logs (use category='conversation_log' to search previous Q
 
             if _added:
                 st.success(_t("kb_success", n=_added))
+                # Immediately digest newly uploaded docs into expert insights
+                if _api_key and _new_doc_ids:
+                    try:
+                        from services.knowledge_pool.expert_memory import digest_spot_kb_docs as _digest
+                        _n_ins = _digest(_api_key, doc_ids=_new_doc_ids)
+                        if _n_ins:
+                            st.toast(f"{_n_ins} insight{'s' if _n_ins != 1 else ''} extracted from uploaded document(s)")
+                    except Exception:
+                        pass
             for _d in _dupes:
                 st.info(_t("kb_duplicate", fname=_d))
             for _fn, _err in _errors:
@@ -2990,6 +3448,26 @@ and past conversation logs (use category='conversation_log' to search previous Q
                 if _dc4.button(_t("kb_delete"), key=f"kb_del_{_doc['id']}"):
                     _kb_delete(_doc['id'])
                     st.rerun()
+
+        # ── Batch KB digest ────────────────────────────────────────────────────
+        st.divider()
+        _col_dig1, _col_dig2 = st.columns([3, 1])
+        with _col_dig1:
+            st.caption(
+                "Extract expert insights from synthesized knowledge base documents "
+                "into the insight pool (processes up to 100 undigested docs per run)."
+            )
+        with _col_dig2:
+            if st.button("Digest KB → Insights", key="kb_digest_btn"):
+                with st.spinner("Extracting insights from synthesized documents…"):
+                    try:
+                        from services.knowledge_pool.expert_memory import digest_spot_kb_docs as _digest_batch
+                        _n_batch = _digest_batch(
+                            _os.environ.get("ANTHROPIC_API_KEY", ""), limit=100
+                        )
+                        st.success(f"{_n_batch} new insight{'s' if _n_batch != 1 else ''} extracted.")
+                    except Exception as _de:
+                        st.error(f"Digest failed: {_de}")
 
 
 # ── Tab 9 helpers — module-level so @st.cache_data can hash them stably ───────
@@ -3178,7 +3656,11 @@ with tab_mgmt:
 
     # ── PDF inventory + gap analysis ──────────────────────────────────────────
     inventory = _scan_pdf_inventory(sel_year)
-    coverage = _db_coverage_detail(sel_year)
+    try:
+        coverage = _db_coverage_detail(sel_year)
+    except Exception as _cov_exc:
+        st.warning(f"Could not load coverage data: {_cov_exc}")
+        coverage = {}
     existing_dates = set(coverage.keys())
 
     relevant_pdfs = [

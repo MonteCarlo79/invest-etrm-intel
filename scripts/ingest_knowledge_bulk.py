@@ -38,6 +38,7 @@ import os
 import sys
 import threading
 import time
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -175,6 +176,9 @@ def main() -> None:
                         help="Print files that would be ingested without doing anything")
     parser.add_argument("--workers", type=int, default=3,
                         help="Parallel worker threads (default: 3, max: 8)")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help="Per-file timeout in seconds (default: 120). "
+                             "Files exceeding this are marked [ERROR] and skipped.")
     parser.add_argument("--exclude", default=None,
                         help="Comma-separated path substrings to skip, "
                              "e.g. '各省现货价格及边界数据,交易数据'")
@@ -268,6 +272,7 @@ def main() -> None:
         sys.exit(0)
 
     # Discover files
+    print(f"Scanning {root} ...", flush=True)
     files = _collect_files(root, allowed_exts, exclude_patterns)
     if not files:
         print(f"No matching files found under: {root}")
@@ -296,25 +301,57 @@ def main() -> None:
     t0 = time.time()
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(
+        futures_map: dict = {}  # future -> path
+        for f in files:
+            fut = pool.submit(
                 _ingest_file, f, args.category,
                 _resolve_app(f, args.app),
                 api_key, False,
-            ): f
-            for f in files
-        }
+            )
+            futures_map[fut] = f
+
+        pending = set(futures_map)
+        running_since: dict = {}  # future -> time when it entered RUNNING state
         done = 0
-        for future in as_completed(futures):
-            done += 1
-            status, msg = future.result()
-            counts[status] = counts.get(status, 0) + 1
-            icon = {"added": "[ADDED]", "skip": "[SKIP ]", "error": "[ERROR]"}.get(status, status)
-            pct = done / len(files) * 100
-            print(f"{icon}  ({done:>4}/{len(files)}, {pct:4.0f}%)  {msg}")
-            # Record completed files so future runs skip them without a DB query
-            if status in ("added", "skip"):
-                _mark_checkpoint(futures[future])
+        while pending:
+            # Poll every 5s so we can detect per-file timeouts
+            finished, _ = concurrent.futures.wait(pending, timeout=5)
+
+            for future in finished:
+                pending.discard(future)
+                running_since.pop(future, None)
+                done += 1
+                path = futures_map[future]
+                try:
+                    status, msg = future.result()
+                except Exception as exc:
+                    status, msg = "error", f"{path.name}  {exc}"
+                counts[status] = counts.get(status, 0) + 1
+                icon = {"added": "[ADDED]", "skip": "[SKIP ]", "error": "[ERROR]"}.get(status, status)
+                pct = done / len(files) * 100
+                print(f"{icon}  ({done:>4}/{len(files)}, {pct:4.0f}%)  {msg}")
+                if status in ("added", "skip"):
+                    _mark_checkpoint(path)
+
+            # Evict futures that have been *actively executing* beyond the timeout.
+            # Futures still queued (not yet running) are never evicted — only those
+            # that transitioned to RUNNING state and haven't finished in time.
+            now = time.time()
+            for future in list(pending):
+                if future.running() and future not in running_since:
+                    running_since[future] = now  # first time we see it running
+            for future in list(pending):
+                if future in running_since and now - running_since[future] > args.timeout:
+                    pending.discard(future)
+                    running_since.pop(future, None)
+                    done += 1
+                    counts["error"] = counts.get("error", 0) + 1
+                    pct = done / len(files) * 100
+                    path = futures_map[future]
+                    print(
+                        f"[ERROR]  ({done:>4}/{len(files)}, {pct:4.0f}%)  "
+                        f"{path.name}  timed out after {args.timeout}s"
+                    )
 
     elapsed = time.time() - t0
     print(
