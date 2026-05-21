@@ -535,6 +535,66 @@ variable "desired_count_gb_market" {
   default     = 1
 }
 
+#################################################
+# AU Market Intelligence Dashboard
+#################################################
+variable "image_au_market" {
+  description = "Docker image for AU Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_au_market" {
+  description = "Desired task count for the au-market ECS service."
+  type        = number
+  default     = 0
+}
+
+#################################################
+# ERCOT Market Intelligence Dashboard
+#################################################
+variable "image_ercot_market" {
+  description = "Docker image for ERCOT Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_ercot_market" {
+  description = "Desired task count for the ercot-market ECS service."
+  type        = number
+  default     = 0
+}
+
+#################################################
+# PJM Market Intelligence Dashboard
+#################################################
+variable "image_pjm_market" {
+  description = "Docker image for PJM Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_pjm_market" {
+  description = "Desired task count for the pjm-market ECS service."
+  type        = number
+  default     = 0
+}
+
+#################################################
+# CAISO Market Intelligence Dashboard
+#################################################
+variable "image_caiso_market" {
+  description = "Docker image for CAISO Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_caiso_market" {
+  description = "Desired task count for the caiso-market ECS service."
+  type        = number
+  default     = 0
+}
+
 variable "modo_api_key" {
   description = "Modo Energy public API token"
   type        = string

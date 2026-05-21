@@ -1717,6 +1717,382 @@ resource "aws_ecs_service" "gb_market" {
   tags       = local.tags
 }
 
+# ---------------------------------------------------------------------------
+# AU Market (port 8509)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "au_market" {
+  name                 = "bess-au-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "au_market" {
+  name        = "${var.name}-au-market"
+  port        = 8509
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/au-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "au_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 46
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.au_market.arn
+  }
+  condition {
+    path_pattern { values = ["/au-market", "/au-market/", "/au-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "au_market" {
+  family                   = "${var.name}-au-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "au-market"
+    image     = var.image_au_market
+    essential = true
+    portMappings = [{ containerPort = 8509, protocol = "tcp" }]
+    command = ["streamlit", "run", "apps/au-market/app.py",
+               "--server.port=8509", "--server.address=0.0.0.0",
+               "--server.baseUrlPath=au-market", "--server.enableCORS=false",
+               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "au-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "au_market" {
+  name            = "${var.name}-au-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.au_market.arn
+  desired_count   = var.desired_count_au_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.au_market.arn
+    container_name   = "au-market"
+    container_port   = 8509
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# ERCOT Market (port 8510)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "ercot_market" {
+  name                 = "bess-ercot-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "ercot_market" {
+  name        = "${var.name}-ercot-market"
+  port        = 8510
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/ercot-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "ercot_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 47
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.ercot_market.arn
+  }
+  condition {
+    path_pattern { values = ["/ercot-market", "/ercot-market/", "/ercot-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "ercot_market" {
+  family                   = "${var.name}-ercot-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "ercot-market"
+    image     = var.image_ercot_market
+    essential = true
+    portMappings = [{ containerPort = 8510, protocol = "tcp" }]
+    command = ["streamlit", "run", "apps/ercot-market/app.py",
+               "--server.port=8510", "--server.address=0.0.0.0",
+               "--server.baseUrlPath=ercot-market", "--server.enableCORS=false",
+               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "ercot-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "ercot_market" {
+  name            = "${var.name}-ercot-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.ercot_market.arn
+  desired_count   = var.desired_count_ercot_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.ercot_market.arn
+    container_name   = "ercot-market"
+    container_port   = 8510
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# PJM Market (port 8511)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "pjm_market" {
+  name                 = "bess-pjm-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "pjm_market" {
+  name        = "${var.name}-pjm-market"
+  port        = 8511
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/pjm-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "pjm_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 48
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.pjm_market.arn
+  }
+  condition {
+    path_pattern { values = ["/pjm-market", "/pjm-market/", "/pjm-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "pjm_market" {
+  family                   = "${var.name}-pjm-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "pjm-market"
+    image     = var.image_pjm_market
+    essential = true
+    portMappings = [{ containerPort = 8511, protocol = "tcp" }]
+    command = ["streamlit", "run", "apps/pjm-market/app.py",
+               "--server.port=8511", "--server.address=0.0.0.0",
+               "--server.baseUrlPath=pjm-market", "--server.enableCORS=false",
+               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "pjm-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "pjm_market" {
+  name            = "${var.name}-pjm-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.pjm_market.arn
+  desired_count   = var.desired_count_pjm_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.pjm_market.arn
+    container_name   = "pjm-market"
+    container_port   = 8511
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# CAISO Market (port 8512)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "caiso_market" {
+  name                 = "bess-caiso-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "caiso_market" {
+  name        = "${var.name}-caiso-market"
+  port        = 8512
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/caiso-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "caiso_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 49
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.caiso_market.arn
+  }
+  condition {
+    path_pattern { values = ["/caiso-market", "/caiso-market/", "/caiso-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "caiso_market" {
+  family                   = "${var.name}-caiso-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "caiso-market"
+    image     = var.image_caiso_market
+    essential = true
+    portMappings = [{ containerPort = 8512, protocol = "tcp" }]
+    command = ["streamlit", "run", "apps/caiso-market/app.py",
+               "--server.port=8512", "--server.address=0.0.0.0",
+               "--server.baseUrlPath=caiso-market", "--server.enableCORS=false",
+               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "caiso-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "caiso_market" {
+  name            = "${var.name}-caiso-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.caiso_market.arn
+  desired_count   = var.desired_count_caiso_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.caiso_market.arn
+    container_name   = "caiso-market"
+    container_port   = 8512
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
 data "aws_iam_policy_document" "eventbridge_assume" {
   statement {
     actions = ["sts:AssumeRole"]
