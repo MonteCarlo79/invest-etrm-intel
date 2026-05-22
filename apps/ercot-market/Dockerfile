@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     "streamlit>=1.32" \
     "plotly==6.0.1" \
     pandas \
@@ -17,7 +17,9 @@ RUN pip install --no-cache-dir \
     lxml \
     "pypdf>=4.0" \
     "python-docx>=1.1" \
-    "reportlab>=4.0" \
+    "reportlab>=4.0"
+
+RUN pip install --no-cache-dir --timeout 600 --retries 10 \
     "playwright>=1.44" \
     "playwright-stealth>=1.0"
 
