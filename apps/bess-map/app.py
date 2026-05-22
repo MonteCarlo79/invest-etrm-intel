@@ -553,15 +553,24 @@ def load_dispatch_day(_eng_key, province: str, duration_h: float, day: str):
                        parse_dates=["datetime"])
 
 @st.cache_data(ttl=3600)
-def load_avg_economics(_eng_key, province: str, duration_h: float):
+def load_avg_economics(_eng_key, province: str, duration_h: float, model: str = "ols_rt_time_v1"):
+    # Theoretical is model-agnostic; realized/capture are scoped to the selected model.
     sql = sql_text("""
-        SELECT AVG(theoretical_profit_per_mwh_day) AS theo_per_mwh_day,
-               AVG(NULLIF(realized_profit_per_mwh_day, 0))    AS real_per_mwh_day,
-               AVG(capture_rate)                   AS capture_rate
-        FROM marketdata.bess_capture_daily
-        WHERE province = :p AND ABS(duration_h - :d) < 0.01
+        SELECT t.theo_per_mwh_day, r.real_per_mwh_day, r.capture_rate
+        FROM (
+            SELECT AVG(theoretical_profit_per_mwh_day) AS theo_per_mwh_day
+            FROM marketdata.bess_capture_daily
+            WHERE province = :p AND ABS(duration_h - :d) < 0.01
+        ) t
+        CROSS JOIN (
+            SELECT AVG(realized_profit_per_mwh_day)              AS real_per_mwh_day,
+                   AVG(NULLIF(capture_rate, 'NaN'::double precision)) AS capture_rate
+            FROM marketdata.bess_capture_daily
+            WHERE province = :p AND ABS(duration_h - :d) < 0.01
+              AND model = :model
+        ) r
     """)
-    row = pd.read_sql(sql, _eng(), params={"p": province, "d": duration_h}).iloc[0]
+    row = pd.read_sql(sql, _eng(), params={"p": province, "d": duration_h, "model": model}).iloc[0]
     return row
 
 @st.cache_data(ttl=3600)
@@ -578,11 +587,11 @@ def load_avg_cycles(_eng_key, start: str, end: str):
         SELECT province, duration_h,
                ROUND(AVG(daily_discharge / (power_mw * duration_h))::numeric, 2) AS avg_cycles
         FROM (
-            SELECT province, ts::date AS day, duration_h, power_mw,
+            SELECT province, datetime::date AS day, duration_h, power_mw,
                    SUM(GREATEST(dispatch_grid_mw, 0)) AS daily_discharge
-            FROM marketdata.bess_dispatch_hourly
-            WHERE ts BETWEEN :start AND :end
-            GROUP BY province, ts::date, duration_h, power_mw
+            FROM marketdata.spot_dispatch_hourly_theoretical
+            WHERE datetime BETWEEN :start AND :end
+            GROUP BY province, datetime::date, duration_h, power_mw
         ) t
         GROUP BY province, duration_h
         ORDER BY province, duration_h
@@ -593,17 +602,24 @@ def load_avg_cycles(_eng_key, start: str, end: str):
 def load_coverage(_eng_key):
     sql = sql_text("""
         SELECT h.province,
-               MAX(h.datetime)::date AS last_hourly,
-               MAX(c.date)           AS last_capture,
+               h.last_hourly,
+               c.last_capture,
                f.last_fund
-        FROM marketdata.spot_prices_hourly h
-        LEFT JOIN marketdata.bess_capture_daily c USING (province)
+        FROM (
+            SELECT province, MAX(datetime)::date AS last_hourly
+            FROM marketdata.spot_prices_hourly
+            GROUP BY province
+        ) h
+        LEFT JOIN (
+            SELECT province, MAX(date) AS last_capture
+            FROM marketdata.bess_capture_daily
+            GROUP BY province
+        ) c USING (province)
         LEFT JOIN (
             SELECT province, MAX(datetime)::date AS last_fund
             FROM marketdata.spot_fundamentals_hourly
             GROUP BY province
         ) f USING (province)
-        GROUP BY h.province, f.last_fund
         ORDER BY h.province
     """)
     return pd.read_sql(sql, _eng(), parse_dates=["last_hourly", "last_capture", "last_fund"])
@@ -1224,7 +1240,7 @@ with tab_irr:
         irr_dur_h = 2.0 if irr_dur == "2h" else 4.0
 
         # Revenue basis from DB — respect forecast_method selection
-        econ = load_avg_economics(_ENG_KEY, irr_prov, irr_dur_h)
+        econ = load_avg_economics(_ENG_KEY, irr_prov, irr_dur_h, sel_model)
         theo_day  = float(econ["theo_per_mwh_day"] or 0)
         real_day_ = float(econ["real_per_mwh_day"]) if pd.notna(econ["real_per_mwh_day"]) else 0.0
         cap_rate  = float(econ["capture_rate"]) if pd.notna(econ["capture_rate"]) else 0.0
@@ -1748,7 +1764,7 @@ with tab_agent:
 
         elif name == "get_irr_estimate":
             econ = load_avg_economics(_ENG_KEY, inp["province"],
-                                      float(inp.get("duration_h", 4.0)))
+                                      float(inp.get("duration_h", 4.0)), sel_model)
             td = float(econ["theo_per_mwh_day"] or 0)
             rd = float(econ["real_per_mwh_day"]) if pd.notna(econ["real_per_mwh_day"]) else 0.0
             rev_day = rd if inp.get("use_realised") else td

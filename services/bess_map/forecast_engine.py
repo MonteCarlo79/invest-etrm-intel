@@ -527,7 +527,7 @@ def forecast_ols_fundamentals_v1(
         ])
         lag7_pred = np.where(np.isnan(lag7_pred), np.nanmean(lag7_train[valid]), lag7_pred)
 
-        fund_pred = day_df[_FUND_COLS].fillna(method="ffill").fillna(method="bfill").to_numpy(dtype=float)
+        fund_pred = day_df[_FUND_COLS].ffill().bfill().to_numpy(dtype=float)
         for col_i in range(fund_pred.shape[1]):
             col_mean = np.nanmean(fund_train[valid, col_i]) if valid.sum() > 0 else 0.0
             fund_pred[:, col_i] = np.where(np.isnan(fund_pred[:, col_i]), col_mean, fund_pred[:, col_i])
