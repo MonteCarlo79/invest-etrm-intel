@@ -5,8 +5,8 @@
 **URL:** `https://www.pjh-etrm.ai/mengxi-dashboard`  
 **Port:** 8505 (ECS/production); 8511 for local `streamlit run` only  
 **ECR repo:** `bess-mengxi-dashboard`  
-**Current image:** `bess-mengxi-dashboard:v7` (deployed 2026-05-13 23:17 SGT, digest sha256:c22f5a96e2a4)  
-**Next image:** `bess-mengxi-dashboard:v8` (8-tab province-level restructuring — pending build & deploy)  
+**Current image:** `bess-mengxi-dashboard:v8` (deployed 2026-05-18, commit 4fa630f + fixes in 993d639)  
+**Next image:** pending — code is clean on branch `cost-optimisation`, rebuild with `--no-cache` when ready  
 **Ingestion image:** `bess-mengxi-ingestion:v19` (deployed 2026-05-08)
 
 ---
@@ -63,7 +63,7 @@ Actual Cleared        ← 实际充放曲线 × nodal_price (ops Excel)
 | Our BESS Portfolio → Strategy Comparison | Multi-day YTD strategy analysis + report export | `reports.bess_asset_daily_attribution` |
 | Options Pricing | Kirk/Margrabe spread call strip valuation | `canon.nodal_rt_price_15min` |
 | Wind Farm Ranking | All wind farm generation + revenue ranking (inline query) | `marketdata.md_id_cleared_energy` |
-| Wind Farm Trading | Placeholder — future wind dispatch management | — |
+| Wind Farm Trading | Placeholder — future wind dispatch management (stub: st.info) | — |
 | Data Management | Table freshness, coverage, pipeline logs, manual upload, Shanxi nodal download | `marketdata.data_quality_status`, `marketdata.md_load_log`, `marketdata.md_shanxi_nodal_price_96` |
 | Trader | Claude agent (sonnet-4-6) for P&L attribution + dispatch analysis + KB search + GB benchmark | `reports.bess_asset_daily_attribution`, `marketdata.ops_bess_dispatch_15min`, `marketdata.agent_memory`, `staging.spot_knowledge_docs` |
 
