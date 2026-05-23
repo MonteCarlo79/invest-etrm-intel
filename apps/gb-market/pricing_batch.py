@@ -157,6 +157,75 @@ def compute_options_value(
     return strip_value * q_max_mwh  # £ total
 
 
+def compute_options_value_sp(
+    power_mw: float,
+    duration_h: float,
+    roundtrip_eff: float,
+    sp_history_df: pd.DataFrame,
+    n_days_remaining: int = 365,
+    corr: float = 0.85,
+    om_cost_gbp_per_mwh: float = 0.0,
+) -> float:
+    """Kirk/Margrabe spread call strip calibrated on system price daily high/low windows.
+
+    Replaces EPEX DA peak/offpeak calibration. The relevant spread for a battery is the
+    daily gap between the best discharge window and the cheapest charge window, each sized
+    to match the battery's energy capacity:
+
+      n_sps = max(2, round(duration_h / 0.5))   e.g. 4 for 2h, 2 for 1h, 8 for 4h
+      sp_high: avg of top n_sps half-hourly system prices each day  → forward discharge price
+      sp_low:  avg of bottom n_sps half-hourly system prices each day → forward charge price
+
+    sp_history_df must have columns: date, settlement_period, system_price.
+    Returns total strip value £ for the asset (not per MW).
+    """
+    if sp_history_df is None or sp_history_df.empty or len(sp_history_df) < 48:
+        return 0.0
+
+    n_sps = max(2, round(duration_h / 0.5))
+
+    def _day_stats(prices: list) -> "pd.Series":
+        if len(prices) < n_sps:
+            return pd.Series({"sp_high": float("nan"), "sp_low": float("nan")})
+        arr = sorted(prices)
+        return pd.Series({
+            "sp_high": float(np.mean(arr[-n_sps:])),
+            "sp_low":  float(np.mean(arr[:n_sps])),
+        })
+
+    daily = (
+        sp_history_df
+        .groupby("date")["system_price"]
+        .apply(list)
+        .apply(_day_stats)
+        .dropna()
+    )
+
+    if len(daily) < 5:
+        return 0.0
+
+    F1     = float(daily["sp_high"].mean())
+    low_fwd = float(daily["sp_low"].mean())
+    eta    = roundtrip_eff
+    F2_eff = low_fwd / eta + om_cost_gbp_per_mwh
+
+    if F1 <= 0.0 or F2_eff <= 0.0:
+        return 0.0
+
+    high_vol = _ann_vol(daily["sp_high"])
+    low_vol  = _ann_vol(daily["sp_low"])
+    sigma_s  = math.sqrt(
+        max(0.0, high_vol ** 2 - 2 * corr * high_vol * low_vol + low_vol ** 2)
+    )
+
+    q_max_mwh = power_mw * duration_h
+    strip_value = sum(
+        _margrabe_call(F1, F2_eff, sigma_s, i / 252.0)
+        for i in range(1, n_days_remaining + 1)
+    )
+    return strip_value * q_max_mwh
+
+
 # ---------------------------------------------------------------------------
 # Perfect-foresight dispatch LP
 # ---------------------------------------------------------------------------
@@ -502,7 +571,7 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
         logger.info("Pricing batch: no assets found for %s", batch_date)
         return {"processed": 0, "errors": [], "date": str(batch_date)}
 
-    # Load EPEX DA prices for calibration (60-day history)
+    # Load EPEX DA prices for DA PF reference (60-day history)
     epex_cutoff = (batch_date - timedelta(days=60)).isoformat()
     try:
         epex_hist = pd.read_sql(
@@ -517,6 +586,20 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
     except Exception as exc:
         logger.error("Pricing batch: EPEX history query failed: %s", exc)
         return {"processed": 0, "errors": [str(exc)], "date": str(batch_date)}
+
+    # Load system price history for options calibration (90-day window)
+    sp_hist: pd.DataFrame = pd.DataFrame()
+    try:
+        sp_hist = pd.read_sql(
+            "SELECT date, settlement_period, system_price "
+            "FROM intl_market.gb_system_price "
+            "WHERE date BETWEEN %s AND %s "
+            "ORDER BY date, settlement_period",
+            conn,
+            params=(ref_start, ref_end),
+        )
+    except Exception as exc:
+        logger.warning("Pricing batch: SP history query failed: %s", exc)
 
     # Target day's EPEX DA prices (48 SPs) — used for options calibration + DA PF reference
     target_epex_48: list[float] = []
@@ -551,12 +634,12 @@ def run_pricing_batch(batch_date: date | None, conn) -> dict[str, Any]:
         eff        = 0.85  # standard roundtrip efficiency
 
         try:
-            # 1. Options value (1-cycle base, calibrated on EPEX DA peak/offpeak)
-            options_val_base = compute_options_value(
+            # 1. Options value (1-cycle base, calibrated on system price daily high/low)
+            options_val_base = compute_options_value_sp(
                 power_mw=power_mw,
                 duration_h=duration_h,
                 roundtrip_eff=eff,
-                epex_history_df=epex_hist,
+                sp_history_df=sp_hist,
                 n_days_remaining=365,
             )
             options_per_mw_base = options_val_base / power_mw if power_mw > 0 else 0.0

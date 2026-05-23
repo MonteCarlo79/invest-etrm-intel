@@ -117,6 +117,21 @@ def _ensure_ingestion_log_table():
     _conn().commit()
 
 
+def _ensure_pricing_schema():
+    """Idempotent migration: add SP-pricing columns introduced in v66."""
+    cur = _conn().cursor()
+    for col_sql in [
+        "pf_actual_sp_pnl_gbp     NUMERIC",
+        "pf_actual_sp_dispatch_48 JSONB",
+        "actual_sp_48             JSONB",
+    ]:
+        cur.execute(
+            f"ALTER TABLE intl_market.gb_pricing_results "
+            f"ADD COLUMN IF NOT EXISTS {col_sql}"
+        )
+    _conn().commit()
+
+
 def _ensure_knowledge_table():
     cur = _conn().cursor()
     cur.execute("""
@@ -2093,6 +2108,11 @@ def _table_counts() -> pd.DataFrame:
 
 _start_scheduler()  # no-op after first call (cache_resource)
 print("[INIT] done _start_scheduler", flush=True)
+try:
+    _ensure_pricing_schema()
+    print("[INIT] done _ensure_pricing_schema", flush=True)
+except Exception as _e:
+    print(f"[INIT] _ensure_pricing_schema failed: {_e}", flush=True)
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -2555,9 +2575,9 @@ with tab_bess:
 with tab_pricing:
     st.header("Pricing Models — GB BESS")
     st.caption(
-        "Options: Kirk/Margrabe spread call strip (365-day horizon) · "
-        "PF Actual: perfect-foresight dispatch on EPEX DA prices · "
-        "PF Forecast: PF on OLS+fundamentals price forecast · "
+        "Options: Kirk/Margrabe spread call strip (365-day horizon) calibrated on system price "
+        "daily high/low windows sized to battery duration · "
+        "PF SP: perfect-foresight dispatch on half-hourly system prices (intraday proxy) · "
         "Batch runs nightly at 04:30 SGT"
     )
 

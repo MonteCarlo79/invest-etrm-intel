@@ -18,7 +18,8 @@ RUN pip install --no-cache-dir \
     python-docx \
     xlrd \
     openpyxl \
-    "statsmodels>=0.14"
+    "statsmodels>=0.14" \
+    "beautifulsoup4>=4.12"
 
 # Install CJK font AFTER matplotlib so the font cache is rebuilt with it present.
 # fonts-noto-cjk provides "Noto Sans CJK SC" used by chart_geo_map for Chinese titles.
@@ -34,7 +35,7 @@ COPY services/spot_mcp/                 ./services/spot_mcp/
 COPY services/knowledge_pool/           ./services/knowledge_pool/
 COPY services/market_fundamentals/      ./services/market_fundamentals/
 COPY apps/spot-watcher/                 ./apps/spot-watcher/
-COPY data/market-fundamentals/          ./data/market-fundamentals/
+# data/market-fundamentals/ omitted — ECS reads from S3, not local folder
 
 ENV PYTHONPATH=/app
 

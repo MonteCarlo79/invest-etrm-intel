@@ -21,7 +21,7 @@ $CmdArg   = '/c "' + $BatFile + '"'
 
 $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $CmdArg -WorkingDirectory $RepoRoot
 $Trigger  = New-ScheduledTaskTrigger -Daily -At "04:00"
-$Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable -RunOnlyIfNetworkAvailable
+$Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 16) -StartWhenAvailable -RunOnlyIfNetworkAvailable
 
 Unregister-ScheduledTask -TaskName "BESS-LingFeng-DailyCollection" -Confirm:$false -ErrorAction SilentlyContinue
 Register-ScheduledTask -TaskName "BESS-LingFeng-DailyCollection" -Action $Action -Trigger $Trigger -Settings $Settings -RunLevel Highest | Out-Null

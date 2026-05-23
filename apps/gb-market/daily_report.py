@@ -480,11 +480,13 @@ def _build_pdf(buf: BytesIO, report_date: date,
     # ── Section 1: Top 10 BESS performers ────────────────────────────────────
     story.append(Paragraph("1. Top 10 BESS Performers", h1_s))
     story.append(Paragraph(
-        f"Total revenue by asset for {report_date.strftime('%d %b %Y')}, "
-        "ranked by total £ across all settlement periods (excl. test data). "
+        f"Top 10 assets by total revenue for {report_date.strftime('%d %b %Y')}. "
+        "All revenue columns are in £/MWh installed/yr "
+        "(today's £ ÷ energy capacity MWh × 365) — a capacity-normalised yield metric "
+        "that makes assets of different sizes directly comparable. "
         "Dur. = storage C-rate (1C = 1 h, 0.5C = 2 h, 0.25C = 4 h). "
         "Ancillary = DC/DM/DR products; Reserve = balancing reserve products; "
-        "Other = CM, Triads, Imbalance, SOC, etc. Total = sum of all columns.",
+        "Other = CM, Triads, Imbalance, SOC, etc.",
         caption_s,
     ))
 
@@ -493,15 +495,28 @@ def _build_pdf(buf: BytesIO, report_date: date,
     else:
         # 12 columns; widths sum to 17.0 cm (A4 portrait, 2 cm margins each side)
         headers = ["#", "Asset", "Owner", "Operator", "MW", "Dur.",
-                   "Total £", "Wholesale", "Ancillary", "BM", "Reserve", "Other"]
+                   "Total", "Wholesale", "Ancillary", "BM", "Reserve", "Other"]
         col_w = [w * cm for w in [0.5, 3.3, 2.0, 1.8, 0.8, 1.3,
                                    1.5, 1.4, 1.3, 1.2, 1.2, 0.7]]
         # Ensure sorted by total_revenue descending (belt-and-suspenders over SQL ORDER BY)
         performers = performers.sort_values("total_revenue", ascending=False).reset_index(drop=True)
+
+        def _per_mwh_yr(raw_gbp, power_mw, duration_h) -> str:
+            """Convert daily raw £ to annualised £/MWh installed."""
+            try:
+                e_cap = float(power_mw) * float(duration_h)
+                if e_cap <= 0:
+                    return "—"
+                return _fmt(float(raw_gbp) / e_cap * 365, 0)
+            except (TypeError, ValueError):
+                return "—"
+
         rows = []
         extra_s = []
         for rank, (_, row) in enumerate(performers.iterrows(), 1):
             asset = str(row.get("asset", ""))
+            pw    = row.get("rated_power_mw")
+            dh    = row.get("duration_h")
             # Colour rank cell green/red if rank changed vs prior day
             prev_rank = (prev_rankings or {}).get(asset)
             tbl_row = rank  # header is row 0; data rows start at 1
@@ -515,16 +530,21 @@ def _build_pdf(buf: BytesIO, report_date: date,
                 Paragraph(asset, cell_s),
                 Paragraph(str(row.get("owner") or ""), cell_s),
                 Paragraph(str(row.get("operator") or ""), cell_s),
-                _fmt(row.get("rated_power_mw"), 0),
-                _c_rate(row.get("duration_h")),
-                _fmt(row.get("total_revenue"), 0, "£"),
-                _fmt(row.get("wholesale"), 0, "£"),
-                _fmt(row.get("ancillary"), 0, "£"),
-                _fmt(row.get("bm"), 0, "£"),
-                _fmt(row.get("reserve"), 0, "£"),
-                _fmt(row.get("other"), 0, "£"),
+                _fmt(pw, 0),
+                _c_rate(dh),
+                _per_mwh_yr(row.get("total_revenue"), pw, dh),
+                _per_mwh_yr(row.get("wholesale"),     pw, dh),
+                _per_mwh_yr(row.get("ancillary"),     pw, dh),
+                _per_mwh_yr(row.get("bm"),            pw, dh),
+                _per_mwh_yr(row.get("reserve"),       pw, dh),
+                _per_mwh_yr(row.get("other"),         pw, dh),
             ])
         story.append(_make_table(headers, rows, col_w, extra_styles=extra_s))
+        story.append(Paragraph(
+            "Revenue columns (Total, Wholesale, Ancillary, BM, Reserve, Other): "
+            "£/MWh installed/yr — today's gross revenue ÷ energy capacity (MWh) × 365.",
+            caption_s,
+        ))
 
     story.append(Spacer(1, 0.4 * cm))
 

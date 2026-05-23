@@ -284,72 +284,6 @@ def _load_quality_status(days: int = 60) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_gb_daily_index(start_date: str, end_date: str) -> pd.DataFrame:
-    try:
-        from sqlalchemy import text as _sql_text
-        return pd.read_sql(
-            _sql_text("""
-                SELECT settlement_date, duration, market,
-                       revenue_permw, revenue_permwh
-                FROM intl_market.gb_bess_daily_index
-                WHERE settlement_date >= :start AND settlement_date <= :end
-                ORDER BY settlement_date, market
-            """),
-            _get_sqlalchemy_engine(),
-            params={"start": start_date, "end": end_date},
-            parse_dates=["settlement_date"],
-        )
-    except Exception:
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_gb_monthly_index(month_from: str, month_to: str) -> pd.DataFrame:
-    try:
-        from sqlalchemy import text as _sql_text
-        return pd.read_sql(
-            _sql_text("""
-                SELECT month, duration, market,
-                       revenue_permw, revenue_permwh
-                FROM intl_market.gb_bess_monthly_index
-                WHERE month >= :mfrom AND month <= :mto
-                ORDER BY month, market
-            """),
-            _get_sqlalchemy_engine(),
-            params={"mfrom": month_from, "mto": month_to},
-        )
-    except Exception:
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_gb_leaderboard(start_date: str, end_date: str, market: str | None = None) -> pd.DataFrame:
-    try:
-        from sqlalchemy import text as _sql_text
-        where = "settlement_date >= :start AND settlement_date <= :end"
-        params: dict = {"start": start_date, "end": end_date}
-        if market:
-            where += " AND market = :market"
-            params["market"] = market
-        return pd.read_sql(
-            _sql_text(f"""
-                SELECT asset, market,
-                       SUM(revenue)    AS total_revenue,
-                       AVG(revspermw)  AS avg_revspermw,
-                       COUNT(DISTINCT settlement_date) AS trading_days
-                FROM intl_market.gb_bess_leaderboard
-                WHERE {where}
-                GROUP BY asset, market
-                ORDER BY avg_revspermw DESC
-                LIMIT 50
-            """),
-            _get_sqlalchemy_engine(),
-            params=params,
-        )
-    except Exception:
-        return pd.DataFrame()
-
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _load_load_log(n: int = 50) -> pd.DataFrame:
@@ -1031,9 +965,9 @@ with tab_trader:
     _TRADER_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
     if not _TRADER_API_KEY:
         st.error("ANTHROPIC_API_KEY not set — Trader agent unavailable.")
-        st.stop()
-
-    _trader_client = _ant.Anthropic(api_key=_TRADER_API_KEY)
+        _trader_client = None
+    else:
+        _trader_client = _ant.Anthropic(api_key=_TRADER_API_KEY)
 
     # ── memory helpers ────────────────────────────────────────────────────────
     @st.cache_resource
@@ -1148,8 +1082,10 @@ with tab_trader:
             "name": "get_dispatch_data",
             "description": (
                 "Get 15-min dispatch data for a BESS asset on a specific date. "
-                "Returns: interval_start, charge_mw, discharge_mw, soc_mwh, "
-                "cleared_price_yuan_mwh. Use to check dispatch quality and SoC profile."
+                "Returns: interval_start, nominated_dispatch_mw (申报曲线, MW), "
+                "actual_dispatch_mw (实际充放曲线, MW), nodal_price_excel (CNY/MWh). "
+                "Positive = discharge, negative = charge. "
+                "Use to analyse execution gaps, nomination vs actual, and intraday dispatch patterns."
             ),
             "input_schema": {
                 "type": "object",
@@ -1238,12 +1174,11 @@ with tab_trader:
                 df = pd.read_sql(
                     _sql_text("""
                         SELECT interval_start, asset_code,
-                               charge_mw, discharge_mw, soc_mwh,
-                               cleared_price_yuan_mwh
+                               nominated_dispatch_mw, actual_dispatch_mw,
+                               nodal_price_excel
                         FROM marketdata.ops_bess_dispatch_15min
                         WHERE asset_code = :asset AND data_date = :dt
                         ORDER BY interval_start
-                        LIMIT 100
                     """),
                     engine, params={"asset": inp["asset_code"], "dt": inp["date"]},
                 )
@@ -1375,7 +1310,9 @@ with tab_trader:
             )
 
     if _trader_input := st.chat_input(
-        "Ask about asset P&L, dispatch, or market conditions…", key="trader_chat_input"
+        "Ask about asset P&L, dispatch, or market conditions…",
+        disabled=not _trader_client,
+        key="trader_chat_input",
     ):
         st.session_state["trader_msgs"].append({"role": "user", "content": _trader_input})
         with st.chat_message("user"):
@@ -1427,120 +1364,3 @@ with tab_trader:
                         _load_trader_memories.clear()
                         st.rerun()
 
-    # ── GB BESS Benchmark ─────────────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("GB BESS Benchmark")
-    st.caption(
-        "Industry-average revenue index and asset leaderboard from Modo Energy. "
-        "Use as context when benchmarking IM asset performance against GB peers."
-    )
-
-    _gb_c1, _gb_c2, _gb_c3 = st.columns([2, 2, 2])
-    _gb_preset = _gb_c1.selectbox(
-        "Period",
-        ["Last 7 days", "Last 30 days", "Last 90 days"],
-        index=1, key="gb_bench_preset",
-    )
-    _gb_today = date.today()
-    if _gb_preset == "Last 7 days":
-        _gb_start, _gb_end = _gb_today - timedelta(days=7), _gb_today
-    elif _gb_preset == "Last 30 days":
-        _gb_start, _gb_end = _gb_today - timedelta(days=30), _gb_today
-    else:
-        _gb_start, _gb_end = _gb_today - timedelta(days=90), _gb_today
-
-    _gb_market_filter = _gb_c2.selectbox(
-        "Market (leaderboard)",
-        ["All", "bm", "cm", "frequency_response", "dml", "dcl", "drl", "dmh", "dch", "drh"],
-        index=0, key="gb_market_filter",
-    )
-    _gb_dur_filter = _gb_c3.selectbox(
-        "Duration (index)",
-        ["All", "1h", "2h", "4h"],
-        index=0, key="gb_duration_filter",
-    )
-
-    _GB_COLOURS = {
-        "bm": "#1f77b4", "cm": "#ff7f0e", "frequency_response": "#2ca02c",
-        "dml": "#d62728", "dcl": "#9467bd", "drl": "#8c564b",
-        "dmh": "#e377c2", "dch": "#7f7f7f", "drh": "#bcbd22",
-    }
-
-    # Daily index stacked bar
-    _gb_idx = _load_gb_daily_index(str(_gb_start), str(_gb_end))
-    if not _gb_idx.empty:
-        if _gb_dur_filter != "All":
-            _gb_idx = _gb_idx[_gb_idx["duration"] == _gb_dur_filter]
-        _gb_pivot = _gb_idx.pivot_table(
-            index="settlement_date", columns="market",
-            values="revenue_permw", aggfunc="mean",
-        ).reset_index()
-        _gb_idx_fig = go.Figure()
-        for _m in [c for c in _gb_pivot.columns if c != "settlement_date"]:
-            _gb_idx_fig.add_trace(go.Bar(
-                x=_gb_pivot["settlement_date"],
-                y=_gb_pivot[_m],
-                name=_m.upper(),
-                marker_color=_GB_COLOURS.get(_m, "#aec7e8"),
-            ))
-        _gb_idx_fig.update_layout(
-            barmode="stack", height=320,
-            margin=dict(l=10, r=10, t=30, b=10),
-            legend=dict(orientation="h", yanchor="bottom", y=1.01),
-            xaxis_title=None, yaxis_title="£/MW/day",
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
-        st.markdown("**Daily Revenue Index (£/MW/day) by Market Stream**")
-        st.plotly_chart(_gb_idx_fig, use_container_width=True, key="gb_daily_idx_chart")
-    else:
-        st.info("No GB daily index data. Run backfill from GB Market > Data Management.")
-
-    # Monthly index line chart
-    _gb_mo_from = (_gb_today - timedelta(days=365)).replace(day=1).strftime("%Y-%m")
-    _gb_mo_to = _gb_today.strftime("%Y-%m")
-    _gb_mo = _load_gb_monthly_index(_gb_mo_from, _gb_mo_to)
-    if not _gb_mo.empty:
-        if _gb_dur_filter != "All":
-            _gb_mo = _gb_mo[_gb_mo["duration"] == _gb_dur_filter]
-        _gb_mo_pivot = _gb_mo.pivot_table(
-            index="month", columns="market",
-            values="revenue_permw", aggfunc="mean",
-        ).reset_index()
-        _gb_mo_fig = go.Figure()
-        for _m in [c for c in _gb_mo_pivot.columns if c != "month"]:
-            _gb_mo_fig.add_trace(go.Scatter(
-                x=_gb_mo_pivot["month"],
-                y=_gb_mo_pivot[_m],
-                name=_m.upper(),
-                mode="lines+markers",
-                line=dict(color=_GB_COLOURS.get(_m, "#aec7e8"), width=2),
-            ))
-        _gb_mo_fig.update_layout(
-            height=280,
-            margin=dict(l=10, r=10, t=30, b=10),
-            legend=dict(orientation="h", yanchor="bottom", y=1.01),
-            xaxis_title=None, yaxis_title="£/MW/month",
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
-        st.markdown("**Monthly Revenue Index (£/MW/month) — Last 12 Months**")
-        st.plotly_chart(_gb_mo_fig, use_container_width=True, key="gb_monthly_idx_chart")
-
-    # Leaderboard table
-    st.markdown("**Asset Leaderboard — Top 20 by Avg Revenue/MW**")
-    _lb_market = None if _gb_market_filter == "All" else _gb_market_filter
-    _gb_lb = _load_gb_leaderboard(str(_gb_start), str(_gb_end), market=_lb_market)
-    if not _gb_lb.empty:
-        _gb_lb = _gb_lb.head(20).reset_index(drop=True)
-        _gb_lb.index += 1
-        _gb_lb_display = _gb_lb.copy()
-        _gb_lb_display.columns = ["Asset", "Market", "Total Revenue (£)", "Avg £/MW/day", "Trading Days"]
-        _gb_lb_display["Total Revenue (£)"] = _gb_lb_display["Total Revenue (£)"].map(
-            lambda x: f"£{x:,.0f}" if pd.notna(x) else "—"
-        )
-        _gb_lb_display["Avg £/MW/day"] = _gb_lb_display["Avg £/MW/day"].map(
-            lambda x: f"£{x:,.2f}" if pd.notna(x) else "—"
-        )
-        st.dataframe(_gb_lb_display, use_container_width=True,
-                     height=min(38 * len(_gb_lb_display) + 38, 500))
-    else:
-        st.info("No leaderboard data for this period.")

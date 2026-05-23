@@ -33,6 +33,7 @@ COPY services/modo_energy/         ./services/modo_energy/
 COPY services/common/              ./services/common/
 COPY services/au_knowledge/        ./services/au_knowledge/
 COPY services/intl_market_common/  ./services/intl_market_common/
+COPY services/aemo/               ./services/aemo/
 
 ENV PYTHONPATH=/app
 

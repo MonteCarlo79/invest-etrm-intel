@@ -22,9 +22,9 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
     )
 
     from services.pjm_knowledge.config import MARKET_CONFIG
-    from services.gb_knowledge.base import get_db_conn
+    import psycopg2
 
-    conn = get_db_conn()
+    conn = psycopg2.connect(os.environ["PGURL"], keepalives=1, keepalives_idle=30)
     prefix = MARKET_CONFIG.table_prefix
     with conn.cursor() as cur:
         cur.execute(f"""

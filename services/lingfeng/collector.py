@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -86,11 +86,35 @@ async def _collect_async(
         try:
             await page.wait_for_url(lambda u: "/login" not in u, timeout=15_000)
         except PWTimeout:
-            # Check for error message
-            err = page.locator("div.el-message--error")
-            if await err.count() > 0:
-                msg = await err.first.inner_text()
-                raise RuntimeError(f"Login failed: {msg}")
+            # Save debug screenshot to diagnose what's blocking the login
+            _debug_dir = Path(__file__).resolve().parent.parent.parent / "debug" / "lingfeng"
+            _debug_dir.mkdir(parents=True, exist_ok=True)
+            _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            _shot = _debug_dir / f"login_fail_{_ts}.png"
+            try:
+                await page.screenshot(path=str(_shot), full_page=True)
+                logger.error(f"Login failure screenshot saved → {_shot}")
+            except Exception:
+                pass
+            # Check for error message (Element UI and Ant Design variants)
+            for _sel in ("div.el-message--error", ".ant-message-error", ".ant-alert-error",
+                         "div[class*='error']", "span[class*='error']"):
+                _err = page.locator(_sel)
+                if await _err.count() > 0:
+                    try:
+                        msg = await _err.first.inner_text()
+                        if msg.strip():
+                            raise RuntimeError(f"Login failed: {msg.strip()}")
+                    except RuntimeError:
+                        raise
+                    except Exception:
+                        pass
+            # Log body text snippet to surface any dialog or verification prompt
+            try:
+                _body = await page.locator("body").inner_text()
+                logger.error(f"Page body (first 400 chars): {_body[:400]!r}")
+            except Exception:
+                pass
             raise RuntimeError("Login did not redirect away from login page within 15 s.")
 
         logger.info(f"Logged in — current URL: {page.url}")

@@ -336,8 +336,14 @@ CREATE INDEX IF NOT EXISTS idx_skc_fts
 """
 
 
+_TABLES_INITIALIZED = False
+
+
 def init_knowledge_tables() -> None:
-    """Create tables if they don't exist. Idempotent."""
+    """Create tables if they don't exist. Idempotent — skips DDL after first run."""
+    global _TABLES_INITIALIZED
+    if _TABLES_INITIALIZED:
+        return
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(_DDL)
@@ -347,6 +353,7 @@ def init_knowledge_tables() -> None:
                 ADD COLUMN IF NOT EXISTS app TEXT NOT NULL DEFAULT 'shared'
             """)
         conn.commit()
+    _TABLES_INITIALIZED = True
 
 
 # ── Hashing ──────────────────────────────────────────────────────────────────
@@ -544,6 +551,80 @@ def register_and_ingest(
             ).start()
         except Exception:
             pass
+
+    return doc_id, True, category
+
+
+def register_url(
+    url: str,
+    api_key: Optional[str] = None,
+) -> tuple[int, bool, str]:
+    """
+    Fetch a public URL, extract its text, and register as a knowledge doc.
+
+    Returns (doc_id, is_new, category).  is_new=False if the URL was already ingested.
+    Raises on network / parse errors so the caller can show a user-facing message.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; SpotMarketBot/1.0)"}
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+        tag.decompose()
+
+    title_el = soup.find("h1") or soup.find("title")
+    title = title_el.get_text(strip=True)[:200] if title_el else url.split("/")[-1][:100]
+    text = soup.get_text(separator="\n", strip=True)
+    if not text.strip():
+        raise ValueError("No readable text found at that URL.")
+
+    # Use SHA-256 of the URL as the dedup key (allows re-fetch to update)
+    url_hash = sha256_bytes(url.encode())
+
+    init_knowledge_tables()
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, category FROM staging.spot_knowledge_docs WHERE file_hash = %s",
+                (url_hash,),
+            )
+            row = cur.fetchone()
+    if row:
+        return row[0], False, row[1]
+
+    category = auto_categorize(url.split("/")[-1], text[:1000], api_key)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO staging.spot_knowledge_docs
+                    (file_name, file_hash, category, app, title,
+                     file_size_bytes, page_count, ingest_status)
+                VALUES (%s, %s, %s, 'shared', %s, %s, 1, 'parsed')
+                RETURNING id
+                """,
+                (url[:255], url_hash, category, title, len(text.encode())),
+            )
+            doc_id = cur.fetchone()[0]
+
+            inserts = [(doc_id, 1, i, chunk) for i, chunk in enumerate(_chunk_text(text))]
+            if inserts:
+                cur.executemany(
+                    """
+                    INSERT INTO staging.spot_knowledge_chunks
+                        (doc_id, page_no, chunk_index, chunk_text)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (doc_id, chunk_index) DO NOTHING
+                    """,
+                    inserts,
+                )
+        conn.commit()
 
     return doc_id, True, category
 

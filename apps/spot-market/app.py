@@ -986,31 +986,32 @@ def chart_spread(df: pd.DataFrame, provinces: list[str]) -> go.Figure:
     return fig
 
 
-def chart_heatmap(df: pd.DataFrame, metric: str) -> go.Figure:
-    avg_col = f"{metric}_avg"
-    pivot = (
-        df[["report_date", "province_en", avg_col]]
-        .dropna(subset=[avg_col])
-        .pivot_table(index="province_en", columns="report_date", values=avg_col)
-    )
+def chart_heatmap(df_shape: pd.DataFrame, metric: str) -> go.Figure:
+    """Province × hour-of-day average price heatmap.
+
+    df_shape: DataFrame with columns province (English), hour (0-23), avg_price.
+    """
+    if df_shape.empty:
+        return go.Figure()
+    pivot = df_shape.pivot_table(index="province", columns="hour", values="avg_price")
     if pivot.empty:
         return go.Figure()
 
     title_key = "da_heatmap_title" if metric == "da" else "rt_heatmap_title"
     fig = go.Figure(go.Heatmap(
         z=pivot.values,
-        x=pivot.columns.strftime("%Y-%m-%d"),   # full date so Plotly shows correct year
+        x=[f"{h:02d}:00" for h in pivot.columns],
         y=pivot.index.tolist(),
         colorscale="RdYlGn_r",
         colorbar=dict(title=_t("price_unit"), thickness=12),
         hoverongaps=False,
-        hovertemplate="Date: %{x}<br>Province: %{y}<br>Price: %{z:.4f} ¥/kWh<extra></extra>",
+        hovertemplate="Hour: %{x}<br>Province: %{y}<br>Avg Price: %{z:.4f} ¥/kWh<extra></extra>",
     ))
     fig.update_layout(
-        height=max(350, len(pivot) * 24),
+        height=max(350, len(pivot) * 28),
         title=dict(text=_t(title_key), font=dict(size=13)),
         margin=dict(l=120, r=20, t=45, b=60),
-        xaxis=dict(tickangle=-45, tickfont=dict(size=10), type="date"),
+        xaxis=dict(tickfont=dict(size=10), title="Hour of Day"),
         yaxis=dict(tickfont=dict(size=11)),
     )
     return fig
@@ -1475,8 +1476,9 @@ with tab_spread:
 # ── Tab 3: Heatmap ────────────────────────────────────────────────────────────
 with tab_heatmap:
     hm_metric = st.radio(_t("metric_label"), ["DA", "RT"], horizontal=True)
+    hm_price_col = "da_price" if hm_metric == "DA" else "rt_price"
 
-    # Local date range — independent of the sidebar, defaults to last 90 days of df
+    # Local date range — independent of the sidebar, defaults to last 90 days
     _hm_df_base = df[df["province_en"].isin(selected_provs)]
     _hm_min = _hm_df_base["report_date"].min() if not _hm_df_base.empty else d_start
     _hm_max = _hm_df_base["report_date"].max() if not _hm_df_base.empty else d_end
@@ -1498,16 +1500,27 @@ with tab_heatmap:
             key="hm_end",
         )
 
-    _hm_df = _hm_df_base[
-        (_hm_df_base["report_date"] >= pd.Timestamp(hm_start)) &
-        (_hm_df_base["report_date"] <= pd.Timestamp(hm_end))
-    ]
+    # Build Chinese province name list for querying spot_prices_hourly
+    _en_to_zh_hm = (
+        df[["province_en", "province_cn"]].drop_duplicates()
+        .set_index("province_en")["province_cn"]
+    )
+    _zh_to_en_hm = {v: k for k, v in _en_to_zh_hm.items()}
+    _zh_provs_hm = tuple(_en_to_zh_hm.get(p, p) for p in selected_provs)
 
-    fig_hm = chart_heatmap(_hm_df, hm_metric.lower())
+    _hm_shape = _load_intraday_shape(
+        _conn, _zh_provs_hm, str(hm_start), str(hm_end) + " 23:59:59", hm_price_col
+    )
+
+    if not _hm_shape.empty:
+        _hm_shape = _hm_shape.copy()
+        _hm_shape["province"] = _hm_shape["province"].map(_zh_to_en_hm).fillna(_hm_shape["province"])
+
+    fig_hm = chart_heatmap(_hm_shape, hm_metric.lower())
     if fig_hm.data:
         st.plotly_chart(fig_hm, use_container_width=True)
     else:
-        st.info("No data for selected range / provinces.")
+        st.info("No hourly data for selected range / provinces.")
 
 # ── Tab 4: Intraday Analysis ──────────────────────────────────────────────────
 with tab_intraday:
@@ -2557,6 +2570,8 @@ with tab_agent:
     # ── Session persistence ────────────────────────────────────────────────────
 
     def _ensure_spot_sessions_table():
+        if st.session_state.get("_spot_sessions_table_ok"):
+            return
         conn = _conn()
         with conn.cursor() as _cur:
             _cur.execute("""
@@ -2568,6 +2583,7 @@ with tab_agent:
                 )
             """)
         conn.commit()
+        st.session_state["_spot_sessions_table_ok"] = True
 
     def _save_spot_session(session_id: str, display_messages: list):
         try:
@@ -3073,15 +3089,24 @@ and past conversation logs (use category='conversation_log' to search previous Q
         st.session_state["spot_mem_suggestions"] = []  # kept for back-compat, unused
 
     st.subheader(_t("agent_title"))
-    try:
-        from services.knowledge_pool.expert_memory import get_memory_stats as _get_mem_stats
-        _mstats = _get_mem_stats()
-        _n_ins = _mstats.get("total", 0) or 0
+    _now_ts = time.time()
+    if (
+        st.session_state.get("_mstats_cache") is None
+        or (_now_ts - st.session_state.get("_mstats_ts", 0)) > 60
+    ):
+        try:
+            from services.knowledge_pool.expert_memory import get_memory_stats as _get_mem_stats
+            st.session_state["_mstats_cache"] = _get_mem_stats()
+            st.session_state["_mstats_ts"] = _now_ts
+        except Exception:
+            st.session_state.setdefault("_mstats_cache", {})
+    _n_ins = (st.session_state.get("_mstats_cache") or {}).get("total", 0) or 0
+    if _n_ins:
         st.caption(
             f"{_t('agent_caption')} · "
             f"{_n_ins} expert insight{'s' if _n_ins != 1 else ''} accumulated"
         )
-    except Exception:
+    else:
         st.caption(_t("agent_caption"))
 
     # ── Clear button (generates new session UUID, old session preserved in DB) ─
@@ -3205,23 +3230,8 @@ and past conversation logs (use category='conversation_log' to search previous Q
         except Exception:
             pass
 
-    # ── Memory management (bottom of tab) ─────────────────────────────────────
-    st.divider()
-    with st.expander(f"🗄️ {_t('mem_manage')}", expanded=False):
-        st.caption(_t("mem_caption"))
-        _mem_df = _load_spot_memories(_SPOT_MEM_KEY)
-        if _mem_df.empty:
-            st.info(_t("mem_empty"))
-        else:
-            for _row in _mem_df.itertuples():
-                _c1, _c2, _c3 = st.columns([1, 5, 1])
-                _c1.markdown(f"**{_row.category}**")
-                _c2.markdown(f"**{_row.subject}** — {_row.content}")
-                if _c3.button(_t("mem_delete"), key=f"del_spot_mem_{_row.id}"):
-                    _delete_spot_memory(_row.id)
-                    st.rerun()
-
     # ── Knowledge Gap Interview ────────────────────────────────────────────────
+    st.divider()
     with st.expander("🎓 Teach the Strategist — Knowledge Gap Interview", expanded=False):
         for _ik in [("interview_questions", []), ("interview_idx", 0),
                     ("interview_answers", 0), ("interview_kb_queried", False),
@@ -3356,6 +3366,21 @@ and past conversation logs (use category='conversation_log' to search previous Q
                     st.session_state["interview_idx"] += 1
                     st.rerun()
 
+    # ── Memory management ─────────────────────────────────────────────────────
+    with st.expander(f"🗄️ {_t('mem_manage')}", expanded=False):
+        st.caption(_t("mem_caption"))
+        _mem_df = _load_spot_memories(_SPOT_MEM_KEY)
+        if _mem_df.empty:
+            st.info(_t("mem_empty"))
+        else:
+            for _row in _mem_df.itertuples():
+                _c1, _c2, _c3 = st.columns([1, 5, 1])
+                _c1.markdown(f"**{_row.category}**")
+                _c2.markdown(f"**{_row.subject}** — {_row.content}")
+                if _c3.button(_t("mem_delete"), key=f"del_spot_mem_{_row.id}"):
+                    _delete_spot_memory(_row.id)
+                    st.rerun()
+
     # ── Knowledge Base ─────────────────────────────────────────────────────────
     with st.expander(f"📚 {_t('kb_title')}", expanded=False):
         from services.knowledge_pool.knowledge_docs import (
@@ -3365,71 +3390,115 @@ and past conversation logs (use category='conversation_log' to search previous Q
             delete_knowledge_doc as _kb_delete,
             CATEGORY_LABELS as _KB_CATS,
         )
-        try:
-            _kb_init()
-        except Exception as _kbi_exc:
-            st.warning(f"KB table init: {_kbi_exc}")
+        if not st.session_state.get("_kp_tables_init_done"):
+            try:
+                _kb_init()
+                st.session_state["_kp_tables_init_done"] = True
+            except Exception as _kbi_exc:
+                st.warning(f"KB table init: {_kbi_exc}")
 
         st.caption(_t("kb_caption"))
 
-        # ── Upload section ─────────────────────────────────────────────────────
-        _kb_files = st.file_uploader(
-            _t("kb_upload_label"),
-            type=["pdf", "pptx", "txt", "docx", "xlsx", "xls",
-                  "png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=True,
-            key="kb_uploader",
-        )
-        _cat_options = [_t("kb_category_auto")] + list(_KB_CATS.keys())
-        _cat_labels  = [_t("kb_category_auto")] + list(_KB_CATS.values())
-        _cat_sel_idx = st.selectbox(
-            _t("kb_category_label"),
-            options=range(len(_cat_options)),
-            format_func=lambda i: _cat_labels[i],
-            key="kb_cat_sel",
-        )
-        _cat_override = None if _cat_sel_idx == 0 else _cat_options[_cat_sel_idx]
+        _kb_up_tab, _kb_url_tab = st.tabs(["📂 Upload Files", "🌐 Fetch from URL"])
 
-        if st.button(_t("kb_upload_btn"), key="kb_upload_btn", disabled=not _kb_files):
-            _api_key = _os.environ.get("ANTHROPIC_API_KEY")
-            _added, _dupes, _errors = 0, [], []
-            _new_doc_ids = []
-            for _f in _kb_files:
-                _bytes = _f.read()
-                try:
-                    _doc_id, _is_new, _cat = _kb_ingest(
-                        _bytes, _f.name,
-                        category_override=_cat_override,
-                        api_key=_api_key,
-                    )
-                    if _is_new:
-                        _added += 1
-                        _new_doc_ids.append(_doc_id)
-                    else:
-                        _dupes.append(_f.name)
-                except Exception as _exc:
-                    _errors.append((_f.name, str(_exc)))
+        # ── Upload Files tab ───────────────────────────────────────────────────
+        with _kb_up_tab:
+            _kb_files = st.file_uploader(
+                _t("kb_upload_label"),
+                type=["pdf", "pptx", "ppt", "txt", "docx", "doc",
+                      "xlsx", "xls", "png", "jpg", "jpeg", "webp"],
+                accept_multiple_files=True,
+                key="kb_uploader",
+            )
+            _cat_options = [_t("kb_category_auto")] + list(_KB_CATS.keys())
+            _cat_labels  = [_t("kb_category_auto")] + list(_KB_CATS.values())
+            _cat_sel_idx = st.selectbox(
+                _t("kb_category_label"),
+                options=range(len(_cat_options)),
+                format_func=lambda i: _cat_labels[i],
+                key="kb_cat_sel",
+            )
+            _cat_override = None if _cat_sel_idx == 0 else _cat_options[_cat_sel_idx]
 
-            if _added:
-                st.success(_t("kb_success", n=_added))
-                # Immediately digest newly uploaded docs into expert insights
-                if _api_key and _new_doc_ids:
+            if st.button(_t("kb_upload_btn"), key="kb_upload_btn", disabled=not _kb_files):
+                _api_key = _os.environ.get("ANTHROPIC_API_KEY")
+                _added, _dupes, _errors = 0, [], []
+                _new_doc_ids = []
+                _prog = st.progress(0, text="Ingesting…")
+                for _fi, _f in enumerate(_kb_files):
+                    _prog.progress((_fi + 1) / len(_kb_files), text=f"Processing {_f.name}…")
+                    _bytes = _f.read()
                     try:
-                        from services.knowledge_pool.expert_memory import digest_spot_kb_docs as _digest
-                        _n_ins = _digest(_api_key, doc_ids=_new_doc_ids)
-                        if _n_ins:
-                            st.toast(f"{_n_ins} insight{'s' if _n_ins != 1 else ''} extracted from uploaded document(s)")
-                    except Exception:
-                        pass
-            for _d in _dupes:
-                st.info(_t("kb_duplicate", fname=_d))
-            for _fn, _err in _errors:
-                st.error(_t("kb_failed", fname=_fn, err=_err))
-            st.rerun()
+                        _doc_id, _is_new, _cat = _kb_ingest(
+                            _bytes, _f.name,
+                            category_override=_cat_override,
+                            api_key=_api_key,
+                        )
+                        if _is_new:
+                            _added += 1
+                            _new_doc_ids.append(_doc_id)
+                        else:
+                            _dupes.append(_f.name)
+                    except Exception as _exc:
+                        _errors.append((_f.name, str(_exc)))
+                _prog.empty()
+
+                if _added:
+                    st.success(_t("kb_success", n=_added))
+                    if _api_key and _new_doc_ids:
+                        try:
+                            from services.knowledge_pool.expert_memory import digest_spot_kb_docs as _digest
+                            _n_ins = _digest(_api_key, doc_ids=_new_doc_ids)
+                            if _n_ins:
+                                st.toast(f"{_n_ins} insight{'s' if _n_ins != 1 else ''} extracted from uploaded document(s)")
+                        except Exception:
+                            pass
+                for _d in _dupes:
+                    st.info(_t("kb_duplicate", fname=_d))
+                for _fn, _err in _errors:
+                    st.error(_t("kb_failed", fname=_fn, err=_err))
+                st.session_state.pop("_kb_docs_cache", None)
+                st.rerun()
+
+        # ── Fetch from URL tab ─────────────────────────────────────────────────
+        with _kb_url_tab:
+            st.caption("Paste a public URL (policy doc, research article, regulator notice). The page text will be extracted and added to the knowledge base.")
+            _kb_url_input = st.text_input("URL", placeholder="https://...", key="kb_url_input", label_visibility="collapsed")
+            if st.button("Fetch & Add to KB", key="kb_url_fetch_btn", disabled=not _kb_url_input):
+                _api_key = _os.environ.get("ANTHROPIC_API_KEY")
+                with st.spinner("Fetching and indexing…"):
+                    try:
+                        from services.knowledge_pool.knowledge_docs import register_url as _kb_register_url
+                        _url_doc_id, _url_is_new, _url_cat = _kb_register_url(_kb_url_input.strip(), api_key=_api_key)
+                        if _url_is_new:
+                            st.success(f"Added to KB (category: {_url_cat})")
+                            if _api_key:
+                                try:
+                                    from services.knowledge_pool.expert_memory import digest_spot_kb_docs as _digest_url
+                                    _n_url_ins = _digest_url(_api_key, doc_ids=[_url_doc_id])
+                                    if _n_url_ins:
+                                        st.toast(f"{_n_url_ins} insight{'s' if _n_url_ins != 1 else ''} extracted")
+                                except Exception:
+                                    pass
+                            st.session_state.pop("_kb_docs_cache", None)
+                            st.rerun()
+                        else:
+                            st.info("This URL is already in the knowledge base.")
+                    except Exception as _url_exc:
+                        st.error(f"Fetch failed: {_url_exc}")
 
         # ── Document list ──────────────────────────────────────────────────────
         st.markdown(f"**{_t('kb_doc_list_title')}**")
-        _kb_docs = _kb_list()
+        if (
+            st.session_state.get("_kb_docs_cache") is None
+            or (time.time() - st.session_state.get("_kb_docs_ts", 0)) > 60
+        ):
+            try:
+                st.session_state["_kb_docs_cache"] = _kb_list()
+                st.session_state["_kb_docs_ts"] = time.time()
+            except Exception:
+                st.session_state.setdefault("_kb_docs_cache", [])
+        _kb_docs = st.session_state.get("_kb_docs_cache") or []
         if not _kb_docs:
             st.info(_t("kb_doc_list_empty"))
         else:
@@ -3447,6 +3516,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
                 )
                 if _dc4.button(_t("kb_delete"), key=f"kb_del_{_doc['id']}"):
                     _kb_delete(_doc['id'])
+                    st.session_state.pop("_kb_docs_cache", None)
                     st.rerun()
 
         # ── Batch KB digest ────────────────────────────────────────────────────

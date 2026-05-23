@@ -23,11 +23,11 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
         override=False,
     )
 
+    import psycopg2
     from services.au_knowledge.config import MARKET_CONFIG
-    from services.gb_knowledge.base import get_db_conn
 
     # Ensure au_knowledge_docs table exists
-    conn = get_db_conn()
+    conn = psycopg2.connect(os.environ["PGURL"], keepalives=1, keepalives_idle=30)
     prefix = MARKET_CONFIG.table_prefix
     with conn.cursor() as cur:
         cur.execute(f"""

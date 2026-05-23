@@ -260,30 +260,9 @@ def ingest_spot_price(engine, client: ModoClient, start: date, end: date) -> int
 # ---------------------------------------------------------------------------
 
 def run_ingestion(start: date, end: date, only: list[str] | None = None) -> dict[str, int]:
-    engine = get_engine()
-    _ensure_tables(engine)
-    client = ModoClient()
-    results: dict[str, int] = {}
-
-    tasks = [
-        ("assets",      lambda: ingest_assets(engine, client)),
-        ("leaderboard", lambda: ingest_leaderboard(engine, client, start, end)),
-        ("daily_index", lambda: ingest_daily_index(engine, client, start, end)),
-        ("spot_price",  lambda: ingest_spot_price(engine, client, start, end)),
-    ]
-    for key, fn in tasks:
-        if only and key not in only:
-            continue
-        print(f"  [au/{key}]…", end="", flush=True)
-        try:
-            n = fn()
-            results[key] = n
-            print(f" {n} rows")
-        except Exception as exc:
-            results[key] = 0
-            print(f" ERROR: {exc}")
-
-    return results
+    # Delegate to AEMO direct ingestion (Modo Energy does not expose AU/NEM endpoints)
+    from services.aemo.nem_ingest import run_ingestion as _aemo_run
+    return _aemo_run(start, end, only=only)
 
 
 if __name__ == "__main__":
