@@ -60,6 +60,27 @@ def _query(sql: str, params=None) -> pd.DataFrame:
     return pd.read_sql(sql, _conn(), params=params)
 
 
+def _run_connector_to_db(connector, conn, prefix: str) -> int:
+    """Insert docs yielded by connector.fetch() into {prefix}knowledge_docs. Returns count."""
+    n = 0
+    for doc in connector.fetch():
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO intl_market.{prefix}knowledge_docs "
+                "(source, doc_type, title, url, published_date, content) "
+                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING",
+                (
+                    getattr(connector, "source", "modo_ai"),
+                    doc["doc_type"], doc.get("title", ""),
+                    doc.get("url"), doc.get("published_date"), doc["content"],
+                ),
+            )
+            if cur.rowcount > 0:
+                n += 1
+    conn.commit()
+    return n
+
+
 # ---------------------------------------------------------------------------
 # Module-level cached data functions — all accept `prefix: str`
 # ---------------------------------------------------------------------------
@@ -341,12 +362,11 @@ def _start_scheduler(code: str, name: str, prefix: str, api_key: str, app_file: 
     def _modo_ai_job():
         try:
             from services.intl_market_common.modo_ai_base import ModoAIConnector
-            from services.intl_market_common.market_config import MarketConfig
             cfg_mod = importlib.import_module(f"services.{code}_knowledge.config")
             cfg = cfg_mod.MARKET_CONFIG
             connector = ModoAIConnector(cfg)
             conn = _conn()
-            n = connector.run(conn)
+            n = _run_connector_to_db(connector, conn, prefix)
             logger.info("Modo AI distillation for %s: %d new docs", code, n)
         except Exception as exc:
             logger.error("Modo AI job failed for %s: %s", code, exc)
@@ -1511,7 +1531,7 @@ def run_market_app(cfg: MarketConfig, _app_file: str | None = None) -> None:
                 try:
                     from services.intl_market_common.modo_ai_base import ModoAIConnector
                     connector = ModoAIConnector(cfg)
-                    n = connector.run(_conn())
+                    n = _run_connector_to_db(connector, _conn(), prefix)
                     if n == 0:
                         st.warning("Modo AI distillation complete — 0 new docs inserted.")
                     else:
