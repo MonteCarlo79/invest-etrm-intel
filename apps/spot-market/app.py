@@ -301,6 +301,43 @@ _T: dict[str, dict[str, str]] = {
         "kb_sync_btn":          "Sync {n} new file(s)",
         "kb_sync_progress":     "Ingesting {i}/{n}: {fname}…",
         "kb_sync_done":         "Sync complete — added: {added}  skipped: {skipped}  errors: {errors}",
+        # data export
+        "export_title":         "Download Price Data",
+        "export_caption":       "Export DA / RT average prices from the database to Excel (.xlsx). "
+                                "Rows = dates, columns = provinces (Chinese names), units = ¥/kWh.",
+        "export_btn":           "Download Excel",
+        "export_filename":      "电力现货市场日均价格.xlsx",
+        # wechat batch ingest
+        "wechat_title":         "WeChat Article Batch Import",
+        "wechat_caption":       "Paste one WeChat article URL per line. The app fetches each article server-side and ingests the text into the Strategist knowledge pool.",
+        "wechat_url_label":     "Article URLs (one per line)",
+        "wechat_url_placeholder": "https://mp.weixin.qq.com/s/...\nhttps://mp.weixin.qq.com/s/...",
+        "wechat_run_btn":       "Fetch & Ingest {n} article(s)",
+        "wechat_no_urls":       "Paste at least one URL above.",
+        "wechat_fetching":      "Fetching {i}/{n}: {url}…",
+        "wechat_done":          "Done — added: {added}  skipped: {skipped}  errors: {errors}",
+        "wechat_digest_btn":    "Digest articles → Insights",
+        # daily report
+        "report_section_title": "Daily Market Report",
+        "report_section_caption": "Scheduled daily PDF report of DA/RT provincial prices with AI commentary. "
+                                  "Sent via email at 06:00 SGT and optionally to WeCom groups.",
+        "report_schedule_status": "Scheduler status",
+        "report_next_run":      "Next run",
+        "report_send_now":      "Send Report Now",
+        "report_send_success":  "Report sent — {size:,} bytes, date: {rdate}",
+        "report_send_wecom":    "WeCom: {result}",
+        "report_send_error":    "Report failed: {err}",
+        "report_email_label":   "Recipient email(s)",
+        "report_email_help":    "Comma-separated. Defaults to REPORT_TO_EMAIL env var.",
+        "report_webhook_title": "WeCom Webhook Groups",
+        "report_webhook_caption": "Add multiple WeCom bot webhook URLs. Saved to DB and survive restarts.",
+        "report_webhook_add_label": "Webhook URL",
+        "report_webhook_add_label_label": "Label (optional)",
+        "report_webhook_add_btn": "Add Webhook",
+        "report_webhook_added": "Webhook added.",
+        "report_webhook_empty": "No webhooks configured — WeCom delivery disabled.",
+        "report_webhook_delete": "Remove",
+        "report_webhook_enabled": "Enabled",
         # chart labels
         "da_label":             "Day-Ahead (DA)",
         "rt_label":             "Real-Time (RT)",
@@ -574,6 +611,41 @@ _T: dict[str, dict[str, str]] = {
         "kb_sync_btn":          "同步 {n} 个新文件",
         "kb_sync_progress":     "正在录入 {i}/{n}：{fname}…",
         "kb_sync_done":         "同步完成——新增：{added}  跳过：{skipped}  错误：{errors}",
+        # data export
+        "export_title":         "下载价格数据",
+        "export_caption":       "将数据库中的日前/实时均价导出为 Excel (.xlsx)。行=日期，列=省份（中文），单位=元/千瓦时。",
+        "export_btn":           "下载 Excel",
+        "export_filename":      "电力现货市场日均价格.xlsx",
+        # wechat batch ingest
+        "wechat_title":         "微信文章批量导入",
+        "wechat_caption":       "每行粘贴一个微信公众号文章链接，系统将自动抓取正文并录入策略师知识库。",
+        "wechat_url_label":     "文章链接（每行一个）",
+        "wechat_url_placeholder": "https://mp.weixin.qq.com/s/...\nhttps://mp.weixin.qq.com/s/...",
+        "wechat_run_btn":       "抓取并录入 {n} 篇文章",
+        "wechat_no_urls":       "请在上方粘贴至少一个链接。",
+        "wechat_fetching":      "正在处理 {i}/{n}：{url}…",
+        "wechat_done":          "完成——新增：{added}  跳过：{skipped}  错误：{errors}",
+        "wechat_digest_btn":    "摘要文章 → 洞察",
+        # daily report
+        "report_section_title": "每日市场报告",
+        "report_section_caption": "每日自动生成含AI分析的日前/实时省份价格PDF报告，新加坡时间06:00发送邮件，并可推送至企业微信群。",
+        "report_schedule_status": "调度状态",
+        "report_next_run":      "下次运行",
+        "report_send_now":      "立即发送报告",
+        "report_send_success":  "报告已发送 — {size:,} 字节，日期：{rdate}",
+        "report_send_wecom":    "企业微信：{result}",
+        "report_send_error":    "报告发送失败：{err}",
+        "report_email_label":   "收件人邮箱",
+        "report_email_help":    "多个地址用逗号分隔。默认使用 REPORT_TO_EMAIL 环境变量。",
+        "report_webhook_title": "企业微信群机器人",
+        "report_webhook_caption": "配置多个企业微信群机器人 Webhook，保存至数据库（重启后不丢失）。",
+        "report_webhook_add_label": "Webhook 链接",
+        "report_webhook_add_label_label": "标签（可选）",
+        "report_webhook_add_btn": "添加",
+        "report_webhook_added": "Webhook 已添加。",
+        "report_webhook_empty": "暂无 Webhook，企业微信推送已禁用。",
+        "report_webhook_delete": "删除",
+        "report_webhook_enabled": "启用",
         # chart labels
         "da_label":             "日前（DA）",
         "rt_label":             "实时（RT）",
@@ -654,6 +726,103 @@ def _conn():
         _get_conn.clear()
         conn = _get_conn()
     return conn
+
+
+# ── Process-level caches for knowledge-pool calls that open fresh connections ──
+# knowledge_pool/db.py's get_conn() opens a NEW TCP connection on every call.
+# These @st.cache_data wrappers limit that to once per 5 minutes per process,
+# regardless of how many Streamlit sessions are active.  Without this, each new
+# browser session triggered 2-3 fresh DB connections before tab_mgmt could render.
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_memory_stats() -> dict:
+    try:
+        from services.knowledge_pool.expert_memory import get_memory_stats as _gms
+        return _gms()
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_kb_docs() -> list:
+    try:
+        from services.knowledge_pool.knowledge_docs import list_knowledge_docs as _lkd
+        return _lkd()
+    except Exception:
+        return []
+
+
+# ── APScheduler — daily spot market report ────────────────────────────────────
+import os as _os
+_DEFAULT_RECIPIENT = "chen_dpeng@hotmail.com"
+
+@st.cache_resource
+def _start_spot_scheduler():
+    """Start background scheduler for daily spot market report (runs once per process)."""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except ImportError:
+        return None
+
+    def _daily_spot_report_job():
+        """06:00 SGT — generate PDF, email, WeCom."""
+        try:
+            import importlib.util, pathlib as _pl
+            _spec = importlib.util.spec_from_file_location(
+                "spot_report",
+                _pl.Path(__file__).parent / "spot_report.py",
+            )
+            _mod = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            result = _mod.run_daily_report()
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "Scheduled spot report: %s", result
+            )
+        except Exception as _exc:
+            import logging as _logging
+            _logging.getLogger(__name__).error(
+                "Scheduled spot report failed: %s", _exc, exc_info=True
+            )
+
+    scheduler = BackgroundScheduler(timezone="Asia/Singapore")
+    scheduler.add_job(
+        _daily_spot_report_job,
+        "cron", hour=6, minute=0,
+        id="spot_daily_report",
+        misfire_grace_time=3600,
+    )
+    scheduler.start()
+    return scheduler
+
+
+_start_spot_scheduler()  # no-op after first call (cache_resource)
+
+
+@st.cache_resource
+def _get_spot_report_mod():
+    """Load spot_report module once per process (exec_module is expensive — loads ReportLab etc.)."""
+    import importlib.util as _ilu, pathlib as _pl2
+    _spec = _ilu.spec_from_file_location(
+        "spot_report",
+        _pl2.Path(__file__).parent / "spot_report.py",
+    )
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    try:
+        _mod.ensure_webhook_table()   # DDL once per process
+    except Exception:
+        pass
+    return _mod
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_webhooks() -> list:
+    """Cached webhook list — avoids a fresh DB connection on every rerun."""
+    try:
+        return _get_spot_report_mod().list_webhooks()
+    except Exception:
+        return []
+
 
 # ── intraday hourly price loaders ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
@@ -986,32 +1155,41 @@ def chart_spread(df: pd.DataFrame, provinces: list[str]) -> go.Figure:
     return fig
 
 
-def chart_heatmap(df_shape: pd.DataFrame, metric: str) -> go.Figure:
-    """Province × hour-of-day average price heatmap.
+def chart_heatmap(df_sel: pd.DataFrame, metric: str) -> go.Figure:
+    """Province × Date daily average price heatmap from spot_daily.
 
-    df_shape: DataFrame with columns province (English), hour (0-23), avg_price.
+    df_sel: DataFrame with columns province_en, report_date, da_avg, rt_avg.
     """
-    if df_shape.empty:
+    if df_sel.empty:
         return go.Figure()
-    pivot = df_shape.pivot_table(index="province", columns="hour", values="avg_price")
+    val_col = "da_avg" if metric == "da" else "rt_avg"
+    pivot = df_sel.pivot_table(index="province_en", columns="report_date", values=val_col)
     if pivot.empty:
         return go.Figure()
 
     title_key = "da_heatmap_title" if metric == "da" else "rt_heatmap_title"
+    _vals = pivot.values.flatten()
+    _vals = _vals[~np.isnan(_vals)]
+    zmin = float(np.percentile(_vals, 2)) if len(_vals) else None
+    zmax = float(np.percentile(_vals, 98)) if len(_vals) else None
+
+    x_labels = [d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d) for d in pivot.columns]
     fig = go.Figure(go.Heatmap(
         z=pivot.values,
-        x=[f"{h:02d}:00" for h in pivot.columns],
+        x=x_labels,
         y=pivot.index.tolist(),
         colorscale="RdYlGn_r",
+        zmin=zmin,
+        zmax=zmax,
         colorbar=dict(title=_t("price_unit"), thickness=12),
         hoverongaps=False,
-        hovertemplate="Hour: %{x}<br>Province: %{y}<br>Avg Price: %{z:.4f} ¥/kWh<extra></extra>",
+        hovertemplate="Date: %{x}<br>Province: %{y}<br>Avg Price: %{z:.4f} ¥/kWh<extra></extra>",
     ))
     fig.update_layout(
         height=max(350, len(pivot) * 28),
         title=dict(text=_t(title_key), font=dict(size=13)),
         margin=dict(l=120, r=20, t=45, b=60),
-        xaxis=dict(tickfont=dict(size=10), title="Hour of Day"),
+        xaxis=dict(tickfont=dict(size=9), tickangle=-45),
         yaxis=dict(tickfont=dict(size=11)),
     )
     return fig
@@ -1363,14 +1541,22 @@ with st.sidebar:
         d_start, d_end = date(2026, 1, 1), _today
 
     prov_options = sorted(provinces_all)
-    default_provs = [p for p in ["Shandong", "Shanxi", "Mengxi", "Guangdong", "Sichuan"]
-                     if p in prov_options] or prov_options[:5]
+    _fallback_provs = [p for p in ["Shandong", "Shanxi", "Mengxi", "Guangdong", "Sichuan"]
+                       if p in prov_options] or prov_options[:5]
+    # Restore saved selection from URL query params (survives browser refresh)
+    _qp_raw = st.query_params.get("provs", "")
+    _qp_saved = [p for p in _qp_raw.split(",") if p in prov_options] if _qp_raw else []
+    default_provs = _qp_saved if _qp_saved else _fallback_provs
     selected_provs = st.multiselect(
         _t("provinces"),
         prov_options,
         default=default_provs,
         help="Select one or more provinces to compare",
     )
+    # Persist selection in URL so it survives page reload
+    _provs_qp = ",".join(selected_provs)
+    if st.query_params.get("provs", "") != _provs_qp:
+        st.query_params["provs"] = _provs_qp
 
     show_band = st.checkbox(_t("show_band"), value=True)
     quality_filter = st.checkbox(
@@ -1476,51 +1662,11 @@ with tab_spread:
 # ── Tab 3: Heatmap ────────────────────────────────────────────────────────────
 with tab_heatmap:
     hm_metric = st.radio(_t("metric_label"), ["DA", "RT"], horizontal=True)
-    hm_price_col = "da_price" if hm_metric == "DA" else "rt_price"
-
-    # Local date range — independent of the sidebar, defaults to last 90 days
-    _hm_df_base = df[df["province_en"].isin(selected_provs)]
-    _hm_min = _hm_df_base["report_date"].min() if not _hm_df_base.empty else d_start
-    _hm_max = _hm_df_base["report_date"].max() if not _hm_df_base.empty else d_end
-    _hm_default_start = max(_hm_min, _hm_max - pd.Timedelta(days=89))
-
-    _hm_col1, _hm_col2, _hm_col3 = st.columns([2, 2, 4])
-    with _hm_col1:
-        hm_start = st.date_input(
-            _t("start_date"), value=_hm_default_start.date() if hasattr(_hm_default_start, "date") else _hm_default_start,
-            min_value=_hm_min.date() if hasattr(_hm_min, "date") else _hm_min,
-            max_value=_hm_max.date() if hasattr(_hm_max, "date") else _hm_max,
-            key="hm_start",
-        )
-    with _hm_col2:
-        hm_end = st.date_input(
-            _t("end_date"), value=_hm_max.date() if hasattr(_hm_max, "date") else _hm_max,
-            min_value=_hm_min.date() if hasattr(_hm_min, "date") else _hm_min,
-            max_value=_hm_max.date() if hasattr(_hm_max, "date") else _hm_max,
-            key="hm_end",
-        )
-
-    # Build Chinese province name list for querying spot_prices_hourly
-    _en_to_zh_hm = (
-        df[["province_en", "province_cn"]].drop_duplicates()
-        .set_index("province_en")["province_cn"]
-    )
-    _zh_to_en_hm = {v: k for k, v in _en_to_zh_hm.items()}
-    _zh_provs_hm = tuple(_en_to_zh_hm.get(p, p) for p in selected_provs)
-
-    _hm_shape = _load_intraday_shape(
-        _conn, _zh_provs_hm, str(hm_start), str(hm_end) + " 23:59:59", hm_price_col
-    )
-
-    if not _hm_shape.empty:
-        _hm_shape = _hm_shape.copy()
-        _hm_shape["province"] = _hm_shape["province"].map(_zh_to_en_hm).fillna(_hm_shape["province"])
-
-    fig_hm = chart_heatmap(_hm_shape, hm_metric.lower())
+    fig_hm = chart_heatmap(df_sel, hm_metric.lower())
     if fig_hm.data:
         st.plotly_chart(fig_hm, use_container_width=True)
     else:
-        st.info("No hourly data for selected range / provinces.")
+        st.info("No data for selected range / provinces.")
 
 # ── Tab 4: Intraday Analysis ──────────────────────────────────────────────────
 with tab_intraday:
@@ -2565,7 +2711,10 @@ with tab_agent:
         conn.commit()
         _load_spot_memories.clear()
 
-    _ensure_spot_memory_table()
+    try:
+        _ensure_spot_memory_table()
+    except Exception:
+        pass  # non-fatal: agent works without this legacy table
 
     # ── Session persistence ────────────────────────────────────────────────────
 
@@ -2792,10 +2941,15 @@ Hainan, Chongqing, Shanghai, Beijing, Tianjin.
 4. For inter-provincial flow questions (volumes, sending/receiving provinces), call get_interprov_flow.
 5. For qualitative market colour or key drivers, call get_market_summaries.
 6. For questions about market rules, trading procedures, settlement mechanisms, annual exchange reports, \
-or regulatory policy, call search_reference_docs — this searches the uploaded knowledge base documents \
-and past conversation logs (use category='conversation_log' to search previous Q&A history).
+regulatory policy, or any uploaded reference data (Excel spreadsheets with trading volumes, network losses, \
+contract data, etc.), call search_reference_docs. \
+The knowledge base indexes ALL file types: PDF, Excel (.xlsx/.xls), PowerPoint, Word, and text files.
 7. Use markdown tables for multi-province or multi-period comparisons.
-8. If asked to ingest a new PDF, confirm the file path with the user before calling run_pipeline.
+8. To ingest a new reference document (PDF, Excel, PPTX, DOCX — any format), call ingest_kb_document \
+with s3_key (file in the S3 uploads bucket) or file_path (local/repo-relative path). \
+For spot market daily price PDFs specifically, use run_pipeline instead (it also extracts structured DA/RT price data).
+9. If the user says they already uploaded a file via the UI, call search_reference_docs directly — \
+the file is already ingested and searchable without calling ingest_kb_document again.
 """
 
     def _build_spot_system(query: str = "") -> str:
@@ -2941,6 +3095,40 @@ and past conversation logs (use category='conversation_log' to search previous Q
             },
         },
         {
+            "name": "ingest_kb_document",
+            "description": (
+                "Add any reference document — Excel (.xlsx/.xls), PDF, PowerPoint (.pptx), "
+                "Word (.docx), plain text, or image — to the knowledge base so it can be "
+                "searched with search_reference_docs. "
+                "Use s3_key to fetch a file from the uploads S3 bucket, or file_path for a "
+                "local/repo-relative path. "
+                "Supports all file types including Excel spreadsheets with trading data, "
+                "network loss tables, contract volumes, or any structured market data."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "s3_key": {
+                        "type": "string",
+                        "description": "S3 object key in the uploads bucket, e.g. 'uploads/跨区交易.xlsx'",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Repo-relative or absolute path, e.g. 'data/market-fundamentals/report.xlsx'",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Optional: market_rules | annual_report | policy_doc | technical_spec | research_report | other",
+                    },
+                    "app": {
+                        "type": "string",
+                        "description": "'shared' (visible to all agents, default) or 'strategist'",
+                    },
+                },
+                "required": [],
+            },
+        },
+        {
             "name": "get_market_fundamentals",
             "description": (
                 "Fetch market fundamentals for Chinese electricity provinces: "
@@ -2967,11 +3155,13 @@ and past conversation logs (use category='conversation_log' to search previous Q
         {
             "name": "search_reference_docs",
             "description": (
-                "Search the uploaded reference document knowledge base — market rules, "
-                "annual exchange operations reports, policy documents, technical specs, "
-                "and research reports. Use this when the user asks about trading rules, "
+                "Search the uploaded reference document knowledge base. Covers market rules, "
+                "annual exchange reports, policy documents, technical specs, research reports, "
+                "AND Excel spreadsheets with trading data (cross-regional volumes, network losses, "
+                "contract quantities, etc.). Supports all file types: PDF, Excel (.xlsx/.xls), "
+                "PPTX, DOCX, TXT. Use this whenever the user asks about trading rules, "
                 "settlement procedures, market mechanisms, regulatory requirements, "
-                "or wants context from official documents rather than live price data."
+                "or any data from documents they have uploaded."
             ),
             "input_schema": {
                 "type": "object",
@@ -3006,6 +3196,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
             get_market_summaries as _gms,
             run_pipeline as _rp,
             get_market_fundamentals as _gmf,
+            ingest_kb_document as _ikd,
         )
         try:
             if name == "get_spot_prices":
@@ -3028,6 +3219,8 @@ and past conversation logs (use category='conversation_log' to search previous Q
                     limit=_limit,
                 )
                 result = {"count": len(rows), "chunks": rows}
+            elif name == "ingest_kb_document":
+                result = _ikd(**inputs)
             else:
                 result = {"error": f"Unknown tool: {name}"}
         except Exception as _e:
@@ -3089,18 +3282,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
         st.session_state["spot_mem_suggestions"] = []  # kept for back-compat, unused
 
     st.subheader(_t("agent_title"))
-    _now_ts = time.time()
-    if (
-        st.session_state.get("_mstats_cache") is None
-        or (_now_ts - st.session_state.get("_mstats_ts", 0)) > 60
-    ):
-        try:
-            from services.knowledge_pool.expert_memory import get_memory_stats as _get_mem_stats
-            st.session_state["_mstats_cache"] = _get_mem_stats()
-            st.session_state["_mstats_ts"] = _now_ts
-        except Exception:
-            st.session_state.setdefault("_mstats_cache", {})
-    _n_ins = (st.session_state.get("_mstats_cache") or {}).get("total", 0) or 0
+    _n_ins = (_cached_memory_stats() or {}).get("total", 0) or 0
     if _n_ins:
         st.caption(
             f"{_t('agent_caption')} · "
@@ -3457,7 +3639,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
                     st.info(_t("kb_duplicate", fname=_d))
                 for _fn, _err in _errors:
                     st.error(_t("kb_failed", fname=_fn, err=_err))
-                st.session_state.pop("_kb_docs_cache", None)
+                _cached_kb_docs.clear()
                 st.rerun()
 
         # ── Fetch from URL tab ─────────────────────────────────────────────────
@@ -3480,7 +3662,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
                                         st.toast(f"{_n_url_ins} insight{'s' if _n_url_ins != 1 else ''} extracted")
                                 except Exception:
                                     pass
-                            st.session_state.pop("_kb_docs_cache", None)
+                            _cached_kb_docs.clear()
                             st.rerun()
                         else:
                             st.info("This URL is already in the knowledge base.")
@@ -3488,21 +3670,17 @@ and past conversation logs (use category='conversation_log' to search previous Q
                         st.error(f"Fetch failed: {_url_exc}")
 
         # ── Document list ──────────────────────────────────────────────────────
-        st.markdown(f"**{_t('kb_doc_list_title')}**")
-        if (
-            st.session_state.get("_kb_docs_cache") is None
-            or (time.time() - st.session_state.get("_kb_docs_ts", 0)) > 60
-        ):
-            try:
-                st.session_state["_kb_docs_cache"] = _kb_list()
-                st.session_state["_kb_docs_ts"] = time.time()
-            except Exception:
-                st.session_state.setdefault("_kb_docs_cache", [])
-        _kb_docs = st.session_state.get("_kb_docs_cache") or []
+        _kb_docs = _cached_kb_docs()
+        _kb_total = len(_kb_docs)
+        _kb_display = _kb_docs[:50]  # cap at 50 rows — rendering all 2000+ docs stalls the page
+        st.markdown(
+            f"**{_t('kb_doc_list_title')}** "
+            + (f"({_kb_total} total, showing latest 50)" if _kb_total > 50 else f"({_kb_total})")
+        )
         if not _kb_docs:
             st.info(_t("kb_doc_list_empty"))
         else:
-            for _doc in _kb_docs:
+            for _doc in _kb_display:
                 _dc1, _dc2, _dc3, _dc4 = st.columns([3, 1, 1, 1])
                 _dc1.markdown(
                     f"**{_doc['file_name']}**"
@@ -3516,7 +3694,7 @@ and past conversation logs (use category='conversation_log' to search previous Q
                 )
                 if _dc4.button(_t("kb_delete"), key=f"kb_del_{_doc['id']}"):
                     _kb_delete(_doc['id'])
-                    st.session_state.pop("_kb_docs_cache", None)
+                    _cached_kb_docs.clear()
                     st.rerun()
 
         # ── Batch KB digest ────────────────────────────────────────────────────
@@ -3590,7 +3768,7 @@ def _parse_pdf_date_range(stem: str, year: int = 2026):
         return None
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _scan_pdf_inventory(year: int = 2026):
     data_dir = _REPO / "data" / "spot reports" / str(year)
     pdfs = []
@@ -3608,7 +3786,8 @@ def _scan_pdf_inventory(year: int = 2026):
 
     # AWS: no local data dir — scan S3
     import boto3 as _boto3
-    s3 = _boto3.client("s3")
+    from botocore.config import Config as _BotoCfg
+    s3 = _boto3.client("s3", config=_BotoCfg(connect_timeout=5, read_timeout=15, retries={"max_attempts": 1}))
     prefix = f"{_S3_PREFIX}/{year}/"
     try:
         paginator = s3.get_paginator("list_objects_v2")
@@ -3630,7 +3809,7 @@ def _scan_pdf_inventory(year: int = 2026):
     return pdfs
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _db_coverage(year: int = 2026):
     cur = _conn().cursor()
     cur.execute(
@@ -3641,7 +3820,7 @@ def _db_coverage(year: int = 2026):
     return {r[0] for r in cur.fetchall()}
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _db_coverage_detail(year: int = 2026):
     cur = _conn().cursor()
     cur.execute(
@@ -3721,6 +3900,117 @@ with tab_mgmt:
                     _scan_pdf_inventory.clear()
                     st.session_state.pop(f"mgmt_upload_{sel_year}", None)
                     st.rerun()
+
+    st.divider()
+
+    # ── DA / RT Price Data Export ──────────────────────────────────────────────
+    with st.expander(f"📥 {_t('export_title')}", expanded=True):
+        st.caption(_t("export_caption"))
+        _ex_col1, _ex_col2 = st.columns([1, 1])
+        _ex_start = _ex_col1.date_input("开始日期 Start", date(sel_year, 1, 1), key="export_start")
+        _ex_end   = _ex_col2.date_input("结束日期 End",   min(date(sel_year, 12, 31), date.today()), key="export_end")
+
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _build_export_xlsx(_start: str, _end: str) -> bytes:
+            import io
+            import openpyxl
+            from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+
+            df_exp = pd.read_sql(
+                """SELECT report_date, province_cn, da_avg, rt_avg
+                   FROM spot_daily
+                   WHERE report_date BETWEEN %s AND %s AND da_avg IS NOT NULL
+                   ORDER BY report_date, province_cn""",
+                _conn(),
+                params=(_start, _end),
+            )
+
+            if df_exp.empty:
+                # return empty workbook
+                wb = openpyxl.Workbook()
+                wb.active.title = "无数据"
+                buf = io.BytesIO()
+                wb.save(buf)
+                return buf.getvalue()
+
+            # Pivot: rows = date, columns = province_cn
+            pivot_da = df_exp.pivot_table(index="report_date", columns="province_cn", values="da_avg")
+            pivot_rt = df_exp.pivot_table(index="report_date", columns="province_cn", values="rt_avg")
+
+            # Province column order: sort by name
+            provinces = sorted(set(df_exp["province_cn"].dropna()))
+            pivot_da = pivot_da.reindex(columns=provinces)
+            pivot_rt = pivot_rt.reindex(columns=provinces)
+
+            # Helper: write one sheet
+            header_fill = PatternFill("solid", fgColor="1F4E79")
+            header_font = Font(bold=True, color="FFFFFF")
+            date_fill   = PatternFill("solid", fgColor="D6E4F0")
+            thin        = Side(style="thin", color="CCCCCC")
+            border      = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+            def _write_sheet(ws, pivot, sheet_title: str, unit_label: str):
+                ws.title = sheet_title
+                cols = list(pivot.columns)
+                # Row 1: title
+                ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(cols) + 1)
+                title_cell = ws.cell(1, 1, f"{sheet_title}（{unit_label}）")
+                title_cell.font = Font(bold=True, size=13)
+                title_cell.alignment = Alignment(horizontal="center")
+                # Row 2: headers
+                ws.cell(2, 1, "日期").font = header_font
+                ws.cell(2, 1).fill = header_fill
+                ws.cell(2, 1).alignment = Alignment(horizontal="center")
+                for ci, prov in enumerate(cols, start=2):
+                    c = ws.cell(2, ci, prov)
+                    c.font = header_font
+                    c.fill = header_fill
+                    c.alignment = Alignment(horizontal="center")
+                # Data rows
+                for ri, (dt_idx, row) in enumerate(pivot.iterrows(), start=3):
+                    dt_str = dt_idx.strftime("%Y-%m-%d") if hasattr(dt_idx, "strftime") else str(dt_idx)
+                    dc = ws.cell(ri, 1, dt_str)
+                    dc.fill = date_fill
+                    dc.font = Font(bold=True)
+                    dc.alignment = Alignment(horizontal="center")
+                    for ci, prov in enumerate(cols, start=2):
+                        val = row.get(prov)
+                        c = ws.cell(ri, ci)
+                        if val is not None and not (isinstance(val, float) and val != val):
+                            c.value = round(float(val), 4)
+                            c.number_format = "0.0000"
+                        c.border = border
+                        c.alignment = Alignment(horizontal="right")
+                # Column widths
+                ws.column_dimensions["A"].width = 13
+                for ci in range(2, len(cols) + 2):
+                    ws.column_dimensions[get_column_letter(ci)].width = 9
+                # Freeze header row
+                ws.freeze_panes = "B3"
+
+            wb = openpyxl.Workbook()
+            _write_sheet(wb.active,    pivot_da, "日前均价",  "元/千瓦时")
+            _write_sheet(wb.create_sheet(), pivot_rt, "实时均价", "元/千瓦时")
+
+            buf = io.BytesIO()
+            wb.save(buf)
+            return buf.getvalue()
+
+        if st.button("生成 Excel / Generate", key="export_generate"):
+            with st.spinner("查询数据库…"):
+                try:
+                    _xlsx_bytes = _build_export_xlsx(str(_ex_start), str(_ex_end))
+                    st.download_button(
+                        label=f"📥 {_t('export_btn')}",
+                        data=_xlsx_bytes,
+                        file_name=_t("export_filename"),
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="export_dl",
+                    )
+                    st.success("点击上方按钮下载 / Click button above to download")
+                except Exception as _ex_exc:
+                    st.error(f"Export failed: {_ex_exc}")
 
     st.divider()
 
@@ -3998,3 +4288,247 @@ with tab_mgmt:
                     st.session_state.pop(_kbs_scan_key, None)
             else:
                 st.caption("Click 'Scan' to check for new files in data/market-fundamentals/")
+
+    # ── WeChat Article Batch Import ───────────────────────────────────────────
+    st.divider()
+    with st.expander(f"💬 {_t('wechat_title')}", expanded=False):
+        st.caption(_t("wechat_caption"))
+
+        _wc_urls_raw = st.text_area(
+            _t("wechat_url_label"),
+            height=140,
+            placeholder=_t("wechat_url_placeholder"),
+            key="wechat_urls_input",
+        )
+        _wc_urls = [u.strip() for u in _wc_urls_raw.splitlines() if u.strip().startswith("http")]
+
+        _wc_col1, _wc_col2 = st.columns([2, 1])
+        _wc_category = _wc_col2.selectbox(
+            "Category",
+            options=["research_report", "market_rules", "policy_doc", "technical_spec", "annual_report", "other"],
+            index=0,
+            key="wechat_category",
+        )
+        _wc_app = _wc_col2.selectbox(
+            "App scope",
+            options=["shared", "strategist", "trader"],
+            index=0,
+            key="wechat_app_scope",
+        )
+
+        _wc_run = _wc_col1.button(
+            _t("wechat_run_btn", n=len(_wc_urls)) if _wc_urls else _t("wechat_no_urls"),
+            disabled=not _wc_urls,
+            type="primary",
+            key="wechat_run",
+        )
+
+        if _wc_run and _wc_urls:
+            import requests as _requests
+
+            def _fetch_wechat(url: str) -> tuple[bytes, str]:
+                """Fetch a WeChat article and return (text_bytes, title)."""
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                        "Version/17.0 Mobile/15E148 Safari/604.1"
+                    ),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Referer": "https://mp.weixin.qq.com/",
+                }
+                resp = _requests.get(url, headers=headers, timeout=30)
+                resp.raise_for_status()
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.content, "html.parser")
+                # Extract title
+                title_tag = (
+                    soup.find("h1", id="activity-name")
+                    or soup.find("h2", class_="rich_media_title")
+                    or soup.find("title")
+                )
+                title = (title_tag.get_text(strip=True) if title_tag else "") or url.split("/s/")[-1][:40]
+                # Remove non-content elements
+                for _tag in soup(["script", "style", "nav", "footer", "header",
+                                   "iframe", "img", "svg"]):
+                    _tag.decompose()
+                # Try article body first, fall back to full page text
+                content_div = (
+                    soup.find("div", id="js_content")
+                    or soup.find("div", class_="rich_media_content")
+                )
+                if content_div:
+                    text = content_div.get_text(separator="\n")
+                else:
+                    text = soup.get_text(separator="\n")
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                return "\n".join(lines).encode("utf-8"), title
+
+            from services.knowledge_pool.knowledge_docs import (
+                init_knowledge_tables as _wc_init,
+                register_and_ingest as _wc_ingest,
+            )
+            _wc_init()
+
+            _wc_added, _wc_skipped, _wc_errors = 0, 0, 0
+            _wc_total = len(_wc_urls)
+            _wc_prog = st.progress(0, text=_t("prog_starting"))
+            _wc_api_key = _os.environ.get("ANTHROPIC_API_KEY")
+            _wc_status_lines = []
+
+            for _wi, _wu in enumerate(_wc_urls):
+                _wc_prog.progress(
+                    _wi / _wc_total,
+                    text=_t("wechat_fetching", i=_wi + 1, n=_wc_total, url=_wu[:60]),
+                )
+                try:
+                    _wc_bytes, _wc_title = _fetch_wechat(_wu)
+                    _safe_title = _wc_title[:120].replace("/", "_").replace("\\", "_")
+                    _wc_fname = f"{_safe_title}.txt"
+                    _, _wc_is_new, _wc_cat = _wc_ingest(
+                        file_bytes=_wc_bytes,
+                        filename=_wc_fname,
+                        category_override=_wc_category,
+                        app=_wc_app,
+                        api_key=_wc_api_key,
+                        synthesize=False,
+                    )
+                    if _wc_is_new:
+                        _wc_added += 1
+                        _wc_status_lines.append(f"✅ {_wc_title[:80]}")
+                    else:
+                        _wc_skipped += 1
+                        _wc_status_lines.append(f"⏭️ already indexed: {_wc_title[:80]}")
+                except Exception as _wc_exc:
+                    _wc_errors += 1
+                    _wc_status_lines.append(f"❌ {_wu[:60]} — {_wc_exc}")
+
+            _wc_prog.progress(1.0, text=_t("prog_done"))
+            st.success(_t("wechat_done", added=_wc_added, skipped=_wc_skipped, errors=_wc_errors))
+            for _sl in _wc_status_lines:
+                st.markdown(_sl)
+
+            # Offer immediate KB digest
+            if _wc_added > 0:
+                if st.button(_t("wechat_digest_btn"), key="wechat_digest_now"):
+                    from services.knowledge_pool.expert_memory import digest_spot_kb_docs as _wc_digest
+                    _wc_api_key2 = _os.environ.get("ANTHROPIC_API_KEY")
+                    if _wc_api_key2:
+                        with st.spinner("Digesting new articles into insights…"):
+                            _wc_n = _wc_digest(api_key=_wc_api_key2)
+                        st.toast(f"Extracted {_wc_n} insight(s) from new articles.")
+                    else:
+                        st.warning("ANTHROPIC_API_KEY not set — cannot digest.")
+
+    # ── Daily Market Report ───────────────────────────────────────────────────
+    st.divider()
+    with st.expander(f"📧 {_t('report_section_title')}", expanded=False):
+        st.caption(_t("report_section_caption"))
+
+        # Scheduler status
+        try:
+            _rpt_sched = _start_spot_scheduler()
+            if _rpt_sched is not None:
+                _rpt_jobs = _rpt_sched.get_jobs()
+                _rpt_job  = next((j for j in _rpt_jobs if j.id == "spot_daily_report"), None)
+                if _rpt_job and _rpt_job.next_run_time:
+                    st.info(
+                        f"⏰ {_t('report_schedule_status')}: running · "
+                        f"{_t('report_next_run')}: "
+                        f"{_rpt_job.next_run_time.strftime('%Y-%m-%d %H:%M %Z')}"
+                    )
+                else:
+                    st.warning("Scheduler running but no next run time found.")
+            else:
+                st.warning("APScheduler not available — install `apscheduler`.")
+        except Exception as _sched_exc:
+            st.warning(f"Scheduler status unavailable: {_sched_exc}")
+
+        st.markdown(f"**{_t('report_webhook_title')}**")
+        st.caption(_t("report_webhook_caption"))
+
+        # Module is loaded once per process via @st.cache_resource
+        try:
+            _rpt_mod = _get_spot_report_mod()
+        except Exception as _wt_exc:
+            st.warning(f"Could not load spot_report module: {_wt_exc}")
+            _rpt_mod = None
+
+        # ── Existing webhooks (cached — no DB hit on every rerun) ─────────────
+        _wh_rows = _cached_webhooks()
+        if _wh_rows:
+            for _wh in _wh_rows:
+                _wh_col1, _wh_col2, _wh_col3, _wh_col4 = st.columns([3, 2, 1, 1])
+                _wh_col1.text(_wh.get("webhook_url", "")[:60])
+                _wh_col2.text(_wh.get("label", ""))
+                _enabled_now = _wh_col3.checkbox(
+                    _t("report_webhook_enabled"),
+                    value=bool(_wh.get("enabled", True)),
+                    key=f"wh_enabled_{_wh['id']}",
+                    label_visibility="collapsed",
+                )
+                if _enabled_now != bool(_wh.get("enabled", True)):
+                    if _rpt_mod:
+                        _rpt_mod.upsert_webhook(
+                            _wh["webhook_url"], _wh.get("label", ""), _enabled_now
+                        )
+                    _cached_webhooks.clear()
+                    st.rerun()
+                if _wh_col4.button(_t("report_webhook_delete"),
+                                   key=f"wh_del_{_wh['id']}"):
+                    if _rpt_mod:
+                        _rpt_mod.delete_webhook(_wh["id"])
+                    _cached_webhooks.clear()
+                    st.rerun()
+        else:
+            st.caption(_t("report_webhook_empty"))
+
+        # ── Add new webhook ───────────────────────────────────────────────────
+        with st.form("add_webhook_form", clear_on_submit=True):
+            _new_wh_url = st.text_input(
+                _t("report_webhook_add_label"),
+                placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
+                type="password",
+            )
+            _new_wh_label = st.text_input(
+                _t("report_webhook_add_label_label"),
+                placeholder="e.g. Trading Team",
+            )
+            if st.form_submit_button(_t("report_webhook_add_btn"), type="primary"):
+                if _new_wh_url and _new_wh_url.startswith("http") and _rpt_mod:
+                    _rpt_mod.upsert_webhook(_new_wh_url, _new_wh_label, True)
+                    _cached_webhooks.clear()
+                    st.success(_t("report_webhook_added"))
+                    st.rerun()
+                else:
+                    st.error("Please enter a valid webhook URL.")
+
+        st.divider()
+
+        # ── Send Now ──────────────────────────────────────────────────────────
+        _rpt_email_default = _os.environ.get("REPORT_TO_EMAIL", _DEFAULT_RECIPIENT)
+        _rpt_email = st.text_input(
+            _t("report_email_label"),
+            value=_rpt_email_default,
+            help=_t("report_email_help"),
+            key="report_email_override",
+        )
+        if st.button(_t("report_send_now"), type="primary", key="report_send_now_btn"):
+            if _rpt_mod is not None:
+                with st.spinner("Generating and sending report…"):
+                    try:
+                        _rpt_result = _rpt_mod.run_daily_report(to_email=_rpt_email or None)
+                        if _rpt_result["status"] == "success":
+                            st.success(
+                                _t("report_send_success",
+                                   size=_rpt_result.get("size_bytes", 0),
+                                   rdate=_rpt_result.get("date", "?"))
+                            )
+                            st.info(_t("report_send_wecom", result=_rpt_result.get("wecom", "skipped")))
+                        else:
+                            st.error(_t("report_send_error", err=_rpt_result.get("error", "?")))
+                    except Exception as _rpt_exc:
+                        st.error(_t("report_send_error", err=str(_rpt_exc)))
+            else:
+                st.error("spot_report module not available.")

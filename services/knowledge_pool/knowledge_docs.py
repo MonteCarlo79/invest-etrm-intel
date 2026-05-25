@@ -168,6 +168,21 @@ def _extract_pages_image(
     return [(1, desc)]
 
 
+def _extract_pages_html(file_bytes: bytes) -> list[tuple[int, str]]:
+    """Strip HTML tags and split into pages of 100 lines each."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(file_bytes, "html.parser")
+    # Remove script/style noise
+    for tag in soup(["script", "style", "nav", "footer", "header"]):
+        tag.decompose()
+    text = soup.get_text(separator="\n")
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    pages = []
+    for i in range(0, max(len(lines), 1), 100):
+        pages.append((i // 100 + 1, "\n".join(lines[i:i + 100])))
+    return pages
+
+
 def _extract_pages_txt(file_bytes: bytes) -> list[tuple[int, str]]:
     """Split plain text into pages of 100 lines each."""
     text = file_bytes.decode("utf-8", errors="replace")
@@ -239,6 +254,8 @@ def _extract_pages(
     ext = filename.rsplit(".", 1)[-1].lower()
     if ext in ("ppt", "pptx"):
         return _extract_pages_pptx(file_bytes, api_key=api_key)
+    if ext in ("htm", "html"):
+        return _extract_pages_html(file_bytes)
     if ext == "txt":
         return _extract_pages_txt(file_bytes)
     if ext in ("doc", "docx"):
@@ -631,6 +648,38 @@ def register_url(
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
+def _has_cjk(text: str) -> bool:
+    """Return True if text contains CJK (Chinese/Japanese/Korean) characters."""
+    return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf]', text))
+
+
+def _cjk_bigrams(text: str, max_terms: int = 12) -> list[str]:
+    """Extract overlapping 2-character bigrams from all CJK runs in text.
+
+    PostgreSQL 'simple' text search cannot tokenise Chinese (no word boundaries),
+    so we break the query into bigrams and use ILIKE for each.  This gives good
+    recall for Chinese knowledge-base search without requiring pg_trgm or a
+    dedicated CJK dictionary.
+
+    Example:
+        "中长期合同情况" → ["中长", "长期", "期合", "合同", "同情", "情况"]
+    """
+    bigrams: list[str] = []
+    seen: set[str] = set()
+    for run in re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf]+', text):
+        if len(run) == 1:
+            if run not in seen:
+                bigrams.append(run)
+                seen.add(run)
+        else:
+            for i in range(len(run) - 1):
+                bg = run[i:i + 2]
+                if bg not in seen:
+                    bigrams.append(bg)
+                    seen.add(bg)
+    return bigrams[:max_terms]
+
+
 def search_reference_docs(
     query: str,
     category: Optional[str] = None,
@@ -639,6 +688,12 @@ def search_reference_docs(
 ) -> list[dict]:
     """
     Full-text search over staging.spot_knowledge_chunks.
+
+    For Latin/English queries (>4 chars): PostgreSQL FTS with 'simple' config.
+    For CJK queries: bigram ILIKE search — each 2-char bigram is an ILIKE
+        condition; rank = number of bigrams matched, so the most-relevant
+        chunks float to the top.  This handles Chinese without needing a CJK
+        PostgreSQL dictionary or pg_trgm extension.
 
     Args:
         app: When set, returns docs where app = :app OR app = 'shared'.
@@ -653,11 +708,32 @@ def search_reference_docs(
     conditions = ["d.active = TRUE"]
     params: list = []
 
-    if len(query) <= 4:
+    if _has_cjk(query):
+        # CJK query: bigram ILIKE OR — matches any chunk containing at least one bigram.
+        # Rank = sum of matched bigrams (higher = more relevant).
+        bigrams = _cjk_bigrams(query)
+        if bigrams:
+            ilike_conds = " OR ".join("c.chunk_text ILIKE %s" for _ in bigrams)
+            conditions.append(f"({ilike_conds})")
+            params.extend(f"%{bg}%" for bg in bigrams)
+            # Rank expression: count of bigrams matched
+            case_parts = " + ".join(
+                "(CASE WHEN c.chunk_text ILIKE %s THEN 1 ELSE 0 END)"
+                for _ in bigrams
+            )
+            rank_expr = f"({case_parts})::float"
+            params.extend(f"%{bg}%" for bg in bigrams)
+        else:
+            # Fallback: full ILIKE on the raw query (single-char or punctuation-only)
+            conditions.append("c.chunk_text ILIKE %s")
+            params.append(f"%{query}%")
+            rank_expr = "1.0::float"
+    elif len(query) <= 4:
         conditions.append("c.chunk_text ILIKE %s")
         params.append(f"%{query}%")
         rank_expr = "1.0::float"
     else:
+        # Latin/numeric query: PostgreSQL FTS
         conditions.append(
             "to_tsvector('simple', c.chunk_text) @@ plainto_tsquery('simple', %s)"
         )

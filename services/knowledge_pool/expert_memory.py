@@ -36,6 +36,7 @@ from typing import Optional
 import anthropic
 
 from .db import get_conn
+from .knowledge_docs import _has_cjk, _cjk_bigrams
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,22 @@ def get_relevant_insights(
     ]
     params: list = [min_conf_val]
 
-    if len(query) > 4:
+    if _has_cjk(query):
+        bigrams = _cjk_bigrams(query)
+        if bigrams:
+            ilike_conds = " OR ".join("insight_text ILIKE %s" for _ in bigrams)
+            conditions.append(f"({ilike_conds})")
+            params.extend(f"%{bg}%" for bg in bigrams)
+            case_parts = " + ".join(
+                "(CASE WHEN insight_text ILIKE %s THEN 1 ELSE 0 END)" for _ in bigrams
+            )
+            rank_expr = f"({case_parts})::float"
+            params.extend(f"%{bg}%" for bg in bigrams)
+        else:
+            conditions.append("insight_text ILIKE %s")
+            params.append(f"%{query}%")
+            rank_expr = "1.0::float"
+    elif len(query) > 4:
         conditions.append(
             "to_tsvector('simple', insight_text) @@ plainto_tsquery('simple', %s)"
         )
@@ -388,7 +404,7 @@ def digest_spot_kb_docs(
     """
     Digest unprocessed synthesis docs into structured expert insights.
 
-    Reads from staging.kp_doc_synthesis + staging.kp_qa_pairs for docs whose
+    Reads from staging.kp_doc_summaries + staging.kp_qa_pairs for docs whose
     doc_id is not yet referenced in staging.kp_expert_insights.source_doc_id.
 
     Args:
@@ -414,7 +430,7 @@ def digest_spot_kb_docs(
                 cur.execute(
                     """
                     SELECT s.doc_id, s.summary_text, d.file_name, d.category
-                    FROM staging.kp_doc_synthesis s
+                    FROM staging.kp_doc_summaries s
                     JOIN staging.spot_knowledge_docs d ON d.id = s.doc_id
                     WHERE s.doc_id = ANY(%s)
                       AND s.doc_id NOT IN (
@@ -429,7 +445,7 @@ def digest_spot_kb_docs(
                 cur.execute(
                     """
                     SELECT s.doc_id, s.summary_text, d.file_name, d.category
-                    FROM staging.kp_doc_synthesis s
+                    FROM staging.kp_doc_summaries s
                     JOIN staging.spot_knowledge_docs d ON d.id = s.doc_id
                     WHERE s.doc_id NOT IN (
                         SELECT DISTINCT source_doc_id

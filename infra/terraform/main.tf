@@ -102,7 +102,7 @@ resource "aws_security_group" "ecs_tasks" {
   ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
-    to_port         = 8508
+    to_port         = 8512
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -1490,6 +1490,34 @@ resource "aws_ecs_task_definition" "spot_markets" {
         {
           name  = "UPLOADS_BUCKET"
           value = var.uploads_bucket_name
+        },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "REPORT_FROM_EMAIL"
+          value = var.smtp_user
+        },
+        {
+          name  = "REPORT_TO_EMAIL"
+          value = var.report_email_to
+        },
+        {
+          name  = "WECOM_WEBHOOK_URL"
+          value = var.spot_market_wecom_webhook_url
         }
       ]
 

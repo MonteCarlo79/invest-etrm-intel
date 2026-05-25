@@ -19,7 +19,9 @@ RUN pip install --no-cache-dir \
     xlrd \
     openpyxl \
     "statsmodels>=0.14" \
-    "beautifulsoup4>=4.12"
+    "beautifulsoup4>=4.12" \
+    "reportlab>=4.0" \
+    "apscheduler>=3.10"
 
 # Install CJK font AFTER matplotlib so the font cache is rebuilt with it present.
 # fonts-noto-cjk provides "Noto Sans CJK SC" used by chart_geo_map for Chinese titles.

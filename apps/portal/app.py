@@ -769,7 +769,7 @@ with col_gb:
     intl_cols = st.columns(2)
     with intl_cols[0]:
         _render_agent_section(
-            icon='🇦🇺',
+            icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
             name="Australia (NEM) Market Intelligence",
             subtitle="AEMO · NEM spot · FCAS · AI Strategist",
             description=(
@@ -791,7 +791,7 @@ with col_gb:
         )
     with intl_cols[1]:
         _render_agent_section(
-            icon='🇺🇸',
+            icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
             name="ERCOT (Texas) Market Intelligence",
             subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
             description=(
@@ -814,7 +814,7 @@ with col_gb:
     intl_cols2 = st.columns(2)
     with intl_cols2[0]:
         _render_agent_section(
-            icon='🇺🇸',
+            icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
             name="PJM (US East) Market Intelligence",
             subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
             description=(
@@ -835,7 +835,7 @@ with col_gb:
         )
     with intl_cols2[1]:
         _render_agent_section(
-            icon='🇺🇸',
+            icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
             name="CAISO (California) Market Intelligence",
             subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
             description=(

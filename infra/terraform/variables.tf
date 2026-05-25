@@ -461,6 +461,13 @@ variable "wecom_webhook_url" {
   default   = ""
 }
 
+variable "spot_market_wecom_webhook_url" {
+  description = "WeCom bot webhook URL for the spot market daily report (separate from GB market)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "image_strategy_agent" {
   description = "Docker image for strategy agent"
   type        = string

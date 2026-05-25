@@ -90,7 +90,7 @@ def _resolve_app(path: Path, app_override: str | None) -> str:
 
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".pptx", ".ppt", ".docx", ".doc",
-    ".xlsx", ".xls", ".txt",
+    ".xlsx", ".xls", ".txt", ".html", ".htm",
     ".png", ".jpg", ".jpeg", ".webp",
 }
 
@@ -195,6 +195,9 @@ def main() -> None:
                         help="Pre-populate the checkpoint from the DB (filename match), "
                              "then exit. Run this once after a large ingest to avoid "
                              "redundant DB queries on future runs.")
+    parser.add_argument("--digest", action="store_true",
+                        help="After ingestion, run digest_spot_kb_docs() to extract "
+                             "expert insights from newly ingested documents.")
     args = parser.parse_args()
 
     root = Path(args.dir)
@@ -361,6 +364,20 @@ def main() -> None:
         f"checkpoint-skipped: {checkpoint_skipped}  "
         f"errors: {counts.get('error', 0)}"
     )
+
+    # ── Post-ingest digest ────────────────────────────────────────────────────
+    if args.digest and counts.get("added", 0) > 0:
+        print(f"\nRunning KB digest (--digest flag set, {counts['added']} new doc(s))…",
+              flush=True)
+        try:
+            from services.knowledge_pool.expert_memory import digest_spot_kb_docs as _digest
+            n_insights = _digest(api_key=api_key)
+            print(f"[DIGEST] Extracted {n_insights} new expert insight(s).")
+        except Exception as _dig_exc:
+            print(f"[DIGEST ERROR] {_dig_exc}", file=sys.stderr)
+    elif args.digest:
+        print("\n[DIGEST] No new documents added — skipping digest.")
+
     if counts.get("error", 0) > 0:
         sys.exit(1)
 

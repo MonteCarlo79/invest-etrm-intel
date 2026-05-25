@@ -31,6 +31,7 @@ from typing import Optional
 import anthropic
 
 from .db import get_conn
+from .knowledge_docs import _has_cjk, _cjk_bigrams
 
 logger = logging.getLogger(__name__)
 
@@ -513,7 +514,22 @@ def search_summaries(query: str, app: Optional[str] = None, limit: int = 5) -> l
     conditions = ["d.active = TRUE"]
     params: list = []
 
-    if len(query) > 4:
+    if _has_cjk(query):
+        bigrams = _cjk_bigrams(query)
+        if bigrams:
+            ilike_conds = " OR ".join("s.summary_text ILIKE %s" for _ in bigrams)
+            conditions.append(f"({ilike_conds})")
+            params.extend(f"%{bg}%" for bg in bigrams)
+            case_parts = " + ".join(
+                "(CASE WHEN s.summary_text ILIKE %s THEN 1 ELSE 0 END)" for _ in bigrams
+            )
+            rank_expr = f"({case_parts})::float"
+            params.extend(f"%{bg}%" for bg in bigrams)
+        else:
+            conditions.append("s.summary_text ILIKE %s")
+            params.append(f"%{query}%")
+            rank_expr = "1.0::float"
+    elif len(query) > 4:
         conditions.append(
             "to_tsvector('simple', s.summary_text) @@ plainto_tsquery('simple', %s)"
         )
@@ -553,7 +569,23 @@ def search_qa_pairs(query: str, app: Optional[str] = None, limit: int = 8) -> li
     conditions = ["d.active = TRUE"]
     params: list = []
 
-    if len(query) > 4:
+    if _has_cjk(query):
+        bigrams = _cjk_bigrams(query)
+        if bigrams:
+            combined = "(qa.question || ' ' || qa.answer)"
+            ilike_conds = " OR ".join(f"{combined} ILIKE %s" for _ in bigrams)
+            conditions.append(f"({ilike_conds})")
+            params.extend(f"%{bg}%" for bg in bigrams)
+            case_parts = " + ".join(
+                f"(CASE WHEN {combined} ILIKE %s THEN 1 ELSE 0 END)" for _ in bigrams
+            )
+            rank_expr = f"({case_parts})::float"
+            params.extend(f"%{bg}%" for bg in bigrams)
+        else:
+            conditions.append("qa.question ILIKE %s OR qa.answer ILIKE %s")
+            params.extend([f"%{query}%", f"%{query}%"])
+            rank_expr = "1.0::float"
+    elif len(query) > 4:
         conditions.append(
             "to_tsvector('simple', qa.question || ' ' || qa.answer) @@ plainto_tsquery('simple', %s)"
         )
