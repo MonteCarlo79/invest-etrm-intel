@@ -227,6 +227,105 @@ def run_pipeline(pdf_path: str, dry_run: bool = False) -> dict:
     return result
 
 
+# ── Tool: ingest_kb_document ──────────────────────────────────────────────────
+
+def ingest_kb_document(
+    s3_key: str | None = None,
+    file_path: str | None = None,
+    category: str | None = None,
+    app: str = "shared",
+) -> dict:
+    """
+    Ingest a reference document (Excel, PDF, PPTX, DOCX, TXT, image, …) into the
+    knowledge base so it can be searched via search_reference_docs.
+
+    Provide exactly one of:
+      s3_key   — object key in the uploads S3 bucket, e.g. "uploads/report.xlsx"
+      file_path — repo-relative or absolute local path, e.g. "data/market-fundamentals/report.xlsx"
+
+    Supports all file types: pdf, xlsx, xls, pptx, ppt, docx, doc, txt, png, jpg, jpeg, webp.
+    If the file was already ingested (same SHA-256 hash), returns the existing doc_id without
+    re-processing.
+
+    Args:
+        s3_key:    S3 object key (relative to the uploads bucket root).
+        file_path: Local path (absolute, or relative to the repo root).
+        category:  Optional manual category override:
+                   market_rules | annual_report | policy_doc | technical_spec |
+                   research_report | other.  Omit to auto-detect.
+        app:       Document scope — 'shared' (all agents) or 'strategist'.  Default 'shared'.
+
+    Returns:
+        {
+          "doc_id":   int,
+          "is_new":   bool,   # False if already existed in KB
+          "category": str,
+          "filename": str,
+          "status":   "ingested" | "duplicate" | "error",
+          "message":  str
+        }
+    """
+    import os as _os
+
+    if not s3_key and not file_path:
+        return {"status": "error", "message": "Provide either s3_key or file_path."}
+
+    # ── Resolve file bytes ──────────────────────────────────────────────────────
+    if s3_key:
+        try:
+            import boto3 as _boto3
+            bucket = _os.environ.get("UPLOADS_BUCKET", "")
+            if not bucket:
+                return {"status": "error", "message": "UPLOADS_BUCKET env var not set."}
+            _s3 = _boto3.client("s3", region_name=_os.environ.get("AWS_REGION", "ap-southeast-1"))
+            obj = _s3.get_object(Bucket=bucket, Key=s3_key)
+            file_bytes = obj["Body"].read()
+            filename = s3_key.split("/")[-1]
+        except Exception as exc:
+            return {"status": "error", "message": f"S3 download failed: {exc}"}
+    else:
+        fp = Path(file_path)
+        if not fp.is_absolute():
+            fp = _REPO / file_path
+        if not fp.exists():
+            return {"status": "error", "message": f"File not found: {fp}"}
+        try:
+            file_bytes = fp.read_bytes()
+        except Exception as exc:
+            return {"status": "error", "message": f"File read failed: {exc}"}
+        filename = fp.name
+
+    # ── Ingest ─────────────────────────────────────────────────────────────────
+    try:
+        from services.knowledge_pool.knowledge_docs import register_and_ingest as _rai
+        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+        doc_id, is_new, detected_category = _rai(
+            file_bytes=file_bytes,
+            filename=filename,
+            category_override=category,
+            app=app,
+            api_key=api_key,
+            synthesize=bool(api_key),
+        )
+        status = "ingested" if is_new else "duplicate"
+        msg = (
+            f"Document ingested successfully (doc_id={doc_id}, category={detected_category})."
+            if is_new
+            else f"Document already in knowledge base (doc_id={doc_id}). No re-processing needed."
+        )
+        return {
+            "doc_id":   doc_id,
+            "is_new":   is_new,
+            "category": detected_category,
+            "filename": filename,
+            "status":   status,
+            "message":  msg,
+        }
+    except Exception as exc:
+        _log.error("ingest_kb_document failed: %s", exc, exc_info=True)
+        return {"status": "error", "message": str(exc)}
+
+
 # ── Tool: get_market_fundamentals ─────────────────────────────────────────────
 
 def get_market_fundamentals(
@@ -267,3 +366,58 @@ def get_market_fundamentals(
     """
     from services.market_fundamentals.loader import get_fundamentals_summary as _gfs
     return _gfs(provinces=provinces, year=year)
+
+
+# ── Tool: search_reference_docs ───────────────────────────────────────────────
+
+def search_reference_docs(
+    query: str,
+    category: str | None = None,
+    app: str | None = "shared",
+    limit: int = 5,
+) -> dict:
+    """
+    Full-text search over the knowledge base (staging.spot_knowledge_chunks).
+
+    Searches all reference documents ingested into the spot-market knowledge
+    pool — PDFs, Excel files, policy documents, annual reports, research
+    papers, etc.
+
+    Both English/Latin and Chinese (CJK) queries are supported.
+    For CJK queries, bigram ILIKE search is used.
+    For Latin queries, PostgreSQL FTS with 'simple' config is used.
+
+    Args:
+        query:    Free-text search query (English or Chinese).
+        category: Optional filter — one of: market_rules | annual_report |
+                  policy_doc | technical_spec | research_report | other.
+                  Omit to search all categories.
+        app:      Scope filter — 'shared' returns documents visible to all
+                  agents; 'strategist' returns strategist-private docs plus
+                  shared docs.  Defaults to 'shared'.
+        limit:    Maximum number of chunk results to return (default 5, max 20).
+
+    Returns:
+        {
+          "results": [
+            {
+              "doc_id":     int,
+              "file_name":  str,
+              "category":   str,
+              "app":        str,
+              "page_no":    int | None,
+              "chunk_text": str,
+              "rank":       float
+            },
+            ...
+          ],
+          "count": int
+        }
+    """
+    try:
+        from services.knowledge_pool.knowledge_docs import search_reference_docs as _srd
+        rows = _srd(query=query, category=category, app=app, limit=min(limit, 20))
+        return {"results": rows, "count": len(rows)}
+    except Exception as exc:
+        _log.error("search_reference_docs failed: %s", exc, exc_info=True)
+        return {"results": [], "count": 0, "error": str(exc)}
