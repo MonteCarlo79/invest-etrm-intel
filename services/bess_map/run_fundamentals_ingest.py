@@ -18,7 +18,7 @@ import argparse
 import os
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -70,14 +70,16 @@ def _detect_fundamentals_cols(xlsx_path: Path) -> dict[str, str]:
     cols = [str(c).strip() for c in df0.columns]
 
     mapping: dict[str, str] = {}
+    used_excel_cols: set[str] = set()
     for (group_key, sfx_key), db_col in _FULL_MAP.items():
         group_kw = COLUMN_GROUPS[group_key][0]   # first element is the Chinese keyword
         for c in cols:
             # Skip price columns
             if "价格" in c or "出清价" in c or ("价" in c and "出力" not in c and "负荷" not in c and "空间" not in c):
                 continue
-            if group_kw in c and sfx_key in c:
+            if group_kw in c and sfx_key in c and c not in used_excel_cols:
                 mapping[db_col] = c
+                used_excel_cols.add(c)
                 break  # take first match per (group, suffix)
     return mapping
 
@@ -181,19 +183,20 @@ def _ingest_one_file(
     df = df.dropna(subset=["_hour"])
     df["_hour"] = df["_hour"].astype(int)
 
-    # Build datetime at hour start (Asia/Shanghai)
-    df["_dt"] = df.apply(
-        lambda r: datetime.combine(r["_date"], datetime.min.time())
-                  + timedelta(hours=int(r["_hour"])),
-        axis=1,
-    )
+    # Build datetime at hour start — vectorized to avoid apply returning DataFrame
+    # on Excel files with ambiguous column structures (e.g. 四川, 浙江)
+    df["_dt"] = pd.to_datetime(df["_date"]) + pd.to_timedelta(df["_hour"].astype(int), unit="h")
 
     # Aggregate 15-min → hourly mean for each fundamentals column
     agg_cols = {db_col: excel_col for db_col, excel_col in col_map.items()}
     rename_map = {v: k for k, v in agg_cols.items()}
 
-    fund_df = df[["_dt"] + list(agg_cols.values())].copy()
+    # Deduplicate: if two DB cols mapped to the same Excel col, only select it once
+    unique_excel_cols = list(dict.fromkeys(agg_cols.values()))
+    fund_df = df[["_dt"] + unique_excel_cols].copy()
     fund_df = fund_df.rename(columns=rename_map)
+    # Drop any residual duplicate columns (keep first occurrence)
+    fund_df = fund_df.loc[:, ~fund_df.columns.duplicated(keep="first")]
     for c in fund_df.columns:
         if c != "_dt":
             fund_df[c] = pd.to_numeric(fund_df[c], errors="coerce")
