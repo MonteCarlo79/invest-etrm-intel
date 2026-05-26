@@ -4507,6 +4507,30 @@ with tab_mgmt:
         st.divider()
 
         # ── Send Now ──────────────────────────────────────────────────────────
+        @st.cache_data(ttl=600, show_spinner=False)
+        def _last_rt_date():
+            try:
+                import pandas as _pd2
+                _df = _pd2.read_sql(
+                    "SELECT MAX(report_date) AS d FROM spot_daily WHERE rt_avg IS NOT NULL",
+                    _conn(),
+                )
+                _v = _df.iloc[0]["d"]
+                if _v is not None and not _pd2.isna(_v):
+                    return _pd2.Timestamp(_v).date()
+            except Exception:
+                pass
+            import datetime as _dt2
+            return _dt2.date.today() - _dt2.timedelta(days=1)
+
+        import datetime as _rdt
+        _rpt_default_date = _last_rt_date()
+        _rpt_date = st.date_input(
+            "Report date",
+            value=_rpt_default_date,
+            max_value=_rdt.date.today(),
+            key="report_date_pick",
+        )
         _rpt_email_default = _os.environ.get("REPORT_TO_EMAIL", _DEFAULT_RECIPIENT)
         _rpt_email = st.text_input(
             _t("report_email_label"),
@@ -4518,7 +4542,10 @@ with tab_mgmt:
             if _rpt_mod is not None:
                 with st.spinner("Generating and sending report…"):
                     try:
-                        _rpt_result = _rpt_mod.run_daily_report(to_email=_rpt_email or None)
+                        _rpt_result = _rpt_mod.run_daily_report(
+                            to_email=_rpt_email or None,
+                            report_date=_rpt_date,
+                        )
                         if _rpt_result["status"] == "success":
                             st.success(
                                 _t("report_send_success",

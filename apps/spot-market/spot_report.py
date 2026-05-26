@@ -48,6 +48,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _register_cjk_font() -> str:
     """Find and register a CJK TrueType/OpenType font with ReportLab.
@@ -123,8 +125,6 @@ def _register_cjk_font() -> str:
 
 
 _CJK = _register_cjk_font()
-
-logger = logging.getLogger(__name__)
 
 _DEFAULT_RECIPIENT = "chen_dpeng@hotmail.com"
 
@@ -416,7 +416,7 @@ def _generate_ai_commentary(
         return text
     except Exception as exc:
         logger.warning("AI commentary generation failed: %s", exc)
-        return ""
+        return f"[AI commentary unavailable: {exc}]"
 
 
 # ---------------------------------------------------------------------------
@@ -842,17 +842,18 @@ def send_report_wecom(
 
 
 def run_daily_report(to_email: str | None = None,
-                     wecom_urls: list[str] | None = None) -> dict:
+                     wecom_urls: list[str] | None = None,
+                     report_date: "date | None" = None) -> dict:
     """End-to-end: generate PDF, email, and optionally WeCom. Returns status dict."""
     import time
     t0 = time.time()
-    report_date = None
     try:
-        conn = _get_conn()
-        try:
-            report_date = _get_latest_data_date(conn)
-        finally:
-            conn.close()
+        if report_date is None:
+            conn = _get_conn()
+            try:
+                report_date = _get_latest_data_date(conn)
+            finally:
+                conn.close()
 
         pdf_bytes, ai_commentary = generate_report_pdf(report_date)
         send_report_email(pdf_bytes, report_date, to_email, ai_commentary=ai_commentary)

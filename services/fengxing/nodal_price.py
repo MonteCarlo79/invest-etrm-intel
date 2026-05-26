@@ -39,6 +39,8 @@ from datetime import date, timedelta
 from typing import Callable
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ def _post_page(
         "X-API-KEY-SECRET": api_key,      # never logged
     }
 
-    resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=_TIMEOUT)
+    resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=_TIMEOUT, verify=False)
 
     if resp.status_code == 429:
         raise RuntimeError("rate_limited")
@@ -188,7 +190,7 @@ def probe(api_key: str) -> str:
         "X-API-KEY-SECRET": api_key,
     }
     try:
-        resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=(10, 20))
+        resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=(10, 20), verify=False)
         if resp.status_code == 200:
             body = resp.json()
             code = body.get("code")
