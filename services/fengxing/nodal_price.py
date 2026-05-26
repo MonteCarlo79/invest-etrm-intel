@@ -44,7 +44,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
-_ENDPOINT = "https://lingfeng-saas.tradingthink.cn/api/base/metrics/data/query"
+_ENDPOINT = "https://lingfeng-saas.tradingthink.cn/api/open/v1/metrics/data/query"
 _METRIC_NAME = "avg_node_price"
 _COLUMNS = ["market_name", "node_name", "metric_time", "time_order_96"]
 _PAGE_SIZE = 50_000
@@ -52,7 +52,7 @@ _PAGE_SIZE = 50_000
 # Per-request timeouts: (connect_timeout_s, read_timeout_s)
 # Short connect timeout catches unreachable hosts quickly.
 # Read timeout is generous — a busy server on a cross-border link can be slow.
-_TIMEOUT = (10, 90)
+_TIMEOUT = (10, 120)
 
 _MAX_RETRIES = 2          # 2 attempts per page (total 3 tries including the first)
 _RETRY_DELAY = 3          # seconds between retries
