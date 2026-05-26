@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 _MMSDM_BASE = (
     "https://www.nemweb.com.au/Data_Archive/Wholesale_Electricity/MMSDM"
 )
+# As of 2025, AEMO moved from SQLServer to SQLLoader format.
+# New path: MMSDM_Historical_Data_SQLLoader/DATA/PUBLIC_ARCHIVE%2523TABLE%2523FILE01%2523YYYYMM010000.zip
+# Table names also changed: TRADING_PRICE→TRADINGPRICE, TRADINGLOAD→DISPATCHLOAD
+_MMSDM_USE_SQLLOADER = True  # set False to revert to legacy SQLServer format
 _GENERATORS_URL = (
     "https://aemo.com.au/-/media/files/electricity/nem/participant_information"
     "/nem-registration-and-exemption-list.xlsx"
@@ -114,6 +118,13 @@ def _parse_aemo_csv(
 # ---------------------------------------------------------------------------
 
 def _mmsdm_url(yyyy: int, mm: int, table: str) -> str:
+    if _MMSDM_USE_SQLLOADER:
+        # New format (2025+): SQLLoader path with %2523-encoded # separators
+        return (
+            f"{_MMSDM_BASE}/{yyyy}/MMSDM_{yyyy}_{mm:02d}"
+            f"/MMSDM_Historical_Data_SQLLoader/DATA"
+            f"/PUBLIC_ARCHIVE%2523{table}%2523FILE01%2523{yyyy}{mm:02d}010000.zip"
+        )
     return (
         f"{_MMSDM_BASE}/{yyyy}/MMSDM_{yyyy}_{mm:02d}"
         f"/MMSDM_Historical_Data_SQLServer/DATA"
@@ -253,20 +264,22 @@ def _upsert(
 # 1. Asset register
 # ---------------------------------------------------------------------------
 
-def ingest_assets(engine) -> int:
-    """Fetch AEMO generator registration, extract battery assets → au_bess_assets."""
+def _ingest_assets_from_excel(engine) -> int:
+    """Try the AEMO generator registration Excel → au_bess_assets.
+    Returns number of rows upserted, or 0 on failure (403, parse error, etc.).
+    """
     logger.info("Fetching AEMO generator registration from %s", _GENERATORS_URL)
     try:
         resp = requests.get(_GENERATORS_URL, headers=_REQUEST_HEADERS, timeout=60)
         resp.raise_for_status()
     except Exception as exc:
-        logger.error("Generator registration fetch failed: %s", exc)
+        logger.warning("Generator registration Excel fetch failed: %s", exc)
         return 0
 
     try:
         all_sheets = pd.read_excel(io.BytesIO(resp.content), sheet_name=None)
     except Exception as exc:
-        logger.error("Excel parse failed: %s", exc)
+        logger.warning("Excel parse failed: %s", exc)
         return 0
 
     # Find the "PU and Scheduled Loads" sheet (preferred) or any sheet with DUID
@@ -301,7 +314,6 @@ def ingest_assets(engine) -> int:
     batteries = gen_df[battery_mask].copy()
     if batteries.empty:
         logger.warning("No battery assets found — trying broader search")
-        # Some registrations use "BATTERY" in station name
         for col in gen_df.columns:
             if "STATION" in col.upper() or "NAME" in col.upper():
                 mask = gen_df[col].astype(str).str.upper().str.contains(
@@ -370,8 +382,129 @@ def ingest_assets(engine) -> int:
         pd.DataFrame(rows),
         ["asset", "history_table", "date_from"],
     )
-    logger.info("Assets: %d rows upserted for %d DUIDs", n, len(batteries))
+    logger.info("Assets (Excel): %d rows upserted for %d DUIDs", n, len(batteries))
     return n
+
+
+def _ingest_assets_from_mmsdm(engine) -> int:
+    """Fallback: extract BESS assets from MMSDM DUDETAIL + DUDETAILSUMMARY tables.
+
+    Uses DISPATCHTYPE='BIDIRECTIONAL' (new NEM classification for 2-way BESS units)
+    plus station name heuristics.  Pulls the most-recent available month's file.
+    REGISTEREDCAPACITY is used as rated_power; energy_capacity is left null (not
+    available in MMSDM — defaults to 2× rated_power in revenue computations).
+    """
+    from datetime import date as _date
+    today = _date.today()
+    # Most recent MMSDM archive is typically ~6 weeks behind today
+    lag_months = 2
+    target = today.replace(day=1)
+    for _ in range(lag_months):
+        if target.month == 1:
+            target = target.replace(year=target.year - 1, month=12)
+        else:
+            target = target.replace(month=target.month - 1)
+    yyyy, mm = target.year, target.month
+
+    logger.info("Fetching BESS assets from MMSDM DUDETAIL %04d-%02d", yyyy, mm)
+    detail_df = _read_mmsdm_table(yyyy, mm, "DUDETAIL")
+    summary_df = _read_mmsdm_table(yyyy, mm, "DUDETAILSUMMARY")
+
+    if detail_df.empty and summary_df.empty:
+        logger.warning("MMSDM DUDETAIL + DUDETAILSUMMARY both empty for %04d-%02d", yyyy, mm)
+        return 0
+
+    # Identify BESS DUIDs: BIDIRECTIONAL dispatch type OR name contains BATTERY/BESS/STORAGE
+    bess_duids: set[str] = set()
+    if not summary_df.empty and "DUID" in summary_df.columns:
+        if "DISPATCHTYPE" in summary_df.columns:
+            bidi = summary_df[summary_df["DISPATCHTYPE"].str.upper().str.strip() == "BIDIRECTIONAL"]["DUID"]
+            bess_duids.update(bidi.tolist())
+        if "STATIONID" in summary_df.columns:
+            name_mask = summary_df["STATIONID"].astype(str).str.upper().str.contains(
+                r"BATTER|BESS|STORAGE", na=False, regex=True
+            )
+            bess_duids.update(summary_df[name_mask]["DUID"].tolist())
+
+    if not bess_duids and not detail_df.empty and "DUID" in detail_df.columns:
+        if "DISPATCHTYPE" in detail_df.columns:
+            bidi = detail_df[detail_df["DISPATCHTYPE"].str.upper().str.strip() == "BIDIRECTIONAL"]["DUID"]
+            bess_duids.update(bidi.tolist())
+
+    if not bess_duids:
+        logger.warning("No BESS DUIDs found in MMSDM DUDETAIL/DUDETAILSUMMARY")
+        return 0
+
+    logger.info("Found %d BESS DUIDs via MMSDM", len(bess_duids))
+
+    rows = []
+    # From DUDETAILSUMMARY: region, stationid
+    if not summary_df.empty and "DUID" in summary_df.columns:
+        sum_bess = summary_df[summary_df["DUID"].isin(bess_duids)].copy()
+        # Keep most-recent entry per DUID
+        if "START_DATE" in sum_bess.columns:
+            sum_bess = sum_bess.sort_values("START_DATE", ascending=False).drop_duplicates("DUID")
+        for _, row in sum_bess.iterrows():
+            duid = str(row["DUID"]).strip()
+            if not duid:
+                continue
+            if "REGIONID" in row.index:
+                region = str(row["REGIONID"]).strip()
+                if region and region.lower() not in ("nan", "none", ""):
+                    rows.append({"asset": duid, "history_table": "region",
+                                 "date_from": date(2000, 1, 1), "date_to": None, "value": region})
+            if "PARTICIPANTID" in row.index:
+                op = str(row["PARTICIPANTID"]).strip()
+                if op and op.lower() not in ("nan", "none", ""):
+                    rows.append({"asset": duid, "history_table": "operator",
+                                 "date_from": date(2000, 1, 1), "date_to": None, "value": op})
+            if "STATIONID" in row.index:
+                st = str(row["STATIONID"]).strip()
+                if st and st.lower() not in ("nan", "none", ""):
+                    rows.append({"asset": duid, "history_table": "owner",
+                                 "date_from": date(2000, 1, 1), "date_to": None, "value": st})
+
+    # From DUDETAIL: rated_power (REGISTEREDCAPACITY), latest effective date per DUID
+    if not detail_df.empty and "DUID" in detail_df.columns:
+        det_bess = detail_df[detail_df["DUID"].isin(bess_duids)].copy()
+        if "EFFECTIVEDATE" in det_bess.columns:
+            det_bess = det_bess.sort_values("EFFECTIVEDATE", ascending=False).drop_duplicates("DUID")
+        for _, row in det_bess.iterrows():
+            duid = str(row["DUID"]).strip()
+            if not duid:
+                continue
+            cap_col = next((c for c in ("REGISTEREDCAPACITY", "MAXCAPACITY") if c in row.index), None)
+            if cap_col:
+                cap = str(row[cap_col]).strip()
+                if cap and cap.lower() not in ("nan", "none", "0", ""):
+                    rows.append({"asset": duid, "history_table": "rated_power",
+                                 "date_from": date(2000, 1, 1), "date_to": None, "value": cap})
+
+    if not rows:
+        logger.warning("Parsed 0 rows from MMSDM DUDETAIL for %d BESS DUIDs", len(bess_duids))
+        return 0
+
+    n = _upsert(
+        engine,
+        "intl_market.au_bess_assets",
+        pd.DataFrame(rows),
+        ["asset", "history_table", "date_from"],
+    )
+    logger.info("Assets (MMSDM fallback): %d rows upserted for %d DUIDs", n, len(bess_duids))
+    return n
+
+
+def ingest_assets(engine) -> int:
+    """Fetch AEMO BESS asset register → au_bess_assets.
+
+    Primary: AEMO generator registration Excel (aemo.com.au).
+    Fallback: MMSDM DUDETAIL + DUDETAILSUMMARY (BIDIRECTIONAL dispatch type).
+    """
+    n = _ingest_assets_from_excel(engine)
+    if n > 0:
+        return n
+    logger.info("Excel fetch returned 0 rows; trying MMSDM DUDETAIL fallback")
+    return _ingest_assets_from_mmsdm(engine)
 
 
 # ---------------------------------------------------------------------------
@@ -379,28 +512,38 @@ def ingest_assets(engine) -> int:
 # ---------------------------------------------------------------------------
 
 def ingest_spot_prices(engine, start: date, end: date) -> int:
-    """Fetch AEMO MMSDM TRADING_PRICE → au_spot_price."""
+    """Fetch AEMO MMSDM TRADINGPRICE (new) or TRADING_PRICE (legacy) → au_spot_price."""
     total = 0
     for yyyy, mm in _month_range(start, end):
-        df = _read_mmsdm_table(yyyy, mm, "TRADING_PRICE")
+        # New format uses TRADINGPRICE (no underscore); legacy used TRADING_PRICE
+        table_name = "TRADINGPRICE" if _MMSDM_USE_SQLLOADER else "TRADING_PRICE"
+        df = _read_mmsdm_table(yyyy, mm, table_name)
         if df.empty:
-            logger.warning("No TRADING_PRICE data for %04d-%02d", yyyy, mm)
+            logger.warning("No %s data for %04d-%02d", table_name, yyyy, mm)
             continue
 
-        # Keep energy market only
+        # Keep energy market only (legacy PERIODTYPE filter; new format has no PERIODTYPE)
         if "PERIODTYPE" in df.columns:
             df = df[df["PERIODTYPE"].str.upper().str.strip() == "ENERGY"]
 
         if "SETTLEMENTDATE" not in df.columns or "REGIONID" not in df.columns:
             logger.warning(
-                "TRADING_PRICE missing expected columns for %04d-%02d: %s",
-                yyyy, mm, list(df.columns),
+                "%s missing expected columns for %04d-%02d: %s",
+                table_name, yyyy, mm, list(df.columns),
             )
             continue
 
         records = []
         for _, row in df.iterrows():
-            sd, sp = _parse_settlement(row["SETTLEMENTDATE"])
+            # New TRADINGPRICE: use PERIODID directly (1-48); legacy: parse from timestamp
+            if "PERIODID" in df.columns and _MMSDM_USE_SQLLOADER:
+                try:
+                    sp = int(float(row["PERIODID"]))
+                except (ValueError, TypeError):
+                    continue
+                sd, _ = _parse_settlement(row["SETTLEMENTDATE"])
+            else:
+                sd, sp = _parse_settlement(row["SETTLEMENTDATE"])
             if not (start <= sd <= end):
                 continue
             try:
@@ -431,7 +574,13 @@ def ingest_spot_prices(engine, start: date, end: date) -> int:
 # 3. FCAS clearing prices
 # ---------------------------------------------------------------------------
 
+# FCAS price column name changed in MMSDM SQLLoader format (2025+):
+#   Old (SQLServer): RAISEREGRRP, RAISE6SECRRP, RAISE60SECRRP, RAISE5MINRRP etc.
+#   New (SQLLoader): RAISE6SECPRICE, RAISE60SECPRICE, RAISE5MINPRICE etc.
+#   Note: RAISEREG/LOWERREG prices were removed from DISPATCHREGIONSUM in new format
+#   (now only in DISPATCHPRICE table); availability columns remain.
 _FCAS_PRICE_MAP: dict[str, tuple[str, str]] = {
+    # Legacy SQLServer column names
     "RAISEREGRRP":   ("raise_reg",   "RAISEREGACTUALAVAILABILITY"),
     "LOWERREGRRP":   ("lower_reg",   "LOWERREGACTUALAVAILABILITY"),
     "RAISE6SECRRP":  ("raise_6s",    "RAISE6SECACTUALAVAILABILITY"),
@@ -440,6 +589,13 @@ _FCAS_PRICE_MAP: dict[str, tuple[str, str]] = {
     "LOWER6SECRRP":  ("lower_6s",    "LOWER6SECACTUALAVAILABILITY"),
     "LOWER60SECRRP": ("lower_60s",   "LOWER60SECACTUALAVAILABILITY"),
     "LOWER5MINRRP":  ("lower_5min",  "LOWER5MINACTUALAVAILABILITY"),
+    # New SQLLoader column names (2025+)
+    "RAISE6SECPRICE":  ("raise_6s",   "RAISE6SECACTUALAVAILABILITY"),
+    "RAISE60SECPRICE": ("raise_60s",  "RAISE60SECACTUALAVAILABILITY"),
+    "RAISE5MINPRICE":  ("raise_5min", "RAISE5MINACTUALAVAILABILITY"),
+    "LOWER6SECPRICE":  ("lower_6s",   "LOWER6SECACTUALAVAILABILITY"),
+    "LOWER60SECPRICE": ("lower_60s",  "LOWER60SECACTUALAVAILABILITY"),
+    "LOWER5MINPRICE":  ("lower_5min", "LOWER5MINACTUALAVAILABILITY"),
 }
 
 
@@ -524,33 +680,70 @@ def ingest_bess_wholesale(
     asset_power: dict,
     asset_capacity: dict,
 ) -> int:
-    """Compute BESS wholesale revenue: TRADINGLOAD × TRADING_PRICE → au_bess_leaderboard."""
+    """Compute BESS wholesale revenue: DISPATCHLOAD (new) / TRADINGLOAD (legacy) × spot price → au_bess_leaderboard.
+
+    New SQLLoader format uses DISPATCHLOAD (5-min intervals).  We aggregate to
+    30-min trading periods using PERIODID (same column in both TRADINGLOAD and
+    DISPATCHLOAD) so the DB join with au_spot_price remains unchanged.
+    """
     from sqlalchemy import text as sql_text
 
     total = 0
     for yyyy, mm in _month_range(start, end):
+        # New format: DISPATCHLOAD (5-min); legacy: TRADINGLOAD (30-min)
+        load_table = "DISPATCHLOAD" if _MMSDM_USE_SQLLOADER else "TRADINGLOAD"
         tl_df = _read_mmsdm_table(
-            yyyy, mm, "TRADINGLOAD",
+            yyyy, mm, load_table,
             filter_col="DUID", filter_vals=battery_duids,
         )
         if tl_df.empty:
-            logger.warning("No TRADINGLOAD battery rows for %04d-%02d", yyyy, mm)
+            logger.warning("No %s battery rows for %04d-%02d", load_table, yyyy, mm)
             continue
 
         required = {"DUID", "SETTLEMENTDATE", "TOTALCLEARED"}
         if not required.issubset(set(tl_df.columns)):
             logger.warning(
-                "TRADINGLOAD missing columns %04d-%02d: found %s",
-                yyyy, mm, list(tl_df.columns),
+                "%s missing columns %04d-%02d: found %s",
+                load_table, yyyy, mm, list(tl_df.columns),
             )
             continue
 
         tl_df["TOTALCLEARED"] = pd.to_numeric(tl_df["TOTALCLEARED"], errors="coerce").fillna(0.0)
         tl_df["_sd"] = tl_df["SETTLEMENTDATE"].apply(lambda x: _parse_settlement(x)[0])
-        tl_df["_sp"] = tl_df["SETTLEMENTDATE"].apply(lambda x: _parse_settlement(x)[1])
+
+        if "PERIODID" in tl_df.columns and _MMSDM_USE_SQLLOADER:
+            # TRADINGPRICE-style 30-min PERIODID present
+            tl_df["_sp"] = pd.to_numeric(tl_df["PERIODID"], errors="coerce").astype("Int64")
+        elif _MMSDM_USE_SQLLOADER:
+            # DISPATCHLOAD: 5-min intervals; derive 30-min trading period from timestamp.
+            # NEM convention: period 1 = 00:00–00:30, settled at 00:30.
+            # 5-min dispatches at 00:05..00:30 → period 1;  00:35..01:00 → period 2; etc.
+            def _dispatch_to_period(dt_str: str) -> int:
+                try:
+                    from datetime import datetime as _dt
+                    dt = _dt.strptime(dt_str.strip(), "%Y/%m/%d %H:%M:%S")
+                    mins = dt.hour * 60 + dt.minute
+                    if mins == 0:
+                        return 48  # midnight = end of period 48 previous day (crossover handled by _sd)
+                    return (mins - 1) // 30 + 1
+                except Exception:
+                    return 0
+            tl_df["_sp"] = tl_df["SETTLEMENTDATE"].apply(_dispatch_to_period)
+        else:
+            tl_df["_sp"] = tl_df["SETTLEMENTDATE"].apply(lambda x: _parse_settlement(x)[1])
+
         tl_df = tl_df[(tl_df["_sd"] >= start) & (tl_df["_sd"] <= end)]
         if tl_df.empty:
             continue
+
+        # For 5-min DISPATCHLOAD: aggregate TOTALCLEARED mean per 30-min period
+        # (mean dispatch MW over the 6 five-min intervals in each trading period)
+        if _MMSDM_USE_SQLLOADER:
+            tl_df = (
+                tl_df.groupby(["DUID", "_sd", "_sp"])["TOTALCLEARED"]
+                .mean()
+                .reset_index()
+            )
 
         # Map DUID → NEM region for price join
         tl_df["_region"] = tl_df["DUID"].map(asset_region)
@@ -623,7 +816,15 @@ def ingest_bess_wholesale(
 # 4b. BESS FCAS revenue
 # ---------------------------------------------------------------------------
 
+# FCAS enablement column → corresponding FCAS price column in DISPATCHREGIONSUM.
+# Old SQLServer format: enablement cols suffixed with MW (e.g. RAISEREGMW, RAISE6SECMW)
+#   and price cols suffixed with RRP (e.g. RAISEREGRRP, RAISE6SECRRP)
+# New SQLLoader format: enablement cols without suffix (RAISEREG, RAISE6SEC etc.)
+#   and price cols suffixed with PRICE (e.g. RAISE6SECPRICE, LOWER5MINPRICE)
+#   Note: RAISEREGPRICE/LOWERREGPRICE absent from new DISPATCHREGIONSUM; reg revenue
+#   approximated by zero (or can be added via DISPATCHPRICE table later).
 _FCAS_ENABLEMENT_MAP: dict[str, str] = {
+    # Legacy SQLServer column names (still present in DISPATCHLOAD for some years)
     "RAISEREGMW":  "RAISEREGRRP",
     "LOWERREGMW":  "LOWERREGRRP",
     "RAISE6SECMW": "RAISE6SECRRP",
@@ -632,6 +833,15 @@ _FCAS_ENABLEMENT_MAP: dict[str, str] = {
     "LOWER6SECMW": "LOWER6SECRRP",
     "LOWER60SECMW":"LOWER60SECRRP",
     "LOWER5MINMW": "LOWER5MINRRP",
+    # New SQLLoader DISPATCHLOAD column names (2025+)
+    "RAISEREG":  "RAISEREGRRP",   # no RAISEREGPRICE in DISPATCHREGIONSUM
+    "LOWERREG":  "LOWERREGRRP",   # no LOWERREGPRICE in DISPATCHREGIONSUM
+    "RAISE6SEC": "RAISE6SECPRICE",
+    "RAISE60SEC":"RAISE60SECPRICE",
+    "RAISE5MIN": "RAISE5MINPRICE",
+    "LOWER6SEC": "LOWER6SECPRICE",
+    "LOWER60SEC":"LOWER60SECPRICE",
+    "LOWER5MIN": "LOWER5MINPRICE",
 }
 
 # Map each enablement col to the market label we store in leaderboard
@@ -644,6 +854,15 @@ _ENABLEMENT_TO_MARKET: dict[str, str] = {
     "LOWER6SECMW": "lower_contingency",
     "LOWER60SECMW":"lower_contingency",
     "LOWER5MINMW": "lower_contingency",
+    # New SQLLoader names
+    "RAISEREG":  "raise_reg",
+    "LOWERREG":  "lower_reg",
+    "RAISE6SEC": "raise_contingency",
+    "RAISE60SEC":"raise_contingency",
+    "RAISE5MIN": "raise_contingency",
+    "LOWER6SEC": "lower_contingency",
+    "LOWER60SEC":"lower_contingency",
+    "LOWER5MIN": "lower_contingency",
 }
 
 
@@ -656,22 +875,24 @@ def ingest_bess_fcas(
     asset_power: dict,
     asset_capacity: dict,
 ) -> int:
-    """Compute BESS FCAS revenue: DISPATCH_UNIT_SOLUTION × DISPATCHREGIONSUM."""
+    """Compute BESS FCAS revenue: DISPATCHLOAD (new) / DISPATCH_UNIT_SOLUTION (legacy) × DISPATCHREGIONSUM."""
     total = 0
     for yyyy, mm in _month_range(start, end):
-        # DISPATCH_UNIT_SOLUTION — stream-filter to battery DUIDs only
-        # (reduces ~200 MB download to a few MB of relevant rows)
+        # New SQLLoader format uses DISPATCHLOAD which contains both TOTALCLEARED
+        # and FCAS enablement columns (RAISEREGMW etc.)
+        # Legacy SQLServer format used DISPATCH_UNIT_SOLUTION for FCAS columns.
+        fcas_table = "DISPATCHLOAD" if _MMSDM_USE_SQLLOADER else "DISPATCH_UNIT_SOLUTION"
         dus_df = _read_mmsdm_table(
-            yyyy, mm, "DISPATCH_UNIT_SOLUTION",
+            yyyy, mm, fcas_table,
             filter_col="DUID", filter_vals=battery_duids,
         )
         if dus_df.empty:
-            logger.warning("No DISPATCH_UNIT_SOLUTION battery rows for %04d-%02d", yyyy, mm)
+            logger.warning("No %s battery rows for %04d-%02d", fcas_table, yyyy, mm)
             continue
 
         if "SETTLEMENTDATE" not in dus_df.columns:
             logger.warning(
-                "DISPATCH_UNIT_SOLUTION missing SETTLEMENTDATE for %04d-%02d", yyyy, mm
+                "%s missing SETTLEMENTDATE for %04d-%02d", fcas_table, yyyy, mm
             )
             continue
 
