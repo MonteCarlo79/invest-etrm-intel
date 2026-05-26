@@ -111,6 +111,11 @@ apps/bess-inner-mongolia/
 !services/knowledge_pool/
 !services/market_fundamentals/
 
+# bess-map image exceptions
+!auth/
+!shared/
+!services/bess_map/
+
 # IDE / OS
 .idea/
 .vscode/
