@@ -182,6 +182,7 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_no_files":   "No files uploaded this session. Upload Excel files above first.",
         "mgmt_fund_s3_needed":  "S3 not configured — cannot download files for ingestion.",
         "mgmt_col_last_fund":   "Last fundamentals date",
+        "mgmt_col_missing_dates": "Missing dates (gaps)",
         "data_ops_log_title":   "Data Operations Log",
         "mgmt_batch_title":     "Batch Backfill",
         "mgmt_batch_caption":   "Download + ingest + capture for stale or missing provinces via the LingFeng scheduled pipeline.",
@@ -329,6 +330,7 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_no_files":   "本次会话无已上传文件，请先在上方上传Excel文件。",
         "mgmt_fund_s3_needed":  "S3未配置——无法下载文件进行导入。",
         "mgmt_col_last_fund":   "最新基本面日期",
+        "mgmt_col_missing_dates": "缺失日期（断档）",
         "data_ops_log_title":   "数据操作日志",
         "mgmt_batch_title":     "批量补录",
         "mgmt_batch_caption":   "对过旧或缺失数据的省份执行自动下载、导入和捕获流程。",
@@ -623,6 +625,51 @@ def load_coverage(_eng_key):
         ORDER BY h.province
     """)
     return pd.read_sql(sql, _eng(), parse_dates=["last_hourly", "last_capture", "last_fund"])
+
+def _compress_dates(dates):
+    """Compress a list/array of date objects into a compact range string like '2026-01-31~2026-02-04'."""
+    if dates is None or len(dates) == 0:
+        return ""
+    dates = sorted(dates)
+    ranges, s, e = [], dates[0], dates[0]
+    for d in dates[1:]:
+        if (d - e).days == 1:
+            e = d
+        else:
+            ranges.append(str(s) if s == e else f"{s}~{e}")
+            s = e = d
+    ranges.append(str(s) if s == e else f"{s}~{e}")
+    return ", ".join(ranges)
+
+@st.cache_data(ttl=3600)
+def load_coverage_gaps(_eng_key):
+    """Return {province: compressed_gap_string} for gaps within spot_prices_hourly date range."""
+    sql = sql_text("""
+        WITH date_series AS (
+            SELECT province, MIN(datetime)::date AS fd, MAX(datetime)::date AS ld
+            FROM marketdata.spot_prices_hourly GROUP BY province
+        ),
+        all_dates AS (
+            SELECT ds.province,
+                   generate_series(ds.fd, ds.ld, interval '1 day')::date AS d
+            FROM date_series ds
+        ),
+        present AS (
+            SELECT province, datetime::date AS d
+            FROM marketdata.spot_prices_hourly
+            GROUP BY province, datetime::date
+        )
+        SELECT a.province, array_agg(a.d ORDER BY a.d) AS missing_dates
+        FROM all_dates a
+        LEFT JOIN present p USING (province, d)
+        WHERE p.d IS NULL
+        GROUP BY a.province
+    """)
+    try:
+        df = pd.read_sql(sql, _eng())
+        return {row["province"]: _compress_dates(row["missing_dates"]) for _, row in df.iterrows()}
+    except Exception:
+        return {}
 
 @st.cache_data(ttl=60)
 def load_data_ops_log(_eng_key):
@@ -1398,10 +1445,12 @@ with tab_mgmt:
                    if pd.notna(row["last_capture"]) else 999)
             return _t("mgmt_status_ok") if lag <= 30 else _t("mgmt_status_stale")
         cov["status"] = cov.apply(_status, axis=1)
+        gaps = load_coverage_gaps(_ENG_KEY)
+        cov["missing_dates"] = cov["province"].map(gaps).fillna("")
         cov_display = cov.copy()
         cov_display.columns = [_t("mgmt_col_province"), _t("mgmt_col_last_hourly"),
                                 _t("mgmt_col_last_capture"), _t("mgmt_col_last_fund"),
-                                _t("mgmt_col_status")]
+                                _t("mgmt_col_status"), _t("mgmt_col_missing_dates")]
         st.dataframe(cov_display, use_container_width=True, hide_index=True)
 
     # ── Batch Backfill ────────────────────────────────────────────────────────
