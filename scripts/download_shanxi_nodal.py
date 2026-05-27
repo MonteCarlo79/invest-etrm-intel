@@ -78,10 +78,10 @@ def cmd_download(args):
                 if engine:
                     upsert(rows, engine)
                 total_rows += len(rows)
-                print(f"  ✅  {d}  {len(rows):,} rows")
+                print(f"  OK  {d}  {len(rows):,} rows")
             except Exception as exc:
                 failed.append(str(d))
-                print(f"  ❌  {d}  {exc}")
+                print(f"  FAIL  {d}  {exc}")
             d += timedelta(days=1)
 
     print(f"\nDone — {total_rows:,} rows written to {csv_path}"

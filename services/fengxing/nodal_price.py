@@ -137,6 +137,7 @@ def _fetch_day(day: date, api_key: str) -> list[dict]:
     Raises on persistent failure.
     """
     all_rows: list[dict] = []
+    seen_keys: set[tuple] = set()   # (node_name, time_order_96) dedup
     page_num = 1
 
     while True:
@@ -158,7 +159,19 @@ def _fetch_day(day: date, api_key: str) -> list[dict]:
         else:
             raise RuntimeError(f"page {page_num} failed after retries: {last_exc}")
 
-        all_rows.extend(rows)
+        # The API cycles indefinitely after exhausting unique rows — every page
+        # returns exactly _PAGE_SIZE rows even when there is no new data.
+        # Discard any row whose (node_name, time_order_96) we've already seen.
+        new_rows = []
+        for r in rows:
+            key = (r.get("node_name"), r.get("time_order_96"))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                new_rows.append(r)
+
+        if not new_rows:
+            break  # entire page was duplicate — real data exhausted
+        all_rows.extend(new_rows)
         if not has_more:
             break
         page_num += 1
