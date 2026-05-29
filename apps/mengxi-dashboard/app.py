@@ -1412,27 +1412,42 @@ with tab_pypsa:
                     _pp_price_df = _pp_price_df[_pp_price_df["node_name"].str.contains(_pp_node_filter.strip(), na=False)]
 
                 with st.spinner("Loading cleared energy & BESS dispatch…"):
+                    # md_id_cleared_energy columns: data_date, datetime, plant_name,
+                    # dispatch_unit_name, energy_mwh, cleared_energy_mwh, cleared_price, price
+                    # (no node_name or unit_type — copper-plate model for generators)
                     _pp_energy_q = _pypsa_sql("""
-                        SELECT datetime, node_name, unit_type, cleared_energy_mwh
+                        SELECT datetime, plant_name, dispatch_unit_name,
+                               cleared_energy_mwh, cleared_price
                         FROM marketdata.md_id_cleared_energy
                         WHERE data_date = :d
-                        ORDER BY node_name, datetime
-                    """)
-                    _pp_bess_q = _pypsa_sql("""
-                        SELECT datetime, asset_name, node_name, charge_mwh, discharge_mwh, soc_mwh
-                        FROM marketdata.ops_bess_dispatch_15min
-                        WHERE date = :d
-                        ORDER BY asset_name, datetime
+                        ORDER BY dispatch_unit_name, datetime
                     """)
                     with _pp_engine.connect() as _pp_conn2:
                         try:
-                            _pp_energy_df = _pypsa_pd.read_sql(_pp_energy_q, _pp_conn2, params={"d": _pp_date_str}, parse_dates=["datetime"])
+                            _pp_energy_df = _pypsa_pd.read_sql(
+                                _pp_energy_q, _pp_conn2,
+                                params={"d": _pp_date_str},
+                                parse_dates=["datetime"],
+                            )
                         except Exception:
                             _pp_energy_df = _pypsa_pd.DataFrame()
-                        try:
-                            _pp_bess_df = _pypsa_pd.read_sql(_pp_bess_q, _pp_conn2, params={"d": _pp_date_str}, parse_dates=["datetime"])
-                        except Exception:
-                            _pp_bess_df = _pypsa_pd.DataFrame()
+
+                    # Derive BESS units: dispatch units that have negative cleared_energy
+                    # on this day (charging periods) — bidirectional behaviour = storage
+                    if not _pp_energy_df.empty:
+                        _pp_bidi = (
+                            _pp_energy_df.groupby("dispatch_unit_name")["cleared_energy_mwh"]
+                            .min()
+                            .loc[lambda s: s < 0]
+                            .index.tolist()
+                        )
+                        _pp_bess_df = (
+                            _pp_energy_df[_pp_energy_df["dispatch_unit_name"].isin(_pp_bidi)]
+                            .rename(columns={"dispatch_unit_name": "asset_name"})
+                            .copy()
+                        )
+                    else:
+                        _pp_bess_df = _pypsa_pd.DataFrame()
 
                 # ── Build PyPSA network ───────────────────────────────────────
                 with st.spinner("Building PyPSA network…"):
@@ -1442,40 +1457,36 @@ with tab_pypsa:
                     _pp_net = _pypsa.Network()
                     _pp_net.set_snapshots(_pp_snapshots)
 
-                    # Buses — one per node
+                    # Buses — one per node (from RT nodal price)
                     for _pp_bus in _pp_nodes:
                         _pp_net.add("Bus", _pp_bus)
 
-                    # Generators — from cleared energy (copper-plate: attach to first bus as fallback)
-                    if not _pp_energy_df.empty:
-                        for _pp_unit_type, _pp_grp in _pp_energy_df.groupby("unit_type"):
-                            _pp_gen_pivot = _pp_grp.groupby(["datetime", "node_name"])["cleared_energy_mwh"].sum().unstack(fill_value=0.0)
-                            for _pp_gen_node in _pp_gen_pivot.columns:
-                                if _pp_gen_node not in _pp_nodes:
-                                    continue
-                                _pp_gen_name = f"{_pp_gen_node}_{_pp_unit_type}"
-                                _pp_p_max = float(_pp_gen_pivot[_pp_gen_node].max()) * 4  # MWh → MW (15-min)
-                                _pp_net.add(
-                                    "Generator", _pp_gen_name,
-                                    bus=_pp_gen_node,
-                                    p_max_pu=1.0,
-                                    p_nom=max(_pp_p_max, 1.0),
-                                    marginal_cost=0.0,
-                                )
+                    # Generators — one per dispatch_unit_name, copper-plate (first bus)
+                    # Positive cleared_energy_mwh = generation/discharge
+                    if not _pp_energy_df.empty and _pp_nodes:
+                        _pp_unit_max = (
+                            _pp_energy_df.groupby("dispatch_unit_name")["cleared_energy_mwh"]
+                            .max()
+                        )
+                        for _pp_unit, _pp_max_e in _pp_unit_max.items():
+                            _pp_p_nom = max(float(_pp_max_e) * 4, 1.0)  # MWh → MW
+                            _pp_net.add(
+                                "Generator", str(_pp_unit),
+                                bus=_pp_nodes[0],
+                                p_max_pu=1.0,
+                                p_nom=_pp_p_nom,
+                                marginal_cost=0.0,
+                            )
 
-                    # Storage units — BESS assets
-                    if not _pp_bess_df.empty:
+                    # Storage units — BESS (bidirectional units), copper-plate (first bus)
+                    if not _pp_bess_df.empty and _pp_nodes:
                         for _pp_asset, _pp_bgrp in _pp_bess_df.groupby("asset_name"):
-                            _pp_bus_name = _pp_bgrp["node_name"].iloc[0] if "node_name" in _pp_bgrp.columns and _pp_bgrp["node_name"].notna().any() else (_pp_nodes[0] if _pp_nodes else None)
-                            if _pp_bus_name not in _pp_nodes:
-                                continue
-                            _pp_max_d = float(_pp_bgrp["discharge_mwh"].fillna(0).max()) * 4
-                            _pp_max_soc = float(_pp_bgrp["soc_mwh"].fillna(0).max()) if "soc_mwh" in _pp_bgrp.columns else _pp_max_d * 2
+                            _pp_max_d = float(_pp_bgrp["cleared_energy_mwh"].clip(lower=0).max()) * 4
                             _pp_net.add(
                                 "StorageUnit", str(_pp_asset),
-                                bus=_pp_bus_name,
+                                bus=_pp_nodes[0],
                                 p_nom=max(_pp_max_d, 1.0),
-                                max_hours=max(_pp_max_soc / max(_pp_max_d, 1), 0.5),
+                                max_hours=2.0,
                                 efficiency_store=0.92,
                                 efficiency_dispatch=0.92,
                             )
@@ -1541,21 +1552,42 @@ with tab_pypsa:
                 _pp_fig4.update_layout(height=400, showlegend=len(_pp_pivot_price.columns) <= 20)
                 st.plotly_chart(_pp_fig4, use_container_width=True)
 
-                # ── Panel 5: BESS actual dispatch overlay ─────────────────────
-                st.subheader("Panel 5 — BESS Actual Dispatch")
+                # ── Panel 5: BESS cleared energy (intraday) ───────────────────
+                st.subheader("Panel 5 — BESS Intraday Cleared Energy")
                 if not _pp_bess_df.empty:
-                    _pp_bess_df["net_mwh"] = _pp_bess_df["discharge_mwh"].fillna(0) - _pp_bess_df["charge_mwh"].fillna(0)
-                    _pp_bess_pivot = _pp_bess_df.pivot_table(index="datetime", columns="asset_name", values="net_mwh", aggfunc="sum")
+                    st.caption(
+                        f"{len(_pp_bess_df['asset_name'].unique())} bidirectional unit(s) detected "
+                        f"(had negative cleared_energy on {_pp_date_str}). "
+                        "Positive = discharge (injection), negative = charge (absorption)."
+                    )
+                    _pp_bess_pivot = _pp_bess_df.pivot_table(
+                        index="datetime", columns="asset_name",
+                        values="cleared_energy_mwh", aggfunc="sum",
+                    )
                     _pp_fig5 = _pp_px.bar(
                         _pp_bess_pivot,
-                        labels={"datetime": "Time", "value": "Net MWh (discharge–charge)", "asset_name": "Asset"},
-                        title=f"BESS net dispatch (actual) — {_pp_date_str}",
+                        labels={"datetime": "Time", "value": "Cleared Energy (MWh)", "asset_name": "Asset"},
+                        title=f"BESS intraday cleared energy — {_pp_date_str}",
                         barmode="group",
+                        color_discrete_sequence=_pp_px.colors.qualitative.Set2,
                     )
                     _pp_fig5.update_layout(height=350)
                     st.plotly_chart(_pp_fig5, use_container_width=True)
+
+                    # Show asset list
+                    _pp_bess_summary = (
+                        _pp_bess_df.groupby("asset_name")["cleared_energy_mwh"]
+                        .agg(max_discharge=("max"), max_charge=("min"), net_mwh=("sum"))
+                        .reset_index()
+                    )
+                    _pp_bess_summary.columns = ["Asset", "Max Discharge (MWh)", "Max Charge (MWh)", "Net (MWh)"]
+                    st.dataframe(_pp_bess_summary, use_container_width=True, hide_index=True)
                 else:
-                    st.info("No BESS dispatch data found for this date.")
+                    st.info(
+                        f"No bidirectional (BESS) dispatch units found for {_pp_date_str} "
+                        "in `marketdata.md_id_cleared_energy`. "
+                        "Ensure the Excel file for this date has been ingested via Data Management."
+                    )
 
 # ---------------------------------------------------------------------------
 # Tab 8: Trader
