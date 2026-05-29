@@ -90,10 +90,12 @@ def _post_page(
     day: date,
     page_num: int,
     api_key: str,
+    filters: list[str] | None = None,
 ) -> tuple[list[dict], bool]:
     """POST one page for a single calendar day.  Returns (rows, has_more).
 
     Raises requests.RequestException or RuntimeError on failure.
+    filters: optional list of filter strings, e.g. ['[market_name] = "山西"']
     """
     payload = {
         "metricName": _METRIC_NAME,
@@ -103,6 +105,8 @@ def _post_page(
         "pageSize":   _PAGE_SIZE,
         "pageNum":    page_num,
     }
+    if filters:
+        payload["filters"] = filters
     headers = {
         "Content-Type":    "application/json",
         "X-API-KEY-SECRET": api_key,      # never logged
@@ -130,11 +134,12 @@ def _post_page(
 # Fetch one day (with retry + pagination)
 # ---------------------------------------------------------------------------
 
-def _fetch_day(day: date, api_key: str) -> list[dict]:
+def _fetch_day(day: date, api_key: str, filters: list[str] | None = None) -> list[dict]:
     """Fetch all rows for a single calendar day, auto-paginating.
 
     Retries each page up to _MAX_RETRIES times on transient errors.
     Raises on persistent failure.
+    filters: optional list of filter strings, e.g. ['[market_name] = "山西"']
     """
     all_rows: list[dict] = []
     seen_keys: set[tuple] = set()   # (node_name, time_order_96) dedup
@@ -144,7 +149,7 @@ def _fetch_day(day: date, api_key: str) -> list[dict]:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                rows, has_more = _post_page(day, page_num, api_key)
+                rows, has_more = _post_page(day, page_num, api_key, filters=filters)
                 break
             except RuntimeError as exc:
                 if "rate_limited" in str(exc):

@@ -431,7 +431,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_trading, tab_data_mgmt, tab_trader = st.tabs([
+tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_trading, tab_data_mgmt, tab_nodal_maps, tab_pypsa, tab_trader = st.tabs([
     "Market Fundamentals",
     "BESS Market Ranking",
     "Our BESS Portfolio",
@@ -439,6 +439,8 @@ tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_t
     "Wind Farm Ranking",
     "Wind Farm Trading",
     "Data Management",
+    "Nodal Maps",
+    "PyPSA Mengxi",
     "Trader",
 ])
 
@@ -953,6 +955,607 @@ with tab_data_mgmt:
                 )
         except Exception as _fx_prev_exc:
             st.info(f"Table not yet created or empty. ({_fx_prev_exc})")
+
+    st.markdown("---")
+
+    # ── Section 7: Multi-province nodal price local CSV download ────────────
+    st.subheader("Nodal Prices — Local CSV Download (Multi-Province)")
+    st.caption(
+        "Download avg_node_price for any province from the Fengxing API and save locally. "
+        "One CSV file per province per month — no database writes. "
+        "Output: `data/nodal/<province>_<YYYY-MM>.csv`"
+    )
+
+    _NODAL_PROVINCES = [
+        "山西", "陕西", "湖南", "浙江", "云南",
+        "贵州", "广东", "广西", "海南", "甘肃",
+    ]
+
+    _nd_c1, _nd_c2 = st.columns(2)
+    _nd_start = _nd_c1.date_input(
+        "Start date",
+        value=date(date.today().year, 1, 1),
+        key="nd_start",
+        help="The download will be split into one CSV per province per month.",
+    )
+    _nd_end = _nd_c2.date_input(
+        "End date",
+        value=date.today() - timedelta(days=1),
+        key="nd_end",
+    )
+    _nd_provinces = st.multiselect(
+        "Provinces",
+        _NODAL_PROVINCES,
+        default=["山西"],
+        key="nd_provinces",
+    )
+
+    _nd_out_dir = os.path.join(_repo_root, "data", "nodal")
+    st.caption(f"Output directory: `{_nd_out_dir}`")
+
+    if st.button(
+        "Download CSV files",
+        key="nd_download_btn",
+        type="primary",
+        disabled=not _fx_api_key or not _nd_provinces or _nd_start > _nd_end,
+    ):
+        import csv
+        import calendar as _calendar
+        from services.fengxing.nodal_price import (
+            _fetch_day as _nd_fetch_day,
+            _COLUMNS as _nd_cols,
+        )
+
+        os.makedirs(_nd_out_dir, exist_ok=True)
+
+        # Build list of (year, month) periods spanning the date range
+        _nd_months: list[tuple[int, int]] = []
+        _y, _m = _nd_start.year, _nd_start.month
+        while (_y, _m) <= (_nd_end.year, _nd_end.month):
+            _nd_months.append((_y, _m))
+            _m += 1
+            if _m > 12:
+                _m = 1
+                _y += 1
+
+        _nd_total_tasks = len(_nd_provinces) * len(_nd_months)
+        _nd_progress = st.progress(0, text=f"0 / {_nd_total_tasks} tasks…")
+        _nd_log = st.empty()
+        _nd_log_lines: list[str] = []
+        _nd_done_count = [0]
+
+        def _nd_append_log(msg: str) -> None:
+            _nd_log_lines.append(msg)
+            _nd_log.code("\n".join(_nd_log_lines[-25:]))
+
+        _nd_fieldnames = _nd_cols + ["avg_node_price"]
+        _nd_errors: list[str] = []
+
+        for _nd_province in _nd_provinces:
+            _nd_filter = [f'[market_name] = "{_nd_province}"']
+            for _nd_yr, _nd_mo in _nd_months:
+                # Clamp to user-specified date range
+                _mo_first = date(_nd_yr, _nd_mo, 1)
+                _mo_last = date(_nd_yr, _nd_mo, _calendar.monthrange(_nd_yr, _nd_mo)[1])
+                _day_start = max(_mo_first, _nd_start)
+                _day_end = min(_mo_last, _nd_end)
+
+                _fname = f"{_nd_province}_{_nd_yr:04d}-{_nd_mo:02d}.csv"
+                _fpath = os.path.join(_nd_out_dir, _fname)
+
+                _nd_append_log(f"[{_nd_province}] {_nd_yr}-{_nd_mo:02d}  downloading…")
+                _month_rows: list[dict] = []
+                _month_failed: list[str] = []
+                _d = _day_start
+                while _d <= _day_end:
+                    try:
+                        _day_rows = _nd_fetch_day(_d, _fx_api_key, filters=_nd_filter)
+                        _month_rows.extend(_day_rows)
+                    except Exception as _nd_exc:
+                        _month_failed.append(str(_d))
+                        _nd_append_log(f"  FAIL {_d}: {_nd_exc}")
+                    _d += timedelta(days=1)
+
+                with open(_fpath, "w", newline="", encoding="utf-8-sig") as _nd_fh:
+                    _nd_writer = csv.DictWriter(_nd_fh, fieldnames=_nd_fieldnames, extrasaction="ignore")
+                    _nd_writer.writeheader()
+                    _nd_writer.writerows(_month_rows)
+
+                _nd_done_count[0] += 1
+                _nd_progress.progress(
+                    _nd_done_count[0] / _nd_total_tasks,
+                    text=f"{_nd_done_count[0]} / {_nd_total_tasks} tasks…",
+                )
+
+                if _month_failed:
+                    _nd_errors.append(f"{_nd_province} {_nd_yr}-{_nd_mo:02d}: {len(_month_failed)} day(s) failed")
+                    _nd_append_log(
+                        f"  Saved {len(_month_rows):,} rows → {_fname}  ({len(_month_failed)} failure(s))"
+                    )
+                else:
+                    _nd_append_log(f"  Saved {len(_month_rows):,} rows → {_fname}")
+
+        _nd_progress.progress(1.0, text="Done.")
+        if _nd_errors:
+            st.warning("Completed with errors:\n" + "\n".join(_nd_errors))
+        else:
+            st.success(f"All {_nd_total_tasks} file(s) saved to `{_nd_out_dir}`")
+
+    # ── Section 8: Ingest local CSV files → RDS ──────────────────────────────
+    st.markdown("---")
+    st.subheader("8 · Ingest local nodal CSV files → RDS")
+    st.caption("Scan `data/nodal/` for downloaded CSV files and upsert into `marketdata.md_shanxi_nodal_price_96`.")
+
+    def _scan_nodal_csvs(nodal_root: str) -> list[dict]:
+        """Return list of {province, filename, month, path, size_kb} for all *_YYYY-MM.csv files."""
+        import re as _re
+        entries = []
+        if not os.path.isdir(nodal_root):
+            return entries
+        _pat = _re.compile(r"^(.+)_(\d{4}-\d{2})\.csv$")
+        for _prov_dir in sorted(os.listdir(nodal_root)):
+            _prov_path = os.path.join(nodal_root, _prov_dir)
+            if not os.path.isdir(_prov_path):
+                continue
+            for _fname in sorted(os.listdir(_prov_path)):
+                _m = _pat.match(_fname)
+                if not _m:
+                    continue
+                _fpath = os.path.join(_prov_path, _fname)
+                _size_kb = os.path.getsize(_fpath) / 1024
+                entries.append({
+                    "province":  _prov_dir,
+                    "filename":  _fname,
+                    "month":     _m.group(2),
+                    "path":      _fpath,
+                    "size_kb":   round(_size_kb, 1),
+                })
+        return entries
+
+    _ingest_nodal_root = os.path.join(_repo_root, "data", "nodal")
+    _csv_entries = _scan_nodal_csvs(_ingest_nodal_root)
+
+    if not _csv_entries:
+        st.info(f"No `*_YYYY-MM.csv` files found under `{_ingest_nodal_root}`. Use Section 7 above to download files first.")
+    else:
+        import pandas as _pd_ingest
+
+        _csv_df = _pd_ingest.DataFrame(_csv_entries)[["province", "month", "filename", "size_kb"]]
+        _csv_df.columns = ["Province", "Month", "File", "Size (KB)"]
+
+        _all_labels = [f"{r['province']} / {r['month']}" for r in _csv_entries]
+        _selected_labels = st.multiselect(
+            "Select files to ingest",
+            options=_all_labels,
+            default=_all_labels,
+            key="nodal_ingest_sel",
+        )
+        st.dataframe(_csv_df, use_container_width=True, hide_index=True)
+
+        _ingest_selected = [e for e, lbl in zip(_csv_entries, _all_labels) if lbl in _selected_labels]
+
+        _can_ingest = bool(_ingest_selected)
+
+        if st.button(
+            f"Ingest {len(_ingest_selected)} file(s) to RDS",
+            key="nodal_ingest_btn",
+            type="primary",
+            disabled=not _can_ingest,
+        ):
+            from services.fengxing.nodal_price import init_table as _nodal_init_table, upsert as _nodal_upsert
+
+            _ingest_engine = _get_sqlalchemy_engine()
+            _nodal_init_table(_ingest_engine)
+
+            _ingest_progress = st.progress(0.0, text="Starting…")
+            _ingest_log_lines: list[str] = []
+            _ingest_errors: list[str] = []
+            _ingest_log_area = st.empty()
+
+            def _ingest_append_log(msg: str) -> None:
+                _ingest_log_lines.append(msg)
+                _ingest_log_area.code("\n".join(_ingest_log_lines[-30:]))
+
+            for _i, _entry in enumerate(_ingest_selected):
+                _label = f"{_entry['province']} / {_entry['month']}"
+                _ingest_append_log(f"Reading {_entry['filename']} …")
+                try:
+                    _csv_data = _pd_ingest.read_csv(
+                        _entry["path"],
+                        encoding="utf-8-sig",
+                        dtype={"time_order_96": "Int64"},
+                    )
+                    _rows_to_upsert = _csv_data.to_dict("records")
+                    _n_upserted = _nodal_upsert(_rows_to_upsert, _ingest_engine)
+                    _ingest_append_log(f"  ✓ {_label}: {_n_upserted:,} rows upserted")
+                except Exception as _exc:
+                    _ingest_errors.append(_label)
+                    _ingest_append_log(f"  ✗ {_label}: {_exc}")
+
+                _ingest_progress.progress(
+                    (_i + 1) / len(_ingest_selected),
+                    text=f"{_i + 1} / {len(_ingest_selected)} files…",
+                )
+
+            _ingest_progress.progress(1.0, text="Done.")
+            if _ingest_errors:
+                st.warning(f"Completed with {len(_ingest_errors)} error(s): " + ", ".join(_ingest_errors))
+            else:
+                st.success(f"All {len(_ingest_selected)} file(s) ingested successfully.")
+
+# ---------------------------------------------------------------------------
+# Tab 9: Nodal Maps — per-province PF spread ranking
+# ---------------------------------------------------------------------------
+with tab_nodal_maps:
+    import pandas as _nm_pd
+    from datetime import date as _nm_date
+
+    st.header("Nodal Investment Maps — Perfect Foresight Spread Ranking")
+    st.caption(
+        "Queries `marketdata.md_shanxi_nodal_price_96` and runs the BESS PF optimisation "
+        "on each node to estimate annual revenue. Use this to identify the highest-value "
+        "nodes for new BESS investment in each province."
+    )
+
+    _nm_c1, _nm_c2, _nm_c3 = st.columns(3)
+    _nm_province = _nm_c1.selectbox(
+        "Province",
+        ["山西", "广东", "广西", "海南", "甘肃", "贵州", "陕西", "湖南", "浙江", "云南"],
+        key="nm_province",
+    )
+    _nm_start = _nm_c2.date_input(
+        "Start date",
+        value=_nm_date(_nm_date.today().year, 1, 1),
+        key="nm_start",
+    )
+    _nm_end = _nm_c3.date_input(
+        "End date",
+        value=_nm_date.today(),
+        key="nm_end",
+    )
+
+    _nm_bc1, _nm_bc2, _nm_bc3 = st.columns(3)
+    _nm_power_mw   = _nm_bc1.number_input("BESS Power (MW)",  min_value=0.1, value=50.0, step=10.0, key="nm_power")
+    _nm_duration_h = _nm_bc2.number_input("Duration (h)",      min_value=0.5, value=2.0,  step=0.5,  key="nm_dur")
+    _nm_eff_pct    = _nm_bc3.number_input("Round-trip eff. (%)", min_value=50.0, max_value=100.0, value=85.0, step=1.0, key="nm_eff")
+    _nm_top_n      = st.slider("Top-N nodes to highlight", 5, 50, 20, key="nm_topn")
+
+    _nm_date_ok = _nm_start <= _nm_end
+    if not _nm_date_ok:
+        st.warning("Start date must be ≤ end date.")
+
+    if st.button("Run PF Optimisation", key="nm_run_btn", type="primary", disabled=not _nm_date_ok):
+        import plotly.express as _nm_px
+        import plotly.graph_objects as _nm_go
+        from sqlalchemy import text as _nm_sql_text
+        from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices as _nm_pf
+
+        _nm_engine = _get_sqlalchemy_engine()
+
+        with st.spinner(f"Fetching nodal prices for {_nm_province} from {_nm_start} to {_nm_end}…"):
+            _nm_query = _nm_sql_text("""
+                SELECT node_name, metric_time, avg_node_price
+                FROM marketdata.md_shanxi_nodal_price_96
+                WHERE market_name = :prov
+                  AND metric_time >= :start_dt
+                  AND metric_time <  :end_dt
+                ORDER BY node_name, metric_time
+            """)
+            with _nm_engine.connect() as _nm_conn:
+                _nm_df = _nm_pd.read_sql(
+                    _nm_query,
+                    _nm_conn,
+                    params={
+                        "prov":     _nm_province,
+                        "start_dt": _nm_start.strftime("%Y-%m-%d"),
+                        "end_dt":   (_nm_end + _nm_pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                    },
+                    parse_dates=["metric_time"],
+                )
+
+        if _nm_df.empty:
+            st.warning(f"No data found for {_nm_province} in the selected date range. Ingest CSV files via Data Management first.")
+        else:
+            _nm_df["metric_time"] = _nm_pd.to_datetime(_nm_df["metric_time"], utc=True).dt.tz_convert("Asia/Shanghai").dt.tz_localize(None)
+            _nm_df["avg_node_price"] = _nm_pd.to_numeric(_nm_df["avg_node_price"], errors="coerce")
+            _nm_nodes = sorted(_nm_df["node_name"].unique())
+            st.info(f"Loaded {len(_nm_df):,} rows across {len(_nm_nodes)} nodes. Running PF optimisation…")
+
+            _nm_results = []
+            _nm_monthly_profits: dict[str, dict] = {}  # node → {month_str → profit}
+            _nm_prog = st.progress(0.0, text="Optimising nodes…")
+
+            for _nm_i, _nm_node in enumerate(_nm_nodes):
+                _nm_series = (
+                    _nm_df[_nm_df["node_name"] == _nm_node]
+                    .set_index("metric_time")["avg_node_price"]
+                    .sort_index()
+                    .dropna()
+                    .astype(float)
+                )
+                if len(_nm_series) < 96:
+                    _nm_prog.progress((_nm_i + 1) / len(_nm_nodes))
+                    continue
+                try:
+                    _, _nm_profit_s = _nm_pf(
+                        _nm_series,
+                        power_mw=_nm_power_mw,
+                        duration_h=_nm_duration_h,
+                        roundtrip_eff=_nm_eff_pct / 100.0,
+                    )
+                    _nm_total = float(_nm_profit_s.sum())
+                    _nm_per_mw = _nm_total / _nm_power_mw
+                    _nm_results.append({
+                        "node_name":          _nm_node,
+                        "total_profit_cny":   _nm_total,
+                        "annual_rev_per_mw":  _nm_per_mw,
+                    })
+                    # Monthly breakdown for heatmap
+                    _nm_monthly = _nm_profit_s.resample("ME").sum() / _nm_power_mw
+                    _nm_monthly_profits[_nm_node] = {
+                        str(ts.to_period("M")): float(v) for ts, v in _nm_monthly.items()
+                    }
+                except Exception:
+                    pass
+                _nm_prog.progress((_nm_i + 1) / len(_nm_nodes), text=f"{_nm_i+1}/{len(_nm_nodes)} nodes…")
+
+            _nm_prog.progress(1.0, text="Done.")
+
+            if not _nm_results:
+                st.warning("No optimisation results — check that the data has valid prices.")
+            else:
+                _nm_res_df = _nm_pd.DataFrame(_nm_results).sort_values("annual_rev_per_mw", ascending=False).reset_index(drop=True)
+                _nm_res_df["rank"] = range(1, len(_nm_res_df) + 1)
+
+                # ── Ranked bar chart ──────────────────────────────────────────
+                st.subheader("Ranked nodes by PF annual revenue / MW")
+                _nm_top_df = _nm_res_df.head(_nm_top_n)
+                _nm_bar = _nm_px.bar(
+                    _nm_top_df,
+                    x="node_name",
+                    y="annual_rev_per_mw",
+                    labels={"node_name": "Node", "annual_rev_per_mw": "Annual Rev / MW (CNY)"},
+                    title=f"Top {_nm_top_n} nodes — {_nm_province} PF spread ({_nm_start} → {_nm_end})",
+                    color="annual_rev_per_mw",
+                    color_continuous_scale="Blues",
+                )
+                _nm_bar.update_layout(xaxis_tickangle=-45, showlegend=False)
+                st.plotly_chart(_nm_bar, use_container_width=True)
+
+                # ── Heatmap: node × month ─────────────────────────────────────
+                st.subheader("Monthly PF revenue / MW heatmap")
+                if _nm_monthly_profits:
+                    _nm_hm_df = _nm_pd.DataFrame(_nm_monthly_profits).T.fillna(0.0)
+                    _nm_hm_df = _nm_hm_df.reindex(
+                        _nm_res_df["node_name"].tolist()
+                    ).head(_nm_top_n)
+                    _nm_hm_df.columns = [str(c) for c in _nm_hm_df.columns]
+                    _nm_hm = _nm_px.imshow(
+                        _nm_hm_df.values,
+                        x=list(_nm_hm_df.columns),
+                        y=list(_nm_hm_df.index),
+                        labels={"x": "Month", "y": "Node", "color": "Rev/MW (CNY)"},
+                        title=f"Monthly PF revenue / MW — top {_nm_top_n} nodes",
+                        color_continuous_scale="RdYlGn",
+                        aspect="auto",
+                    )
+                    _nm_hm.update_layout(height=max(400, _nm_top_n * 20))
+                    st.plotly_chart(_nm_hm, use_container_width=True)
+
+                # ── Top-N investment table ────────────────────────────────────
+                st.subheader(f"Top {_nm_top_n} node investment summary")
+                _nm_disp_df = _nm_res_df.head(_nm_top_n)[["rank", "node_name", "annual_rev_per_mw", "total_profit_cny"]].copy()
+                _nm_disp_df.columns = ["Rank", "Node", "Annual Rev / MW (CNY)", f"Total Profit {_nm_power_mw:.0f}MW (CNY)"]
+                _nm_disp_df["Annual Rev / MW (CNY)"] = _nm_disp_df["Annual Rev / MW (CNY)"].map("{:,.0f}".format)
+                _nm_disp_df[f"Total Profit {_nm_power_mw:.0f}MW (CNY)"] = _nm_disp_df[f"Total Profit {_nm_power_mw:.0f}MW (CNY)"].map("{:,.0f}".format)
+                st.dataframe(_nm_disp_df, use_container_width=True, hide_index=True)
+
+                st.session_state["nm_last_results"] = _nm_res_df
+
+# ---------------------------------------------------------------------------
+# Tab 10: PyPSA Mengxi — nodal supply/demand modelling
+# ---------------------------------------------------------------------------
+with tab_pypsa:
+    import pandas as _pypsa_pd
+
+    st.header("PyPSA Mengxi — Nodal Supply & Demand Dynamics")
+    st.caption(
+        "Build a PyPSA network from the Mengxi RT nodal price table and cleared energy data. "
+        "Requires `pypsa>=0.28` to be installed."
+    )
+
+    # ── Dependency check ─────────────────────────────────────────────────────
+    try:
+        import pypsa as _pypsa  # type: ignore
+        _pypsa_available = True
+    except ImportError:
+        _pypsa_available = False
+
+    if not _pypsa_available:
+        st.error(
+            "**PyPSA is not installed.** To enable this tab, run:\n\n"
+            "```\npip install pypsa>=0.28\n```\n\n"
+            "Then add `pypsa>=0.28` to `apps/mengxi-dashboard/requirements.txt` "
+            "and rebuild the Docker image."
+        )
+    else:
+        from sqlalchemy import text as _pypsa_sql
+
+        st.success(f"PyPSA {_pypsa.__version__} detected.")
+
+        _pp_c1, _pp_c2 = st.columns(2)
+        _pp_date = _pp_c1.date_input("Date", value=_pypsa_pd.Timestamp.today().date() - _pypsa_pd.Timedelta(days=1), key="pp_date")
+        _pp_node_filter = _pp_c2.text_input("Node filter (leave blank for all)", value="", key="pp_node")
+
+        if st.button("Build Network", key="pp_build_btn", type="primary"):
+            _pp_engine = _get_sqlalchemy_engine()
+            _pp_date_str = _pp_date.strftime("%Y-%m-%d")
+
+            with st.spinner("Loading nodal prices…"):
+                _pp_price_q = _pypsa_sql("""
+                    SELECT datetime, node_name, node_price, energy_price, congestion_price
+                    FROM marketdata.md_rt_nodal_price
+                    WHERE data_date = :d
+                    ORDER BY node_name, datetime
+                """)
+                with _pp_engine.connect() as _pp_conn:
+                    _pp_price_df = _pypsa_pd.read_sql(
+                        _pp_price_q, _pp_conn,
+                        params={"d": _pp_date_str},
+                        parse_dates=["datetime"],
+                    )
+
+            if _pp_price_df.empty:
+                st.warning(f"No nodal price data found for {_pp_date_str}.")
+            else:
+                if _pp_node_filter.strip():
+                    _pp_price_df = _pp_price_df[_pp_price_df["node_name"].str.contains(_pp_node_filter.strip(), na=False)]
+
+                with st.spinner("Loading cleared energy & BESS dispatch…"):
+                    _pp_energy_q = _pypsa_sql("""
+                        SELECT datetime, node_name, unit_type, cleared_energy_mwh
+                        FROM marketdata.md_id_cleared_energy
+                        WHERE data_date = :d
+                        ORDER BY node_name, datetime
+                    """)
+                    _pp_bess_q = _pypsa_sql("""
+                        SELECT datetime, asset_name, node_name, charge_mwh, discharge_mwh, soc_mwh
+                        FROM marketdata.ops_bess_dispatch_15min
+                        WHERE date = :d
+                        ORDER BY asset_name, datetime
+                    """)
+                    with _pp_engine.connect() as _pp_conn2:
+                        try:
+                            _pp_energy_df = _pypsa_pd.read_sql(_pp_energy_q, _pp_conn2, params={"d": _pp_date_str}, parse_dates=["datetime"])
+                        except Exception:
+                            _pp_energy_df = _pypsa_pd.DataFrame()
+                        try:
+                            _pp_bess_df = _pypsa_pd.read_sql(_pp_bess_q, _pp_conn2, params={"d": _pp_date_str}, parse_dates=["datetime"])
+                        except Exception:
+                            _pp_bess_df = _pypsa_pd.DataFrame()
+
+                # ── Build PyPSA network ───────────────────────────────────────
+                with st.spinner("Building PyPSA network…"):
+                    _pp_nodes = sorted(_pp_price_df["node_name"].unique())
+                    _pp_snapshots = sorted(_pp_price_df["datetime"].unique())
+
+                    _pp_net = _pypsa.Network()
+                    _pp_net.set_snapshots(_pp_snapshots)
+
+                    # Buses — one per node
+                    for _pp_bus in _pp_nodes:
+                        _pp_net.add("Bus", _pp_bus)
+
+                    # Generators — from cleared energy (copper-plate: attach to first bus as fallback)
+                    if not _pp_energy_df.empty:
+                        for _pp_unit_type, _pp_grp in _pp_energy_df.groupby("unit_type"):
+                            _pp_gen_pivot = _pp_grp.groupby(["datetime", "node_name"])["cleared_energy_mwh"].sum().unstack(fill_value=0.0)
+                            for _pp_gen_node in _pp_gen_pivot.columns:
+                                if _pp_gen_node not in _pp_nodes:
+                                    continue
+                                _pp_gen_name = f"{_pp_gen_node}_{_pp_unit_type}"
+                                _pp_p_max = float(_pp_gen_pivot[_pp_gen_node].max()) * 4  # MWh → MW (15-min)
+                                _pp_net.add(
+                                    "Generator", _pp_gen_name,
+                                    bus=_pp_gen_node,
+                                    p_max_pu=1.0,
+                                    p_nom=max(_pp_p_max, 1.0),
+                                    marginal_cost=0.0,
+                                )
+
+                    # Storage units — BESS assets
+                    if not _pp_bess_df.empty:
+                        for _pp_asset, _pp_bgrp in _pp_bess_df.groupby("asset_name"):
+                            _pp_bus_name = _pp_bgrp["node_name"].iloc[0] if "node_name" in _pp_bgrp.columns and _pp_bgrp["node_name"].notna().any() else (_pp_nodes[0] if _pp_nodes else None)
+                            if _pp_bus_name not in _pp_nodes:
+                                continue
+                            _pp_max_d = float(_pp_bgrp["discharge_mwh"].fillna(0).max()) * 4
+                            _pp_max_soc = float(_pp_bgrp["soc_mwh"].fillna(0).max()) if "soc_mwh" in _pp_bgrp.columns else _pp_max_d * 2
+                            _pp_net.add(
+                                "StorageUnit", str(_pp_asset),
+                                bus=_pp_bus_name,
+                                p_nom=max(_pp_max_d, 1.0),
+                                max_hours=max(_pp_max_soc / max(_pp_max_d, 1), 0.5),
+                                efficiency_store=0.92,
+                                efficiency_dispatch=0.92,
+                            )
+
+                # ── Panel 1: Network summary ──────────────────────────────────
+                st.subheader("Panel 1 — Network Summary")
+                _pp_sum_cols = st.columns(4)
+                _pp_sum_cols[0].metric("Buses", len(_pp_net.buses))
+                _pp_sum_cols[1].metric("Generators", len(_pp_net.generators))
+                _pp_sum_cols[2].metric("Storage Units", len(_pp_net.storage_units))
+                _pp_sum_cols[3].metric("Snapshots", len(_pp_net.snapshots))
+
+                import plotly.express as _pp_px
+                import plotly.graph_objects as _pp_go
+
+                # ── Panel 2: Nodal price choropleth (bar chart by node) ───────
+                st.subheader("Panel 2 — Nodal Price by Node (avg)")
+                _pp_avg_price = (
+                    _pp_price_df.groupby("node_name")["node_price"]
+                    .mean()
+                    .reset_index()
+                    .rename(columns={"node_price": "avg_price_cny_mwh"})
+                    .sort_values("avg_price_cny_mwh", ascending=False)
+                )
+                _pp_fig2 = _pp_px.bar(
+                    _pp_avg_price, x="node_name", y="avg_price_cny_mwh",
+                    labels={"node_name": "Node", "avg_price_cny_mwh": "Avg Price (CNY/MWh)"},
+                    title=f"Mengxi avg nodal price — {_pp_date_str}",
+                    color="avg_price_cny_mwh", color_continuous_scale="RdYlGn",
+                )
+                _pp_fig2.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(_pp_fig2, use_container_width=True)
+
+                # ── Panel 3: Energy vs congestion price split by node ─────────
+                st.subheader("Panel 3 — Energy vs Congestion Component by Node")
+                if "energy_price" in _pp_price_df.columns and "congestion_price" in _pp_price_df.columns:
+                    _pp_comp = (
+                        _pp_price_df.groupby("node_name")[["energy_price", "congestion_price"]]
+                        .mean()
+                        .reset_index()
+                        .sort_values("congestion_price", ascending=False)
+                    )
+                    _pp_fig3 = _pp_go.Figure()
+                    _pp_fig3.add_bar(x=_pp_comp["node_name"], y=_pp_comp["energy_price"], name="Energy component")
+                    _pp_fig3.add_bar(x=_pp_comp["node_name"], y=_pp_comp["congestion_price"], name="Congestion component")
+                    _pp_fig3.update_layout(
+                        barmode="stack", title=f"Energy vs congestion price — {_pp_date_str}",
+                        xaxis_tickangle=-45,
+                        yaxis_title="CNY/MWh",
+                    )
+                    st.plotly_chart(_pp_fig3, use_container_width=True)
+                else:
+                    st.info("energy_price / congestion_price columns not available in this dataset.")
+
+                # ── Panel 4: Nodal price time series for all nodes ────────────
+                st.subheader("Panel 4 — Nodal Price Time Series")
+                _pp_pivot_price = _pp_price_df.pivot_table(index="datetime", columns="node_name", values="node_price", aggfunc="mean")
+                _pp_fig4 = _pp_px.line(
+                    _pp_pivot_price,
+                    labels={"datetime": "Time", "value": "Price (CNY/MWh)", "node_name": "Node"},
+                    title=f"15-min nodal prices — {_pp_date_str}",
+                )
+                _pp_fig4.update_layout(height=400, showlegend=len(_pp_pivot_price.columns) <= 20)
+                st.plotly_chart(_pp_fig4, use_container_width=True)
+
+                # ── Panel 5: BESS actual dispatch overlay ─────────────────────
+                st.subheader("Panel 5 — BESS Actual Dispatch")
+                if not _pp_bess_df.empty:
+                    _pp_bess_df["net_mwh"] = _pp_bess_df["discharge_mwh"].fillna(0) - _pp_bess_df["charge_mwh"].fillna(0)
+                    _pp_bess_pivot = _pp_bess_df.pivot_table(index="datetime", columns="asset_name", values="net_mwh", aggfunc="sum")
+                    _pp_fig5 = _pp_px.bar(
+                        _pp_bess_pivot,
+                        labels={"datetime": "Time", "value": "Net MWh (discharge–charge)", "asset_name": "Asset"},
+                        title=f"BESS net dispatch (actual) — {_pp_date_str}",
+                        barmode="group",
+                    )
+                    _pp_fig5.update_layout(height=350)
+                    st.plotly_chart(_pp_fig5, use_container_width=True)
+                else:
+                    st.info("No BESS dispatch data found for this date.")
 
 # ---------------------------------------------------------------------------
 # Tab 8: Trader
