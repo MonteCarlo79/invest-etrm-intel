@@ -102,7 +102,7 @@ resource "aws_security_group" "ecs_tasks" {
   ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
-    to_port         = 8512
+    to_port         = 8520
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -3341,6 +3341,194 @@ resource "aws_ecs_task_definition" "trading_performance_agent" {
       }
     }
   ])
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Crystal-Ball Fortune Teller
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_ecr_repository" "crystal_ball" {
+  name                 = "crystal-ball-fortune"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+}
+
+resource "aws_lb_target_group" "crystal_ball" {
+  name_prefix = "tgcb-"
+  port        = 8520
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path                = "/crystal-ball/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "crystal_ball_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 50
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.crystal_ball.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/crystal-ball", "/crystal-ball/", "/crystal-ball/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "crystal_ball" {
+  family                   = "${var.name}-crystal-ball"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "crystal-ball"
+      image     = var.image_crystal_ball
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8520
+          protocol      = "tcp"
+        }
+      ]
+
+      command = [
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.port=8520",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=crystal-ball",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
+        "--server.headless=true"
+      ]
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "REPORT_FROM_EMAIL"
+          value = var.smtp_user
+        },
+        {
+          name  = "REPORT_TO_EMAIL"
+          value = var.report_email_to
+        },
+        {
+          name  = "WECOM_WEBHOOK_URL"
+          value = var.crystal_ball_wecom_webhook_url
+        },
+        {
+          name  = "TIMEZONE"
+          value = "Asia/Shanghai"
+        },
+        {
+          name  = "REPORT_HOUR"
+          value = "7"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "crystal-ball"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "crystal_ball" {
+  name            = "${var.name}-crystal-ball-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.crystal_ball.arn
+  desired_count   = var.desired_count_crystal_ball
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.crystal_ball.arn
+    container_name   = "crystal-ball"
+    container_port   = 8520
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
 }
 
 resource "aws_cloudwatch_event_rule" "trading_performance_agent_daily" {

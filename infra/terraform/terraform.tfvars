@@ -119,6 +119,11 @@ LINGFENG_PASSWORD="P+2jGuuE5WD"
 
 fengxing_api_key = "b5d38061-d965-6039d74b69ff"
 
+# Crystal-Ball Fortune Teller
+image_crystal_ball             = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/crystal-ball-fortune:v6"
+desired_count_crystal_ball     = 1
+crystal_ball_wecom_webhook_url = ""
+
 # Daily market report email (06:00 SGT)
 # Use Gmail with an App Password: https://myaccount.google.com/apppasswords
 smtp_host      = "smtp.gmail.com"

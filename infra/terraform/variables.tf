@@ -630,3 +630,25 @@ variable "fengxing_api_key" {
   sensitive   = true
 }
 
+#################################################
+# Crystal-Ball Fortune Teller
+#################################################
+variable "image_crystal_ball" {
+  description = "Docker image for Crystal-Ball fortune teller app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_crystal_ball" {
+  description = "Desired task count for the crystal-ball ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "crystal_ball_wecom_webhook_url" {
+  description = "WeCom bot webhook URL for Crystal-Ball daily fortune report"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
