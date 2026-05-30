@@ -120,7 +120,7 @@ LINGFENG_PASSWORD="P+2jGuuE5WD"
 fengxing_api_key = "b5d38061-d965-6039d74b69ff"
 
 # Crystal-Ball Fortune Teller
-image_crystal_ball             = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/crystal-ball-fortune:v6"
+image_crystal_ball             = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/crystal-ball-fortune:v12"
 desired_count_crystal_ball     = 1
 crystal_ball_wecom_webhook_url = ""
 
