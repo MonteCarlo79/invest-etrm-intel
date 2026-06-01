@@ -208,6 +208,63 @@ def _knowledge_doc_counts(prefix: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _kb_stats_metrics(prefix: str) -> dict:
+    """Return KB + insight statistics for the metrics dashboard."""
+    from datetime import timezone as _tz
+    _now = datetime.now(_tz.utc)
+
+    def _ago(ts):
+        if ts is None:
+            return "never"
+        _ts = ts if (hasattr(ts, "tzinfo") and ts.tzinfo) else ts.replace(tzinfo=_tz.utc)
+        h = int((_now - _ts).total_seconds() / 3600)
+        return f"{h}h ago" if h < 48 else f"{h // 24}d ago"
+
+    docs_row = _query(
+        f"SELECT COUNT(*)::int AS n, MAX(fetched_at) AS last_fetch "
+        f"FROM intl_market.{prefix}knowledge_docs"
+    )
+    insights_row = _query(
+        f"SELECT COUNT(*)::int AS n FROM intl_market.{prefix}expert_insights WHERE active = TRUE"
+    )
+    digest_row = _query(
+        f"""SELECT COUNT(DISTINCT d.id)::int AS digested,
+               (SELECT COUNT(*)::int FROM intl_market.{prefix}knowledge_docs) AS total
+            FROM intl_market.{prefix}knowledge_docs d
+            WHERE EXISTS (
+                SELECT 1 FROM intl_market.{prefix}expert_insights i
+                WHERE i.source_doc_url = d.url
+            )"""
+    )
+    sched_row = _query(
+        f"""SELECT COUNT(*) FILTER (WHERE status = 'success')::int AS successes,
+               COUNT(*)::int AS total, MAX(run_at) AS last_run
+            FROM intl_market.{prefix}ingestion_log
+            WHERE run_at > NOW() - INTERVAL '30 days'"""
+    )
+
+    n_docs      = int(docs_row.iloc[0]["n"])       if not docs_row.empty      else 0
+    n_insights  = int(insights_row.iloc[0]["n"])   if not insights_row.empty  else 0
+    digested    = int(digest_row.iloc[0]["digested"]) if not digest_row.empty else 0
+    total_d     = int(digest_row.iloc[0]["total"])    if not digest_row.empty else 0
+    successes   = int(sched_row.iloc[0]["successes"]) if not sched_row.empty  else 0
+    total_runs  = int(sched_row.iloc[0]["total"])     if not sched_row.empty  else 0
+    last_run    = sched_row.iloc[0]["last_run"]        if not sched_row.empty  else None
+
+    return {
+        "n_docs":          n_docs,
+        "n_insights":      n_insights,
+        "digested":        digested,
+        "total_digestible": total_d,
+        "digest_pct":      digested / total_d   if total_d    > 0 else 0.0,
+        "successes":       successes,
+        "total_runs":      total_runs,
+        "sched_pct":       successes / total_runs if total_runs > 0 else 0.0,
+        "last_ingest_ago": _ago(last_run),
+    }
+
+
 @st.cache_data(ttl=300)
 def _get_daily_index(prefix: str, start: str, end: str) -> pd.DataFrame:
     try:
@@ -1318,6 +1375,35 @@ def run_market_app(cfg: MarketConfig, _app_file: str | None = None) -> None:
     with tab_knowledge:
         st.header(f"{cfg.name} Knowledge Base")
         st.info("**Auto-updated daily** · Knowledge ingested at **03:30 SGT** · Modo AI at **04:00 SGT**", icon="🔄")
+
+        # --- KB metrics dashboard ---
+        try:
+            _kbs = _kb_stats_metrics(prefix)
+            _km1, _km2, _km3 = st.columns(3)
+            _km1.metric("📄 KB Documents", f"{_kbs['n_docs']:,}")
+            _km2.metric("💡 Expert Insights", f"{_kbs['n_insights']:,}")
+            _km3.metric("⏱ Last Ingestion", _kbs["last_ingest_ago"])
+            _kd1, _kd2 = st.columns(2)
+            with _kd1:
+                st.caption(
+                    f"**Digest rate** — {_kbs['digested']}/{_kbs['total_digestible']} "
+                    f"docs converted to insights"
+                )
+                st.progress(_kbs["digest_pct"], text=f"{_kbs['digest_pct']:.0%}")
+            with _kd2:
+                _sched_lbl = (
+                    f"{_kbs['successes']}/{_kbs['total_runs']} runs succeeded (last 30 days)"
+                    if _kbs["total_runs"] > 0 else "no ingestion runs in last 30 days"
+                )
+                st.caption(f"**Ingestion success** — {_sched_lbl}")
+                st.progress(
+                    _kbs["sched_pct"],
+                    text=f"{_kbs['sched_pct']:.0%}" if _kbs["total_runs"] > 0 else "—",
+                )
+            st.divider()
+        except Exception:
+            pass
+
         kc1, kc2 = st.columns([2, 1])
         with kc1:
             kb_counts = _knowledge_doc_counts(prefix)

@@ -751,6 +751,34 @@ def _cached_kb_docs() -> list:
         return []
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _spot_kb_stats() -> dict:
+    """Return spot market KB + insight statistics for the metrics dashboard."""
+    docs_row = _query(
+        "SELECT COUNT(*)::int AS total, "
+        "COUNT(*) FILTER (WHERE parse_error IS NULL AND active = TRUE)::int AS parsed, "
+        "COUNT(*) FILTER (WHERE active = TRUE)::int AS active_docs "
+        "FROM staging.spot_knowledge_docs"
+    )
+    chunks_row = _query("SELECT COUNT(*)::int AS n FROM staging.spot_knowledge_chunks")
+    insights_row = _query(
+        "SELECT COUNT(*)::int AS n FROM staging.kp_expert_insights WHERE active = TRUE"
+    )
+    total   = int(docs_row.iloc[0]["total"])       if not docs_row.empty     else 0
+    parsed  = int(docs_row.iloc[0]["parsed"])      if not docs_row.empty     else 0
+    active  = int(docs_row.iloc[0]["active_docs"]) if not docs_row.empty     else 0
+    n_chunks    = int(chunks_row.iloc[0]["n"])     if not chunks_row.empty   else 0
+    n_insights  = int(insights_row.iloc[0]["n"])   if not insights_row.empty else 0
+    return {
+        "total":       total,
+        "parsed":      parsed,
+        "active":      active,
+        "parse_pct":   parsed / total if total > 0 else 0.0,
+        "n_chunks":    n_chunks,
+        "n_insights":  n_insights,
+    }
+
+
 # ── APScheduler — daily spot market report ────────────────────────────────────
 import os as _os
 _DEFAULT_RECIPIENT = "chen_dpeng@hotmail.com"
@@ -3580,6 +3608,21 @@ the file is already ingested and searchable without calling ingest_kb_document a
                 st.warning(f"KB table init: {_kbi_exc}")
 
         st.caption(_t("kb_caption"))
+
+        # --- KB metrics ---
+        try:
+            _skbs = _spot_kb_stats()
+            _skm1, _skm2, _skm3 = st.columns(3)
+            _skm1.metric("📄 Files", f"{_skbs['total']:,}")
+            _skm2.metric("🧩 Chunks", f"{_skbs['n_chunks']:,}")
+            _skm3.metric("💡 Insights", f"{_skbs['n_insights']:,}")
+            st.caption(
+                f"**Parse success rate** — {_skbs['parsed']}/{_skbs['total']} files "
+                f"parsed without error"
+            )
+            st.progress(_skbs["parse_pct"], text=f"{_skbs['parse_pct']:.0%}")
+        except Exception:
+            pass
 
         _kb_up_tab, _kb_url_tab = st.tabs(["📂 Upload Files", "🌐 Fetch from URL"])
 
