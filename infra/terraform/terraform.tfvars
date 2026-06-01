@@ -95,12 +95,12 @@ modo_api_key  = "c456dba24fe6e6b302ac926d7da993c2e47ed54dddd67d20653b4a148225"
 modo_email    = "dipeng.chen@envision-energy.com"   # fill in: your Modo Energy web login email
 modo_password = "!Ariesqq0409"   # fill in: your Modo Energy web login password
 
-image_gb_market = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-gb-market:v69"
+image_gb_market = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-gb-market:v70"
 
-image_au_market    = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-au-market:v4"
-image_ercot_market = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-ercot-market:v2"
-image_pjm_market   = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-pjm-market:v2"
-image_caiso_market = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-caiso-market:v2"
+image_au_market    = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-au-market:v5"
+image_ercot_market = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-ercot-market:v3"
+image_pjm_market   = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-pjm-market:v3"
+image_caiso_market = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-caiso-market:v3"
 
 desired_count_au_market    = 1
 desired_count_ercot_market = 1
@@ -120,7 +120,7 @@ LINGFENG_PASSWORD="P+2jGuuE5WD"
 fengxing_api_key = "b5d38061-d965-6039d74b69ff"
 
 # Crystal-Ball Fortune Teller
-image_crystal_ball             = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/crystal-ball-fortune:v15"
+image_crystal_ball             = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/crystal-ball-fortune:v17"
 desired_count_crystal_ball     = 1
 crystal_ball_wecom_webhook_url = ""
 
