@@ -757,6 +757,12 @@ def run_daily_report(cfg: MarketConfig, to_email: str | None = None) -> dict:
         finally:
             conn.close()
         pdf_bytes, ai_commentary = generate_report_pdf(cfg, report_date)
+        try:
+            from services.common.report_library import save_report as _save_report
+            _save_report(cfg.code, report_date, pdf_bytes,
+                         f"{cfg.code}_market_report_{report_date.isoformat()}.pdf")
+        except Exception as _lib_exc:
+            logger.warning("[%s] Report library save failed: %s", cfg.code, _lib_exc)
         send_daily_report_email(cfg, pdf_bytes, report_date, to_email, ai_commentary=ai_commentary)
         return {"status": "success", "date": str(report_date), "size_bytes": len(pdf_bytes),
                 "duration": round(time.time() - t0, 1)}

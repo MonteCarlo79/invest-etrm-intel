@@ -2284,9 +2284,9 @@ with st.sidebar:
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_overview, tab_ancillary, tab_bess, tab_pricing, tab_map, tab_strategist, tab_quant, tab_knowledge, tab_mgmt = st.tabs([
+tab_overview, tab_ancillary, tab_bess, tab_pricing, tab_map, tab_strategist, tab_quant, tab_knowledge, tab_library, tab_mgmt = st.tabs([
     "Market Overview", "Ancillary Markets", "BESS Benchmarking",
-    "Pricing", "Asset Map", "Strategist", "Quant", "Knowledge Base", "Data Management",
+    "Pricing", "Asset Map", "Strategist", "Quant", "Knowledge Base", "Library", "Data Management",
 ])
 
 # ---- Market Overview -------------------------------------------------------
@@ -3877,4 +3877,9 @@ with tab_mgmt:
         if st.form_submit_button("Save"):
             _save_memory(cat, subj, cont, source="manual")
             st.success("Saved")
+
+# ---- Library ----------------------------------------------------------------
+with tab_library:
+    from services.common.report_library_ui import render_library_tab
+    render_library_tab("gb", "GB Market", "gb")
             st.rerun()

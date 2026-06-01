@@ -856,6 +856,12 @@ def run_daily_report(to_email: str | None = None,
                 conn.close()
 
         pdf_bytes, ai_commentary = generate_report_pdf(report_date)
+        try:
+            from services.common.report_library import save_report as _save_report
+            _save_report("spot", report_date, pdf_bytes,
+                         f"spot_market_report_{report_date.isoformat()}.pdf")
+        except Exception as _lib_exc:
+            logger.warning("Report library save failed: %s", _lib_exc)
         send_report_email(pdf_bytes, report_date, to_email, ai_commentary=ai_commentary)
 
         wecom_result = "skipped"

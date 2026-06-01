@@ -1191,9 +1191,9 @@ def run_market_app(cfg: MarketConfig, _app_file: str | None = None) -> None:
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
     (tab_overview, tab_ancillary, tab_bess, tab_map,
-     tab_knowledge, tab_strategist, tab_quant, tab_mgmt) = st.tabs([
+     tab_knowledge, tab_strategist, tab_quant, tab_library, tab_mgmt) = st.tabs([
         "Market Overview", "Ancillary Markets", "BESS Benchmarking", "Asset Map",
-        "Knowledge Base", "Strategist", "Quant", "Data Management",
+        "Knowledge Base", "Strategist", "Quant", "Library", "Data Management",
     ])
 
     # ── Market Overview ───────────────────────────────────────────────────────
@@ -1655,6 +1655,11 @@ def run_market_app(cfg: MarketConfig, _app_file: str | None = None) -> None:
         if st.session_state.get(f"{cfg.code}_quant_history") and st.button("Clear chat", key=f"{cfg.code}_clear_quant"):
             st.session_state[f"{cfg.code}_quant_history"] = []
             st.rerun()
+
+    # ── Library ───────────────────────────────────────────────────────────────
+    with tab_library:
+        from services.common.report_library_ui import render_library_tab
+        render_library_tab(cfg.code, cfg.name, cfg.code)
 
     # ── Data Management ───────────────────────────────────────────────────────
     with tab_mgmt:

@@ -1626,10 +1626,10 @@ st.divider()
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_overview, tab_spread, tab_heatmap, tab_intraday, tab_province, tab_dist, tab_geo, \
-tab_interprov, tab_fundamentals, tab_agent, tab_mgmt = st.tabs([
+tab_interprov, tab_fundamentals, tab_agent, tab_library, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"), _t("tab_intraday"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
-    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_mgmt"),
+    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), "Library", _t("tab_mgmt"),
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -3875,6 +3875,11 @@ def _db_coverage_detail(year: int = 2026):
     )
     return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
 
+
+# ── Library ───────────────────────────────────────────────────────────────────
+with tab_library:
+    from services.common.report_library_ui import render_library_tab
+    render_library_tab("spot", "China Spot Market", "spot")
 
 # ── Tab 9: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
