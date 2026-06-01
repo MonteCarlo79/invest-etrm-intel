@@ -596,11 +596,14 @@ _FCAS_PRICE_MAP: dict[str, tuple[str, str]] = {
     "LOWER6SECPRICE":  ("lower_6s",   "LOWER6SECACTUALAVAILABILITY"),
     "LOWER60SECPRICE": ("lower_60s",  "LOWER60SECACTUALAVAILABILITY"),
     "LOWER5MINPRICE":  ("lower_5min", "LOWER5MINACTUALAVAILABILITY"),
+    # Regulation prices — moved to DISPATCHPRICE in new format (no availability col in DISPATCHPRICE)
+    "RAISEREGPRICE":   ("raise_reg",  None),
+    "LOWERREGPRICE":   ("lower_reg",  None),
 }
 
 
 def ingest_fcas_prices(engine, start: date, end: date) -> int:
-    """Fetch AEMO MMSDM DISPATCHREGIONSUM → au_ancillary_results (daily avg)."""
+    """Fetch AEMO MMSDM DISPATCHREGIONSUM (+ DISPATCHPRICE for regulation) → au_ancillary_results (daily avg)."""
     total = 0
     for yyyy, mm in _month_range(start, end):
         df = _read_mmsdm_table(yyyy, mm, "DISPATCHREGIONSUM")
@@ -623,17 +626,20 @@ def ingest_fcas_prices(engine, start: date, end: date) -> int:
         records = []
 
         for price_col, (service_name, avail_col) in _FCAS_PRICE_MAP.items():
+            # RAISEREGPRICE/LOWERREGPRICE come from DISPATCHPRICE, not DISPATCHREGIONSUM
+            if price_col in ("RAISEREGPRICE", "LOWERREGPRICE"):
+                continue
             if price_col not in df.columns:
                 continue
             df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
 
             group_cols = ["_date"] + ([region_col] if region_col else [])
             agg_dict: dict = {"clearing_price": (price_col, "mean")}
-            if avail_col in df.columns:
+            if avail_col and avail_col in df.columns:
                 df[avail_col] = pd.to_numeric(df[avail_col], errors="coerce")
                 agg_dict["volume_mw"] = (avail_col, "mean")
 
-            agg = df[group_cols + [price_col] + ([avail_col] if avail_col in df.columns else [])].groupby(
+            agg = df[group_cols + [price_col] + ([avail_col] if avail_col and avail_col in df.columns else [])].groupby(
                 group_cols
             ).agg(**agg_dict).reset_index()
 
@@ -653,6 +659,36 @@ def ingest_fcas_prices(engine, start: date, end: date) -> int:
                         else None
                     ),
                 })
+
+        # Regulation prices: read from DISPATCHPRICE (new SQLLoader format only)
+        if _MMSDM_USE_SQLLOADER:
+            dp_df = _read_mmsdm_table(yyyy, mm, "DISPATCHPRICE")
+            if not dp_df.empty and "SETTLEMENTDATE" in dp_df.columns:
+                if "INTERVENTION" in dp_df.columns:
+                    dp_df = dp_df[pd.to_numeric(dp_df["INTERVENTION"], errors="coerce").fillna(0) == 0]
+                dp_df["_date"] = dp_df["SETTLEMENTDATE"].apply(lambda x: _parse_settlement(x)[0])
+                dp_df = dp_df[(dp_df["_date"] >= start) & (dp_df["_date"] <= end)]
+                dp_region = "REGIONID" if "REGIONID" in dp_df.columns else None
+                for price_col, service_name in (("RAISEREGPRICE", "raise_reg"), ("LOWERREGPRICE", "lower_reg")):
+                    if price_col not in dp_df.columns:
+                        continue
+                    dp_df[price_col] = pd.to_numeric(dp_df[price_col], errors="coerce")
+                    group_cols = ["_date"] + ([dp_region] if dp_region else [])
+                    agg = dp_df[group_cols + [price_col]].groupby(group_cols).agg(
+                        clearing_price=(price_col, "mean")
+                    ).reset_index()
+                    for _, row in agg.iterrows():
+                        records.append({
+                            "settlement_date": row["_date"],
+                            "service": service_name,
+                            "region": str(row[dp_region]).strip() if dp_region else "NEM",
+                            "clearing_price": (
+                                float(row["clearing_price"])
+                                if pd.notna(row.get("clearing_price"))
+                                else None
+                            ),
+                            "volume_mw": None,
+                        })
 
         if records:
             n = _upsert(
@@ -834,8 +870,8 @@ _FCAS_ENABLEMENT_MAP: dict[str, str] = {
     "LOWER60SECMW":"LOWER60SECRRP",
     "LOWER5MINMW": "LOWER5MINRRP",
     # New SQLLoader DISPATCHLOAD column names (2025+)
-    "RAISEREG":  "RAISEREGRRP",   # no RAISEREGPRICE in DISPATCHREGIONSUM
-    "LOWERREG":  "LOWERREGRRP",   # no LOWERREGPRICE in DISPATCHREGIONSUM
+    "RAISEREG":  "RAISEREGPRICE",  # price from DISPATCHPRICE (merged below)
+    "LOWERREG":  "LOWERREGPRICE",  # price from DISPATCHPRICE (merged below)
     "RAISE6SEC": "RAISE6SECPRICE",
     "RAISE60SEC":"RAISE60SECPRICE",
     "RAISE5MIN": "RAISE5MINPRICE",
@@ -909,7 +945,7 @@ def ingest_bess_fcas(
         for col in enablement_cols:
             dus_df[col] = pd.to_numeric(dus_df[col], errors="coerce").fillna(0.0)
 
-        # DISPATCHREGIONSUM — for FCAS prices (5-min)
+        # DISPATCHREGIONSUM — for contingency FCAS prices (5-min)
         drs_df = _read_mmsdm_table(yyyy, mm, "DISPATCHREGIONSUM")
         if drs_df.empty:
             logger.warning("No DISPATCHREGIONSUM for %04d-%02d", yyyy, mm)
@@ -917,6 +953,24 @@ def ingest_bess_fcas(
 
         drs_df["_date"] = drs_df["SETTLEMENTDATE"].apply(lambda x: _parse_settlement(x)[0])
         drs_df = drs_df[(drs_df["_date"] >= start) & (drs_df["_date"] <= end)]
+
+        # In new SQLLoader format, merge RAISEREGPRICE/LOWERREGPRICE from DISPATCHPRICE
+        if _MMSDM_USE_SQLLOADER:
+            dp_df = _read_mmsdm_table(yyyy, mm, "DISPATCHPRICE")
+            if not dp_df.empty and "SETTLEMENTDATE" in dp_df.columns:
+                if "INTERVENTION" in dp_df.columns:
+                    dp_df = dp_df[pd.to_numeric(dp_df["INTERVENTION"], errors="coerce").fillna(0) == 0]
+                reg_cols = [c for c in ("RAISEREGPRICE", "LOWERREGPRICE") if c in dp_df.columns]
+                if reg_cols:
+                    dp_merge_on = ["SETTLEMENTDATE"] + (["REGIONID"] if "REGIONID" in dp_df.columns else [])
+                    dp_sub = dp_df[[c for c in dp_merge_on + reg_cols if c in dp_df.columns]].copy()
+                    for col in reg_cols:
+                        dp_sub[col] = pd.to_numeric(dp_sub[col], errors="coerce").fillna(0.0)
+                    drs_merge_on = [c for c in dp_merge_on if c in drs_df.columns]
+                    drs_df = drs_df.merge(dp_sub, on=drs_merge_on, how="left")
+                    for col in reg_cols:
+                        if col in drs_df.columns:
+                            drs_df[col] = drs_df[col].fillna(0.0)
 
         price_cols = [c for c in _FCAS_ENABLEMENT_MAP.values() if c in drs_df.columns]
         for col in price_cols:

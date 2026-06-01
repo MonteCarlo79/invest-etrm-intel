@@ -73,6 +73,65 @@ def _query(sql: str, params=None) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Daily report settings helpers
+# ---------------------------------------------------------------------------
+
+def _raw_db_conn():
+    """Open a fresh psycopg2 connection (safe to call from background threads)."""
+    url = (
+        os.environ.get("PGURL")
+        or os.environ.get("DATABASE_URL")
+        or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
+    )
+    conn = psycopg2.connect(url, connect_timeout=5)
+    conn.autocommit = True
+    return conn
+
+
+def _is_report_enabled() -> bool:
+    """Return True if daily report sending is enabled for GB (default: True)."""
+    try:
+        conn = _raw_db_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT value FROM intl_market.platform_settings "
+                "WHERE market_code = 'gb' AND key = 'daily_report_enabled'",
+            )
+            row = cur.fetchone()
+        conn.close()
+        if row is None:
+            return True
+        return row[0].lower() in ("true", "1", "yes")
+    except Exception:
+        return True
+
+
+def _set_report_enabled(enabled: bool) -> None:
+    """Persist daily report enabled state for GB to DB."""
+    conn = _raw_db_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS intl_market.platform_settings (
+                market_code TEXT NOT NULL,
+                key         TEXT NOT NULL,
+                value       TEXT,
+                updated_at  TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (market_code, key)
+            )
+        """)
+        cur.execute(
+            """
+            INSERT INTO intl_market.platform_settings (market_code, key, value, updated_at)
+            VALUES ('gb', 'daily_report_enabled', %s, NOW())
+            ON CONFLICT (market_code, key) DO UPDATE
+              SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            ("true" if enabled else "false",),
+        )
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Agent memory helpers
 # ---------------------------------------------------------------------------
 
@@ -453,6 +512,9 @@ def _start_scheduler():
         _run_knowledge_ingest_job(trigger="scheduled")
 
     def _daily_report_job():
+        if not _is_report_enabled():
+            logger.info("Daily report disabled for GB — skipping")
+            return
         import importlib.util, pathlib
         today     = date.today()
         yesterday = today - timedelta(days=1)
@@ -2131,7 +2193,17 @@ with st.sidebar:
     date_end   = d_end.isoformat()
 
     st.divider()
-    st.caption("v1 · ap-southeast-1")
+    st.subheader("Daily Report")
+    _rpt_cur = _is_report_enabled()
+    _rpt_toggle = st.toggle("Send daily report", value=_rpt_cur,
+                            key="gb_rpt_enabled",
+                            help="Enable or disable the 6 AM daily email + WeCom report")
+    if _rpt_toggle != _rpt_cur:
+        _set_report_enabled(_rpt_toggle)
+        st.success("Saved" if _rpt_toggle else "Daily report disabled")
+
+    st.divider()
+    st.caption("v68 · ap-southeast-1")
 
 
 # ---------------------------------------------------------------------------

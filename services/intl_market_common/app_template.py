@@ -60,6 +60,66 @@ def _query(sql: str, params=None) -> pd.DataFrame:
     return pd.read_sql(sql, _conn(), params=params)
 
 
+# ---------------------------------------------------------------------------
+# Daily report settings helpers
+# ---------------------------------------------------------------------------
+
+def _raw_db_conn():
+    """Open a fresh psycopg2 connection (safe to call from background threads)."""
+    url = (
+        os.environ.get("PGURL")
+        or os.environ.get("DATABASE_URL")
+        or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
+    )
+    conn = psycopg2.connect(url, connect_timeout=5)
+    conn.autocommit = True
+    return conn
+
+
+def _is_report_enabled(market_code: str) -> bool:
+    """Return True if daily report sending is enabled for this market (default: True)."""
+    try:
+        conn = _raw_db_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT value FROM intl_market.platform_settings "
+                "WHERE market_code = %s AND key = 'daily_report_enabled'",
+                (market_code,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if row is None:
+            return True
+        return row[0].lower() in ("true", "1", "yes")
+    except Exception:
+        return True  # on DB error, default to enabled
+
+
+def _set_report_enabled(market_code: str, enabled: bool) -> None:
+    """Persist daily report enabled state for this market to DB."""
+    conn = _raw_db_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS intl_market.platform_settings (
+                market_code TEXT NOT NULL,
+                key         TEXT NOT NULL,
+                value       TEXT,
+                updated_at  TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (market_code, key)
+            )
+        """)
+        cur.execute(
+            """
+            INSERT INTO intl_market.platform_settings (market_code, key, value, updated_at)
+            VALUES (%s, 'daily_report_enabled', %s, NOW())
+            ON CONFLICT (market_code, key) DO UPDATE
+              SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            (market_code, "true" if enabled else "false"),
+        )
+    conn.close()
+
+
 def _run_connector_to_db(connector, conn, prefix: str) -> int:
     """Insert docs yielded by connector.fetch() into {prefix}knowledge_docs. Returns count."""
     n = 0
@@ -380,6 +440,9 @@ def _start_scheduler(code: str, name: str, prefix: str, api_key: str, app_file: 
             logger.error("KB digest failed for %s: %s", code, exc)
 
     def _daily_report_job():
+        if not _is_report_enabled(code):
+            logger.info("Daily report disabled for %s — skipping", code)
+            return
         try:
             _rpt_path = pathlib.Path(app_file).with_name("daily_report.py")
             if not _rpt_path.exists():
@@ -392,8 +455,18 @@ def _start_scheduler(code: str, name: str, prefix: str, api_key: str, app_file: 
             pdf_bytes, ai_commentary = mod.generate_report_pdf(rpt_date)
             try:
                 mod.send_daily_report_email(pdf_bytes, rpt_date, ai_commentary=ai_commentary)
+                logger.info("Daily report emailed for %s (%s)", code, rpt_date)
             except Exception as e:
                 logger.error("Daily report email failed for %s: %s", code, e)
+            wecom_url = os.environ.get("WECOM_WEBHOOK_URL", "")
+            if wecom_url:
+                try:
+                    mod.send_daily_report_wecom(pdf_bytes, rpt_date,
+                                                webhook_url=wecom_url,
+                                                ai_commentary=ai_commentary)
+                    logger.info("Daily report sent to WeCom for %s (%s)", code, rpt_date)
+                except Exception as e:
+                    logger.error("Daily report WeCom failed for %s: %s", code, e)
         except Exception as exc:
             logger.error("Daily report job failed for %s: %s", code, exc)
 
@@ -1036,6 +1109,17 @@ def run_market_app(cfg: MarketConfig, _app_file: str | None = None) -> None:
         d_end   = st.date_input("To",   value=today,         key=f"{cfg.code}_d_end")
         date_start = d_start.isoformat()
         date_end   = d_end.isoformat()
+
+        st.divider()
+        st.subheader("Daily Report")
+        _rpt_cur = _is_report_enabled(cfg.code)
+        _rpt_toggle = st.toggle("Send daily report", value=_rpt_cur,
+                                key=f"{cfg.code}_rpt_enabled",
+                                help="Enable or disable the 6 AM daily email + WeCom report")
+        if _rpt_toggle != _rpt_cur:
+            _set_report_enabled(cfg.code, _rpt_toggle)
+            st.success("Saved" if _rpt_toggle else "Daily report disabled")
+
         st.divider()
         st.caption(f"Port {cfg.port} · ap-southeast-1")
 
