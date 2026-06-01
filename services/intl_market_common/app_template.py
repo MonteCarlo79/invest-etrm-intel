@@ -398,8 +398,14 @@ def _list_recent_sessions(prefix: str, limit: int = 3) -> pd.DataFrame:
 # Scheduler (module-level, one per process per market)
 # ---------------------------------------------------------------------------
 
-@st.cache_resource
+_scheduler_instances: dict = {}
+_scheduler_lock = __import__("threading").Lock()
+
+
 def _start_scheduler(code: str, name: str, prefix: str, api_key: str, app_file: str):
+    with _scheduler_lock:
+        if code in _scheduler_instances:
+            return _scheduler_instances[code]
     from apscheduler.schedulers.background import BackgroundScheduler
 
     def _daily_market_job():
@@ -477,6 +483,9 @@ def _start_scheduler(code: str, name: str, prefix: str, api_key: str, app_file: 
     scheduler.add_job(_modo_ai_job,        "cron", hour=4,  minute=0,  id=f"{code}_modo_ai",         misfire_grace_time=3600)
     scheduler.add_job(_daily_report_job,   "cron", hour=6,  minute=0,  id=f"{code}_daily_report",    misfire_grace_time=3600)
     scheduler.start()
+    with _scheduler_lock:
+        _scheduler_instances[code] = scheduler
+    print(f"[SCHEDULER] {code} scheduler started", flush=True)
     return scheduler
 
 

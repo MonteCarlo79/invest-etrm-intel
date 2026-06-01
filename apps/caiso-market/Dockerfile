@@ -2,7 +2,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 RUN pip install --no-cache-dir --timeout 300 --retries 10 \
-    "streamlit>=1.32" \
+    "streamlit==1.58.0" \
     "plotly==6.0.1" \
     pandas \
     "psycopg2-binary==2.9.10" \
@@ -38,11 +38,5 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8512
 
-CMD ["streamlit", "run", "apps/caiso-market/app.py", \
-     "--server.port=8512", \
-     "--server.address=0.0.0.0", \
-     "--server.baseUrlPath=caiso-market", \
-     "--server.enableCORS=false", \
-     "--server.enableXsrfProtection=false", \
-     "--server.headless=true", \
-     "--server.fileWatcherType=none"]
+RUN chmod +x ./apps/caiso-market/run.sh
+CMD ["/bin/bash", "apps/caiso-market/run.sh"]

@@ -486,9 +486,16 @@ def _run_knowledge_ingest_job(only: list[str] | None = None, trigger: str = "man
         return {"status": "error", "error": str(exc), "duration": duration}
 
 
-@st.cache_resource
+_scheduler_instance = None
+_scheduler_lock = __import__("threading").Lock()
+
+
 def _start_scheduler():
-    """Start APScheduler background scheduler (runs once per process via cache_resource)."""
+    """Start APScheduler background scheduler (runs once per process, thread-safe)."""
+    global _scheduler_instance
+    with _scheduler_lock:
+        if _scheduler_instance is not None:
+            return _scheduler_instance
     from apscheduler.schedulers.background import BackgroundScheduler
 
     def _daily_market_job():
@@ -619,7 +626,17 @@ def _start_scheduler():
     scheduler.add_job(_daily_report_job, "cron", hour=6, minute=0,
                       id="gb_daily_report", misfire_grace_time=3600)
     scheduler.start()
+    global _scheduler_instance
+    _scheduler_instance = scheduler
+    print("[SCHEDULER] GB scheduler started", flush=True)
     return scheduler
+
+
+# ---------------------------------------------------------------------------
+# Scheduler is now started at container boot by scheduler_service.py (run.sh).
+# The call below initialises the in-process scheduler for the sidebar status
+# widget when a user visits the page.
+# ---------------------------------------------------------------------------
 
 
 @st.cache_data(ttl=60)

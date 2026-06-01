@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
-    "streamlit>=1.32" \
+    "streamlit==1.58.0" \
     "plotly==6.0.1" \
     pandas \
     "psycopg2-binary==2.9.10" \

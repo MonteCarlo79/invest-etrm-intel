@@ -1645,17 +1645,9 @@ resource "aws_ecs_task_definition" "gb_market" {
         }
       ]
 
-      command = [
-        "streamlit",
-        "run",
-        "apps/gb-market/app.py",
-        "--server.port=8508",
-        "--server.address=0.0.0.0",
-        "--server.baseUrlPath=gb-market",
-        "--server.enableCORS=false",
-        "--server.enableXsrfProtection=false",
-        "--server.headless=true"
-      ]
+      # run.sh starts scheduler_service.py in the background then Streamlit in the foreground.
+      # This ensures scheduled jobs run even if no user ever visits the page.
+      command = ["/bin/bash", "apps/gb-market/run.sh"]
 
       environment = [
         {
@@ -1795,10 +1787,7 @@ resource "aws_ecs_task_definition" "au_market" {
     image     = var.image_au_market
     essential = true
     portMappings = [{ containerPort = 8509, protocol = "tcp" }]
-    command = ["streamlit", "run", "apps/au-market/app.py",
-               "--server.port=8509", "--server.address=0.0.0.0",
-               "--server.baseUrlPath=au-market", "--server.enableCORS=false",
-               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    command = ["/bin/bash", "apps/au-market/run.sh"]
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
@@ -1889,10 +1878,7 @@ resource "aws_ecs_task_definition" "ercot_market" {
     image     = var.image_ercot_market
     essential = true
     portMappings = [{ containerPort = 8510, protocol = "tcp" }]
-    command = ["streamlit", "run", "apps/ercot-market/app.py",
-               "--server.port=8510", "--server.address=0.0.0.0",
-               "--server.baseUrlPath=ercot-market", "--server.enableCORS=false",
-               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    command = ["/bin/bash", "apps/ercot-market/run.sh"]
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
@@ -1983,10 +1969,7 @@ resource "aws_ecs_task_definition" "pjm_market" {
     image     = var.image_pjm_market
     essential = true
     portMappings = [{ containerPort = 8511, protocol = "tcp" }]
-    command = ["streamlit", "run", "apps/pjm-market/app.py",
-               "--server.port=8511", "--server.address=0.0.0.0",
-               "--server.baseUrlPath=pjm-market", "--server.enableCORS=false",
-               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    command = ["/bin/bash", "apps/pjm-market/run.sh"]
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
@@ -2077,10 +2060,7 @@ resource "aws_ecs_task_definition" "caiso_market" {
     image     = var.image_caiso_market
     essential = true
     portMappings = [{ containerPort = 8512, protocol = "tcp" }]
-    command = ["streamlit", "run", "apps/caiso-market/app.py",
-               "--server.port=8512", "--server.address=0.0.0.0",
-               "--server.baseUrlPath=caiso-market", "--server.enableCORS=false",
-               "--server.enableXsrfProtection=false", "--server.headless=true"]
+    command = ["/bin/bash", "apps/caiso-market/run.sh"]
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
