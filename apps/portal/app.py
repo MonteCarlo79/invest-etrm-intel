@@ -755,169 +755,170 @@ with col_deal:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Row 3: GB Analyst (full width) ───────────────────────────────────────────
-col_gb, _ = st.columns(2)
+# ── International & Global Markets ───────────────────────────────────────────
+st.markdown("### International & Global Markets")
 
-with col_gb:
+# GB full width
+_render_agent_section(
+    icon='<img src="https://flagcdn.com/w40/gb.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+    name="GB Analyst",
+    subtitle="Great Britain BESS Market Intelligence · GB Market",
+    description=(
+        "Live intelligence platform for the GB battery storage market. "
+        "Tracks daily asset performance across the full GB BESS fleet, covering "
+        "wholesale arbitrage, Balancing Mechanism, ancillary services (FFR, DC), "
+        "and reserve markets. Includes AI-generated market commentary, pricing "
+        "models, and automated daily reports delivered by email and WeCom."
+    ),
+    capabilities=[
+        "Daily BESS leaderboard: revenue by asset, owner, operator",
+        "EPEX DA prices: baseload, peak/off-peak, arbitrage spreads",
+        "Balancing Mechanism & system price / NIV analysis",
+        "Ancillary markets: FFR, DCL, DCH, reserve clearing prices",
+        "Pricing models: BESS options value, PF dispatch, OLS forecast",
+        "Automated daily PDF report via email & WeCom",
+    ],
+    app_slug="gb-market",
+    agent_key="gb_analyst",
+    available=True,
+)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Row A: AU | ERCOT | PJM
+intl_cols = st.columns(3)
+with intl_cols[0]:
     _render_agent_section(
-        icon='<img src="https://flagcdn.com/w40/gb.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-        name="GB Analyst",
-        subtitle="Great Britain BESS Market Intelligence · GB Market",
+        icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="Australia (NEM) Market Intelligence",
+        subtitle="AEMO · NEM spot · FCAS · AI Strategist",
         description=(
-            "Live intelligence platform for the GB battery storage market. "
-            "Tracks daily asset performance across the full GB BESS fleet, covering "
-            "wholesale arbitrage, Balancing Mechanism, ancillary services (FFR, DC), "
-            "and reserve markets. Includes AI-generated market commentary, pricing "
-            "models, and automated daily reports delivered by email and WeCom."
+            "Real-time NEM BESS intelligence: spot prices by region (QLD/NSW/VIC/SA), "
+            "FCAS regulation and contingency markets, BESS leaderboard, and Strategist agent "
+            "grounded on Modo Energy data."
         ),
         capabilities=[
-            "Daily BESS leaderboard: revenue by asset, owner, operator",
-            "EPEX DA prices: baseload, peak/off-peak, arbitrage spreads",
-            "Balancing Mechanism & system price / NIV analysis",
-            "Ancillary markets: FFR, DCL, DCH, reserve clearing prices",
-            "Pricing models: BESS options value, PF dispatch, OLS forecast",
-            "Automated daily PDF report via email & WeCom",
+            "NEM spot price by region (QLD/NSW/VIC/SA)",
+            "FCAS regulation and contingency clearing prices",
+            "BESS daily and monthly revenue index",
+            "Asset leaderboard: revenue by owner/operator",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: AEMO notices + Modo research",
         ],
-        app_slug="gb-market",
-        agent_key="gb_analyst",
+        app_slug="au-market",
+        agent_key="au_analyst",
+        available=True,
+    )
+with intl_cols[1]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="ERCOT (Texas) Market Intelligence",
+        subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
+        description=(
+            "Texas BESS intelligence: real-time and day-ahead LMPs, ancillary services "
+            "(Reg-Up/Down, RRS, ECRS), BESS revenue benchmarking, and Strategist agent."
+        ),
+        capabilities=[
+            "ERCOT RT and DA nodal LMP prices",
+            "Ancillary services: Reg-Up/Down, RRS, ECRS, Non-Spin",
+            "BESS daily and monthly revenue index",
+            "Asset leaderboard by owner/operator",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: ERCOT market notices + Modo research",
+        ],
+        app_slug="ercot-market",
+        agent_key="ercot_analyst",
+        available=True,
+    )
+with intl_cols[2]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="PJM (US East) Market Intelligence",
+        subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
+        description=(
+            "PJM BESS intelligence: nodal LMPs, capacity market, regulation (RegD/RegA), "
+            "synchronised reserve, BESS revenue benchmarking, and Strategist agent."
+        ),
+        capabilities=[
+            "PJM nodal LMP prices by zone",
+            "Ancillary services: Regulation (RegD/RegA), Sync Reserve",
+            "Capacity market (RPM) context",
+            "BESS daily and monthly revenue index",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: PJM market notices + Modo research",
+        ],
+        app_slug="pjm-market",
+        agent_key="pjm_analyst",
         available=True,
     )
 
-    st.markdown("### International Markets")
-    intl_cols = st.columns(2)
-    with intl_cols[0]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="Australia (NEM) Market Intelligence",
-            subtitle="AEMO · NEM spot · FCAS · AI Strategist",
-            description=(
-                "Real-time NEM BESS intelligence: spot prices by region (QLD/NSW/VIC/SA), "
-                "FCAS regulation and contingency markets, BESS leaderboard, and Strategist agent "
-                "grounded on Modo Energy data."
-            ),
-            capabilities=[
-                "NEM spot price by region (QLD/NSW/VIC/SA)",
-                "FCAS regulation and contingency clearing prices",
-                "BESS daily and monthly revenue index",
-                "Asset leaderboard: revenue by owner/operator",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: AEMO notices + Modo research",
-            ],
-            app_slug="au-market",
-            agent_key="au_analyst",
-            available=True,
-        )
-    with intl_cols[1]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="ERCOT (Texas) Market Intelligence",
-            subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
-            description=(
-                "Texas BESS intelligence: real-time and day-ahead LMPs, ancillary services "
-                "(Reg-Up/Down, RRS, ECRS), BESS revenue benchmarking, and Strategist agent."
-            ),
-            capabilities=[
-                "ERCOT RT and DA nodal LMP prices",
-                "Ancillary services: Reg-Up/Down, RRS, ECRS, Non-Spin",
-                "BESS daily and monthly revenue index",
-                "Asset leaderboard by owner/operator",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: ERCOT market notices + Modo research",
-            ],
-            app_slug="ercot-market",
-            agent_key="ercot_analyst",
-            available=True,
-        )
-
-    intl_cols2 = st.columns(2)
-    with intl_cols2[0]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="PJM (US East) Market Intelligence",
-            subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
-            description=(
-                "PJM BESS intelligence: nodal LMPs, capacity market, regulation (RegD/RegA), "
-                "synchronised reserve, BESS revenue benchmarking, and Strategist agent."
-            ),
-            capabilities=[
-                "PJM nodal LMP prices by zone",
-                "Ancillary services: Regulation (RegD/RegA), Sync Reserve",
-                "Capacity market (RPM) context",
-                "BESS daily and monthly revenue index",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: PJM market notices + Modo research",
-            ],
-            app_slug="pjm-market",
-            agent_key="pjm_analyst",
-            available=True,
-        )
-    with intl_cols2[1]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="CAISO (California) Market Intelligence",
-            subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
-            description=(
-                "California BESS intelligence: CAISO LMPs, ancillary services (Regulation, "
-                "Spinning/Non-Spin), duck curve dynamics, Resource Adequacy, and Strategist agent."
-            ),
-            capabilities=[
-                "CAISO RT and DA LMP prices",
-                "Ancillary services: Regulation, Spinning/Non-Spin reserve",
-                "Duck curve and solar curtailment context",
-                "BESS daily and monthly revenue index",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: CAISO market notices + Modo research",
-            ],
-            app_slug="caiso-market",
-            agent_key="caiso_analyst",
-            available=True,
-        )
-
-    intl_cols3 = st.columns(2)
-    with intl_cols3[0]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/ph.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="Philippines RE Investment Advisory",
-            subtitle="WESM · GEAP · BESS · IRR Calculator · AI Analyst",
-            description=(
-                "Philippines renewable energy investment intelligence: GEAP auction data "
-                "(GEA-1 to GEA-5), WESM spot prices, NGCP ancillary services (ASPA), "
-                "parametric IRR/LCOE model for Solar/Wind/BESS/IRESS, and AI Investment Analyst."
-            ),
-            capabilities=[
-                "GEAP/COE-GET auction rounds: target vs awarded MW, GET pricing",
-                "WESM spot price projections by grid (Luzon/Visayas/Mindanao)",
-                "BESS ancillary services: regulating/contingency reserves, ASPA",
-                "IRR/LCOE calculator: Solar, Onshore Wind, BESS 2h/4h, IRESS",
-                "AI Investment Analyst: 7 tools + Knowledge Base + Expert Memory",
-                "Report Library: daily/weekly/monthly PDF archive",
-            ],
-            app_slug="ph-market",
-            agent_key="ph_analyst",
-            available=True,
-        )
-    with intl_cols3[1]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/pl.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="Poland Power Investment Advisory",
-            subtitle="FCR/aFRR · Rynek Mocy · Aurora Forecasts · AI Analyst",
-            description=(
-                "Polish BESS investment intelligence: FCR/aFRR ancillary services, "
-                "Rynek Mocy (capacity market), Aurora Energy Research Q1/Q2 2026 forecasts, "
-                "parametric IRR model, 4-zone PyPSA grid model, and AI Investment Analyst."
-            ),
-            capabilities=[
-                "FCR (Primary): European integrated auctions, BESS revenue ~60-180k PLN/MW/yr",
-                "aFRR (Secondary): PSE weekly/monthly auctions + energy settlement",
-                "Rynek Mocy: T-4/T-1 capacity auctions, 150-250 PLN/kW/yr",
-                "IRR calculator: BESS 1h/2h/4h, Solar, Onshore Wind (PLN, EUR×4.25)",
-                "AI Investment Analyst: Aurora-grounded, 7 tools + Expert Memory",
-                "Report Library: daily/weekly/monthly PDF archive",
-            ],
-            app_slug="po-market",
-            agent_key="po_analyst",
-            available=True,
-        )
+# Row B: CAISO | Philippines | Poland
+intl_cols2 = st.columns(3)
+with intl_cols2[0]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="CAISO (California) Market Intelligence",
+        subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
+        description=(
+            "California BESS intelligence: CAISO LMPs, ancillary services (Regulation, "
+            "Spinning/Non-Spin), duck curve dynamics, Resource Adequacy, and Strategist agent."
+        ),
+        capabilities=[
+            "CAISO RT and DA LMP prices",
+            "Ancillary services: Regulation, Spinning/Non-Spin reserve",
+            "Duck curve and solar curtailment context",
+            "BESS daily and monthly revenue index",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: CAISO market notices + Modo research",
+        ],
+        app_slug="caiso-market",
+        agent_key="caiso_analyst",
+        available=True,
+    )
+with intl_cols2[1]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/ph.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="Philippines RE Investment Advisory",
+        subtitle="WESM · GEAP · BESS · IRR Calculator · AI Analyst",
+        description=(
+            "Philippines renewable energy investment intelligence: GEAP auction data "
+            "(GEA-1 to GEA-5), WESM spot prices, NGCP ancillary services (ASPA), "
+            "parametric IRR/LCOE model for Solar/Wind/BESS/IRESS, and AI Investment Analyst."
+        ),
+        capabilities=[
+            "GEAP/COE-GET auction rounds: target vs awarded MW, GET pricing",
+            "WESM spot price projections by grid (Luzon/Visayas/Mindanao)",
+            "BESS ancillary services: regulating/contingency reserves, ASPA",
+            "IRR/LCOE calculator: Solar, Onshore Wind, BESS 2h/4h, IRESS",
+            "AI Investment Analyst: 7 tools + Knowledge Base + Expert Memory",
+            "Report Library: daily/weekly/monthly PDF archive",
+        ],
+        app_slug="ph-market",
+        agent_key="ph_analyst",
+        available=True,
+    )
+with intl_cols2[2]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/pl.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="Poland Power Investment Advisory",
+        subtitle="FCR/aFRR · Rynek Mocy · Aurora Forecasts · AI Analyst",
+        description=(
+            "Polish BESS investment intelligence: FCR/aFRR ancillary services, "
+            "Rynek Mocy (capacity market), Aurora Energy Research Q1/Q2 2026 forecasts, "
+            "parametric IRR model, 4-zone PyPSA grid model, and AI Investment Analyst."
+        ),
+        capabilities=[
+            "FCR (Primary): European integrated auctions, BESS revenue ~60-180k PLN/MW/yr",
+            "aFRR (Secondary): PSE weekly/monthly auctions + energy settlement",
+            "Rynek Mocy: T-4/T-1 capacity auctions, 150-250 PLN/kW/yr",
+            "IRR calculator: BESS 1h/2h/4h, Solar, Onshore Wind (PLN, EUR×4.25)",
+            "AI Investment Analyst: Aurora-grounded, 7 tools + Expert Memory",
+            "Report Library: daily/weekly/monthly PDF archive",
+        ],
+        app_slug="po-market",
+        agent_key="po_analyst",
+        available=True,
+    )
 
 # --------------------------------------------------
 # FOOTER
