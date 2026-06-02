@@ -1,0 +1,1371 @@
+"""Poland Power Market Investment Advisory — Streamlit app. Port 8511.
+
+Standalone app (does NOT use run_market_app template).
+Tabs: Market Structure | Balancing & AS Markets | BESS Opportunity |
+      Investment Analysis | Investment Advisor | Knowledge Base |
+      Data Management | Grid Analysis (PyPSA)
+"""
+import io
+import json
+import logging
+import os
+import sys
+import uuid
+from datetime import date, timedelta
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "config", ".env"))
+
+import anthropic
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import psycopg2
+import streamlit as st
+
+st.set_page_config(
+    page_title="Poland Power Investment Advisory",
+    page_icon="🇵🇱",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+from services.po_knowledge.config import MARKET_CONFIG
+from services.po_knowledge.ingest import run_knowledge_ingest
+from services.intl_market_common.advanced_retrieval_base import retrieve_for_agent
+from services.intl_market_common.expert_memory_base import (
+    extract_insights, get_insights, inject_memory, digest_kb_docs,
+)
+
+logger = logging.getLogger(__name__)
+
+_ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+_client = anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
+
+CFG = MARKET_CONFIG
+PREFIX = CFG.table_prefix      # "po_"
+APP_KEY = CFG.app_key          # "po_market"
+CURRENCY = CFG.currency_sym    # "zł"
+_EUR_PLN = 4.25
+_USD_PLN = 3.95
+
+
+# ── DB connection ────────────────────────────────────────────────────────────
+
+@st.cache_resource(ttl=3600)
+def _get_conn():
+    url = (
+        os.environ.get("PGURL")
+        or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
+    )
+    conn = psycopg2.connect(url, connect_timeout=10)
+    conn.autocommit = True
+    return conn
+
+
+def _conn():
+    conn = _get_conn()
+    if conn.closed:
+        _get_conn.clear()
+        conn = _get_conn()
+    return conn
+
+
+def _query(sql: str, params=None) -> pd.DataFrame:
+    return pd.read_sql(sql, _conn(), params=params)
+
+
+# ── Ensure tables ────────────────────────────────────────────────────────────
+
+def _ensure_tables():
+    cur = _conn().cursor()
+    cur.execute("ALTER TABLE marketdata.agent_memory ADD COLUMN IF NOT EXISTS app TEXT DEFAULT 'po_market'")
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS intl_market.{PREFIX}analyst_sessions (
+            session_id TEXT PRIMARY KEY,
+            messages   JSONB NOT NULL DEFAULT '[]',
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS intl_market.{PREFIX}knowledge_docs (
+            id              SERIAL PRIMARY KEY,
+            source          TEXT NOT NULL,
+            doc_type        TEXT NOT NULL,
+            title           TEXT,
+            url             TEXT UNIQUE,
+            published_date  DATE,
+            content         TEXT NOT NULL,
+            fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            search_vector   TSVECTOR GENERATED ALWAYS AS (
+                to_tsvector('english', coalesce(title,'') || ' ' || left(content,100000))
+            ) STORED
+        )
+    """)
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS {PREFIX}knowledge_docs_fts "
+        f"ON intl_market.{PREFIX}knowledge_docs USING GIN(search_vector)"
+    )
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS intl_market.{PREFIX}expert_insights (
+            id SERIAL PRIMARY KEY,
+            insight_text TEXT,
+            insight_type TEXT,
+            confidence TEXT,
+            source_session TEXT,
+            source_doc_url TEXT,
+            active BOOLEAN DEFAULT TRUE,
+            validated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    _conn().commit()
+
+
+try:
+    _ensure_tables()
+except Exception as _e:
+    logger.warning("_ensure_tables: %s", _e)
+
+
+# ── Scheduler ────────────────────────────────────────────────────────────────
+
+@st.cache_resource
+def _start_scheduler():
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    def _ingest_job():
+        try:
+            run_knowledge_ingest(verbose=False)
+        except Exception as exc:
+            logger.error("[po_scheduler] ingest: %s", exc)
+
+    def _digest_job():
+        try:
+            digest_kb_docs(_ANTHROPIC_KEY, PREFIX, CFG.name, limit=100)
+        except Exception as exc:
+            logger.error("[po_scheduler] digest: %s", exc)
+
+    sched = BackgroundScheduler(timezone="Europe/Warsaw")
+    sched.add_job(_ingest_job, "cron", hour=3, minute=30, id="po_ingest", misfire_grace_time=3600)
+    sched.add_job(_digest_job, "cron", hour=3, minute=45, id="po_digest", misfire_grace_time=3600)
+    sched.start()
+    return sched
+
+
+_start_scheduler()
+
+
+# ── Cached helpers ────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=60)
+def _load_memories(app_key: str) -> pd.DataFrame:
+    try:
+        return _query(
+            "SELECT id, category, subject, content, source, created_at "
+            "FROM marketdata.agent_memory WHERE app=%s AND active=TRUE ORDER BY created_at DESC",
+            (app_key,),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
+def _search_knowledge(prefix: str, query: str, limit: int = 10) -> pd.DataFrame:
+    try:
+        return _query(
+            f"SELECT source, doc_type, title, url, published_date, "
+            f"left(content,1500) AS snippet, "
+            f"ts_rank(search_vector, plainto_tsquery('english',%s)) AS rank "
+            f"FROM intl_market.{prefix}knowledge_docs "
+            f"WHERE search_vector @@ to_tsquery('english',"
+            f"  regexp_replace(plainto_tsquery('english',%s)::text,' & ',' | ','g')) "
+            f"ORDER BY rank DESC LIMIT %s",
+            (query, query, limit),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def _knowledge_doc_counts(prefix: str) -> pd.DataFrame:
+    try:
+        return _query(
+            f"SELECT source, doc_type, COUNT(*) AS docs, MAX(fetched_at) AS last_fetch "
+            f"FROM intl_market.{prefix}knowledge_docs GROUP BY source, doc_type ORDER BY source"
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def _po_table_counts(prefix: str) -> pd.DataFrame:
+    rows = []
+    for table in [f"{prefix}knowledge_docs", f"{prefix}expert_insights", f"{prefix}analyst_sessions"]:
+        try:
+            df = _query(f"SELECT COUNT(*) AS n FROM intl_market.{table}")
+            rows.append({"Table": f"intl_market.{table}", "Rows": int(df["n"].iloc[0])})
+        except Exception:
+            rows.append({"Table": f"intl_market.{table}", "Rows": "error"})
+    try:
+        df2 = _query("SELECT COUNT(*) AS n FROM marketdata.agent_memory WHERE app=%s AND active=TRUE", (APP_KEY,))
+        rows.append({"Table": "marketdata.agent_memory", "Rows": int(df2["n"].iloc[0])})
+    except Exception:
+        rows.append({"Table": "marketdata.agent_memory", "Rows": "error"})
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=60)
+def _list_recent_sessions(prefix: str, limit: int = 3) -> pd.DataFrame:
+    try:
+        return _query(
+            f"SELECT session_id, jsonb_array_length(messages) AS msg_count, updated_at "
+            f"FROM intl_market.{prefix}analyst_sessions "
+            f"WHERE jsonb_array_length(messages) > 0 ORDER BY updated_at DESC LIMIT %s",
+            (limit,),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+# ── Session / memory helpers ──────────────────────────────────────────────────
+
+def _save_session(session_id: str, messages: list):
+    try:
+        cur = _conn().cursor()
+        cur.execute(
+            f"INSERT INTO intl_market.{PREFIX}analyst_sessions (session_id, messages, updated_at) "
+            f"VALUES (%s, %s::jsonb, NOW()) "
+            f"ON CONFLICT (session_id) DO UPDATE SET messages=EXCLUDED.messages, updated_at=NOW()",
+            (session_id, json.dumps(messages)),
+        )
+    except Exception as exc:
+        logger.debug("_save_session: %s", exc)
+
+
+def _load_session(session_id: str) -> list:
+    try:
+        cur = _conn().cursor()
+        cur.execute(
+            f"SELECT messages FROM intl_market.{PREFIX}analyst_sessions WHERE session_id=%s",
+            (session_id,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else []
+    except Exception:
+        return []
+
+
+def _save_memory(category, subject, content, source="manual"):
+    cur = _conn().cursor()
+    cur.execute(
+        "INSERT INTO marketdata.agent_memory (app, category, subject, content, source) "
+        "VALUES (%s,%s,%s,%s,%s)",
+        (APP_KEY, category, subject, content, source),
+    )
+    _load_memories.clear()
+
+
+def _delete_memory(mem_id: int):
+    cur = _conn().cursor()
+    cur.execute("UPDATE marketdata.agent_memory SET active=FALSE WHERE id=%s", (mem_id,))
+
+
+def _get_insight_count() -> int:
+    try:
+        df = _query(f"SELECT COUNT(*) AS n FROM intl_market.{PREFIX}expert_insights WHERE active=TRUE")
+        return int(df.iloc[0]["n"]) if not df.empty else 0
+    except Exception:
+        return 0
+
+
+# ── Ingest helpers ────────────────────────────────────────────────────────────
+
+def _ingest_url(url: str) -> dict:
+    import requests
+    from bs4 import BeautifulSoup
+    try:
+        resp = requests.get(url, timeout=30, headers={"User-Agent": "BESSPlatformBot/1.0"})
+        resp.raise_for_status()
+    except Exception as exc:
+        return {"status": "error", "msg": f"Fetch failed: {exc}"}
+    soup = BeautifulSoup(resp.text, "html.parser")
+    title_el = soup.find("h1") or soup.find("title")
+    title = title_el.get_text(" ", strip=True) if title_el else url
+    for tag in soup.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    content = "\n\n".join(
+        el.get_text(" ", strip=True) for el in soup.find_all(["p", "h1", "h2", "h3", "li"])
+        if el.get_text(" ", strip=True)
+    ) or soup.get_text(" ", strip=True)
+    if not content.strip():
+        return {"status": "error", "msg": "No text extracted."}
+    try:
+        cur = _conn().cursor()
+        cur.execute(
+            f"INSERT INTO intl_market.{PREFIX}knowledge_docs "
+            f"(source, doc_type, title, url, published_date, content) VALUES (%s,%s,%s,%s,%s,%s) "
+            f"ON CONFLICT (url) DO UPDATE SET content=EXCLUDED.content, title=EXCLUDED.title, fetched_at=NOW()",
+            ("upload", "article", title, url, date.today(), content),
+        )
+        return {"status": "success", "msg": f"Ingested '{title}' ({len(content):,} chars)"}
+    except Exception as exc:
+        return {"status": "error", "msg": f"DB insert failed: {exc}"}
+
+
+def _ingest_uploaded_file(filename: str, data: bytes) -> dict:
+    ext = filename.rsplit(".", 1)[-1].lower()
+    try:
+        if ext == "txt":
+            content = data.decode("utf-8", errors="replace")
+        elif ext == "pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(data))
+            content = "\n\n".join(p.extract_text() for p in reader.pages if p.extract_text())
+        elif ext in ("xlsx", "xls"):
+            xl = pd.ExcelFile(io.BytesIO(data))
+            content = "\n\n".join(
+                f"Sheet: {s}\n{xl.parse(s).to_string(index=False)}" for s in xl.sheet_names
+            )
+        elif ext in ("pptx", "ppt"):
+            from pptx import Presentation
+            prs = Presentation(io.BytesIO(data))
+            slides = []
+            for i, slide in enumerate(prs.slides, 1):
+                texts = [sh.text.strip() for sh in slide.shapes if hasattr(sh, "text") and sh.text.strip()]
+                if texts:
+                    slides.append(f"[Slide {i}]\n" + "\n".join(texts))
+            content = "\n\n".join(slides)
+        elif ext in ("docx", "doc"):
+            from docx import Document
+            doc = Document(io.BytesIO(data))
+            content = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        else:
+            return {"status": "error", "msg": f"Unsupported type: .{ext}"}
+    except Exception as exc:
+        return {"status": "error", "msg": f"Extraction failed: {exc}"}
+    if not content.strip():
+        return {"status": "error", "msg": "No text extracted."}
+    doc_type = {"pdf": "pdf", "txt": "text", "xlsx": "excel", "xls": "excel",
+                "pptx": "presentation", "ppt": "presentation", "docx": "word"}.get(ext, "document")
+    try:
+        cur = _conn().cursor()
+        cur.execute(
+            f"INSERT INTO intl_market.{PREFIX}knowledge_docs "
+            f"(source, doc_type, title, url, published_date, content) VALUES (%s,%s,%s,%s,%s,%s) "
+            f"ON CONFLICT (url) DO UPDATE SET content=EXCLUDED.content, fetched_at=NOW()",
+            ("upload", doc_type, filename, f"upload://{filename}", date.today(), content),
+        )
+        return {"status": "success", "msg": f"Ingested '{filename}' ({len(content):,} chars)"}
+    except Exception as exc:
+        return {"status": "error", "msg": f"DB insert failed: {exc}"}
+
+
+# ── IRR model ────────────────────────────────────────────────────────────────
+
+_TECH_PRESETS_PO = {
+    "bess_1h":      {"capex_eur_kwh": 280, "duration_h": 1, "om_pct": 2.0, "degradation": 0.020, "life": 15, "label": "BESS 1h"},
+    "bess_2h":      {"capex_eur_kwh": 260, "duration_h": 2, "om_pct": 2.0, "degradation": 0.020, "life": 15, "label": "BESS 2h"},
+    "bess_4h":      {"capex_eur_kwh": 240, "duration_h": 4, "om_pct": 2.0, "degradation": 0.020, "life": 15, "label": "BESS 4h"},
+    "solar":        {"capex_eur_kw": 650,  "cf_pct": 11.5, "om_pct": 1.5, "degradation": 0.005, "life": 25, "label": "Solar PV"},
+    "onshore_wind": {"capex_eur_kw": 1400, "cf_pct": 27.0, "om_pct": 2.0, "degradation": 0.000, "life": 25, "label": "Onshore Wind"},
+}
+
+
+def _compute_irr(cashflows: list) -> float:
+    rate = 0.10
+    for _ in range(200):
+        npv  = sum(cf / (1 + rate) ** t for t, cf in enumerate(cashflows))
+        dnpv = sum(-t * cf / (1 + rate) ** (t + 1) for t, cf in enumerate(cashflows))
+        if abs(dnpv) < 1e-10:
+            break
+        rate -= npv / dnpv
+        if rate <= -0.999:
+            rate = -0.999
+    return rate
+
+
+def _run_irr_model_po(
+    technology: str,
+    capacity_mw: float,
+    capex_eur_per_kw: float | None = None,
+    revenue_pln_per_mw_yr: float | None = None,
+    capacity_factor_pct: float | None = None,
+    wacc_pct: float = 9.0,
+    project_life_yrs: int | None = None,
+    leverage_pct: float = 60.0,
+    cost_of_debt_pct: float = 5.5,
+) -> dict:
+    p = _TECH_PRESETS_PO.get(technology, _TECH_PRESETS_PO["bess_2h"])
+    is_bess = technology.startswith("bess")
+
+    if is_bess:
+        duration_h = p["duration_h"]
+        capex_eur_kw = (capex_eur_per_kw or p["capex_eur_kwh"] * duration_h)
+        capex_total_pln = capacity_mw * capex_eur_kw * 1000 * _EUR_PLN
+        # Revenue: FCR + aFRR expressed as PLN/MW/yr
+        annual_rev_pln = capacity_mw * (revenue_pln_per_mw_yr or 250_000)  # ~250k PLN/MW/yr default
+    else:
+        capex_eur_kw = capex_eur_per_kw or p["capex_eur_kw"]
+        capex_total_pln = capacity_mw * capex_eur_kw * 1000 * _EUR_PLN
+        cf = (capacity_factor_pct or p["cf_pct"]) / 100
+        annual_gen_mwh = capacity_mw * 8760 * cf
+        # Revenue: TGE day-ahead price ~330 PLN/MWh (2024 avg)
+        rev_pln_mwh = revenue_pln_per_mw_yr / 8760 if revenue_pln_per_mw_yr else 330
+        annual_rev_pln = annual_gen_mwh * rev_pln_mwh
+
+    life = project_life_yrs or p["life"]
+    om_annual_pln = capex_total_pln * (p["om_pct"] / 100)
+    degradation = p.get("degradation", 0.0)
+
+    cashflows_unlev = [-capex_total_pln]
+    for yr in range(1, life + 1):
+        rev = annual_rev_pln * (1 - degradation) ** (yr - 1)
+        cashflows_unlev.append(rev - om_annual_pln)
+
+    unlevered_irr = _compute_irr(cashflows_unlev)
+    npv_wacc = sum(cf / (1 + wacc_pct / 100) ** t for t, cf in enumerate(cashflows_unlev))
+
+    # Levered IRR
+    debt = capex_total_pln * (leverage_pct / 100)
+    equity = capex_total_pln - debt
+    debt_service = debt * (cost_of_debt_pct / 100) / (1 - (1 + cost_of_debt_pct / 100) ** (-min(life, 15)))
+    cashflows_eq = [-equity]
+    for yr in range(1, life + 1):
+        rev = annual_rev_pln * (1 - degradation) ** (yr - 1)
+        ds = debt_service if yr <= min(life, 15) else 0
+        cashflows_eq.append(rev - om_annual_pln - ds)
+    equity_irr = _compute_irr(cashflows_eq)
+
+    # Sensitivity
+    sensitivity = []
+    for cm in [0.8, 1.0, 1.2]:
+        for rm in [0.8, 1.0, 1.2]:
+            cfs = [-capex_total_pln * cm]
+            for yr in range(1, life + 1):
+                rev = annual_rev_pln * rm * (1 - degradation) ** (yr - 1)
+                cfs.append(rev - om_annual_pln)
+            sensitivity.append({
+                "capex": f"{cm:.0%}", "revenue": f"{rm:.0%}",
+                "unlevered_irr": f"{_compute_irr(cfs) * 100:.1f}%",
+            })
+
+    return {
+        "technology": p["label"],
+        "capacity_mw": capacity_mw,
+        "capex_eur_per_kw": round(capex_eur_kw, 0),
+        "capex_total_pln_m": round(capex_total_pln / 1e6, 1),
+        "annual_rev_pln_m": round(annual_rev_pln / 1e6, 1),
+        "unlevered_irr_pct": round(unlevered_irr * 100, 1),
+        "equity_irr_pct": round(equity_irr * 100, 1),
+        "npv_at_wacc_pln_m": round(npv_wacc / 1e6, 1),
+        "sensitivity": sensitivity,
+    }
+
+
+# ── Embedded market data ──────────────────────────────────────────────────────
+
+_MARKET_STRUCTURE_PO = {
+    "installed_capacity_gw": 65,
+    "peak_demand_gw": 27,
+    "generation_mix_2024": {
+        "Coal": 38, "Lignite": 14, "Natural Gas": 8, "Nuclear": 0,
+        "Solar": 15, "Wind Onshore": 13, "Hydro": 4, "Other": 8,
+    },
+    "re_targets": {"2030": "50% RES share (PEP2040)", "2040": "80% RES share"},
+    "key_players": [
+        "PGE — largest utility; coal + pumped hydro; transitioning to RE",
+        "Tauron — coal-heavy; RE ambitions (wind, solar)",
+        "Enea — coal + biomass; RE build-out",
+        "DTEK / international investors — utility-scale solar+storage",
+        "RWE, Statkraft, Total Eren — BESS + wind developers",
+        "Orlen — oil major transitioning to offshore wind",
+    ],
+    "tge_prices_pln_mwh": {
+        "2023_avg": 550,
+        "2024_avg": 330,
+        "2025_fwd": 280,
+        "note": "Sharp fall from 2022 energy crisis peak; Aurora forecasts ~200-250 PLN/MWh long-run",
+    },
+}
+
+_AS_CONTEXT_PO = {
+    "fcr": {
+        "name": "FCR — Frequency Containment Reserve (Primary)",
+        "entso_e_framework": "Symmetric product; activation when freq deviates ±200 mHz from 50 Hz",
+        "procurement": "Monthly auctions; European integrated FCR market since 2021",
+        "bess_advantage": "BESS provides very fast response (<1s); no fuel cost; high availability",
+        "typical_price_eur_mw_week": "2–8 EUR/MW/week (variable; can spike during scarcity)",
+        "bess_revenue_pln_mw_yr": "~60,000 – 180,000 PLN/MW/yr (FCR alone)",
+    },
+    "afrr": {
+        "name": "aFRR — Automatic Frequency Restoration Reserve (Secondary)",
+        "procurement": "Weekly/monthly auctions by PSE; symmetric and asymmetric products",
+        "bess_advantage": "BESS provides both upward and downward aFRR; no fuel cost per activation",
+        "capacity_price": "Significant capacity payment component (~20-60 EUR/MW/h depending on auction)",
+        "energy_settlement": "Additional activation energy settlement at real-time balancing price",
+        "bess_revenue_pln_mw_yr": "~80,000 – 200,000 PLN/MW/yr (aFRR alone)",
+    },
+    "mfrr": {
+        "name": "mFRR — Manual Frequency Restoration Reserve (Tertiary)",
+        "procurement": "PSE direct contracting; less relevant for BESS (slower product, 30-min response)",
+        "bess_relevance": "Lower priority for BESS vs FCR/aFRR",
+    },
+    "capacity_market": {
+        "name": "Rynek Mocy — Polish Capacity Market",
+        "auctions": "T-4 (4 years ahead) and T-1 (1 year ahead) auctions",
+        "bess_eligibility": "BESS eligible since 2021; must demonstrate ≥1h duration for T-4, ≥2h preferred",
+        "derating": "BESS derated based on available energy duration vs. peak obligation period (4h)",
+        "typical_price_pln_kw_yr": "150–250 PLN/kW/yr",
+        "bess_revenue_pln_mw_yr": "~150,000 – 250,000 PLN/MW/yr",
+    },
+    "bess_revenue_stack": [
+        "FCR (Primary Reserve): ~60-180k PLN/MW/yr",
+        "aFRR (Secondary Reserve): ~80-200k PLN/MW/yr",
+        "mFRR (Tertiary): lower priority for BESS",
+        "Capacity Market (Rynek Mocy): ~150-250k PLN/MW/yr",
+        "Energy arbitrage (TGE day-ahead spread): ~30-80k PLN/MW/yr",
+        "Total stacked: ~320-710k PLN/MW/yr (FCR+aFRR+capacity market)",
+    ],
+}
+
+_POLICY_SNAPSHOT_PO = {
+    "pep2040": {
+        "name": "Polish Energy Policy to 2040 (PEP2040)",
+        "key_targets": {
+            "2030": "23% RES in gross final energy consumption; 32 GW+ offshore wind by 2040",
+            "offshore_wind": "Phase 1 auctions (5.9 GW) underway; OWF Baltica projects (Orlen/PGE)",
+            "nuclear": "First Polish nuclear plant planned ~2033-2035 (6 GW total by 2043)",
+        },
+    },
+    "res_act": "Act on Renewable Energy Sources (RES Act) — support mechanisms: CfD-style auctions (OZE auctions), prosumer net billing",
+    "oze_auctions": {
+        "mechanism": "Competitive CfD auctions for new RE capacity; 15-year price guarantee",
+        "2024": "Active auctions for solar, onshore wind, offshore wind; BESS not yet standalone eligible",
+        "bess_path": "BESS expected in future auction rounds or via capacity market + ancillary services",
+    },
+    "foreign_investment": {
+        "restrictions": "No FDI restrictions for RE/storage in Poland; EU Single Market applies",
+        "grid_connection": "URE (energy regulator) and DSO/PSE approval required; typical 2-4yr timeline for large BESS",
+        "land": "Agricultural land conversion requires Ministry approval; industrial land preferred",
+    },
+    "key_risks": [
+        "Grid connection capacity constraints (distribution network saturation in SW/central Poland)",
+        "TGE power price decline (from 550 PLN/MWh in 2023 to ~280-330 PLN/MWh 2024-2025) reduces arbitrage revenue",
+        "FCR/aFRR price volatility — European integrated market adds competition from German/Nordic BESS",
+        "Capacity market cannibalisation — large BESS pipeline may suppress Rynek Mocy prices by 2027-2030",
+        "Permitting risk: zoning and environmental approvals 18-36 months",
+    ],
+}
+
+_AURORA_KEY_FINDINGS = {
+    "source": "Aurora Energy Research Q1/Q2 2026 Poland Power & Renewables Market Forecast",
+    "power_prices": {
+        "2026_avg_pln_mwh": "~280-310",
+        "2030_avg_pln_mwh": "~200-240",
+        "2040_avg_pln_mwh": "~160-200 (with high RE penetration)",
+        "driver": "Rapid solar/wind build-out suppresses baseload prices; nuclear addition moderates decline",
+    },
+    "bess_economics": {
+        "fcr_afrr_pln_mw_yr_2026": "~200,000 – 350,000",
+        "capacity_market_pln_kw_yr": "150-200 (declining as BESS pipeline grows)",
+        "optimal_duration": "1-2h for FCR/aFRR; 2-4h for energy arbitrage + capacity market",
+        "irr_range_pct": "8-14% unlevered depending on revenue stack and CAPEX",
+    },
+    "flexible_market_summary_apr26": "Apr 2026 flexible energy market showed sustained FCR prices; aFRR symmetric products attracted new BESS registrations",
+}
+
+
+def _dispatch_tool_po(name: str, inputs: dict) -> str:
+    try:
+        if name == "search_knowledge_base":
+            try:
+                return retrieve_for_agent(inputs["query"], _ANTHROPIC_KEY, CFG,
+                                          sources=inputs.get("sources") or None, top_k=6)
+            except Exception:
+                results = _search_knowledge(PREFIX, inputs["query"], limit=6)
+                if results.empty:
+                    return "No matching knowledge documents found."
+                return "\n\n---\n\n".join(
+                    f"[{r['source']}] {r['title']} ({r['published_date']})\n{r['snippet']}"
+                    for _, r in results.iterrows()
+                )
+
+        elif name == "get_aurora_forecast_data":
+            topic = inputs.get("topic", "").lower()
+            if "price" in topic or "power" in topic:
+                return json.dumps(_AURORA_KEY_FINDINGS["power_prices"], indent=2)
+            if "bess" in topic or "storage" in topic or "economics" in topic:
+                return json.dumps(_AURORA_KEY_FINDINGS["bess_economics"], indent=2)
+            return json.dumps(_AURORA_KEY_FINDINGS, indent=2)
+
+        elif name == "get_balancing_market_context":
+            return json.dumps(_AS_CONTEXT_PO, indent=2)
+
+        elif name == "get_capacity_market_context":
+            return json.dumps(_AS_CONTEXT_PO["capacity_market"], indent=2)
+
+        elif name == "estimate_bess_irr":
+            result = _run_irr_model_po(
+                technology=inputs.get("technology", "bess_2h"),
+                capacity_mw=float(inputs.get("capacity_mw", 50)),
+                capex_eur_per_kw=inputs.get("capex_eur_per_kw"),
+                revenue_pln_per_mw_yr=inputs.get("revenue_pln_per_mw_yr"),
+                wacc_pct=float(inputs.get("wacc_pct", 9.0)),
+                project_life_yrs=inputs.get("project_life_yrs"),
+                leverage_pct=float(inputs.get("leverage_pct", 60.0)),
+                cost_of_debt_pct=float(inputs.get("cost_of_debt_pct", 5.5)),
+            )
+            return json.dumps(result, indent=2)
+
+        elif name == "get_market_structure":
+            return json.dumps(_MARKET_STRUCTURE_PO, indent=2)
+
+        elif name == "get_policy_snapshot":
+            return json.dumps(_POLICY_SNAPSHOT_PO, indent=2)
+
+    except Exception as exc:
+        return f"Tool error: {exc}"
+    return "Unknown tool"
+
+
+_TOOLS_PO = [
+    {
+        "name": "search_knowledge_base",
+        "description": "Semantic search (HyDE + FTS + rerank) over Poland market reports and Aurora Energy Research documents.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "sources": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_aurora_forecast_data",
+        "description": "Returns key projections from Aurora Energy Research Q1/Q2 2026 Poland Power & Renewables Market Forecast — power prices, BESS economics.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"topic": {"type": "string"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_balancing_market_context",
+        "description": "PSE balancing market (Rynek Bilansujący), FCR/aFRR/mFRR ancillary services, BESS participation and revenue stack in Poland.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_capacity_market_context",
+        "description": "Polish capacity market (Rynek Mocy) — T-4/T-1 auction mechanics, BESS eligibility, duration requirements, derating, pricing.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "estimate_bess_irr",
+        "description": "Parametric IRR model for a Polish BESS project (PLN, FCR+aFRR revenue stack). Returns unlevered IRR, equity IRR, NPV, sensitivity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "technology":            {"type": "string", "enum": ["bess_1h", "bess_2h", "bess_4h", "solar", "onshore_wind"]},
+                "capacity_mw":           {"type": "number"},
+                "capex_eur_per_kw":      {"type": "number"},
+                "revenue_pln_per_mw_yr": {"type": "number"},
+                "wacc_pct":              {"type": "number"},
+                "project_life_yrs":      {"type": "integer"},
+                "leverage_pct":          {"type": "number"},
+                "cost_of_debt_pct":      {"type": "number"},
+            },
+            "required": ["technology", "capacity_mw"],
+        },
+    },
+    {
+        "name": "get_market_structure",
+        "description": "Poland power market structure — installed capacity, generation mix, TGE prices, key developers and utilities.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_policy_snapshot",
+        "description": "Poland energy policy — PEP2040, RES Act, OZE auctions, offshore wind programme, foreign investment rules, key risks.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+]
+
+
+def _build_system_po(query: str = "") -> str:
+    base = """\
+You are a senior Poland Power Market Investment Expert at a global infrastructure fund, specialising in BESS and renewable energy.
+
+GROUNDING RULE: For specific current prices, Aurora forecast data, and recent market developments → use your tools.
+For regulatory framework, market mechanics, and structural context → use embedded knowledge below.
+
+MARKET CONTEXT:
+- Market operator: TGE (Towarowa Giełda Energii) — day-ahead (RDN) + intraday (RDT)
+- TSO and balancing: PSE (Polskie Sieci Elektroenergetyczne) — Rynek Bilansujący (RB)
+- Regulator: URE (Urząd Regulacji Energetyki)
+- Installed capacity: ~65 GW; peak demand ~27 GW
+- Generation: still coal/lignite dominant but rapid solar build-out (15% share 2024)
+- TGE day-ahead: ~330 PLN/MWh (2024 avg); down sharply from 2022-23 energy crisis
+
+ANCILLARY SERVICES (ENTSO-E framework):
+- FCR (Primary): symmetric, monthly European auctions; BESS ideal (fast response, high availability)
+- aFRR (Secondary): weekly/monthly PSE auctions; symmetric + asymmetric products; capacity + energy payments
+- mFRR (Tertiary): PSE direct contracting; less valuable for BESS
+- Revenue guidance: FCR+aFRR combined ~140,000-380,000 PLN/MW/yr (2024 observed)
+
+CAPACITY MARKET (RYNEK MOCY):
+- T-4 and T-1 competitive auctions; 15-year obligation periods
+- BESS eligible since 2021; ~150-250 PLN/kW/yr clearing price (2023-2024)
+- Duration requirement: ≥1h for T-4; ≥2h preferred for full derating benefit
+- Peak obligation: 4h; BESS derated proportionally for shorter durations
+
+RE POLICY (PEP2040):
+- 50% RES in gross final energy by 2030
+- Offshore wind Baltic Sea: Phase 1 auctions (OWF Baltica 2&3, ~5.9 GW); Orlen + PGE joint venture
+- OZE CfD auctions: 15-year price guarantee; solar + onshore wind active rounds
+- First nuclear plant ~2033 (APR-1400 technology); 6 GW total by 2043
+
+CURRENCY: PLN (Polish Zloty); EUR/PLN ≈ 4.25; USD/PLN ≈ 3.95
+"""
+    if query:
+        try:
+            insights = get_insights(query, PREFIX, limit=5)
+            mem_block = inject_memory(insights, CFG.name)
+            if mem_block:
+                base += f"\n\n{mem_block}"
+        except Exception:
+            pass
+    mems = _load_memories(APP_KEY)
+    if not mems.empty:
+        lines = "\n".join(f"- [{r.category}] {r.subject}: {r.content}" for r in mems.itertuples())
+        base += f"\n\n## Analyst notes from prior sessions:\n{lines}"
+    return base
+
+
+def _run_agent_turn(messages: list, system: str) -> tuple[str, list, list]:
+    tool_events = []
+    while True:
+        resp = _client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=4096,
+            system=system, tools=_TOOLS_PO, messages=messages,
+        )
+        messages = messages + [{"role": "assistant", "content": resp.content}]
+        if resp.stop_reason == "end_turn":
+            text = next((b.text for b in resp.content if hasattr(b, "text")), "")
+            return text, messages, tool_events
+        tool_results = []
+        for block in resp.content:
+            if block.type == "tool_use":
+                result_str = _dispatch_tool_po(block.name, block.input)
+                tool_events.append({"tool": block.name, "result": result_str[:200]})
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result_str})
+        messages = messages + [{"role": "user", "content": tool_results}]
+
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.title("🇵🇱 Poland Power Investment")
+    st.caption("Investment advisory · FCR/aFRR · Rynek Mocy · BESS")
+    st.divider()
+    n_insights = _get_insight_count()
+    st.metric("Expert Insights", n_insights)
+    try:
+        kb_ct = _knowledge_doc_counts(PREFIX)
+        total_docs = int(kb_ct["docs"].sum()) if not kb_ct.empty else 0
+        st.metric("KB Documents", total_docs)
+    except Exception:
+        pass
+    st.divider()
+    st.caption("Port 8511 · Europe/Warsaw · ap-southeast-1")
+
+(
+    tab_mkt, tab_as, tab_bess, tab_irr,
+    tab_advisor, tab_kb, tab_mgmt, tab_pypsa,
+) = st.tabs([
+    "Market Structure", "Balancing & AS Markets", "BESS Opportunity",
+    "Investment Analysis", "Investment Advisor",
+    "Knowledge Base", "Data Management", "Grid Analysis",
+])
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 1 — Market Structure
+# ═══════════════════════════════════════════════════════════════
+with tab_mkt:
+    st.header("Poland Power Market Structure")
+    st.caption("Source: PSE, TGE, URE, Aurora Energy Research Q2 2026")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Installed Capacity", "~65 GW")
+    c2.metric("Peak Demand",        "~27 GW")
+    c3.metric("TGE DA Price (2024)", "~330 PLN/MWh")
+    c4.metric("Solar Share",        "~15%")
+
+    col_mix, col_price = st.columns(2)
+    with col_mix:
+        st.subheader("Generation Mix (2024)")
+        mix_df = pd.DataFrame([
+            {"Technology": k, "Share (%)": v}
+            for k, v in _MARKET_STRUCTURE_PO["generation_mix_2024"].items()
+        ])
+        fig_mix = px.pie(
+            mix_df, names="Technology", values="Share (%)",
+            color_discrete_sequence=px.colors.qualitative.Set2,
+        )
+        fig_mix.update_traces(textposition="inside", textinfo="percent+label")
+        fig_mix.update_layout(height=320, showlegend=False, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig_mix, use_container_width=True)
+
+    with col_price:
+        st.subheader("TGE Power Price Trend (PLN/MWh)")
+        price_df = pd.DataFrame([
+            {"Year": "2022 (crisis)", "PLN/MWh": 800},
+            {"Year": "2023 avg",      "PLN/MWh": 550},
+            {"Year": "2024 avg",      "PLN/MWh": 330},
+            {"Year": "2025 fwd",      "PLN/MWh": 280},
+            {"Year": "2030 Aurora",   "PLN/MWh": 220},
+            {"Year": "2040 Aurora",   "PLN/MWh": 180},
+        ])
+        fig_price = px.bar(price_df, x="Year", y="PLN/MWh",
+                           text="PLN/MWh", color_discrete_sequence=["#1f77b4"])
+        fig_price.update_traces(textposition="outside")
+        fig_price.update_layout(height=320, margin=dict(l=0, r=0, t=0, b=0))
+        st.plotly_chart(fig_price, use_container_width=True)
+
+    st.subheader("Key Market Participants")
+    for p in _MARKET_STRUCTURE_PO["key_players"]:
+        st.markdown(f"- {p}")
+
+    st.subheader("RE Targets (PEP2040)")
+    st.info(
+        "**2030:** 50% RES in gross final energy consumption  \n"
+        "**2040:** 80% RES share  \n"
+        "**Offshore wind:** 5.9 GW Phase 1 (OWF Baltica 2&3 by Orlen/PGE); 18 GW by 2040  \n"
+        "**Nuclear:** First plant ~2033; 6 GW total by 2043"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 2 — Balancing & AS Markets
+# ═══════════════════════════════════════════════════════════════
+with tab_as:
+    st.header("Balancing & Ancillary Services Markets — Poland")
+    st.caption("FCR (Primary) · aFRR (Secondary) · mFRR (Tertiary) · Rynek Bilansujący")
+
+    as1, as2 = st.columns(2)
+    with as1:
+        st.subheader("FCR — Primary Control Reserve")
+        fcr = _AS_CONTEXT_PO["fcr"]
+        st.markdown(f"""
+**Framework:** {fcr['entso_e_framework']}
+**Procurement:** {fcr['procurement']}
+**BESS advantage:** {fcr['bess_advantage']}
+**Typical price:** {fcr['typical_price_eur_mw_week']}
+**Indicative BESS revenue:** {fcr['bess_revenue_pln_mw_yr']}
+""")
+
+        st.subheader("mFRR — Tertiary")
+        mfrr = _AS_CONTEXT_PO["mfrr"]
+        st.caption(f"{mfrr['name']} — {mfrr['bess_relevance']}")
+
+    with as2:
+        st.subheader("aFRR — Secondary Reserve")
+        afrr = _AS_CONTEXT_PO["afrr"]
+        st.markdown(f"""
+**Procurement:** {afrr['procurement']}
+**BESS advantage:** {afrr['bess_advantage']}
+**Capacity price:** {afrr['capacity_price']}
+**Energy settlement:** {afrr['energy_settlement']}
+**Indicative BESS revenue:** {afrr['bess_revenue_pln_mw_yr']}
+""")
+
+    st.divider()
+    st.subheader("Capacity Market — Rynek Mocy")
+    cm = _AS_CONTEXT_PO["capacity_market"]
+    col_cm1, col_cm2 = st.columns(2)
+    with col_cm1:
+        st.markdown(f"""
+**Auctions:** {cm['auctions']}
+**BESS eligibility:** {cm['bess_eligibility']}
+**Derating:** {cm['derating']}
+**Typical price:** {cm['typical_price_pln_kw_yr']}
+**Indicative revenue:** {cm['bess_revenue_pln_mw_yr']}
+""")
+    with col_cm2:
+        st.subheader("BESS Revenue Stack Summary")
+        rev_df = pd.DataFrame([
+            {"Stream": "FCR (Primary)", "PLN/MW/yr": "60-180k"},
+            {"Stream": "aFRR (Secondary)", "PLN/MW/yr": "80-200k"},
+            {"Stream": "Capacity Market (Rynek Mocy)", "PLN/MW/yr": "150-250k"},
+            {"Stream": "Energy Arbitrage (TGE spread)", "PLN/MW/yr": "30-80k"},
+            {"Stream": "TOTAL (FCR+aFRR+CM)", "PLN/MW/yr": "290-630k"},
+        ])
+        st.dataframe(rev_df, use_container_width=True, hide_index=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 3 — BESS Opportunity
+# ═══════════════════════════════════════════════════════════════
+with tab_bess:
+    st.header("BESS Investment Opportunity — Poland")
+    st.caption("Aurora Q1/Q2 2026 · FCR+aFRR+Rynek Mocy revenue stack · EU taxonomy eligible")
+
+    b1, b2 = st.columns([3, 2])
+    with b1:
+        st.subheader("Why Poland for BESS?")
+        st.markdown("""
+1. **Deep FCR/aFRR revenue pool** — European integrated FCR market + domestic aFRR auctions
+2. **Capacity market (Rynek Mocy)** — BESS eligible; 15-year capacity obligation provides revenue visibility
+3. **Rapid RE build-out** → growing flexibility need; intraday price volatility increasing
+4. **Grid investment** — PSE 2040 grid modernisation plan includes >35 GW new transmission
+5. **EU Taxonomy** compliance — BESS explicitly listed as sustainable finance eligible
+6. **No FDI restrictions** — EU Single Market; no foreign ownership limits on storage
+
+**Key risk:** FCR/aFRR price compression as BESS fleet grows and European market integrates further.
+""")
+
+    with b2:
+        st.subheader("Aurora BESS Economics (2026)")
+        aurora_bess = _AURORA_KEY_FINDINGS["bess_economics"]
+        for k, v in aurora_bess.items():
+            if k != "irr_range_pct":
+                st.markdown(f"**{k.replace('_', ' ').title()}:** {v}")
+        st.metric("IRR Range (Aurora)", aurora_bess["irr_range_pct"])
+
+    st.divider()
+    st.subheader("Optimal BESS Configuration for Poland")
+    config_df = pd.DataFrame([
+        {"Duration": "1h", "Best for": "FCR only", "Revenue stream": "FCR (primary reserves)", "Note": "Minimum viable for FCR"},
+        {"Duration": "2h", "Best for": "FCR + aFRR + partial CM", "Revenue stream": "FCR + aFRR + Rynek Mocy (50% derating)", "Note": "Sweet spot by Aurora 2026"},
+        {"Duration": "4h", "Best for": "Full revenue stack", "Revenue stream": "FCR + aFRR + Rynek Mocy (full credit) + arbitrage", "Note": "Higher CAPEX but more CM revenue"},
+    ])
+    st.dataframe(config_df, use_container_width=True, hide_index=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 4 — Investment Analysis
+# ═══════════════════════════════════════════════════════════════
+with tab_irr:
+    st.header("Investment Analysis — BESS IRR Calculator")
+    st.caption("Parametric model · PLN · EUR/PLN = 4.25 · FCR+aFRR+Capacity Market revenue stack")
+
+    irr_c1, irr_c2 = st.columns([1, 1])
+    with irr_c1:
+        tech_opts = {v["label"]: k for k, v in _TECH_PRESETS_PO.items()}
+        sel_lbl = st.selectbox("Technology", list(tech_opts.keys()), key="po_tech")
+        tech_key = tech_opts[sel_lbl]
+        p = _TECH_PRESETS_PO[tech_key]
+
+        is_bess = tech_key.startswith("bess")
+        cap_mw = st.number_input("Project Capacity (MW)", min_value=1.0, max_value=2000.0,
+                                  value=50.0, step=10.0, key="po_cap")
+
+        if is_bess:
+            dur = p["duration_h"]
+            default_capex = p["capex_eur_kwh"] * dur
+            capex_val = st.number_input("CAPEX (EUR/kW-AC)", min_value=100.0, max_value=2000.0,
+                                         value=float(default_capex), step=50.0, key="po_capex")
+            st.caption("Revenue = FCR + aFRR + Rynek Mocy combined (PLN/MW/yr)")
+            rev_val = st.number_input("Combined Revenue (PLN/MW/yr)",
+                                       min_value=50_000.0, max_value=800_000.0,
+                                       value=300_000.0, step=10_000.0, key="po_rev")
+            cf_val = None
+        else:
+            capex_val = st.number_input("CAPEX (EUR/kW)", min_value=200.0, max_value=3000.0,
+                                         value=float(p["capex_eur_kw"]), step=50.0, key="po_capex_re")
+            cf_val = st.number_input("Capacity Factor (%)", min_value=5.0, max_value=60.0,
+                                      value=float(p["cf_pct"]), step=1.0, key="po_cf")
+            rev_val = st.number_input("TGE price assumption (PLN/MWh) → as PLN/MW/yr",
+                                       min_value=50_000.0, max_value=600_000.0,
+                                       value=280_000.0, step=10_000.0, key="po_rev_re")
+
+        with st.expander("Advanced parameters"):
+            wacc_val      = st.number_input("WACC (%)",           min_value=5.0,  max_value=20.0, value=9.0, step=0.5, key="po_wacc")
+            life_val      = st.number_input("Project Life (yrs)", min_value=5,    max_value=30,   value=int(p["life"]), step=1, key="po_life")
+            leverage_val  = st.number_input("Leverage (%)",        min_value=0.0,  max_value=80.0, value=60.0, step=5.0, key="po_lev")
+            debt_rate_val = st.number_input("Cost of Debt (%)",    min_value=2.0,  max_value=12.0, value=5.5, step=0.5, key="po_debt")
+
+    with irr_c2:
+        if st.button("Calculate IRR", type="primary", key="po_calc_irr"):
+            result = _run_irr_model_po(
+                technology=tech_key, capacity_mw=cap_mw,
+                capex_eur_per_kw=capex_val,
+                revenue_pln_per_mw_yr=rev_val if is_bess else None,
+                capacity_factor_pct=cf_val, wacc_pct=wacc_val,
+                project_life_yrs=int(life_val), leverage_pct=leverage_val,
+                cost_of_debt_pct=debt_rate_val,
+            )
+            st.session_state["po_irr_result"] = result
+            st.rerun()
+
+        res = st.session_state.get("po_irr_result")
+        if res:
+            r1, r2 = st.columns(2)
+            r1.metric("Unlevered IRR", f"{res['unlevered_irr_pct']:.1f}%")
+            r2.metric("Equity IRR",    f"{res['equity_irr_pct']:.1f}%")
+            r3, r4 = st.columns(2)
+            r3.metric("Total CAPEX",   f"zł{res['capex_total_pln_m']:.0f}M")
+            r4.metric("NPV @ WACC",    f"zł{res['npv_at_wacc_pln_m']:.0f}M")
+            st.caption(f"Annual revenue: zł{res['annual_rev_pln_m']:.1f}M")
+
+            st.subheader("Sensitivity (Unlevered IRR) — CAPEX × Revenue")
+            sens = res.get("sensitivity", [])
+            if sens:
+                sens_df = pd.DataFrame(sens)
+                pivot = sens_df.pivot(index="capex", columns="revenue", values="unlevered_irr")
+                st.dataframe(pivot, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 5 — Investment Advisor
+# ═══════════════════════════════════════════════════════════════
+with tab_advisor:
+    st.header("Investment Advisor — Poland Power")
+    n_ins = _get_insight_count()
+    st.caption(
+        f"Senior Poland Power Investment Expert · 7 tools · "
+        f"Expert memory: {n_ins} insights · Aurora Research grounded"
+    )
+
+    if "po_adv_session_id" not in st.session_state:
+        st.session_state["po_adv_session_id"] = str(uuid.uuid4())
+    if "po_adv_history" not in st.session_state:
+        st.session_state["po_adv_history"] = []
+
+    if not st.session_state["po_adv_history"]:
+        recent = _list_recent_sessions(PREFIX)
+        if not recent.empty:
+            with st.expander("Resume a previous conversation?", expanded=False):
+                for _, srow in recent.iterrows():
+                    lbl = (f"{srow['session_id'][:8]}… — "
+                           f"{srow['updated_at'].strftime('%Y-%m-%d %H:%M')} — "
+                           f"{int(srow['msg_count'])} messages")
+                    if st.button(lbl, key=f"po_resume_{srow['session_id']}"):
+                        st.session_state["po_adv_session_id"] = srow["session_id"]
+                        st.session_state["po_adv_history"] = _load_session(srow["session_id"])
+                        st.rerun()
+
+    if not st.session_state["po_adv_history"]:
+        st.markdown("**Quick-start questions:**")
+        qq_c1, qq_c2 = st.columns(2)
+        quick_qs = [
+            "What is the investment case for BESS in Poland in 2026?",
+            "Model IRR for a 50MW / 2h BESS targeting FCR + aFRR + Rynek Mocy",
+            "How have Aurora's power price forecasts for Poland changed in Q1 vs Q2 2026?",
+            "What are the key risks for a foreign developer entering the Polish BESS market?",
+        ]
+        for i, qq in enumerate(quick_qs):
+            col = qq_c1 if i % 2 == 0 else qq_c2
+            if col.button(qq, key=f"po_qq_{i}"):
+                st.session_state["po_adv_history"].append({"role": "user", "content": qq})
+                st.rerun()
+
+    for msg in st.session_state["po_adv_history"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    user_input = st.chat_input("Ask about Poland power markets — FCR, aFRR, Rynek Mocy, BESS IRR, Aurora forecasts…")
+    if user_input:
+        st.session_state["po_adv_history"].append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        with st.chat_message("assistant"):
+            with st.spinner("Analysing…"):
+                api_msgs = [{"role": m["role"], "content": m["content"]}
+                            for m in st.session_state["po_adv_history"]]
+                try:
+                    reply, _, tool_events = _run_agent_turn(api_msgs, _build_system_po(user_input))
+                except Exception as err:
+                    reply = f"API error: {err}. Please try again."
+                    tool_events = []
+            st.markdown(reply)
+            if tool_events:
+                with st.expander(f"Tools used ({len(tool_events)})", expanded=False):
+                    for ev in tool_events:
+                        st.caption(f"**{ev['tool']}** → {ev['result'][:120]}…")
+
+        st.session_state["po_adv_history"].append({"role": "assistant", "content": reply})
+        try:
+            _save_session(st.session_state["po_adv_session_id"], st.session_state["po_adv_history"])
+        except Exception:
+            pass
+        try:
+            n_new = extract_insights(user_input, reply, _ANTHROPIC_KEY, PREFIX, CFG.name)
+            if n_new:
+                st.toast(f"Stored {n_new} expert insight(s)")
+        except Exception:
+            pass
+
+    if st.session_state.get("po_adv_history"):
+        if st.button("Clear conversation", key="po_clear_adv"):
+            st.session_state["po_adv_history"] = []
+            st.session_state["po_adv_session_id"] = str(uuid.uuid4())
+            st.rerun()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 6 — Knowledge Base
+# ═══════════════════════════════════════════════════════════════
+with tab_kb:
+    st.header("Poland Knowledge Base")
+    st.info("Aurora Energy Research Q1/Q2 2026 PDFs + Excel · Auto-updated daily at **03:30 WAW**", icon="🔄")
+
+    kb_c1, kb_c2 = st.columns([2, 1])
+    with kb_c1:
+        kb_counts = _knowledge_doc_counts(PREFIX)
+        if kb_counts.empty:
+            st.info("Knowledge base is empty. Click 'Auto-ingest Local Reports' to seed from Aurora data.")
+        else:
+            st.dataframe(kb_counts, use_container_width=True, hide_index=True)
+    with kb_c2:
+        if st.button("Refresh KB stats", key="po_kb_refresh"):
+            _knowledge_doc_counts.clear()
+            st.rerun()
+        if st.button("Auto-ingest Local Reports", type="primary", key="po_kb_ingest_local"):
+            with st.spinner("Ingesting from data/market-fundamentals-po/…"):
+                try:
+                    results = run_knowledge_ingest(only=["local_reports"], verbose=False)
+                    st.success(f"Done — {results.get('local_reports', 0)} new docs")
+                except Exception as exc:
+                    st.error(f"Failed: {exc}")
+            _knowledge_doc_counts.clear()
+            st.rerun()
+        if st.button("Ingest All Sources", key="po_kb_ingest_all"):
+            with st.spinner("Fetching from all sources…"):
+                try:
+                    results = run_knowledge_ingest(verbose=False)
+                    total = sum(results.values())
+                    st.success(f"Done — {total} new docs: {results}")
+                except Exception as exc:
+                    st.error(f"Failed: {exc}")
+            _knowledge_doc_counts.clear()
+            st.rerun()
+
+    st.divider()
+    st.subheader("Search Knowledge Base")
+    kb_query = st.text_input("Search query", placeholder="e.g. Aurora FCR aFRR Poland BESS revenue", key="po_kb_query")
+    if kb_query:
+        _search_knowledge.clear()
+        results_df = _search_knowledge(PREFIX, kb_query, limit=10)
+        if results_df.empty:
+            st.info("No results found.")
+        else:
+            for _, row in results_df.iterrows():
+                with st.expander(
+                    f"[{row['source']}] {row['title'] or 'Untitled'} — {row['published_date']}",
+                    expanded=False,
+                ):
+                    if row.get("url"):
+                        st.markdown(f"[Source]({row['url']})")
+                    st.text(row["snippet"])
+
+    st.divider()
+    st.subheader("Upload Documents")
+    up1, up2 = st.tabs(["Upload Files", "Fetch from URL"])
+    with up1:
+        uploaded_files = st.file_uploader(
+            "PDF, Excel, PPTX, Word, TXT",
+            type=["pdf", "xlsx", "xls", "pptx", "ppt", "docx", "doc", "txt"],
+            accept_multiple_files=True, key="po_kb_upload",
+        )
+        if uploaded_files and st.button("Ingest uploaded files", type="primary", key="po_upload_btn"):
+            prog = st.progress(0)
+            ok, errs = [], []
+            for i, f in enumerate(uploaded_files):
+                res = _ingest_uploaded_file(f.name, f.read())
+                (ok if res["status"] == "success" else errs).append((f.name, res))
+                prog.progress((i + 1) / len(uploaded_files))
+            prog.empty()
+            if ok:
+                st.success(f"Ingested {len(ok)} file(s).")
+            for fname, r in errs:
+                st.error(f"{fname}: {r['msg']}")
+            _knowledge_doc_counts.clear()
+            st.rerun()
+    with up2:
+        fetch_url = st.text_input("Article URL", key="po_fetch_url")
+        if st.button("Fetch and ingest", type="primary", key="po_fetch_btn") and fetch_url:
+            with st.spinner("Fetching…"):
+                res = _ingest_url(fetch_url.strip())
+            if res["status"] == "success":
+                st.success(res["msg"])
+                _knowledge_doc_counts.clear()
+            else:
+                st.error(res["msg"])
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 7 — Data Management
+# ═══════════════════════════════════════════════════════════════
+with tab_mgmt:
+    st.header("Data Management")
+
+    dm_c1, dm_c2 = st.columns(2)
+    with dm_c1:
+        st.subheader("Table Coverage")
+        if st.button("Refresh counts", key="po_refresh_counts"):
+            _po_table_counts.clear()
+        counts_df = _po_table_counts(PREFIX)
+        st.dataframe(counts_df, use_container_width=True, hide_index=True)
+    with dm_c2:
+        st.subheader("Scheduler Status")
+        try:
+            sched = _start_scheduler()
+            jobs = sched.get_jobs()
+            if jobs:
+                next_run = min((j.next_run_time for j in jobs if j.next_run_time), default=None)
+                next_str = next_run.strftime("%Y-%m-%d %H:%M WAW") if next_run else "—"
+                st.success(f"Running · Next: **{next_str}**")
+        except Exception as exc:
+            st.error(f"Scheduler error: {exc}")
+
+    st.divider()
+    st.subheader("Knowledge Base Digest → Expert Memory")
+    if st.button("Digest KB into Expert Memory", type="primary", key="po_digest_kb"):
+        with st.spinner("Extracting insights (1-2 min)…"):
+            try:
+                n_dk = digest_kb_docs(_ANTHROPIC_KEY, PREFIX, CFG.name, limit=200)
+                st.success(f"Extracted {n_dk} new insights.")
+            except Exception as exc:
+                st.error(f"KB digest failed: {exc}")
+
+    st.divider()
+    st.subheader("Expert Memory")
+    try:
+        insights_df = _query(
+            f"SELECT id, insight_type, confidence, insight_text, validated_at "
+            f"FROM intl_market.{PREFIX}expert_insights WHERE active=TRUE ORDER BY validated_at DESC LIMIT 50"
+        )
+        if insights_df.empty:
+            st.info("No expert insights yet. Digest the KB above.")
+        else:
+            for _, row in insights_df.iterrows():
+                with st.expander(
+                    f"[{row['insight_type']}] [{row['confidence']}] {str(row['insight_text'])[:80]}…",
+                    expanded=False,
+                ):
+                    st.write(row["insight_text"])
+                    st.caption(f"Logged: {row['validated_at']}")
+    except Exception as exc:
+        st.error(f"Could not load insights: {exc}")
+
+    st.divider()
+    st.subheader("Agent Memory")
+    mems = _load_memories(APP_KEY)
+    if mems.empty:
+        st.info("No agent memories saved yet.")
+    else:
+        for _, row in mems.iterrows():
+            c1, c2 = st.columns([10, 1])
+            with c1:
+                st.markdown(f"**[{row['category']}]** {row['subject']}: {row['content']}")
+                st.caption(f"{row['source']} · {row['created_at']}")
+            with c2:
+                if st.button("🗑", key=f"po_del_mem_{row['id']}"):
+                    _delete_memory(row["id"])
+                    st.rerun()
+
+    st.divider()
+    st.subheader("Add Memory Manually")
+    with st.form("po_add_mem"):
+        cat = st.selectbox("Category",
+                           ["market_view", "methodology", "investment_thesis", "asset_note", "red_flag"])
+        subj = st.text_input("Subject (≤8 words)")
+        cont = st.text_area("Content (one sentence)")
+        if st.form_submit_button("Save"):
+            _save_memory(cat, subj, cont, source="manual")
+            st.success("Saved")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 8 — Grid Analysis (PyPSA)
+# ═══════════════════════════════════════════════════════════════
+with tab_pypsa:
+    st.header("Grid Analysis — PyPSA Zonal Model")
+    st.info(
+        "Upload PSE grid data or use simplified 4-zone Poland model (N/S/E/W) "
+        "to run zonal power flow and analyse congestion patterns affecting BESS dispatch.",
+        icon="⚡",
+    )
+
+    pypsa_mode = st.radio("Model type", ["4-Zone Poland (built-in)", "Upload CSV files"], horizontal=True)
+
+    if pypsa_mode == "4-Zone Poland (built-in)":
+        st.subheader("Simplified 4-Zone Poland Network")
+        st.caption("Approximate zonal prices and transmission from Aurora Q2 2026 data")
+
+        if st.button("Build and run 4-zone model", type="primary", key="po_pypsa_run"):
+            try:
+                import pypsa
+                n = pypsa.Network()
+                n.set_snapshots(pd.date_range("2026-01-01", periods=24, freq="h"))
+
+                # Zones
+                for zone, price in [("North", 290), ("South", 310), ("East", 285), ("West", 305)]:
+                    n.add("Bus", zone, v_nom=400)
+                    n.add("Generator", f"{zone}_gen", bus=zone, p_nom=5000,
+                          marginal_cost=price, p_max_pu=0.8)
+                    n.add("Load", f"{zone}_load", bus=zone,
+                          p_set=pd.Series([2000] * 24, index=n.snapshots))
+
+                # Transmission
+                for b0, b1, cap in [("North","South",2000),("North","East",1500),
+                                     ("South","West",2500),("East","West",1000)]:
+                    n.add("Line", f"{b0}-{b1}", bus0=b0, bus1=b1, x=0.05, s_nom=cap)
+
+                n.lopf(pyomo=False, solver_name="highs")
+
+                st.success("LOPF solved successfully")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.subheader("Zonal Dispatch (MW)")
+                    disp = n.generators_t.p.mean().reset_index()
+                    disp.columns = ["Zone_Gen", "Avg MW"]
+                    st.dataframe(disp, use_container_width=True, hide_index=True)
+                with col2:
+                    st.subheader("Line Loading (%)")
+                    if not n.lines_t.p0.empty:
+                        loading = (n.lines_t.p0.abs() / n.lines.s_nom * 100).mean().reset_index()
+                        loading.columns = ["Line", "Avg Loading %"]
+                        st.dataframe(loading, use_container_width=True, hide_index=True)
+            except ImportError:
+                st.error("PyPSA not installed. Add `pypsa` to the Dockerfile.")
+            except Exception as exc:
+                st.error(f"PyPSA error: {exc}")
+
+    else:
+        col1, col2, col3 = st.columns(3)
+        buses_file = col1.file_uploader("Buses CSV",      type=["csv"], key="po_buses")
+        lines_file  = col2.file_uploader("Lines CSV",      type=["csv"], key="po_lines")
+        gens_file   = col3.file_uploader("Generators CSV", type=["csv"], key="po_gens")
+
+        if buses_file and lines_file:
+            try:
+                import pypsa
+                buses_df = pd.read_csv(buses_file)
+                lines_df = pd.read_csv(lines_file)
+                n = pypsa.Network()
+                for _, row in buses_df.iterrows():
+                    n.add("Bus", row["name"], v_nom=row.get("v_nom", 400))
+                for _, row in lines_df.iterrows():
+                    n.add("Line", row.get("name", "L"), bus0=row["bus0"], bus1=row["bus1"],
+                          x=row.get("x", 0.05), s_nom=row.get("s_nom", 500))
+                if gens_file:
+                    gens_df = pd.read_csv(gens_file)
+                    for _, row in gens_df.iterrows():
+                        n.add("Generator", row["name"], bus=row["bus"],
+                              p_nom=row.get("p_nom", 100), marginal_cost=row.get("marginal_cost", 50))
+                st.success(f"Network loaded: {len(n.buses)} buses, {len(n.lines)} lines")
+            except ImportError:
+                st.error("PyPSA not installed.")
+            except Exception as exc:
+                st.error(f"Network build error: {exc}")
+        else:
+            st.markdown("""
+**Data sources for Poland grid model:**
+- PSE publishes annual grid data (generation units, transmission topology)
+- ENTSO-E Transparency Platform: cross-border flows, installed capacity by zone
+- Aurora Excel data (Q1/Q2 2026): zonal prices, capacity by technology
+""")
