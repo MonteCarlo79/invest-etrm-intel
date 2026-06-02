@@ -120,6 +120,22 @@ def _ensure_tables():
             validated_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS intl_market.{PREFIX}report_library (
+            id           SERIAL PRIMARY KEY,
+            report_name  TEXT NOT NULL,
+            frequency    TEXT NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+            period       DATE NOT NULL,
+            filename     TEXT NOT NULL,
+            file_data    BYTEA NOT NULL,
+            file_size_kb INTEGER,
+            uploaded_at  TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS {PREFIX}report_library_freq_period "
+        f"ON intl_market.{PREFIX}report_library (frequency, period DESC)"
+    )
     _conn().commit()
 
 
@@ -214,6 +230,60 @@ def _po_table_counts(prefix: str) -> pd.DataFrame:
     except Exception:
         rows.append({"Table": "marketdata.agent_memory", "Rows": "error"})
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=120)
+def _list_library_reports(prefix: str, frequency: str | None = None) -> pd.DataFrame:
+    try:
+        if frequency:
+            return _query(
+                f"SELECT id, report_name, frequency, period, filename, file_size_kb, uploaded_at "
+                f"FROM intl_market.{prefix}report_library "
+                f"WHERE frequency=%s ORDER BY period DESC, uploaded_at DESC",
+                (frequency,),
+            )
+        return _query(
+            f"SELECT id, report_name, frequency, period, filename, file_size_kb, uploaded_at "
+            f"FROM intl_market.{prefix}report_library ORDER BY period DESC, uploaded_at DESC"
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=600)
+def _get_library_report_data(prefix: str, report_id: int) -> bytes | None:
+    try:
+        cur = _conn().cursor()
+        cur.execute(
+            f"SELECT file_data FROM intl_market.{prefix}report_library WHERE id=%s",
+            (report_id,),
+        )
+        row = cur.fetchone()
+        return bytes(row[0]) if row else None
+    except Exception:
+        return None
+
+
+def _save_library_report(report_name: str, frequency: str, period,
+                          filename: str, file_data: bytes):
+    import psycopg2
+    kb = len(file_data) // 1024
+    cur = _conn().cursor()
+    cur.execute(
+        f"INSERT INTO intl_market.{PREFIX}report_library "
+        f"(report_name, frequency, period, filename, file_data, file_size_kb) "
+        f"VALUES (%s,%s,%s,%s,%s,%s)",
+        (report_name, frequency, period, filename, psycopg2.Binary(file_data), kb),
+    )
+    _list_library_reports.clear()
+    _get_library_report_data.clear()
+
+
+def _delete_library_report(report_id: int):
+    cur = _conn().cursor()
+    cur.execute(f"DELETE FROM intl_market.{PREFIX}report_library WHERE id=%s", (report_id,))
+    _list_library_reports.clear()
+    _get_library_report_data.clear()
 
 
 @st.cache_data(ttl=60)
@@ -782,11 +852,11 @@ with st.sidebar:
 
 (
     tab_mkt, tab_as, tab_bess, tab_irr,
-    tab_advisor, tab_kb, tab_mgmt, tab_pypsa,
+    tab_advisor, tab_kb, tab_mgmt, tab_pypsa, tab_library,
 ) = st.tabs([
     "Market Structure", "Balancing & AS Markets", "BESS Opportunity",
     "Investment Analysis", "Investment Advisor",
-    "Knowledge Base", "Data Management", "Grid Analysis",
+    "Knowledge Base", "Data Management", "Grid Analysis", "Library",
 ])
 
 
@@ -1369,3 +1439,89 @@ with tab_pypsa:
 - ENTSO-E Transparency Platform: cross-border flows, installed capacity by zone
 - Aurora Excel data (Q1/Q2 2026): zonal prices, capacity by technology
 """)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tab 9 — Library
+# ═══════════════════════════════════════════════════════════════
+with tab_library:
+    st.header("Report Library")
+    st.caption("Save and retrieve daily, weekly, and monthly market reports (PDF)")
+
+    # ── Upload ──
+    with st.expander("Upload New Report", expanded=True):
+        ul_c1, ul_c2, ul_c3 = st.columns(3)
+        with ul_c1:
+            lib_name = st.text_input("Report Name",
+                                      placeholder="e.g. Aurora Monthly Flexible Summary Apr 2026",
+                                      key="po_lib_name")
+        with ul_c2:
+            lib_freq = st.selectbox("Frequency", ["daily", "weekly", "monthly"],
+                                     key="po_lib_freq")
+        with ul_c3:
+            lib_period = st.date_input("Report Period", value=date.today(),
+                                        key="po_lib_period")
+        lib_file = st.file_uploader("PDF File", type=["pdf"], key="po_lib_upload")
+        if st.button("Save to Library", type="primary", key="po_lib_save_btn",
+                     disabled=not (lib_file and lib_name)):
+            try:
+                _save_library_report(lib_name.strip(), lib_freq, lib_period,
+                                      lib_file.name, lib_file.read())
+                st.success(f"Saved '{lib_name}' ({lib_freq}) to library.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Failed: {exc}")
+
+    st.divider()
+
+    # ── Browse by frequency ──
+    lib_freq_tabs = st.tabs(["All Reports", "Daily", "Weekly", "Monthly"])
+    lib_freq_filters = [None, "daily", "weekly", "monthly"]
+
+    for lib_ftab, lib_filt in zip(lib_freq_tabs, lib_freq_filters):
+        with lib_ftab:
+            lib_df = _list_library_reports(PREFIX, lib_filt)
+            if lib_df.empty:
+                st.info("No reports in this category yet. Use 'Upload New Report' above.")
+                continue
+
+            st.caption(f"{len(lib_df)} report(s)")
+            filt_key = lib_filt or "all"
+
+            # Summary table
+            display_df = lib_df[["report_name", "frequency", "period",
+                                  "filename", "file_size_kb", "uploaded_at"]].copy()
+            display_df.columns = ["Report Name", "Frequency", "Period",
+                                   "Filename", "Size (KB)", "Uploaded At"]
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("Download / Delete")
+            options = {
+                f"{r['report_name']}  —  {str(r['period'])}  [{r['frequency']}]": int(r["id"])
+                for _, r in lib_df.iterrows()
+            }
+            sel_label = st.selectbox("Select report", list(options.keys()),
+                                      key=f"po_lib_sel_{filt_key}")
+            if sel_label:
+                sel_id = options[sel_label]
+                sel_row = lib_df[lib_df["id"] == sel_id].iloc[0]
+                col_dl, col_del = st.columns([3, 1])
+                with col_dl:
+                    report_bytes = _get_library_report_data(PREFIX, sel_id)
+                    if report_bytes:
+                        st.download_button(
+                            label=f"Download  {sel_row['filename']}",
+                            data=report_bytes,
+                            file_name=sel_row["filename"],
+                            mime="application/pdf",
+                            key=f"po_lib_dl_{sel_id}_{filt_key}",
+                        )
+                    else:
+                        st.warning("Report data not found in database.")
+                with col_del:
+                    if st.button("Delete", key=f"po_lib_del_{sel_id}_{filt_key}",
+                                  type="secondary"):
+                        _delete_library_report(sel_id)
+                        st.success("Deleted.")
+                        st.rerun()
