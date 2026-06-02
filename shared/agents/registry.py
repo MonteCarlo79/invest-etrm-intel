@@ -37,6 +37,20 @@ APP_CATALOG = [
         "category": "Applications",
     },
     {
+        "name": "Philippines RE Investment",
+        "path": "/ph-market/",
+        "description": "Philippines renewable energy investment advisory — GEAP, WESM, BESS, IRR calculator, Aurora-grounded AI analyst.",
+        "roles": ["Admin", "Trader", "Quant", "Analyst"],
+        "category": "Applications",
+    },
+    {
+        "name": "Poland Power Investment",
+        "path": "/po-market/",
+        "description": "Poland BESS investment advisory — FCR/aFRR, Rynek Mocy, Aurora Q1/Q2 2026 forecasts, IRR calculator.",
+        "roles": ["Admin", "Trader", "Quant", "Analyst"],
+        "category": "Applications",
+    },
+    {
         "name": "Strategy Agent",
         "path": "/strategy-agent/",
         "description": "Opportunity screening, market structure, and deployment ranking.",
