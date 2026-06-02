@@ -37,17 +37,20 @@ APP_CATALOG = [
         "category": "Applications",
     },
     {
-        "name": "Philippines RE Investment",
-        "path": "/ph-market/",
-        "description": "Philippines renewable energy investment advisory — GEAP, WESM, BESS, IRR calculator, Aurora-grounded AI analyst.",
-        "roles": ["Admin", "Trader", "Quant", "Analyst"],
+        "name": "Options Cockpit",
+        "path": "/options-cockpit/",
+        "description": (
+            "Standard options pricing: BS/Black-76, structures (straddle, spreads, butterfly, condor), "
+            "SVI smile calibration from market quotes, historical vol, Greeks and hedging."
+        ),
+        "roles": ["Admin", "Trader", "Quant"],
         "category": "Applications",
     },
     {
-        "name": "Poland Power Investment",
-        "path": "/po-market/",
-        "description": "Poland BESS investment advisory — FCR/aFRR, Rynek Mocy, Aurora Q1/Q2 2026 forecasts, IRR calculator.",
-        "roles": ["Admin", "Trader", "Quant", "Analyst"],
+        "name": "GB Market",
+        "path": "/gb-market/",
+        "description": "GB BESS market intelligence: system price, EPEX, ancillary services, BESS benchmarking index, asset map, Strategist + Quant agents.",
+        "roles": ["Admin", "Trader", "Quant", "Analyst", "Viewer"],
         "category": "Applications",
     },
     {
@@ -81,6 +84,18 @@ APP_CATALOG = [
         "roles": ["Admin", "Quant"],
         "category": "Agents",
         "task_definition": "bess-platform-dev-agent",
+    },
+    {
+        "name": "Trading Performance Agent",
+        "path": "/trading-performance-agent/",
+        "description": (
+            "Daily strategy performance monitoring for the 4 Inner Mongolia BESS assets. "
+            "Claude-powered: strategy ranking, discrepancy attribution, realization & fragility "
+            "status, operator narrative, and email reports."
+        ),
+        "roles": ["Admin", "Trader", "Quant"],
+        "category": "Agents",
+        "task_definition": "bess-trading-performance-agent",
     },
 ]
 

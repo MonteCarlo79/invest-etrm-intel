@@ -18,7 +18,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 # PAGE CONFIG
 # --------------------------------------------------
 
-st.set_page_config(page_title="BESS Platform", layout="wide")
+st.set_page_config(page_title="BESS Intelligence Platform", layout="wide")
 
 # --------------------------------------------------
 # PROJECT IMPORTS
@@ -26,10 +26,6 @@ st.set_page_config(page_title="BESS Platform", layout="wide")
 
 from shared.agents.registry import get_visible_apps, get_visible_by_category
 from auth.rbac import get_user, get_groups, get_email
-from shared.metrics.portfolio import get_portfolio_metrics
-from shared.metrics.agents import get_agent_status
-from shared.metrics.dispatch import get_dispatch_preview
-from shared.metrics.market import get_price_series
 
 # --------------------------------------------------
 # AWS DEBUG
@@ -258,7 +254,7 @@ user_email = user.get("email", "unknown") if user else "unknown"
 
 IS_VIEWER = role == "Viewer"
 CAN_OPEN_APPS = role in ["Admin", "Trader", "Quant", "Analyst"]
-CAN_RUN_AGENTS = role in ["Admin", "Trader", "Quant", "Analyst"]
+CAN_QUICK_ASK = role in ["Admin", "Trader", "Quant", "Analyst"]
 CAN_MANAGE_USERS = role == "Admin"
 
 COGNITO_DOMAIN = os.getenv(
@@ -277,137 +273,223 @@ logout_url = (
     f"&logout_uri={urllib.parse.quote(LOGOUT_REDIRECT_URI, safe='')}"
 )
 
-visible_apps = [] if role == "Viewer" else get_visible_apps(role)
-app_items = [] if role == "Viewer" else get_visible_by_category(role, "Applications")
-agent_items = [] if role == "Viewer" else get_visible_by_category(role, "Agents")
-
 # --------------------------------------------------
-# ECS RUNNER
+# QUICK ASK — Anthropic one-shot helper
 # --------------------------------------------------
 
+_QUICK_ASK_SYSTEM = {
+    "strategist": (
+        "You are the Strategist — China spot electricity market analyst. "
+        "You give concise, expert answers on: spot market prices, inter-provincial flows, "
+        "market fundamentals (load, new energy, system tightness), and market rules. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "quant": (
+        "You are the Quant — BESS investment economics specialist. "
+        "You give concise, expert answers on: province-level BESS economics, LP dispatch, "
+        "IRR modelling, capture rates, and investment screening. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "trader": (
+        "You are the Trader — Inner Mongolia BESS trading operations analyst. "
+        "You give concise, expert answers on: asset P&L attribution, dispatch quality, "
+        "execution gaps, RT price dynamics for the 4 IM BESS assets "
+        "(SuYou, HangJinQi, SiZiWangQi, GuShanLiang). "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "deal_structurer": (
+        "You are the Deal Structurer — investment committee analyst. "
+        "You give concise, expert answers on: BESS investment deal structuring, "
+        "market attractiveness assessment, IRR hurdle rates, equity/debt structure, "
+        "and investment memorandum framing for China renewable assets. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "gb_analyst": (
+        "You are the GB Analyst — Great Britain BESS market intelligence specialist. "
+        "You give concise, expert answers on: GB BESS leaderboard performance, EPEX DA "
+        "prices and arbitrage spreads, Balancing Mechanism (BM) revenues, ancillary "
+        "markets (FFR, DCL, DCH, reserve), system price and NIV dynamics, asset "
+        "owner/operator benchmarking, and BESS options valuation and dispatch modelling. "
+        "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+    ),
+    "au_analyst": (
+        "You are the AU Analyst — Australia NEM BESS market intelligence specialist. "
+        "You give concise, expert answers on: NEM spot prices, FCAS regulation and "
+        "contingency services, BESS dispatch strategy, MLFs, regional constraints "
+        "(QLD/NSW/VIC/SA), Capacity Investment Scheme, AEMO market notices, and "
+        "BESS revenue benchmarking. Keep answers under 150 words. No tool calls."
+    ),
+    "ercot_analyst": (
+        "You are the ERCOT Analyst — Texas BESS market intelligence specialist. "
+        "You give concise, expert answers on: ERCOT real-time and day-ahead LMPs, "
+        "ancillary services (Reg-Up/Down, RRS, ECRS, Non-Spin), BESS revenue stacks, "
+        "grid emergencies, nodal pricing, and BESS benchmarking. "
+        "Keep answers under 150 words. No tool calls."
+    ),
+    "pjm_analyst": (
+        "You are the PJM Analyst — US East BESS market intelligence specialist. "
+        "You give concise, expert answers on: PJM LMP nodal prices, capacity market "
+        "(RPM), regulation (RegD/RegA), synchronised reserve, BESS performance, "
+        "and ancillary service revenues. Keep answers under 150 words. No tool calls."
+    ),
+    "caiso_analyst": (
+        "You are the CAISO Analyst — California BESS market intelligence specialist. "
+        "You give concise, expert answers on: CAISO real-time and day-ahead LMPs, "
+        "ancillary services (Regulation, Spinning/Non-Spin), Resource Adequacy, "
+        "duck curve dynamics, BESS benchmarking, and storage policy. "
+        "Keep answers under 150 words. No tool calls."
+    ),
+    "ph_analyst": (
+        "You are the Philippines RE Investment Analyst. "
+        "You give concise, expert answers on: Philippine renewable energy market (WESM, "
+        "GEAP/COE-GET, three grids), BESS ancillary services (NGCP, ASPA), IRR modelling "
+        "for solar/wind/BESS/IRESS, foreign ownership rules (100% allowed for RE), "
+        "and key investment risks (ERC approval, permitting, curtailment). "
+        "Keep answers under 150 words. No tool calls."
+    ),
+    "po_analyst": (
+        "You are the Poland Power Investment Analyst. "
+        "You give concise, expert answers on: Polish BESS market (FCR/aFRR via PSE, "
+        "Rynek Mocy capacity market), TGE power prices, Aurora Energy Research forecasts, "
+        "IRR modelling (PLN, FCR+aFRR+capacity market revenue stack), EU taxonomy, "
+        "and key risks (price compression, grid connection, permitting). "
+        "Keep answers under 150 words. No tool calls."
+    ),
+}
 
-def run_ecs_task(task_def: str, display_name: str):
+
+def _quick_ask(agent_key: str, question: str) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return "ANTHROPIC_API_KEY not configured."
     try:
-        if not task_def:
-            st.error(f"No task_definition configured for {display_name}")
-            return
-
-        if not cluster:
-            st.error("ECS_CLUSTER is not configured.")
-            return
-
-        if not private_subnets:
-            st.error("PRIVATE_SUBNETS is not configured.")
-            return
-
-        if not task_security_group:
-            st.error("TASK_SECURITY_GROUPS is not configured.")
-            return
-
-        response = ecs.run_task(
-            cluster=cluster,
-            taskDefinition=task_def,
-            launchType="FARGATE",
-            networkConfiguration={
-                "awsvpcConfiguration": {
-                    "subnets": private_subnets,
-                    "securityGroups": [task_security_group],
-                    "assignPublicIp": "DISABLED",
-                }
-            },
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            system=_QUICK_ASK_SYSTEM[agent_key],
+            messages=[{"role": "user", "content": question}],
         )
-
-        failures = response.get("failures", [])
-        tasks = response.get("tasks", [])
-
-        if failures:
-            st.error(f"Failed to start {display_name}: {failures}")
-        elif tasks:
-            st.success(f"{display_name} started.")
-        else:
-            st.warning(f"No task started for {display_name}.")
+        return resp.content[0].text.strip()
     except Exception as e:
-        st.error(f"Failed to start {display_name}: {e}")
+        return f"Error: {e}"
+
 
 # --------------------------------------------------
-# UI HELPERS
+# APP URL RESOLVER
 # --------------------------------------------------
 
+_DEV_PORTS = {
+    "spot-markets":     "8505",
+    "bess-map":         "8503",
+    "mengxi-dashboard": "8511",
+    "gb-market":        "8508",
+    "au-market":        "8509",
+    "ercot-market":     "8510",
+    "pjm-market":       "8511",
+    "caiso-market":     "8512",
+    "ph-market":        "8515",
+    "po-market":        "8516",
+}
 
-def render_application_cards(items: list[dict]):
-    if not items:
-        st.info("No application modules are visible for your role.")
-        return
 
-    cols = st.columns(3)
-    for i, item in enumerate(items):
-        with cols[i % 3]:
-            with st.container(border=True):
-                st.markdown(f"### {item['name']}")
-                st.write(item.get("description", "-"))
-                path = item.get("path", "")
+def _app_url(path_slug: str) -> str:
+    """Resolve app URL — APP_URL_MAP overrides first, then dev-mode localhost, then ALB path."""
+    raw = os.getenv("APP_URL_MAP", "")
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        slug, url = item.split("=", 1)
+        if slug.strip() == path_slug:
+            return url.strip()
+    if os.getenv("AUTH_MODE", "alb_oidc").lower() == "dev" and path_slug in _DEV_PORTS:
+        return f"http://localhost:{_DEV_PORTS[path_slug]}"
+    return f"/{path_slug}/"
 
-                if CAN_OPEN_APPS and path:
-                    st.link_button("Open", path, use_container_width=True)
-                else:
-                    st.button(
-                        "Open",
-                        disabled=True,
-                        key=f"disabled_open_{item['name']}",
-                        use_container_width=True,
+
+# --------------------------------------------------
+# AGENT SECTION RENDERER
+# --------------------------------------------------
+
+def _render_agent_section(
+    icon: str,
+    name: str,
+    subtitle: str,
+    description: str,
+    capabilities: list[str],
+    app_slug: str | None,
+    agent_key: str,
+    available: bool = True,
+):
+    with st.container(border=True):
+        # Header row: icon + name + Open App button
+        hcol1, hcol2 = st.columns([7, 2])
+        with hcol1:
+            st.markdown(
+                f"<h2 style='margin:0; padding:0'>{icon} {name}</h2>"
+                f"<p style='color:#888; margin:0; font-size:0.9rem'>{subtitle}</p>",
+                unsafe_allow_html=True,
+            )
+        with hcol2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if available and CAN_OPEN_APPS and app_slug:
+                st.link_button(
+                    "Open App →",
+                    _app_url(app_slug),
+                    use_container_width=True,
+                    type="primary",
+                )
+            else:
+                st.button(
+                    "Coming Soon",
+                    disabled=True,
+                    key=f"open_{agent_key}",
+                    use_container_width=True,
+                )
+
+        st.markdown(f"*{description}*")
+
+        # Capabilities
+        cap_cols = st.columns(2)
+        half = len(capabilities) // 2 + len(capabilities) % 2
+        for i, cap in enumerate(capabilities):
+            cap_cols[i // half].markdown(f"- {cap}")
+
+        st.markdown("---")
+
+        # Quick Ask
+        if not IS_VIEWER and CAN_QUICK_ASK:
+            with st.expander("Quick Ask", expanded=False):
+                q_key = f"qa_input_{agent_key}"
+                r_key = f"qa_reply_{agent_key}"
+
+                if r_key not in st.session_state:
+                    st.session_state[r_key] = ""
+
+                q = st.text_input(
+                    f"Ask {name} a quick question",
+                    key=q_key,
+                    placeholder=f"e.g. What provinces have the best BESS economics right now?",
+                    label_visibility="collapsed",
+                )
+                c1, c2 = st.columns([2, 8])
+                with c1:
+                    if st.button("Ask", key=f"qa_btn_{agent_key}", type="primary"):
+                        if q.strip():
+                            with st.spinner("Thinking…"):
+                                st.session_state[r_key] = _quick_ask(agent_key, q.strip())
+                with c2:
+                    if st.button("Clear", key=f"qa_clear_{agent_key}"):
+                        st.session_state[r_key] = ""
+
+                if st.session_state[r_key]:
+                    st.info(st.session_state[r_key])
+                    st.caption(
+                        f"Quick answer — no live data access. Open the app for full {name} analysis."
                     )
 
-
-def render_agent_cards(items: list[dict]):
-    if not items:
-        st.info("No agent modules are visible for your role.")
-        return
-
-    cols = st.columns(2)
-    for i, item in enumerate(items):
-        with cols[i % 2]:
-            with st.container(border=True):
-                st.markdown(f"### {item['name']}")
-                st.write(item.get("description", "-"))
-
-                task_def = item.get("task_definition")
-                path = item.get("path", "")
-
-                btn_cols = st.columns(2)
-
-                with btn_cols[0]:
-                    if CAN_OPEN_APPS and path:
-                        st.link_button(
-                            "Open UI",
-                            path,
-                            use_container_width=True,
-                        )
-                    else:
-                        st.button(
-                            "Open UI",
-                            disabled=True,
-                            key=f"disabled_open_agent_{item['name']}",
-                            use_container_width=True,
-                        )
-
-                with btn_cols[1]:
-                    if CAN_RUN_AGENTS and task_def:
-                        if st.button(
-                            "Run Task",
-                            key=f"run_{item['name']}",
-                            use_container_width=True,
-                        ):
-                            run_ecs_task(task_def, item["name"])
-                    else:
-                        st.button(
-                            "Run Task",
-                            disabled=True,
-                            key=f"disabled_run_{item['name']}",
-                            use_container_width=True,
-                        )
-
-                if task_def:
-                    st.caption(f"ECS task: {task_def}")
 
 # --------------------------------------------------
 # HEADER
@@ -416,7 +498,7 @@ def render_agent_cards(items: list[dict]):
 header_left, header_right = st.columns([6, 1])
 
 with header_left:
-    st.title("⚡ BESS Energy Investment & Trading Platform")
+    st.title("BESS Investment-Trading-Asset Intelligence")
     st.caption(f"User: {user_email} | Role: {role}")
 
 with header_right:
@@ -435,21 +517,57 @@ if IS_VIEWER:
     st.info("You are signed in as Viewer. This role has read-only access to the portal.")
 
 # --------------------------------------------------
-# PORTFOLIO SNAPSHOT
+# DATA OPERATIONS STATUS
 # --------------------------------------------------
 
-st.subheader("Portfolio Snapshot")
+st.subheader("Data Operations Status")
 
 try:
-    metrics = get_portfolio_metrics()
+    import sqlalchemy as _sa
+    from shared.data_ops.status import get_recent_ops, get_pipeline_jobs
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total PnL", f"{metrics['total_pnl']:,.0f} ¥")
-    m2.metric("Today PnL", f"{metrics['today_pnl']:,.0f} ¥")
-    m3.metric("Active Assets", metrics["assets"])
-    m4.metric("Running Agents", len(agent_items))
-except Exception:
-    st.info("Portfolio metrics not available yet.")
+    _pgurl = os.environ.get("PGURL") or os.environ.get("DB_DSN", "")
+    _ops_engine = _sa.create_engine(_pgurl) if _pgurl else None
+
+    if _ops_engine is None:
+        st.info("DB not configured (PGURL missing).")
+    else:
+        _ops  = get_recent_ops(_ops_engine, hours=48)
+        _jobs = get_pipeline_jobs(_ops_engine)
+
+        # ── Summary tiles: last run per op type ─────────────────────────
+        if not _ops.empty:
+            _last = _ops.groupby("op_name").first().reset_index()
+            _status_icon = {"success": "✅", "running": "⏳", "failed": "❌"}
+            cols = st.columns(max(len(_last), 1))
+            for i, (_, row) in enumerate(_last.iterrows()):
+                icon = _status_icon.get(row["status"], "❓")
+                cols[i].metric(
+                    label=row["op_name"],
+                    value=f"{icon} {row['status']}",
+                    delta=row.get("market") or "",
+                )
+        else:
+            st.info("No data operations recorded in the last 48 hours.")
+
+        # ── Running pipeline jobs ────────────────────────────────────────
+        if not _jobs.empty:
+            running = _jobs[_jobs["status"] == "running"]
+            if not running.empty:
+                names = ", ".join(running["job_name"].tolist())
+                st.warning(f"{len(running)} pipeline job(s) currently running: {names}")
+
+        # ── Recent ops table (collapsible) ───────────────────────────────
+        if not _ops.empty:
+            with st.expander("Recent operations (last 48 h)", expanded=False):
+                st.dataframe(
+                    _ops[["op_name", "market", "date_range", "status", "message",
+                           "started_at", "duration_s"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+except Exception as _e:
+    st.info(f"Data operations status unavailable: {_e}")
 
 st.divider()
 
@@ -521,85 +639,292 @@ if CAN_MANAGE_USERS:
     st.divider()
 
 # --------------------------------------------------
-# PLATFORM METRICS
+# 4 AGENT SECTIONS
 # --------------------------------------------------
 
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Role", role)
-k2.metric("Visible Modules", len(visible_apps))
-k3.metric("Agent Modules", len(agent_items))
-k4.metric("Status", "Operational")
+st.subheader("Your Intelligence Team")
+st.caption(
+    "Five specialist agents covering the full investment lifecycle. "
+    "Open an app for deep analysis, or Quick Ask for instant answers."
+)
 
-# --------------------------------------------------
-# APPLICATIONS
-# --------------------------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
 
-st.subheader("Applications")
-render_application_cards(app_items)
+# ── Row 1: Strategist + Quant ──────────────────────────────────────────────
+col_strategist, col_quant = st.columns(2)
 
-# --------------------------------------------------
-# AI AGENTS
-# --------------------------------------------------
+with col_strategist:
+    _render_agent_section(
+        icon="📊",
+        name="Strategist",
+        subtitle="China Spot Market Intelligence · Pillar 1",
+        description=(
+            "Analyses China's provincial spot electricity markets — price spreads, "
+            "inter-provincial flows, market fundamentals, and system tightness. "
+            "Trained on market rules, exchange annual reports, and policy documents "
+            "via the Knowledge Pool."
+        ),
+        capabilities=[
+            "Daily DA/RT price spread & volatility by province",
+            "Inter-provincial flow analysis (省间现货交易)",
+            "Market fundamentals: load, new energy, thermal capacity",
+            "System tightness & congestion signals",
+            "Knowledge base: market rules, policy docs, annual reports",
+            "Conversation memory across sessions",
+        ],
+        app_slug="spot-markets",
+        agent_key="strategist",
+        available=True,
+    )
 
-st.divider()
-st.subheader("AI Agents")
-render_agent_cards(agent_items)
+with col_quant:
+    _render_agent_section(
+        icon="📐",
+        name="Quant",
+        subtitle="BESS Investment Economics · Pillar 2",
+        description=(
+            "Screens provinces for BESS investment attractiveness using LP perfect-foresight "
+            "dispatch. Computes theoretical revenue, capture rate, and equity IRR under "
+            "configurable CapEx/O&M/RTE scenarios. Province ranking updated daily."
+        ),
+        capabilities=[
+            "Province ranking: annual revenue/MWh/day (2h and 4h)",
+            "LP-optimal dispatch detail by province and date",
+            "IRR, NPV, and payback under custom assumptions",
+            "Capture rate vs perfect-foresight benchmark",
+            "Realised vs theoretical revenue comparison",
+            "Conversation memory across sessions",
+        ],
+        app_slug="bess-map",
+        agent_key="quant",
+        available=True,
+    )
 
-# --------------------------------------------------
-# AGENT STATUS
-# --------------------------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
 
-st.divider()
-st.subheader("Agent Status")
+# ── Row 2: Trader + Deal Structurer ──────────────────────────────────────
+col_trader, col_deal = st.columns(2)
 
-try:
-    df_agents = get_agent_status()
-    st.dataframe(df_agents, use_container_width=True)
-except Exception:
-    st.info("Agent status table not available.")
+with col_trader:
+    _render_agent_section(
+        icon="⚡",
+        name="Trader",
+        subtitle="Mengxi BESS Trading Operations · Pillar 3",
+        description=(
+            "Operations and trading analyst for the 4 Inner Mongolia BESS assets. "
+            "Tracks daily P&L attribution across the full 5-step waterfall — from "
+            "perfect-foresight upper bound down to actual cleared dispatch — and "
+            "identifies execution gaps."
+        ),
+        capabilities=[
+            "Daily P&L waterfall for SuYou, HangJinQi, SiZiWangQi, GuShanLiang",
+            "Dispatch quality: charge/discharge curves, SoC profile",
+            "Execution gap attribution (grid restriction, forecast error, nomination)",
+            "RT clearing price dynamics and market context",
+            "Strategy comparison: multi-strategy simulation",
+            "Auto-save memory: ops observations persist across sessions",
+        ],
+        app_slug="mengxi-dashboard",
+        agent_key="trader",
+        available=True,
+    )
 
-# --------------------------------------------------
-# DISPATCH PREVIEW
-# --------------------------------------------------
+with col_deal:
+    _render_agent_section(
+        icon="🏦",
+        name="Deal Structurer",
+        subtitle="Investment Committee · Pillar 5",
+        description=(
+            "Orchestrates the investment committee process — aggregating market signals "
+            "from the Strategist, economics from the Quant, and ops benchmarks from the "
+            "Trader into a structured investment recommendation. Quick Ask available now; "
+            "full app coming in the next build."
+        ),
+        capabilities=[
+            "Market screen: province attractiveness assessment",
+            "Economics case: IRR vs hurdle rate (target: >12% equity IRR)",
+            "Ops benchmark: realisation rate vs IM asset portfolio",
+            "Risk factors: regulatory, curtailment, counterparty, grid access",
+            "Deal structure: equity/debt split, duration, subsidy, exit horizon",
+            "Investment memorandum drafting (full app TBD)",
+        ],
+        app_slug=None,
+        agent_key="deal_structurer",
+        available=False,
+    )
 
-st.divider()
-st.subheader("Dispatch Preview (Next 24h)")
+st.markdown("<br>", unsafe_allow_html=True)
 
-try:
-    df_dispatch = get_dispatch_preview()
-    st.dataframe(df_dispatch, use_container_width=True)
-except Exception:
-    st.info("Execution plan not available yet.")
+# ── Row 3: GB Analyst (full width) ───────────────────────────────────────────
+col_gb, _ = st.columns(2)
 
-# --------------------------------------------------
-# MARKET PRICES
-# --------------------------------------------------
+with col_gb:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/gb.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="GB Analyst",
+        subtitle="Great Britain BESS Market Intelligence · GB Market",
+        description=(
+            "Live intelligence platform for the GB battery storage market. "
+            "Tracks daily asset performance across the full GB BESS fleet, covering "
+            "wholesale arbitrage, Balancing Mechanism, ancillary services (FFR, DC), "
+            "and reserve markets. Includes AI-generated market commentary, pricing "
+            "models, and automated daily reports delivered by email and WeCom."
+        ),
+        capabilities=[
+            "Daily BESS leaderboard: revenue by asset, owner, operator",
+            "EPEX DA prices: baseload, peak/off-peak, arbitrage spreads",
+            "Balancing Mechanism & system price / NIV analysis",
+            "Ancillary markets: FFR, DCL, DCH, reserve clearing prices",
+            "Pricing models: BESS options value, PF dispatch, OLS forecast",
+            "Automated daily PDF report via email & WeCom",
+        ],
+        app_slug="gb-market",
+        agent_key="gb_analyst",
+        available=True,
+    )
 
-st.divider()
-st.subheader("Market Prices")
+    st.markdown("### International Markets")
+    intl_cols = st.columns(2)
+    with intl_cols[0]:
+        _render_agent_section(
+            icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+            name="Australia (NEM) Market Intelligence",
+            subtitle="AEMO · NEM spot · FCAS · AI Strategist",
+            description=(
+                "Real-time NEM BESS intelligence: spot prices by region (QLD/NSW/VIC/SA), "
+                "FCAS regulation and contingency markets, BESS leaderboard, and Strategist agent "
+                "grounded on Modo Energy data."
+            ),
+            capabilities=[
+                "NEM spot price by region (QLD/NSW/VIC/SA)",
+                "FCAS regulation and contingency clearing prices",
+                "BESS daily and monthly revenue index",
+                "Asset leaderboard: revenue by owner/operator",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: AEMO notices + Modo research",
+            ],
+            app_slug="au-market",
+            agent_key="au_analyst",
+            available=True,
+        )
+    with intl_cols[1]:
+        _render_agent_section(
+            icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+            name="ERCOT (Texas) Market Intelligence",
+            subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
+            description=(
+                "Texas BESS intelligence: real-time and day-ahead LMPs, ancillary services "
+                "(Reg-Up/Down, RRS, ECRS), BESS revenue benchmarking, and Strategist agent."
+            ),
+            capabilities=[
+                "ERCOT RT and DA nodal LMP prices",
+                "Ancillary services: Reg-Up/Down, RRS, ECRS, Non-Spin",
+                "BESS daily and monthly revenue index",
+                "Asset leaderboard by owner/operator",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: ERCOT market notices + Modo research",
+            ],
+            app_slug="ercot-market",
+            agent_key="ercot_analyst",
+            available=True,
+        )
 
-try:
-    df_prices = get_price_series()
-    st.line_chart(df_prices.set_index("timestamp"))
-except Exception as e:
-    st.info(f"Market prices not available yet: {e}")
+    intl_cols2 = st.columns(2)
+    with intl_cols2[0]:
+        _render_agent_section(
+            icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+            name="PJM (US East) Market Intelligence",
+            subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
+            description=(
+                "PJM BESS intelligence: nodal LMPs, capacity market, regulation (RegD/RegA), "
+                "synchronised reserve, BESS revenue benchmarking, and Strategist agent."
+            ),
+            capabilities=[
+                "PJM nodal LMP prices by zone",
+                "Ancillary services: Regulation (RegD/RegA), Sync Reserve",
+                "Capacity market (RPM) context",
+                "BESS daily and monthly revenue index",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: PJM market notices + Modo research",
+            ],
+            app_slug="pjm-market",
+            agent_key="pjm_analyst",
+            available=True,
+        )
+    with intl_cols2[1]:
+        _render_agent_section(
+            icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+            name="CAISO (California) Market Intelligence",
+            subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
+            description=(
+                "California BESS intelligence: CAISO LMPs, ancillary services (Regulation, "
+                "Spinning/Non-Spin), duck curve dynamics, Resource Adequacy, and Strategist agent."
+            ),
+            capabilities=[
+                "CAISO RT and DA LMP prices",
+                "Ancillary services: Regulation, Spinning/Non-Spin reserve",
+                "Duck curve and solar curtailment context",
+                "BESS daily and monthly revenue index",
+                "AI Strategist: grounded on live DB data",
+                "Knowledge base: CAISO market notices + Modo research",
+            ],
+            app_slug="caiso-market",
+            agent_key="caiso_analyst",
+            available=True,
+        )
+
+    intl_cols3 = st.columns(2)
+    with intl_cols3[0]:
+        _render_agent_section(
+            icon='<img src="https://flagcdn.com/w40/ph.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+            name="Philippines RE Investment Advisory",
+            subtitle="WESM · GEAP · BESS · IRR Calculator · AI Analyst",
+            description=(
+                "Philippines renewable energy investment intelligence: GEAP auction data "
+                "(GEA-1 to GEA-5), WESM spot prices, NGCP ancillary services (ASPA), "
+                "parametric IRR/LCOE model for Solar/Wind/BESS/IRESS, and AI Investment Analyst."
+            ),
+            capabilities=[
+                "GEAP/COE-GET auction rounds: target vs awarded MW, GET pricing",
+                "WESM spot price projections by grid (Luzon/Visayas/Mindanao)",
+                "BESS ancillary services: regulating/contingency reserves, ASPA",
+                "IRR/LCOE calculator: Solar, Onshore Wind, BESS 2h/4h, IRESS",
+                "AI Investment Analyst: 7 tools + Knowledge Base + Expert Memory",
+                "Report Library: daily/weekly/monthly PDF archive",
+            ],
+            app_slug="ph-market",
+            agent_key="ph_analyst",
+            available=True,
+        )
+    with intl_cols3[1]:
+        _render_agent_section(
+            icon='<img src="https://flagcdn.com/w40/pl.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+            name="Poland Power Investment Advisory",
+            subtitle="FCR/aFRR · Rynek Mocy · Aurora Forecasts · AI Analyst",
+            description=(
+                "Polish BESS investment intelligence: FCR/aFRR ancillary services, "
+                "Rynek Mocy (capacity market), Aurora Energy Research Q1/Q2 2026 forecasts, "
+                "parametric IRR model, 4-zone PyPSA grid model, and AI Investment Analyst."
+            ),
+            capabilities=[
+                "FCR (Primary): European integrated auctions, BESS revenue ~60-180k PLN/MW/yr",
+                "aFRR (Secondary): PSE weekly/monthly auctions + energy settlement",
+                "Rynek Mocy: T-4/T-1 capacity auctions, 150-250 PLN/kW/yr",
+                "IRR calculator: BESS 1h/2h/4h, Solar, Onshore Wind (PLN, EUR×4.25)",
+                "AI Investment Analyst: Aurora-grounded, 7 tools + Expert Memory",
+                "Report Library: daily/weekly/monthly PDF archive",
+            ],
+            app_slug="po-market",
+            agent_key="po_analyst",
+            available=True,
+        )
 
 # --------------------------------------------------
 # FOOTER
 # --------------------------------------------------
 
 st.divider()
-st.info(
-    """
-    **Platform Control Tower**
-
-    Applications provide operational tools.
-
-    AI Agents automate:
-
-    • Strategy generation  
-    • Portfolio optimization  
-    • Execution planning  
-    • Development workflows
-    """
+st.caption(
+    "Investment-Trading-Asset Intelligence and Decisions System · "
+    "BESS Platform · Powered by Claude"
 )
