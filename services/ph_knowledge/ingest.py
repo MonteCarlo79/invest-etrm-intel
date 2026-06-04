@@ -327,10 +327,12 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
         )
     conn.commit()
 
+    from services.ph_knowledge.wesm_scraper import WESMReportConnector
     connectors = [
-        ("local_reports", "Local market reports (PDF/Excel/PPTX)", LocalReportsConnector()),
-        ("doe_news",       "DOE Philippines news",                  DOENewsConnector()),
-        ("iemop_notices",  "IEMOP market bulletins",                IEMOPNoticesConnector()),
+        ("local_reports",  "Local market reports (PDF/Excel/PPTX)", LocalReportsConnector()),
+        ("doe_news",        "DOE Philippines news",                  DOENewsConnector()),
+        ("iemop_notices",   "IEMOP market bulletins",                IEMOPNoticesConnector()),
+        ("wesm_reports",    "WESM/IEMOP market reports & advisories", WESMReportConnector()),
     ]
 
     results: dict[str, int] = {}

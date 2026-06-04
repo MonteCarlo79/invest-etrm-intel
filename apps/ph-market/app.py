@@ -33,6 +33,7 @@ st.set_page_config(
 
 from services.ph_knowledge.config import MARKET_CONFIG
 from services.ph_knowledge.ingest import run_knowledge_ingest
+from services.ph_knowledge.wesm_scraper import WESMPriceScraper, run_wesm_price_scrape
 from services.intl_market_common.advanced_retrieval_base import retrieve_for_agent
 from services.intl_market_common.expert_memory_base import (
     extract_insights, get_insights, inject_memory, digest_kb_docs,
@@ -132,6 +133,24 @@ def _ensure_tables():
         )
     """)
     cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS intl_market.ph_wesm_prices (
+            id           SERIAL PRIMARY KEY,
+            trading_date DATE        NOT NULL,
+            hour         INTEGER     NOT NULL DEFAULT 0,
+            interval_no  INTEGER     NOT NULL DEFAULT 0,
+            region       TEXT        NOT NULL,
+            node         TEXT,
+            price_php_kwh NUMERIC(10,4) NOT NULL,
+            price_type   TEXT        NOT NULL DEFAULT 'HSIP',
+            fetched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT ph_wesm_prices_uq UNIQUE (trading_date, hour, region, price_type)
+        )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS ph_wesm_prices_date_idx "
+        "ON intl_market.ph_wesm_prices (trading_date DESC, region)"
+    )
+    cur.execute(f"""
         CREATE TABLE IF NOT EXISTS intl_market.{PREFIX}report_library (
             id           SERIAL PRIMARY KEY,
             report_name  TEXT NOT NULL,
@@ -174,9 +193,25 @@ def _start_scheduler():
         except Exception as exc:
             logger.error("[ph_scheduler] digest failed: %s", exc)
 
+    def _wesm_price_job():
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                keepalives=1, keepalives_idle=30,
+            )
+            conn.autocommit = True
+            results = run_wesm_price_scrape(conn, days_back=2)
+            conn.close()
+            total = sum(v for v in results.values() if v > 0)
+            logger.info("[ph_scheduler] WESM price scrape done: %s (%d new rows)", results, total)
+        except Exception as exc:
+            logger.error("[ph_scheduler] WESM price scrape failed: %s", exc)
+
     sched = BackgroundScheduler(timezone="Asia/Manila")
-    sched.add_job(_ingest_job,  "cron", hour=3,  minute=30, id="ph_ingest",  misfire_grace_time=3600)
-    sched.add_job(_digest_job,  "cron", hour=3,  minute=45, id="ph_digest",  misfire_grace_time=3600)
+    sched.add_job(_ingest_job,      "cron", hour=3,  minute=30, id="ph_ingest",      misfire_grace_time=3600)
+    sched.add_job(_digest_job,      "cron", hour=3,  minute=45, id="ph_digest",      misfire_grace_time=3600)
+    sched.add_job(_wesm_price_job,  "cron", hour=7,  minute=15, id="ph_wesm_price",  misfire_grace_time=3600)
     sched.start()
     return sched
 
@@ -240,7 +275,47 @@ def _ph_table_counts(prefix: str) -> pd.DataFrame:
         rows.append({"Table": "marketdata.agent_memory", "Rows": int(df2["n"].iloc[0])})
     except Exception:
         rows.append({"Table": "marketdata.agent_memory", "Rows": "error"})
+    try:
+        df3 = _query("SELECT COUNT(*) AS n FROM intl_market.ph_wesm_prices")
+        rows.append({"Table": "intl_market.ph_wesm_prices", "Rows": int(df3["n"].iloc[0])})
+    except Exception:
+        rows.append({"Table": "intl_market.ph_wesm_prices", "Rows": "error"})
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300)
+def _wesm_price_history(days: int = 30) -> pd.DataFrame:
+    try:
+        return _query(
+            "SELECT trading_date, region, price_type, "
+            "AVG(price_php_kwh) AS avg_price, "
+            "MIN(price_php_kwh) AS min_price, "
+            "MAX(price_php_kwh) AS max_price, "
+            "COUNT(*) AS intervals "
+            "FROM intl_market.ph_wesm_prices "
+            "WHERE trading_date >= CURRENT_DATE - %s "
+            "GROUP BY trading_date, region, price_type "
+            "ORDER BY trading_date DESC, region",
+            (days,),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
+def _wesm_latest_date() -> str:
+    try:
+        df = _query(
+            "SELECT MAX(trading_date) AS latest, COUNT(DISTINCT trading_date) AS n_days "
+            "FROM intl_market.ph_wesm_prices"
+        )
+        if df.empty or df["latest"].iloc[0] is None:
+            return "No data yet"
+        latest = df["latest"].iloc[0]
+        n_days = int(df["n_days"].iloc[0])
+        return f"{latest} ({n_days} trading days stored)"
+    except Exception:
+        return "—"
 
 
 @st.cache_data(ttl=120)
@@ -1382,6 +1457,141 @@ with tab_mgmt:
                 st.warning("Scheduler has no active jobs.")
         except Exception as exc:
             st.error(f"Scheduler error: {exc}")
+
+    st.divider()
+
+    # ── WESM Price Data ───────────────────────────────────────────────────────
+    st.subheader("WESM Spot Price Data")
+    st.caption(
+        "Daily settlement interval prices for Luzon, Visayas, and Mindanao reference "
+        "trading nodes scraped from IEMOP. Scheduler runs at **07:15 MNL** daily."
+    )
+
+    wesm_stat_c1, wesm_stat_c2, wesm_stat_c3 = st.columns(3)
+    with wesm_stat_c1:
+        latest_str = _wesm_latest_date()
+        st.metric("Latest trading date", latest_str.split(" ")[0] if latest_str != "—" else "—")
+    with wesm_stat_c2:
+        try:
+            n_rows = _query("SELECT COUNT(*) AS n FROM intl_market.ph_wesm_prices")
+            st.metric("Price rows stored", int(n_rows["n"].iloc[0]))
+        except Exception:
+            st.metric("Price rows stored", "—")
+    with wesm_stat_c3:
+        try:
+            n_days_df = _query("SELECT COUNT(DISTINCT trading_date) AS n FROM intl_market.ph_wesm_prices")
+            st.metric("Trading days", int(n_days_df["n"].iloc[0]))
+        except Exception:
+            st.metric("Trading days", "—")
+
+    # Manual trigger
+    wesm_btn_c1, wesm_btn_c2 = st.columns(2)
+    with wesm_btn_c1:
+        if st.button("Scrape Today's WESM Prices", type="primary", key="ph_wesm_scrape_now"):
+            with st.spinner("Fetching prices from IEMOP…"):
+                try:
+                    import psycopg2
+                    _wconn = psycopg2.connect(
+                        os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                        keepalives=1, keepalives_idle=30,
+                    )
+                    _wconn.autocommit = True
+                    results = run_wesm_price_scrape(_wconn, days_back=1)
+                    _wconn.close()
+                    _wesm_latest_date.clear()
+                    total = sum(v for v in results.values() if v > 0)
+                    if total > 0:
+                        st.success(f"Fetched {total} new price records: {results}")
+                    else:
+                        st.warning(
+                            f"Scraper ran but found 0 new records ({results}). "
+                            "IEMOP may not have published yesterday's data yet — "
+                            "prices are typically available by 09:00 MNL."
+                        )
+                except Exception as exc:
+                    st.error(f"WESM price scrape failed: {exc}")
+    with wesm_btn_c2:
+        backfill_days = st.number_input(
+            "Backfill days", min_value=1, max_value=30, value=7, key="ph_wesm_backfill_days"
+        )
+        if st.button("Backfill Price History", key="ph_wesm_backfill"):
+            with st.spinner(f"Backfilling {backfill_days} days…"):
+                try:
+                    import psycopg2
+                    _wconn = psycopg2.connect(
+                        os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                        keepalives=1, keepalives_idle=30,
+                    )
+                    _wconn.autocommit = True
+                    results = run_wesm_price_scrape(_wconn, days_back=int(backfill_days))
+                    _wconn.close()
+                    _wesm_latest_date.clear()
+                    total = sum(v for v in results.values() if v > 0)
+                    st.success(f"Backfill complete: {total} new rows across {len(results)} dates.")
+                    with st.expander("Per-date results"):
+                        for dt, n in sorted(results.items(), reverse=True):
+                            st.caption(f"{dt}: {n} rows")
+                except Exception as exc:
+                    st.error(f"Backfill failed: {exc}")
+
+    # WESM price chart
+    wesm_df = _wesm_price_history(days=30)
+    if not wesm_df.empty:
+        st.markdown("**Last 30 days — Daily average spot price (PHP/kWh)**")
+        try:
+            import plotly.express as px
+            fig = px.line(
+                wesm_df[wesm_df["avg_price"].notna()],
+                x="trading_date", y="avg_price", color="region",
+                labels={"trading_date": "Date", "avg_price": "PHP/kWh", "region": "Grid"},
+                color_discrete_map={"Luzon": "#1f77b4", "Visayas": "#ff7f0e", "Mindanao": "#2ca02c"},
+            )
+            fig.update_layout(height=300, margin=dict(t=20, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.dataframe(wesm_df[["trading_date", "region", "avg_price"]],
+                         use_container_width=True, hide_index=True)
+    else:
+        st.info("No WESM price data yet. Click 'Scrape Today's WESM Prices' above to fetch.")
+
+    st.divider()
+
+    # ── WESM / IEMOP Market Reports ───────────────────────────────────────────
+    st.subheader("WESM Market Reports (IEMOP)")
+    st.caption(
+        "Scrapes IEMOP market bulletins, advisories, and notices into the Knowledge Base. "
+        "Runs as part of the nightly KB ingest at **03:30 MNL**."
+    )
+    wesm_rep_c1, wesm_rep_c2 = st.columns(2)
+    with wesm_rep_c1:
+        try:
+            n_wesm_docs = _query(
+                f"SELECT COUNT(*) AS n FROM intl_market.{PREFIX}knowledge_docs "
+                "WHERE source='wesm_iemop'"
+            )
+            st.metric("WESM docs in KB", int(n_wesm_docs["n"].iloc[0]))
+        except Exception:
+            st.metric("WESM docs in KB", "—")
+    with wesm_rep_c2:
+        try:
+            latest_doc = _query(
+                f"SELECT MAX(fetched_at) AS latest FROM intl_market.{PREFIX}knowledge_docs "
+                "WHERE source='wesm_iemop'"
+            )
+            lt = latest_doc["latest"].iloc[0]
+            st.metric("Last fetched", str(lt)[:16] if lt is not None else "Never")
+        except Exception:
+            st.metric("Last fetched", "—")
+
+    if st.button("Fetch WESM Reports Now", key="ph_wesm_reports_now"):
+        with st.spinner("Scraping IEMOP reports (may take 30–60 s)…"):
+            try:
+                from services.ph_knowledge.ingest import run_knowledge_ingest
+                results = run_knowledge_ingest(only=["wesm_reports"], verbose=False)
+                n = results.get("wesm_reports", 0)
+                st.success(f"Done — {n} new IEMOP documents added to Knowledge Base.")
+            except Exception as exc:
+                st.error(f"Report scrape failed: {exc}")
 
     st.divider()
     st.subheader("Knowledge Base Digest → Expert Memory")
