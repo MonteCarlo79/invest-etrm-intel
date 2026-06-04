@@ -965,9 +965,13 @@ def _run_agent_turn(messages: list, system: str) -> tuple[str, list, list]:
         tool_results = []
         for block in resp.content:
             if block.type == "tool_use":
-                result_str = _dispatch_tool(block.name, block.input)
+                result_str = _dispatch_tool(block.name, block.input) or "(tool returned no output)"
                 tool_events.append({"tool": block.name, "result": result_str[:200]})
                 tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result_str})
+        if not tool_results:
+            # stop_reason was not end_turn but no tool_use blocks — return any text
+            text = next((b.text for b in resp.content if hasattr(b, "text")), "")
+            return text, messages, tool_events
         messages = messages + [{"role": "user", "content": tool_results}]
 
 
