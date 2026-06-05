@@ -3,6 +3,8 @@
 Sources:
   - AEMO MMSDM monthly archive — TRADING_PRICE, DISPATCHREGIONSUM,
     TRADINGLOAD, DISPATCH_UNIT_SOLUTION
+  - AEMO TradingIS weekly archives — TRADING,PRICE (spot + FCAS fallback
+    when MMSDM not yet published, typically ~2 weeks after month-end)
   - AEMO Generators and Scheduled Loads Excel — battery asset list
 
 Tables populated:
@@ -15,9 +17,11 @@ Tables populated:
 
 Notes:
   MMSDM monthly files are published ~2 weeks after month-end.
-  The daily scheduler at 03:00 SGT will log 0 rows for the current
-  month until that file is published.  Run the backfill commands below
-  to populate historical data.
+  For months where MMSDM is not yet available, spot prices and FCAS
+  prices are automatically sourced from TradingIS weekly archives
+  (available with ~1-week lag).  BESS wholesale/FCAS revenue and the
+  daily/monthly index still require MMSDM DISPATCHLOAD — run backfill
+  once the MMSDM file is published (~15th of the following month).
 
 Usage:
     python -m services.aemo.nem_ingest                              # yesterday
@@ -186,6 +190,237 @@ def _month_range(start: date, end: date) -> Iterator[tuple[int, int]]:
             d = d.replace(year=d.year + 1, month=1)
         else:
             d = d.replace(month=d.month + 1)
+
+
+# ---------------------------------------------------------------------------
+# TradingIS weekly archive helpers  (fallback when MMSDM not yet published)
+# ---------------------------------------------------------------------------
+
+_TRADINGIS_BASE = "https://nemweb.com.au/Reports/ARCHIVE/TradingIS_Reports"
+
+# TRADING,PRICE FCAS price column → au_ancillary_results service name
+_TRADINGIS_FCAS_COLS: dict[str, str] = {
+    "RAISE6SECRRP":  "raise_6s",
+    "RAISE60SECRRP": "raise_60s",
+    "RAISE5MINRRP":  "raise_5min",
+    "RAISEREGRRP":   "raise_reg",
+    "LOWER6SECRRP":  "lower_6s",
+    "LOWER60SECRRP": "lower_60s",
+    "LOWER5MINRRP":  "lower_5min",
+    "LOWERREGRRP":   "lower_reg",
+}
+
+
+def _list_tradingis_archives(start: date, end: date) -> list[tuple[str, date, date]]:
+    """Fetch TradingIS directory listing; return (url, arc_start, arc_end) for
+    weekly ZIPs overlapping [start, end].
+    """
+    import re
+    try:
+        resp = requests.get(
+            f"{_TRADINGIS_BASE}/", headers=_REQUEST_HEADERS, timeout=30
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("TradingIS directory listing failed: %s", exc)
+        return []
+
+    pat = re.compile(r"PUBLIC_TRADINGIS_(\d{8})_(\d{8})\.zip", re.IGNORECASE)
+    results: list[tuple[str, date, date]] = []
+    for m in pat.finditer(resp.text):
+        try:
+            d1, d2 = m.group(1), m.group(2)
+            arc_start = date(int(d1[:4]), int(d1[4:6]), int(d1[6:]))
+            arc_end   = date(int(d2[:4]), int(d2[4:6]), int(d2[6:]))
+        except ValueError:
+            continue
+        if arc_end < start or arc_start > end:
+            continue
+        results.append((f"{_TRADINGIS_BASE}/{m.group(0)}", arc_start, arc_end))
+
+    results.sort(key=lambda x: x[1])
+    logger.info("TradingIS: %d archive(s) cover %s–%s", len(results), start, end)
+    return results
+
+
+def _parse_tradingis_weekly(outer_buf: io.BytesIO) -> pd.DataFrame:
+    """Parse a TradingIS weekly outer ZIP → DataFrame of TRADING,PRICE rows.
+
+    Structure: outer ZIP → inner ZIPs (one per trading interval)
+               → CSV per interval with TRADING,PRICE header + data rows.
+
+    Returns DataFrame with SETTLEMENTDATE, REGIONID, RRP and all
+    RAISE*/LOWER*RRP FCAS price columns present in the source data.
+    """
+    headers: list[str] | None = None
+    all_rows: list[list] = []
+
+    try:
+        with zipfile.ZipFile(outer_buf) as outer_zf:
+            inner_names = sorted(
+                n for n in outer_zf.namelist() if n.upper().endswith(".ZIP")
+            )
+            for inner_name in inner_names:
+                try:
+                    inner_buf = io.BytesIO(outer_zf.read(inner_name))
+                    with zipfile.ZipFile(inner_buf) as inner_zf:
+                        csv_names = [
+                            n for n in inner_zf.namelist()
+                            if n.upper().endswith(".CSV")
+                        ]
+                        if not csv_names:
+                            continue
+                        with inner_zf.open(csv_names[0]) as f:
+                            cur_hdrs: list[str] | None = None
+                            for raw in f:
+                                line = (
+                                    raw.decode("utf-8", errors="ignore")
+                                    if isinstance(raw, bytes) else raw
+                                ).rstrip("\r\n")
+                                if not line:
+                                    continue
+                                parts = line.split(",")
+                                rtype = parts[0].strip('"')
+                                if rtype == "I" and len(parts) > 4:
+                                    if (parts[1].strip('"').upper() == "TRADING"
+                                            and parts[2].strip('"').upper() == "PRICE"):
+                                        cur_hdrs = [p.strip('" ') for p in parts[4:]]
+                                        if headers is None:
+                                            headers = cur_hdrs
+                                elif rtype == "D" and cur_hdrs is not None:
+                                    if len(parts) < 3:
+                                        continue
+                                    if (parts[1].strip('"').upper() != "TRADING"
+                                            or parts[2].strip('"').upper() != "PRICE"):
+                                        continue
+                                    data = [p.strip('" ') for p in parts[4:]]
+                                    n = len(cur_hdrs)
+                                    if len(data) < n:
+                                        data += [""] * (n - len(data))
+                                    all_rows.append(data[:n])
+                except Exception as exc:
+                    logger.debug("TradingIS inner ZIP error %s: %s", inner_name, exc)
+    except Exception as exc:
+        logger.warning("TradingIS outer ZIP parse failed: %s", exc)
+        return pd.DataFrame()
+
+    if not all_rows or headers is None:
+        return pd.DataFrame()
+    return pd.DataFrame(all_rows, columns=headers)
+
+
+def _ingest_spot_prices_tradingis(engine, start: date, end: date) -> int:
+    """TradingIS fallback for au_spot_price when MMSDM not yet published."""
+    archives = _list_tradingis_archives(start, end)
+    if not archives:
+        return 0
+
+    records: list[dict] = []
+    for url, _arc_s, _arc_e in archives:
+        logger.info("TradingIS spot: %s", url)
+        buf = _download_zip(url)
+        if buf is None:
+            continue
+        df = _parse_tradingis_weekly(buf)
+        if df.empty or "SETTLEMENTDATE" not in df.columns:
+            continue
+        region_col = "REGIONID" if "REGIONID" in df.columns else None
+        df["_rrp"] = pd.to_numeric(df.get("RRP", pd.Series(dtype=float)), errors="coerce")
+        for _, row in df.iterrows():
+            sd, sp = _parse_settlement(row["SETTLEMENTDATE"])
+            if not (start <= sd <= end):
+                continue
+            try:
+                rrp = float(row.get("_rrp") or 0)
+            except (ValueError, TypeError):
+                continue
+            records.append({
+                "settlement_date":   sd,
+                "settlement_period": sp,
+                "region": str(row[region_col]).strip() if region_col else "NEM",
+                "spot_price": rrp,
+            })
+
+    if not records:
+        logger.info("TradingIS spot: 0 records for %s–%s", start, end)
+        return 0
+
+    rdf = pd.DataFrame(records)
+    # Average across any duplicate runs for the same period/region
+    rdf = (
+        rdf.groupby(["settlement_date", "settlement_period", "region"])
+        ["spot_price"].mean().reset_index()
+    )
+    n = _upsert(
+        engine,
+        "intl_market.au_spot_price",
+        rdf,
+        ["settlement_date", "settlement_period", "region"],
+    )
+    logger.info("TradingIS spot: %d rows upserted (%s–%s)", n, start, end)
+    return n
+
+
+def _ingest_fcas_prices_tradingis(engine, start: date, end: date) -> int:
+    """TradingIS fallback for au_ancillary_results when MMSDM not yet published."""
+    archives = _list_tradingis_archives(start, end)
+    if not archives:
+        return 0
+
+    dfs: list[pd.DataFrame] = []
+    for url, _arc_s, _arc_e in archives:
+        logger.info("TradingIS FCAS: %s", url)
+        buf = _download_zip(url)
+        if buf is None:
+            continue
+        df = _parse_tradingis_weekly(buf)
+        if not df.empty and "SETTLEMENTDATE" in df.columns:
+            dfs.append(df)
+
+    if not dfs:
+        return 0
+
+    raw = pd.concat(dfs, ignore_index=True)
+    raw["_date"] = raw["SETTLEMENTDATE"].apply(lambda x: _parse_settlement(x)[0])
+    raw = raw[(raw["_date"] >= start) & (raw["_date"] <= end)]
+    if raw.empty:
+        return 0
+
+    region_col = "REGIONID" if "REGIONID" in raw.columns else None
+    records: list[dict] = []
+    for fcas_col, service in _TRADINGIS_FCAS_COLS.items():
+        if fcas_col not in raw.columns:
+            continue
+        raw[fcas_col] = pd.to_numeric(raw[fcas_col], errors="coerce")
+        group_cols = ["_date"] + ([region_col] if region_col else [])
+        agg = (
+            raw[group_cols + [fcas_col]]
+            .groupby(group_cols)[fcas_col]
+            .mean()
+            .reset_index()
+        )
+        for _, row in agg.iterrows():
+            records.append({
+                "settlement_date": row["_date"],
+                "service":         service,
+                "region": str(row[region_col]).strip() if region_col else "NEM",
+                "clearing_price": (
+                    float(row[fcas_col]) if pd.notna(row[fcas_col]) else None
+                ),
+                "volume_mw": None,
+            })
+
+    if not records:
+        return 0
+
+    n = _upsert(
+        engine,
+        "intl_market.au_ancillary_results",
+        pd.DataFrame(records),
+        ["settlement_date", "service", "region"],
+    )
+    logger.info("TradingIS FCAS: %d rows upserted (%s–%s)", n, start, end)
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -512,14 +747,28 @@ def ingest_assets(engine) -> int:
 # ---------------------------------------------------------------------------
 
 def ingest_spot_prices(engine, start: date, end: date) -> int:
-    """Fetch AEMO MMSDM TRADINGPRICE (new) or TRADING_PRICE (legacy) → au_spot_price."""
+    """Fetch AEMO MMSDM TRADINGPRICE (new) or TRADING_PRICE (legacy) → au_spot_price.
+    Falls back to TradingIS weekly archives for months where MMSDM returns 0 rows.
+    """
     total = 0
+    tradingis_ranges: list[tuple[date, date]] = []
     for yyyy, mm in _month_range(start, end):
         # New format uses TRADINGPRICE (no underscore); legacy used TRADING_PRICE
         table_name = "TRADINGPRICE" if _MMSDM_USE_SQLLOADER else "TRADING_PRICE"
         df = _read_mmsdm_table(yyyy, mm, table_name)
         if df.empty:
-            logger.warning("No %s data for %04d-%02d", table_name, yyyy, mm)
+            logger.warning(
+                "No %s data for %04d-%02d — queuing TradingIS fallback",
+                table_name, yyyy, mm,
+            )
+            m_start = max(start, date(yyyy, mm, 1))
+            m_end = min(
+                end,
+                date(yyyy + 1, 1, 1) - timedelta(days=1)
+                if mm == 12
+                else date(yyyy, mm + 1, 1) - timedelta(days=1),
+            )
+            tradingis_ranges.append((m_start, m_end))
             continue
 
         # Keep energy market only (legacy PERIODTYPE filter; new format has no PERIODTYPE)
@@ -567,6 +816,9 @@ def ingest_spot_prices(engine, start: date, end: date) -> int:
             total += n
             logger.info("Spot prices %04d-%02d: %d rows", yyyy, mm, n)
 
+    for ts, te in tradingis_ranges:
+        total += _ingest_spot_prices_tradingis(engine, ts, te)
+
     return total
 
 
@@ -603,12 +855,26 @@ _FCAS_PRICE_MAP: dict[str, tuple[str, str]] = {
 
 
 def ingest_fcas_prices(engine, start: date, end: date) -> int:
-    """Fetch AEMO MMSDM DISPATCHREGIONSUM (+ DISPATCHPRICE for regulation) → au_ancillary_results (daily avg)."""
+    """Fetch AEMO MMSDM DISPATCHREGIONSUM (+ DISPATCHPRICE for regulation) → au_ancillary_results (daily avg).
+    Falls back to TradingIS weekly archives for months where MMSDM returns 0 rows.
+    """
     total = 0
+    tradingis_ranges: list[tuple[date, date]] = []
     for yyyy, mm in _month_range(start, end):
         df = _read_mmsdm_table(yyyy, mm, "DISPATCHREGIONSUM")
         if df.empty:
-            logger.warning("No DISPATCHREGIONSUM data for %04d-%02d", yyyy, mm)
+            logger.warning(
+                "No DISPATCHREGIONSUM data for %04d-%02d — queuing TradingIS fallback",
+                yyyy, mm,
+            )
+            m_start = max(start, date(yyyy, mm, 1))
+            m_end = min(
+                end,
+                date(yyyy + 1, 1, 1) - timedelta(days=1)
+                if mm == 12
+                else date(yyyy, mm + 1, 1) - timedelta(days=1),
+            )
+            tradingis_ranges.append((m_start, m_end))
             continue
 
         if "SETTLEMENTDATE" not in df.columns:
@@ -699,6 +965,9 @@ def ingest_fcas_prices(engine, start: date, end: date) -> int:
             )
             total += n
             logger.info("FCAS prices %04d-%02d: %d rows", yyyy, mm, n)
+
+    for ts, te in tradingis_ranges:
+        total += _ingest_fcas_prices_tradingis(engine, ts, te)
 
     return total
 
