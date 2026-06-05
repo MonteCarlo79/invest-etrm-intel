@@ -39,6 +39,7 @@ from services.intl_market_common.expert_memory_base import (
     extract_insights, get_insights, inject_memory, digest_kb_docs,
 )
 from services.intl_market_common.export_helpers import export_pdf, export_pptx, export_docx
+from services.intl_market_common.audio_ingest import transcribe_and_contextualize, store_voice_memo
 
 logger = logging.getLogger(__name__)
 
@@ -1469,6 +1470,76 @@ with tab_kb:
                 _knowledge_doc_counts.clear()
             else:
                 st.error(res["msg"])
+
+    st.divider()
+    st.subheader("Voice Memo Interviews")
+    st.caption(
+        "Upload iPhone voice memos (.m4a) or other audio recordings from domain expert meetings. "
+        "Whisper transcribes the audio, then Claude fixes domain terminology and extracts key points."
+    )
+
+    _openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if not _openai_key:
+        st.warning("OPENAI_API_KEY not set in environment. Enter it below for this session only.")
+        _openai_key = st.text_input("OpenAI API Key", type="password", key="ph_oai_key_input",
+                                    help="Required for Whisper audio transcription")
+
+    _audio_file = st.file_uploader(
+        "Upload audio recording",
+        type=["m4a", "mp3", "mp4", "wav", "webm", "mpeg", "mpga"],
+        key="ph_audio_upload",
+    )
+    _speaker_ctx = st.text_input(
+        "Speaker / meeting context (optional)",
+        placeholder="e.g. Interview with NGCP grid planning engineer about ancillary services reform",
+        key="ph_audio_ctx",
+    )
+
+    if _audio_file and _openai_key:
+        _audio_bytes = _audio_file.read()
+        _size_mb = len(_audio_bytes) / (1024 * 1024)
+        st.caption(f"File: **{_audio_file.name}** · {_size_mb:.1f} MB")
+        if _size_mb > 100:
+            st.error("File too large (>100 MB). Please trim the recording before uploading.")
+        else:
+            if st.button("Transcribe & Contextualize", type="primary", key="ph_transcribe_btn"):
+                st.session_state.pop("ph_audio_result", None)
+                with st.status("Processing audio…", expanded=True) as _status:
+                    st.write(f"Transcribing with Whisper ({'chunked' if _size_mb > 24 else 'single pass'})…")
+                    try:
+                        _result = transcribe_and_contextualize(
+                            _audio_bytes, _audio_file.name,
+                            _openai_key, _ANTHROPIC_KEY,
+                            CFG.name, _speaker_ctx,
+                        )
+                        st.write("Contextualizing with domain knowledge…")
+                        st.session_state["ph_audio_result"] = _result
+                        st.session_state["ph_audio_filename"] = _audio_file.name
+                        _status.update(label="Done!", state="complete")
+                    except Exception as _err:
+                        _status.update(label=f"Failed: {_err}", state="error")
+                        st.error(str(_err))
+
+    if st.session_state.get("ph_audio_result"):
+        _res = st.session_state["ph_audio_result"]
+        _fname = st.session_state.get("ph_audio_filename", "recording")
+        st.divider()
+        with st.expander("Raw Whisper transcript", expanded=False):
+            st.text_area("Raw", _res["raw_transcript"], height=200, disabled=True, key="ph_raw_transcript")
+        st.subheader("Cleaned transcript")
+        st.markdown(_res["polished_content"])
+        _memo_title = st.text_input(
+            "Document title (edit if needed)",
+            value=_res["title"], key="ph_memo_title",
+        )
+        if st.button("Add to Knowledge Base", type="primary", key="ph_memo_add"):
+            try:
+                store_voice_memo(_res, _fname, _conn(), PREFIX, custom_title=_memo_title)
+                st.success(f"Added **{_memo_title}** to knowledge base.")
+                st.session_state.pop("ph_audio_result", None)
+                _knowledge_doc_counts.clear()
+            except Exception as _exc:
+                st.error(f"DB insert failed: {_exc}")
 
 
 # ═══════════════════════════════════════════════════════════════

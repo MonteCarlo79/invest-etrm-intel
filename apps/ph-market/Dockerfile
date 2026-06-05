@@ -1,6 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     "streamlit>=1.32" \
     "plotly==6.0.1" \
@@ -19,7 +21,9 @@ RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     "python-docx>=1.1" \
     "python-pptx>=0.6" \
     "reportlab>=4.0" \
-    pypsa
+    pypsa \
+    "openai>=1.0" \
+    "pydub>=0.25"
 
 COPY apps/ph-market/               ./apps/ph-market/
 COPY services/common/               ./services/common/
