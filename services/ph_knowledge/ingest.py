@@ -327,12 +327,28 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
         )
     conn.commit()
 
-    from services.ph_knowledge.wesm_scraper import WESMReportConnector
+    from services.ph_knowledge.wesm_scraper import (
+        WESMReportConnector,
+        WESMMarketWatchConnector,
+        WESMMarketAssessmentConnector,
+        WESMRetailAssessmentConnector,
+        WESMOverridingConstraintsConnector,
+        IEMOPKnowledgeCenterConnector,
+        WESMBESSStudyConnector,
+        IEMOPMarketDataConnector,
+    )
     connectors = [
-        ("local_reports",  "Local market reports (PDF/Excel/PPTX)", LocalReportsConnector()),
-        ("doe_news",        "DOE Philippines news",                  DOENewsConnector()),
-        ("iemop_notices",   "IEMOP market bulletins",                IEMOPNoticesConnector()),
-        ("wesm_reports",    "WESM/IEMOP market reports & advisories", WESMReportConnector()),
+        ("local_reports",                "Local market reports (PDF/Excel/PPTX)",    LocalReportsConnector()),
+        ("doe_news",                     "DOE Philippines news",                      DOENewsConnector()),
+        ("iemop_notices",                "IEMOP market bulletins",                    IEMOPNoticesConnector()),
+        ("wesm_reports",                 "WESM/IEMOP market reports & advisories",   WESMReportConnector()),
+        ("wesm_market_watch",            "WESM Market Watch (weekly)",               WESMMarketWatchConnector()),
+        ("wesm_assessment",              "WESM Market Assessment reports",            WESMMarketAssessmentConnector()),
+        ("wesm_retail_assessment",       "WESM Retail Market Assessment",            WESMRetailAssessmentConnector()),
+        ("wesm_overriding_constraints",  "WESM Over-riding Constraints",             WESMOverridingConstraintsConnector()),
+        ("iemop_knowledge_center",       "IEMOP Knowledge Center",                   IEMOPKnowledgeCenterConnector()),
+        ("wesm_bess_study",              "WESM BESS Study Reports",                  WESMBESSStudyConnector()),
+        ("iemop_market_data",            "IEMOP Market Data publications",           IEMOPMarketDataConnector()),
     ]
 
     results: dict[str, int] = {}

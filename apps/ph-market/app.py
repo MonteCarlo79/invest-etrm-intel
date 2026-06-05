@@ -33,7 +33,12 @@ st.set_page_config(
 
 from services.ph_knowledge.config import MARKET_CONFIG
 from services.ph_knowledge.ingest import run_knowledge_ingest
-from services.ph_knowledge.wesm_scraper import WESMPriceScraper, run_wesm_price_scrape
+from services.ph_knowledge.wesm_scraper import (
+    WESMPriceScraper,
+    run_wesm_price_scrape,
+    run_wesm_doc_backfill,
+    _WESM_DOC_CONNECTOR_MAP,
+)
 from services.intl_market_common.advanced_retrieval_base import retrieve_for_agent
 from services.intl_market_common.expert_memory_base import (
     extract_insights, get_insights, inject_memory, digest_kb_docs,
@@ -210,10 +215,25 @@ def _start_scheduler():
         except Exception as exc:
             logger.error("[ph_scheduler] WESM price scrape failed: %s", exc)
 
+    def _wesm_docs_job():
+        """Weekly: scrape WESM Market Watch, Assessment, Retail, Over-riding Constraints,
+        IEMOP Knowledge Center, BESS Study, and Market Data publications."""
+        try:
+            run_knowledge_ingest(only=[
+                "wesm_market_watch", "wesm_assessment", "wesm_retail_assessment",
+                "wesm_overriding_constraints", "iemop_knowledge_center",
+                "wesm_bess_study", "iemop_market_data",
+            ], verbose=False)
+            logger.info("[ph_scheduler] WESM docs job done")
+        except Exception as exc:
+            logger.error("[ph_scheduler] WESM docs job failed: %s", exc)
+
     sched = BackgroundScheduler(timezone="Asia/Manila")
     sched.add_job(_ingest_job,      "cron", hour=3,  minute=30, id="ph_ingest",      misfire_grace_time=3600)
     sched.add_job(_digest_job,      "cron", hour=3,  minute=45, id="ph_digest",      misfire_grace_time=3600)
     sched.add_job(_wesm_price_job,  "cron", hour=7,  minute=15, id="ph_wesm_price",  misfire_grace_time=3600)
+    sched.add_job(_wesm_docs_job,   "cron", day_of_week="mon", hour=4, minute=5,
+                  id="ph_wesm_docs", misfire_grace_time=7200)
     sched.start()
     return sched
 
@@ -1792,6 +1812,118 @@ with tab_mgmt:
                 st.success(f"Done — {n} new IEMOP documents added to Knowledge Base.")
             except Exception as exc:
                 st.error(f"Report scrape failed: {exc}")
+
+    st.divider()
+
+    # ── WESM Document Sources (Market Watch, Assessment, Retail, etc.) ────────
+    st.subheader("WESM Document Sources")
+    st.caption(
+        "Market Watch (weekly), Market Assessment (monthly/quarterly/annual), "
+        "Retail Market Assessment, Over-riding Constraints, IEMOP Knowledge Center, "
+        "BESS Study Reports, IEMOP Market Data publications. "
+        "Scheduled every **Monday 04:05 MNL**."
+    )
+
+    _WESM_DOC_SOURCE_LABELS = [
+        ("wesm_market_watch",           "Market Watch (weekly)"),
+        ("wesm_assessment",             "Market Assessment"),
+        ("wesm_retail_assessment",      "Retail Market Assessment"),
+        ("wesm_overriding_constraints", "Over-riding Constraints"),
+        ("iemop_knowledge_center",      "IEMOP Knowledge Center"),
+        ("wesm_bess_study",             "BESS Study Reports"),
+        ("iemop_market_data",           "IEMOP Market Data Docs"),
+    ]
+
+    # Status table
+    try:
+        src_rows = []
+        for src_key, src_label in _WESM_DOC_SOURCE_LABELS:
+            row_df = _query(
+                f"SELECT COUNT(*) AS n, MAX(fetched_at) AS last_fetched "
+                f"FROM intl_market.{PREFIX}knowledge_docs WHERE source=%s",
+                (src_key,),
+            )
+            n_docs = int(row_df["n"].iloc[0]) if not row_df.empty else 0
+            last_ft = row_df["last_fetched"].iloc[0] if not row_df.empty else None
+            last_str = str(last_ft)[:16] if last_ft is not None else "Never"
+            src_rows.append({"Source": src_label, "Docs": n_docs, "Last Fetched": last_str})
+        st.dataframe(pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
+    except Exception as exc:
+        st.warning(f"Could not load source stats: {exc}")
+
+    # Manual trigger
+    wesm_doc_btn_c1, wesm_doc_btn_c2 = st.columns(2)
+    with wesm_doc_btn_c1:
+        if st.button("Fetch All WESM Document Sources Now", type="primary", key="ph_wesm_docs_now"):
+            with st.spinner("Scraping WESM & IEMOP document sources (may take 2–5 min)…"):
+                try:
+                    results = run_knowledge_ingest(
+                        only=[s for s, _ in _WESM_DOC_SOURCE_LABELS],
+                        verbose=False,
+                    )
+                    total = sum(v for v in results.values() if isinstance(v, int) and v > 0)
+                    st.success(f"Done — {total} new documents added.")
+                    with st.expander("Per-source results"):
+                        for src_key, src_label in _WESM_DOC_SOURCE_LABELS:
+                            st.caption(f"{src_label}: {results.get(src_key, 0)} new docs")
+                except Exception as exc:
+                    st.error(f"Fetch failed: {exc}")
+
+    st.markdown("**Historical Backfill**")
+    st.caption("Paginate deeply through listing pages to retrieve reports since a chosen start date.")
+
+    wesm_bf_c1, wesm_bf_c2 = st.columns(2)
+    with wesm_bf_c1:
+        backfill_start = st.date_input(
+            "Backfill from date", value=date(2024, 1, 1), key="wesm_bf_start"
+        )
+        backfill_sources = st.multiselect(
+            "Sources to backfill",
+            options=[s for s, _ in _WESM_DOC_SOURCE_LABELS],
+            format_func=lambda s: dict(_WESM_DOC_SOURCE_LABELS).get(s, s),
+            default=[s for s, _ in _WESM_DOC_SOURCE_LABELS],
+            key="wesm_bf_sources",
+        )
+    with wesm_bf_c2:
+        st.markdown("")  # spacing
+        st.markdown("")
+        if st.button("Run Historical Backfill", type="primary", key="wesm_bf_run"):
+            if not backfill_sources:
+                st.warning("Select at least one source.")
+            else:
+                with st.status(
+                    f"Backfilling {len(backfill_sources)} sources since {backfill_start}…",
+                    expanded=True,
+                ) as bf_status:
+                    try:
+                        import psycopg2
+                        _bf_conn = psycopg2.connect(
+                            os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                            keepalives=1, keepalives_idle=30,
+                        )
+                        _bf_conn.autocommit = False
+                        bf_results: dict = {}
+                        for src_key in backfill_sources:
+                            src_label = dict(_WESM_DOC_SOURCE_LABELS).get(src_key, src_key)
+                            st.write(f"Fetching **{src_label}** …")
+                            per = run_wesm_doc_backfill(
+                                _bf_conn, [src_key], backfill_start, PREFIX
+                            )
+                            n_src = per.get(src_key, 0)
+                            bf_results[src_key] = n_src
+                            st.write(f"  → {n_src} new docs")
+                        _bf_conn.close()
+                        total_bf = sum(v for v in bf_results.values() if v > 0)
+                        bf_status.update(
+                            label=f"Backfill complete — {total_bf} new documents added.",
+                            state="complete",
+                        )
+                        with st.expander("Per-source results", expanded=True):
+                            for src_key, src_label in _WESM_DOC_SOURCE_LABELS:
+                                if src_key in bf_results:
+                                    st.caption(f"{src_label}: {bf_results[src_key]} new docs")
+                    except Exception as exc:
+                        st.error(f"Backfill failed: {exc}")
 
     st.divider()
     st.subheader("Knowledge Base Digest → Expert Memory")

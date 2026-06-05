@@ -535,6 +535,269 @@ def _fetch_page_text(session, url: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Generic WESM / IEMOP document connector  (base + 7 concrete subclasses)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WESMDocumentConnector:
+    """Paginated WESM / IEMOP listing-page scraper.
+
+    Subclasses declare:
+      source        - str identifier stored in ph_knowledge_docs.source
+      _LISTING_URLS - list of listing page URLs to crawl
+      _DOC_KEYWORDS - keywords used to filter anchor links
+      _BASE         - base URL for resolving relative hrefs
+    """
+
+    source: str = "wesm_doc"
+    _LISTING_URLS: list[str] = []
+    _DOC_KEYWORDS: list[str] = ["report", "assessment", "market watch", "bess"]
+    _BASE: str = "https://www.wesm.ph"
+
+    def fetch(self, max_pages: int = 3, since: date | None = None) -> list[dict]:
+        """Scrape listing pages and return list of doc dicts for _run_connector().
+
+        Args:
+            max_pages: Maximum paginated pages to fetch per listing URL.
+            since:     If set, stop paginating when all docs on a page are older.
+        """
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+        except ImportError:
+            logger.warning("[wesm_doc] requests/bs4 not installed")
+            return []
+
+        session = requests.Session()
+        session.headers.update(_HEADERS)
+
+        docs: list[dict] = []
+        seen_urls: set[str] = set()
+
+        for base_url in self._LISTING_URLS:
+            for page_num in range(1, max_pages + 1):
+                # Build paginated URL
+                if page_num == 1:
+                    page_url = base_url
+                elif "?" in base_url:
+                    page_url = f"{base_url}&page={page_num}"
+                else:
+                    page_url = f"{base_url}?page={page_num}"
+
+                try:
+                    resp = session.get(page_url, timeout=30)
+                    if resp.status_code == 404:
+                        break  # no more pages
+                    resp.raise_for_status()
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                except Exception as exc:
+                    logger.debug("[wesm_doc:%s] page %s fetch failed: %s", self.source, page_url, exc)
+                    break
+
+                page_docs = self._extract_docs_from_page(soup, session, seen_urls)
+
+                if not page_docs:
+                    break  # empty page → stop paginating
+
+                # Date-based early stop for backfill
+                if since is not None:
+                    dated = [d for d in page_docs if d.get("published_date")]
+                    if dated and all(d["published_date"] < since for d in dated):
+                        break  # all docs on this page are older than cutoff
+
+                docs.extend(page_docs)
+
+                # Also check for "paged" style pagination (WordPress)
+                has_next = bool(soup.find("a", string=re.compile(r"next|»|›", re.I)))
+                if not has_next and page_num > 1:
+                    break
+
+                time.sleep(1.0)  # polite crawl rate
+
+        return docs
+
+    def _extract_docs_from_page(
+        self,
+        soup,
+        session,
+        seen_urls: set[str],
+    ) -> list[dict]:
+        """Extract document links from a parsed listing page."""
+        page_docs: list[dict] = []
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            title = link.get_text(" ", strip=True)
+
+            if not title or len(title) < 8:
+                continue
+
+            # Resolve relative URLs
+            if href.startswith("//"):
+                href = "https:" + href
+            elif href.startswith("/"):
+                href = self._BASE + href
+            elif not href.startswith("http"):
+                continue
+
+            if href in seen_urls:
+                continue
+
+            is_pdf = href.lower().endswith(".pdf")
+            keyword_match = any(kw.lower() in (title + href).lower() for kw in self._DOC_KEYWORDS)
+
+            if not (is_pdf or keyword_match):
+                continue
+
+            seen_urls.add(href)
+            published_date = _infer_date_from_text(title + " " + href)
+
+            if is_pdf:
+                content = _fetch_pdf_text(session, href, max_pages=15)
+                doc_type = "pdf"
+            else:
+                content = _fetch_page_text(session, href)
+                doc_type = "report"
+
+            if not content or len(content.strip()) < 100:
+                continue
+
+            page_docs.append({
+                "doc_type":       doc_type,
+                "title":          title[:250],
+                "url":            href,
+                "published_date": published_date,
+                "content":        f"{self.source} — {title}\n\n{content[:80_000]}",
+            })
+            time.sleep(0.5)
+
+        return page_docs
+
+
+class WESMMarketWatchConnector(WESMDocumentConnector):
+    """WESM Market Watch weekly reports from wesm.ph."""
+    source = "wesm_market_watch"
+    _LISTING_URLS = ["https://www.wesm.ph/market-outcomes/market-watch"]
+    _DOC_KEYWORDS = ["market watch", "weekly", "report", "market outcome"]
+
+
+class WESMMarketAssessmentConnector(WESMDocumentConnector):
+    """WESM Market Assessment reports (monthly/quarterly/seasonal/annual)."""
+    source = "wesm_assessment"
+    _LISTING_URLS = ["https://www.wesm.ph/market-outcomes/market-assessment-reports"]
+    _DOC_KEYWORDS = ["market assessment", "monthly", "quarterly", "seasonal", "annual", "assessment report"]
+
+
+class WESMRetailAssessmentConnector(WESMDocumentConnector):
+    """WESM Retail Market Assessment reports."""
+    source = "wesm_retail_assessment"
+    _LISTING_URLS = ["https://www.wesm.ph/market-outcomes/retail-market-assessment-reports"]
+    _DOC_KEYWORDS = ["retail", "assessment", "retail market"]
+
+
+class WESMOverridingConstraintsConnector(WESMDocumentConnector):
+    """WESM Over-riding Constraints reports."""
+    source = "wesm_overriding_constraints"
+    _LISTING_URLS = ["https://www.wesm.ph/market-outcomes/over-riding-constraints"]
+    _DOC_KEYWORDS = ["over-riding", "constraint", "overriding", "report"]
+
+
+class IEMOPKnowledgeCenterConnector(WESMDocumentConnector):
+    """IEMOP Knowledge Center publications."""
+    source = "iemop_knowledge_center"
+    _LISTING_URLS = ["https://www.iemop.ph/services/knowledge-center/"]
+    _BASE = "https://www.iemop.ph"
+    _DOC_KEYWORDS = ["knowledge", "manual", "guide", "publication", "study", "primer", "market"]
+
+
+class WESMBESSStudyConnector(WESMDocumentConnector):
+    """WESM BESS study reports."""
+    source = "wesm_bess_study"
+    _LISTING_URLS = [
+        "https://www.wesm.ph/library/downloads/view-download/documents/market-study/bess-wesm-design-and-power-wrangler"
+    ]
+    _DOC_KEYWORDS = ["bess", "battery", "storage", "wesm", "design", "wrangler", "download"]
+
+
+class IEMOPMarketDataConnector(WESMDocumentConnector):
+    """IEMOP Market Data publications and downloads."""
+    source = "iemop_market_data"
+    _LISTING_URLS = ["https://www.iemop.ph/the-market/market-data/"]
+    _BASE = "https://www.iemop.ph"
+    _DOC_KEYWORDS = [
+        "market data", "settlement", "dispatch", "price", "report",
+        "statement", "billing", "invoice", "download", "luzon", "visayas", "mindanao",
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Historical backfill convenience function
+# ─────────────────────────────────────────────────────────────────────────────
+
+_WESM_DOC_CONNECTOR_MAP: dict[str, WESMDocumentConnector] = {
+    "wesm_market_watch":           WESMMarketWatchConnector(),
+    "wesm_assessment":             WESMMarketAssessmentConnector(),
+    "wesm_retail_assessment":      WESMRetailAssessmentConnector(),
+    "wesm_overriding_constraints": WESMOverridingConstraintsConnector(),
+    "iemop_knowledge_center":      IEMOPKnowledgeCenterConnector(),
+    "wesm_bess_study":             WESMBESSStudyConnector(),
+    "iemop_market_data":           IEMOPMarketDataConnector(),
+}
+
+
+def run_wesm_doc_backfill(
+    conn,
+    sources: list[str],
+    start_date: date,
+    prefix: str,
+) -> dict[str, int]:
+    """Backfill historical WESM/IEMOP documents for *sources* since *start_date*.
+
+    Returns {source: new_rows_inserted} for each source processed.
+    """
+    results: dict[str, int] = {}
+    for src in sources:
+        connector = _WESM_DOC_CONNECTOR_MAP.get(src)
+        if connector is None:
+            logger.warning("[wesm_backfill] unknown source: %s", src)
+            results[src] = 0
+            continue
+        logger.info("[wesm_backfill] backfilling %s since %s …", src, start_date)
+        try:
+            docs = connector.fetch(max_pages=50, since=start_date)
+            filtered = [
+                d for d in docs
+                if not d.get("published_date") or d["published_date"] >= start_date
+            ]
+            n = 0
+            for doc in filtered:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"INSERT INTO intl_market.{prefix}knowledge_docs "
+                        "(source, doc_type, title, url, published_date, content) "
+                        "VALUES (%s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (url) DO UPDATE SET "
+                        "  content=EXCLUDED.content, fetched_at=NOW()",
+                        (
+                            src,
+                            doc.get("doc_type", "report"),
+                            doc.get("title", ""),
+                            doc.get("url"),
+                            doc.get("published_date"),
+                            doc["content"],
+                        ),
+                    )
+                    if cur.rowcount > 0:
+                        n += 1
+            conn.commit()
+            results[src] = n
+            logger.info("[wesm_backfill] %s: %d new docs", src, n)
+        except Exception as exc:
+            logger.error("[wesm_backfill] %s failed: %s", src, exc)
+            results[src] = -1
+
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Top-level convenience function (called by scheduler + manual trigger)
 # ─────────────────────────────────────────────────────────────────────────────
 
