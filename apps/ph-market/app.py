@@ -38,6 +38,7 @@ from services.intl_market_common.advanced_retrieval_base import retrieve_for_age
 from services.intl_market_common.expert_memory_base import (
     extract_insights, get_insights, inject_memory, digest_kb_docs,
 )
+from services.intl_market_common.export_helpers import export_pdf, export_pptx, export_docx
 
 logger = logging.getLogger(__name__)
 
@@ -1334,10 +1335,49 @@ with tab_advisor:
             pass
 
     if st.session_state.get("ph_adv_history"):
-        if st.button("Clear conversation", key="ph_clear_adv"):
-            st.session_state["ph_adv_history"] = []
-            st.session_state["ph_adv_session_id"] = str(uuid.uuid4())
-            st.rerun()
+        st.divider()
+        exp_col1, exp_col2, exp_col3, exp_col4 = st.columns([3, 2, 2, 2])
+        with exp_col1:
+            if st.button("Clear conversation", key="ph_clear_adv"):
+                st.session_state["ph_adv_history"] = []
+                st.session_state["ph_adv_session_id"] = str(uuid.uuid4())
+                st.rerun()
+        # Export buttons — only show when there is at least one assistant reply
+        has_answers = any(m["role"] == "assistant" for m in st.session_state["ph_adv_history"])
+        if has_answers:
+            _exp_title = f"Philippines RE Investment Advisory — {date.today()}"
+            with exp_col2:
+                try:
+                    _pdf_bytes = export_pdf(st.session_state["ph_adv_history"], _exp_title, CFG.name)
+                    st.download_button(
+                        "📄 Export PDF", _pdf_bytes,
+                        file_name=f"ph_advisory_{date.today()}.pdf",
+                        mime="application/pdf", key="ph_exp_pdf",
+                    )
+                except Exception as _e:
+                    st.error(f"PDF failed: {_e}")
+            with exp_col3:
+                try:
+                    _pptx_bytes = export_pptx(st.session_state["ph_adv_history"], _exp_title, CFG.name)
+                    st.download_button(
+                        "📊 Export PPT", _pptx_bytes,
+                        file_name=f"ph_advisory_{date.today()}.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        key="ph_exp_pptx",
+                    )
+                except Exception as _e:
+                    st.error(f"PPT failed: {_e}")
+            with exp_col4:
+                try:
+                    _docx_bytes = export_docx(st.session_state["ph_adv_history"], _exp_title, CFG.name)
+                    st.download_button(
+                        "📝 Export Word", _docx_bytes,
+                        file_name=f"ph_advisory_{date.today()}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="ph_exp_docx",
+                    )
+                except Exception as _e:
+                    st.error(f"Word failed: {_e}")
 
 
 # ═══════════════════════════════════════════════════════════════
