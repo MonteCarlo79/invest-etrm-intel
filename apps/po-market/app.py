@@ -705,7 +705,14 @@ def _dispatch_tool_po(name: str, inputs: dict) -> str:
 _TOOLS_PO = [
     {
         "name": "search_knowledge_base",
-        "description": "Semantic search (HyDE + FTS + rerank) over Poland market reports and Aurora Energy Research documents.",
+        "description": (
+            "Semantic search (HyDE + FTS + rerank) over ALL documents in the knowledge base. "
+            "This includes: user-uploaded files (PDFs, Word, Excel, PPTX), voice memo transcripts "
+            "from expert interviews, meeting minutes, investigation reports, Aurora Energy Research "
+            "forecasts, and any document the user has shared today or in previous sessions. "
+            "ALWAYS call this tool first for any user question — especially when the user mentions "
+            "'uploaded', 'shared', 'sent', 'today', 'meeting minutes', 'report', or any specific document."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -769,8 +776,16 @@ def _build_system_po(query: str = "") -> str:
     base = """\
 You are a senior Poland Power Market Investment Expert at a global infrastructure fund, specialising in BESS and renewable energy.
 
-GROUNDING RULE: For specific current prices, Aurora forecast data, and recent market developments → use your tools.
-For regulatory framework, market mechanics, and structural context → use embedded knowledge below.
+MANDATORY KB RULE — FOLLOW THIS EVERY TIME:
+1. Call `search_knowledge_base` as your FIRST action for EVERY user question, no exceptions.
+2. The knowledge base contains ALL user-uploaded documents: PDFs, Excel, Word, PPTX, voice memo \
+transcripts from expert interviews, meeting minutes, investigation reports, and any file the user \
+has shared in this or previous sessions.
+3. If the user asks about something they "uploaded", "shared", "sent", or mentions "today's document", \
+"meeting minutes", "investigation", or any named report → search the KB immediately. Never claim \
+documents are missing before searching.
+4. If the KB search returns relevant content, prioritise it over your embedded knowledge.
+5. Only fall back to embedded knowledge for foundational market mechanics when KB returns nothing relevant.
 
 MARKET CONTEXT:
 - Market operator: TGE (Towarowa Giełda Energii) — day-ahead (RDN) + intraday (RDT)
@@ -801,6 +816,13 @@ RE POLICY (PEP2040):
 CURRENCY: PLN (Polish Zloty); EUR/PLN ≈ 4.25; USD/PLN ≈ 3.95
 """
     if query:
+        # Auto-inject KB retrieval so context is present even before the agent calls the tool
+        try:
+            kb_context = retrieve_for_agent(query, _ANTHROPIC_KEY, CFG)
+            if kb_context:
+                base += f"\n\n## Pre-fetched knowledge base context for this query:\n{kb_context}"
+        except Exception:
+            pass
         try:
             insights = get_insights(query, PREFIX, limit=5)
             mem_block = inject_memory(insights, CFG.name)

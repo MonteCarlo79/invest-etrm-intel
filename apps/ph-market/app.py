@@ -827,7 +827,14 @@ def _dispatch_tool(name: str, inputs: dict) -> str:
 _TOOLS = [
     {
         "name": "search_knowledge_base",
-        "description": "Semantic search (HyDE + FTS + rerank) over Philippines market reports and documents.",
+        "description": (
+            "Semantic search (HyDE + FTS + rerank) over ALL documents in the knowledge base. "
+            "This includes: user-uploaded files (PDFs, Word, Excel, PPTX), voice memo transcripts "
+            "from expert interviews, meeting minutes, investigation reports, and any document "
+            "the user has shared today or in previous sessions. "
+            "ALWAYS call this tool first for any user question — especially when the user mentions "
+            "'uploaded', 'shared', 'sent', 'today', 'meeting minutes', 'report', or any specific document."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -903,8 +910,16 @@ def _build_system(query: str = "") -> str:
     base = """\
 You are a senior Philippines Renewable Power Investment Expert at a global infrastructure fund.
 
-GROUNDING RULE: For specific current prices, project data, and recent developments → use your tools.
-For regulatory framework, market mechanics, and historical context → use embedded knowledge below.
+MANDATORY KB RULE — FOLLOW THIS EVERY TIME:
+1. Call `search_knowledge_base` as your FIRST action for EVERY user question, no exceptions.
+2. The knowledge base contains ALL user-uploaded documents: PDFs, Excel, Word, PPTX, voice memo \
+transcripts from expert interviews, meeting minutes, investigation reports, and any file the user \
+has shared in this or previous sessions.
+3. If the user asks about something they "uploaded", "shared", "sent", or mentions "today's document", \
+"meeting minutes", "investigation", or any named report → search the KB immediately. Never claim \
+documents are missing before searching.
+4. If the KB search returns relevant content, prioritise it over your embedded knowledge.
+5. Only fall back to embedded knowledge for foundational market mechanics when KB returns nothing relevant.
 
 MARKET CONTEXT:
 - WESM: Wholesale Electricity Spot Market, operated by IEMOP/PEMC
@@ -939,6 +954,13 @@ KEY RISKS:
 - Foreign land ownership restriction (long-term lease workaround)
 """
     if query:
+        # Auto-inject KB retrieval so context is present even before the agent calls the tool
+        try:
+            kb_context = retrieve_for_agent(query, _ANTHROPIC_KEY, CFG)
+            if kb_context:
+                base += f"\n\n## Pre-fetched knowledge base context for this query:\n{kb_context}"
+        except Exception:
+            pass
         try:
             insights = get_insights(query, PREFIX, limit=5)
             mem_block = inject_memory(insights, CFG.name)
