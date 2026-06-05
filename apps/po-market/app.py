@@ -409,10 +409,35 @@ def _ingest_uploaded_file(filename: str, data: bytes) -> dict:
                 if texts:
                     slides.append(f"[Slide {i}]\n" + "\n".join(texts))
             content = "\n\n".join(slides)
-        elif ext in ("docx", "doc"):
+        elif ext == "docx":
             from docx import Document
             doc = Document(io.BytesIO(data))
             content = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        elif ext == "doc":
+            content = ""
+            try:
+                import subprocess, tempfile, os as _os
+                with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as _f:
+                    _f.write(data)
+                    _tmppath = _f.name
+                _r = subprocess.run(["antiword", _tmppath], capture_output=True, text=True, timeout=30)
+                _os.unlink(_tmppath)
+                if _r.returncode == 0:
+                    content = _r.stdout.strip()
+            except Exception:
+                pass
+            if not content:
+                try:
+                    from docx import Document as _Doc
+                    _doc = _Doc(io.BytesIO(data))
+                    content = "\n".join(p.text for p in _doc.paragraphs if p.text.strip())
+                except Exception:
+                    pass
+            if not content:
+                return {"status": "error", "msg": (
+                    "Could not extract text from .doc file. "
+                    "Please convert to .docx or .pdf and re-upload."
+                )}
         else:
             return {"status": "error", "msg": f"Unsupported type: .{ext}"}
     except Exception as exc:
@@ -697,6 +722,29 @@ def _dispatch_tool_po(name: str, inputs: dict) -> str:
         elif name == "get_policy_snapshot":
             return json.dumps(_POLICY_SNAPSHOT_PO, indent=2)
 
+        elif name == "list_knowledge_docs":
+            limit = int(inputs.get("limit") or 30)
+            try:
+                df = _query(
+                    f"SELECT source, doc_type, title, url, published_date::text, fetched_at::text "
+                    f"FROM intl_market.{PREFIX}knowledge_docs "
+                    f"ORDER BY fetched_at DESC LIMIT %s",
+                    (limit,),
+                )
+                if df.empty:
+                    return "Knowledge base is empty — no documents have been ingested yet."
+                total = _query(f"SELECT COUNT(*) AS n FROM intl_market.{PREFIX}knowledge_docs").iloc[0]["n"]
+                header = f"Knowledge base contains {total} documents total. Most recent {len(df)}:\n\n"
+                rows = []
+                for _, r in df.iterrows():
+                    rows.append(
+                        f"- [{r['source']}] [{r['doc_type']}] {r['title'] or 'Untitled'} "
+                        f"(uploaded: {r['fetched_at'][:16]})"
+                    )
+                return header + "\n".join(rows)
+            except Exception as exc:
+                return f"DB error listing docs: {exc}"
+
     except Exception as exc:
         return f"Tool error: {exc}"
     return "Unknown tool"
@@ -768,6 +816,20 @@ _TOOLS_PO = [
         "name": "get_policy_snapshot",
         "description": "Poland energy policy — PEP2040, RES Act, OZE auctions, offshore wind programme, foreign investment rules, key risks.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "list_knowledge_docs",
+        "description": (
+            "List the most recently added documents in the knowledge base, showing title, source, "
+            "type, and upload date. Use this to verify exactly which documents are available — "
+            "especially when the user says they uploaded something and search_knowledge_base returns "
+            "nothing. Call this first to confirm what is actually in the database."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "Max documents to list (default 30)"}},
+            "required": [],
+        },
     },
 ]
 

@@ -100,6 +100,36 @@ def retrieve_for_agent(
         conn.close()
 
     if not rows:
+        # Fallback: broad ILIKE search on title + first 20k of content using key terms
+        try:
+            # Extract the most meaningful terms (skip very short words)
+            terms = [t for t in query.split() if len(t) > 3][:5]
+            ilike_rows: list = []
+            with psycopg2.connect(url, connect_timeout=10) as fb_conn:
+                fb_conn.autocommit = True
+                with fb_conn.cursor() as cur:
+                    for term in terms:
+                        cur.execute(
+                            f"SELECT source, title, published_date, left(content, 1500) AS snippet, 0.5 AS rank "
+                            f"FROM intl_market.{prefix}knowledge_docs "
+                            f"WHERE title ILIKE %s OR left(content, 20000) ILIKE %s "
+                            f"ORDER BY fetched_at DESC LIMIT %s",
+                            (f"%{term}%", f"%{term}%", top_k),
+                        )
+                        ilike_rows.extend(cur.fetchall())
+            # Deduplicate by title
+            seen: set = set()
+            rows = []
+            for r in ilike_rows:
+                key = r[1] or r[0]
+                if key not in seen:
+                    seen.add(key)
+                    rows.append(r)
+            rows = rows[:top_k]
+        except Exception as exc:
+            logger.debug("[retrieve_for_agent] ILIKE fallback failed: %s", exc)
+
+    if not rows:
         return f"No documents found in the {cfg.name} knowledge base matching this query."
 
     parts = []
