@@ -1732,7 +1732,7 @@ with tab_mgmt:
                     st.error(f"WESM price scrape failed: {exc}")
     with wesm_btn_c2:
         backfill_days = st.number_input(
-            "Backfill days", min_value=1, max_value=30, value=7, key="ph_wesm_backfill_days"
+            "Backfill days", min_value=1, max_value=100, value=7, key="ph_wesm_backfill_days"
         )
         if st.button("Backfill Price History", key="ph_wesm_backfill"):
             with st.spinner(f"Backfilling {backfill_days} days…"):
