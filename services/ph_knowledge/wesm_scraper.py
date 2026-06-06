@@ -57,21 +57,101 @@ _REGION_NODES = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 class WESMPriceScraper:
-    """Scrapes daily WESM spot prices (Luzon / Visayas / Mindanao) from IEMOP.
+    """Scrapes WESM LWAP (Load-Weighted Average Price) data from IEMOP.
 
-    Strategy (in order of preference):
-      1. IEMOP OASIS CSV download if the endpoint is available
-      2. Parse the HTML market-results page for tabulated prices
-      3. Fall back to scraping the market bulletin PDFs for price summaries
+    IEMOP publishes daily 5-minute interval LWAP CSVs at:
+      https://www.iemop.ph/market-data/load-weighted-average-prices-final/
+      ?post=276300&sort=desc&page=N&start=&end=
 
-    Prices are stored into intl_market.ph_wesm_prices.
+    Each page returns a ZIP archive containing CSVs named final_lwap_YYYYMMDD.csv
+    Each CSV has columns: RUN_TIME, MKT_TYPE, TIME_INTERVAL, REGION_NAME, LWAP
+    LWAP values are in PHP/MWh.  Region codes: CLUZ, CMIN, CVIS, SYSTEM.
+    Approximately 24 days of data per page (desc order, page 1 = most recent).
     """
 
-    def fetch_daily_prices(
+    _LWAP_URL  = "https://www.iemop.ph/market-data/load-weighted-average-prices-final/"
+    _POST_ID   = 276300
+    _DAYS_PER_PAGE = 25   # conservative estimate for page-count calculations
+
+    _REGION_MAP = {
+        "CLUZ":   "Luzon",
+        "CMIN":   "Mindanao",
+        "CVIS":   "Visayas",
+    }
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def fetch_pages(
         self,
-        target_date: Optional[date] = None,
-    ) -> list[dict]:
-        """Return a list of price records for *target_date* (default: yesterday)."""
+        session,
+        max_pages: int = 1,
+        since: Optional[date] = None,
+    ) -> dict[str, list[dict]]:
+        """Fetch up to *max_pages* pages; return {date_str: [records]}.
+
+        Stops early when all dates on a page are older than *since* (if given).
+        """
+        import io
+        import zipfile
+
+        all_data: dict[str, list[dict]] = {}
+
+        for page in range(1, max_pages + 1):
+            url = (
+                f"{self._LWAP_URL}"
+                f"?post={self._POST_ID}&sort=desc&page={page}&start=&end="
+            )
+            try:
+                resp = session.get(url, timeout=30)
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning("[wesm_price] page %d fetch failed: %s", page, exc)
+                break
+
+            # Response must be a ZIP (magic bytes PK)
+            if resp.content[:2] != b"PK":
+                logger.debug("[wesm_price] page %d: not a ZIP (got HTML?)", page)
+                break
+
+            try:
+                with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                    for name in zf.namelist():
+                        m = re.match(r"final_lwap_(\d{4})(\d{2})(\d{2})\.csv", name)
+                        if not m:
+                            continue
+                        trading_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                        date_str = str(trading_date)
+                        if date_str in all_data:
+                            continue
+                        csv_bytes = zf.read(name)
+                        records = self._parse_lwap_csv(
+                            csv_bytes.decode("utf-8", errors="replace"),
+                            trading_date,
+                        )
+                        if records:
+                            all_data[date_str] = records
+            except Exception as exc:
+                logger.warning("[wesm_price] page %d ZIP parse failed: %s", page, exc)
+                break
+
+            if not all_data:
+                break
+
+            # Early stop: if all dates on this page are before *since*, done
+            if since is not None:
+                page_dates = sorted(all_data.keys())
+                if page_dates and page_dates[0] < str(since):
+                    break
+
+            time.sleep(0.5)
+
+        return all_data
+
+    def fetch_daily_prices(self, target_date: Optional[date] = None) -> list[dict]:
+        """Return LWAP records for *target_date* (default: yesterday).
+
+        Searches pages in descending order until the date is found.
+        """
         if target_date is None:
             target_date = date.today() - timedelta(days=1)
 
@@ -83,259 +163,68 @@ class WESMPriceScraper:
 
         session = requests.Session()
         session.headers.update(_HEADERS)
+        target_str = str(target_date)
 
-        # Strategy 1: try OASIS CSV download
-        records = self._fetch_oasis_csv(session, target_date)
-        if records:
-            logger.info("[wesm_price] OASIS CSV: %d records for %s", len(records), target_date)
-            return records
+        # Estimate which page the date is on (page 1 = most recent ~25 days)
+        days_back = (date.today() - target_date).days
+        start_page = max(1, days_back // self._DAYS_PER_PAGE)
+        max_pages = start_page + 2  # fetch a small window around estimate
 
-        # Strategy 2: parse the market-results HTML page
-        records = self._fetch_html_table(session, target_date)
-        if records:
-            logger.info("[wesm_price] HTML table: %d records for %s", len(records), target_date)
-            return records
+        data = self.fetch_pages(session, max_pages=max_pages)
+        records = data.get(target_str, [])
+        if not records:
+            logger.warning("[wesm_price] no LWAP data found for %s", target_date)
+        return records
 
-        # Strategy 3: scrape market bulletin for the date
-        records = self._fetch_bulletin_prices(session, target_date)
-        if records:
-            logger.info("[wesm_price] bulletin: %d records for %s", len(records), target_date)
-            return records
+    # ── CSV parser ────────────────────────────────────────────────────────────
 
-        logger.warning("[wesm_price] no price data found for %s", target_date)
-        return []
-
-    # ── Strategy 1: OASIS / data portal CSV ──────────────────────────────────
-
-    def _fetch_oasis_csv(self, session, target_date: date) -> list[dict]:
-        """Try IEMOP OASIS data portal for CSV price downloads."""
-        date_str = target_date.strftime("%Y-%m-%d")
-        # Common OASIS URL patterns observed on IEMOP
-        candidates = [
-            f"{_IEMOP_BASE}/oasis/daily-prices?date={date_str}&format=csv",
-            f"{_IEMOP_BASE}/market-operations/market-results/daily-prices?date={date_str}",
-            f"{_IEMOP_BASE}/market-data/spot-prices/{target_date.year}/{target_date.month:02d}/{date_str}.csv",
-        ]
-        for url in candidates:
-            try:
-                resp = session.get(url, timeout=20)
-                if resp.status_code == 200 and "text/csv" in resp.headers.get("content-type", ""):
-                    return self._parse_csv(resp.text, target_date)
-                if resp.status_code == 200 and len(resp.content) > 200:
-                    # Try parsing as CSV anyway
-                    records = self._parse_csv(resp.text, target_date)
-                    if records:
-                        return records
-            except Exception as exc:
-                logger.debug("[wesm_price] OASIS URL %s failed: %s", url, exc)
-        return []
-
-    def _parse_csv(self, csv_text: str, trading_date: date) -> list[dict]:
-        """Parse a WESM price CSV (flexible header detection)."""
+    def _parse_lwap_csv(self, csv_text: str, trading_date: date) -> list[dict]:
+        """Parse a final_lwap_YYYYMMDD.csv file into price records."""
         import io
         import pandas as pd
+        from datetime import datetime as _dt
 
         try:
             df = pd.read_csv(io.StringIO(csv_text))
         except Exception:
             return []
 
-        if df.empty:
+        if df.empty or "LWAP" not in df.columns or "REGION_NAME" not in df.columns:
             return []
 
-        cols_lower = {c.lower().strip(): c for c in df.columns}
         records = []
-
-        # Detect column names flexibly
-        date_col   = next((cols_lower[k] for k in cols_lower if "date" in k), None)
-        hour_col   = next((cols_lower[k] for k in cols_lower if "hour" in k or "interval" in k), None)
-        region_col = next((cols_lower[k] for k in cols_lower if "region" in k or "node" in k or "area" in k), None)
-        price_col  = next((cols_lower[k] for k in cols_lower
-                           if any(p in k for p in ["price", "lmp", "php", "kwh", "mwh"])), None)
-
-        if price_col is None:
-            return []
-
         for _, row in df.iterrows():
+            region_code = str(row.get("REGION_NAME", "")).strip()
+            region = self._REGION_MAP.get(region_code)
+            if region is None:
+                continue  # skip SYSTEM and unrecognised codes
+
             try:
-                price_raw = float(row[price_col])
-                # Convert PHP/MWh → PHP/kWh if price looks like MWh scale
-                price_php_kwh = price_raw / 1000 if price_raw > 100 else price_raw
-                region = str(row[region_col]).strip() if region_col else "Unknown"
-                hour   = int(row[hour_col]) if hour_col else 0
-                tdate  = pd.to_datetime(row[date_col]).date() if date_col else trading_date
+                lwap_mwh = float(row["LWAP"])
+                price_kwh = round(lwap_mwh / 1000.0, 4)  # PHP/MWh → PHP/kWh
+
+                # Parse 5-min interval timestamp
+                interval_str = str(row.get("TIME_INTERVAL", "")).strip()
+                hour, interval_no = 0, 0
+                try:
+                    dt = _dt.strptime(interval_str, "%m/%d/%Y %I:%M:%S %p")
+                    hour = dt.hour
+                    interval_no = dt.hour * 12 + dt.minute // 5
+                except Exception:
+                    pass
+
                 records.append({
-                    "trading_date":   tdate,
-                    "hour":           hour,
-                    "interval_no":    hour,
-                    "region":         region,
-                    "node":           region,
-                    "price_php_kwh":  round(price_php_kwh, 4),
-                    "price_type":     "HSIP",
+                    "trading_date": trading_date,
+                    "hour":         hour,
+                    "interval_no":  interval_no,
+                    "region":       region,
+                    "node":         region_code,
+                    "price_php_kwh": price_kwh,
+                    "price_type":   "LWAP",
                 })
             except Exception:
                 continue
-        return records
 
-    # ── Strategy 2: HTML market-results table ─────────────────────────────────
-
-    def _fetch_html_table(self, session, target_date: date) -> list[dict]:
-        """Parse the IEMOP market-results page for daily average prices."""
-        try:
-            from bs4 import BeautifulSoup
-        except ImportError:
-            return []
-
-        try:
-            resp = session.get(_RESULTS_URL, timeout=30)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-        except Exception as exc:
-            logger.debug("[wesm_price] HTML fetch failed: %s", exc)
-            return []
-
-        date_str = target_date.strftime("%B %d, %Y")  # e.g. "June 03, 2026"
-        alt_str  = target_date.strftime("%Y-%m-%d")
-
-        records = []
-
-        # Find tables that contain price data for the target date
-        for table in soup.find_all("table"):
-            text = table.get_text(" ")
-            if not (date_str in text or alt_str in text):
-                continue
-            # Extract rows
-            rows = table.find_all("tr")
-            for row in rows:
-                cells = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
-                if len(cells) < 3:
-                    continue
-                # Look for rows with region name + numeric price
-                for region, aliases in _REGION_NODES.items():
-                    if any(alias.lower() in cells[0].lower() for alias in aliases):
-                        for cell in cells[1:]:
-                            try:
-                                price = float(cell.replace(",", ""))
-                                price_kwh = price / 1000 if price > 100 else price
-                                records.append({
-                                    "trading_date":  target_date,
-                                    "hour":          0,
-                                    "interval_no":   0,
-                                    "region":        region,
-                                    "node":          region,
-                                    "price_php_kwh": round(price_kwh, 4),
-                                    "price_type":    "daily_avg",
-                                })
-                                break
-                            except (ValueError, AttributeError):
-                                continue
-
-        # Fallback: scan all text for price patterns near region names
-        if not records:
-            records = self._scrape_price_patterns(soup, target_date)
-
-        return records
-
-    def _scrape_price_patterns(self, soup, target_date: date) -> list[dict]:
-        """Last-resort: scan page text for price numbers near region keywords."""
-        text = soup.get_text(" ")
-        records = []
-        for region in ["Luzon", "Visayas", "Mindanao"]:
-            # Look for  "Luzon ... PHP X.XX/kWh" or similar
-            pattern = rf"{region}[^.]*?(\d+[\.,]\d{{2,4}})"
-            m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                try:
-                    price = float(m.group(1).replace(",", ""))
-                    price_kwh = price / 1000 if price > 100 else price
-                    if 1.0 < price_kwh < 30.0:  # sanity: PHP 1–30/kWh is plausible
-                        records.append({
-                            "trading_date":  target_date,
-                            "hour":          0,
-                            "interval_no":   0,
-                            "region":        region,
-                            "node":          region,
-                            "price_php_kwh": round(price_kwh, 4),
-                            "price_type":    "scraped",
-                        })
-                except (ValueError, AttributeError):
-                    pass
-        return records
-
-    # ── Strategy 3: bulletin PDF summary ──────────────────────────────────────
-
-    def _fetch_bulletin_prices(self, session, target_date: date) -> list[dict]:
-        """Try to extract price summaries from the latest market bulletin."""
-        try:
-            from bs4 import BeautifulSoup
-        except ImportError:
-            return []
-
-        try:
-            resp = session.get(_BULLETINS_URL, timeout=30)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-        except Exception as exc:
-            logger.debug("[wesm_price] bulletin list fetch failed: %s", exc)
-            return []
-
-        # Find bulletin links for or near target_date
-        date_strs = [
-            target_date.strftime("%B %d, %Y"),
-            target_date.strftime("%d %B %Y"),
-            target_date.strftime("%Y-%m-%d"),
-            target_date.strftime("%d/%m/%Y"),
-        ]
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            title = link.get_text(" ", strip=True)
-            if not any(ds.lower() in (href + title).lower() for ds in date_strs):
-                continue
-            if not href.lower().endswith(".pdf"):
-                continue
-            if not href.startswith("http"):
-                href = _IEMOP_BASE + href if href.startswith("/") else href
-            try:
-                pdf_resp = session.get(href, timeout=30)
-                if pdf_resp.status_code == 200:
-                    return self._parse_bulletin_pdf(pdf_resp.content, target_date)
-            except Exception:
-                pass
-        return []
-
-    def _parse_bulletin_pdf(self, pdf_bytes: bytes, trading_date: date) -> list[dict]:
-        """Extract regional prices from a WESM market bulletin PDF."""
-        try:
-            import io
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(pdf_bytes))
-            text = "\n".join(p.extract_text() or "" for p in reader.pages[:5])
-        except Exception:
-            return []
-
-        records = []
-        for region in ["Luzon", "Visayas", "Mindanao"]:
-            pattern = rf"{region}[^.]*?(\d+[\.,]\d{{2,4}})\s*(?:PHP|₱)?[^.]*?(?:kWh|MWh)"
-            m = re.search(pattern, text, re.IGNORECASE)
-            if not m:
-                pattern = rf"{region}[^.]*?(\d+[\.,]\d{{2,4}})"
-                m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                try:
-                    price = float(m.group(1).replace(",", ""))
-                    price_kwh = price / 1000 if price > 100 else price
-                    if 1.0 < price_kwh < 30.0:
-                        records.append({
-                            "trading_date":  trading_date,
-                            "hour":          0,
-                            "interval_no":   0,
-                            "region":        region,
-                            "node":          region,
-                            "price_php_kwh": round(price_kwh, 4),
-                            "price_type":    "bulletin_pdf",
-                        })
-                except (ValueError, AttributeError):
-                    pass
         return records
 
     # ── DB storage ────────────────────────────────────────────────────────────
@@ -355,7 +244,7 @@ class WESMPriceScraper:
                     (
                         r["trading_date"], r["hour"], r.get("interval_no", r["hour"]),
                         r["region"], r.get("node", r["region"]),
-                        r["price_php_kwh"], r.get("price_type", "HSIP"),
+                        r["price_php_kwh"], r.get("price_type", "LWAP"),
                     ),
                 )
                 if cur.rowcount > 0:
@@ -364,7 +253,7 @@ class WESMPriceScraper:
         return n
 
     def run(self, conn, target_date: Optional[date] = None) -> int:
-        """Full fetch-and-store cycle. Returns count of new price rows inserted."""
+        """Fetch single day and store. Returns new row count."""
         records = self.fetch_daily_prices(target_date)
         return self.store_prices(conn, records)
 
@@ -802,19 +691,45 @@ def run_wesm_doc_backfill(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_wesm_price_scrape(conn, days_back: int = 1) -> dict[str, int]:
-    """Scrape WESM prices for the last *days_back* days.
+    """Scrape WESM LWAP prices for the last *days_back* days.
 
-    Returns {date_str: rows_inserted} for each date processed.
+    Fetches the minimum number of IEMOP ZIP pages to cover the requested range,
+    then stores all records found.  Returns {date_str: rows_inserted}.
     """
+    try:
+        import requests
+    except ImportError:
+        logger.warning("[wesm_price] requests not installed")
+        return {}
+
     scraper = WESMPriceScraper()
+    today   = date.today()
+    since   = today - timedelta(days=days_back)
+
+    # Pages needed: each page covers ~25 days; add 1 for safety
+    max_pages = max(1, (days_back // scraper._DAYS_PER_PAGE) + 2)
+
+    session = requests.Session()
+    session.headers.update(_HEADERS)
+
+    logger.info("[wesm_price] fetching %d day(s) across up to %d page(s)", days_back, max_pages)
+    page_data = scraper.fetch_pages(session, max_pages=max_pages, since=since)
+
     results: dict[str, int] = {}
-    today = date.today()
-    for i in range(1, days_back + 1):
-        target = today - timedelta(days=i)
+    for date_str, records in page_data.items():
+        if date_str < str(since):
+            continue  # outside requested window
         try:
-            n = scraper.run(conn, target_date=target)
-            results[str(target)] = n
+            n = scraper.store_prices(conn, records)
+            results[date_str] = n
         except Exception as exc:
-            logger.error("[wesm_price] date %s failed: %s", target, exc)
-            results[str(target)] = -1
+            logger.error("[wesm_price] store failed for %s: %s", date_str, exc)
+            results[date_str] = -1
+
+    # Ensure every requested date appears in results (even if 0 rows found)
+    for i in range(1, days_back + 1):
+        d = str(today - timedelta(days=i))
+        if d not in results:
+            results[d] = 0
+
     return results
