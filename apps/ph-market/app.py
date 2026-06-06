@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "config", ".env"))
 
 import anthropic
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -39,6 +40,7 @@ from services.ph_knowledge.wesm_scraper import (
     run_wesm_doc_backfill,
     _WESM_DOC_CONNECTOR_MAP,
 )
+from services.bess_map.optimisation_engine import optimise_day, DispatchResult
 from services.intl_market_common.advanced_retrieval_base import retrieve_for_agent
 from services.intl_market_common.expert_memory_base import (
     extract_insights, get_insights, inject_memory, digest_kb_docs,
@@ -696,6 +698,54 @@ def _run_irr_model(
     }
 
 
+def _run_bess_dispatch(region: str, power_mw: float, duration_h: float,
+                       roundtrip_eff: float, price_type: str) -> pd.DataFrame:
+    """
+    Load WESM hourly prices for region, run LP dispatch for each trading_date.
+    Returns DataFrame with columns:
+        trading_date, pf_profit_php, naive_profit_php, options_value_php,
+        charge_mwh, discharge_mwh
+    Profit units match the optimizer: price_php_kwh × MW (×1000 to convert to strict PHP).
+    """
+    df = _query(
+        "SELECT trading_date, hour, price_php_kwh FROM intl_market.ph_wesm_prices "
+        "WHERE region = %s AND price_type = %s ORDER BY trading_date, hour",
+        (region, price_type),
+    )
+    if df.empty:
+        return pd.DataFrame()
+
+    results = []
+    for date_val, grp in df.groupby("trading_date"):
+        grp = grp.sort_values("hour")
+        if len(grp) < 24:
+            continue
+        prices_arr = grp["price_php_kwh"].values[:24].astype(float)
+        try:
+            res = optimise_day(prices_arr, power_mw, duration_h, roundtrip_eff)
+        except Exception:
+            continue
+
+        # Naive: charge at cheapest, discharge at most expensive (if max_h > min_h)
+        min_h = int(np.argmin(prices_arr))
+        max_h = int(np.argmax(prices_arr))
+        eta = float(np.sqrt(roundtrip_eff))
+        energy_mwh = power_mw * duration_h
+        naive_profit = (
+            (prices_arr[max_h] * eta - prices_arr[min_h] / eta) * energy_mwh
+            if max_h > min_h else 0.0
+        )
+        results.append({
+            "trading_date":      date_val,
+            "pf_profit_php":     res.profit,
+            "naive_profit_php":  max(naive_profit, 0.0),
+            "options_value_php": max(res.profit - max(naive_profit, 0.0), 0.0),
+            "charge_mwh":        float(res.charge_mw.sum()),
+            "discharge_mwh":     float(res.discharge_mw.sum()),
+        })
+    return pd.DataFrame(results)
+
+
 # ── Agent tools ───────────────────────────────────────────────────────────────
 
 _GEAP_DATA = {
@@ -1278,6 +1328,124 @@ The **Capacity and Energy Reserve (CAPER)** programme allows BESS to register as
 BESS investment case in the Philippines is strengthened by the combination of GEAP (IRESS), reserve market (ASPA), and WESM arbitrage — making the Philippines one of Southeast Asia's most attractive BESS markets.
 """)
 
+    st.divider()
+    st.header("BESS P&L Analysis — Perfect-Forecast Dispatch")
+    st.caption(
+        "Theoretical P&L using LP dispatch on WESM cleared prices · "
+        "Includes reserve (ancillary) value · "
+        "Options value = PF premium over naive 1-cycle dispatch"
+    )
+
+    pnl_c1, pnl_c2, pnl_c3, pnl_c4 = st.columns(4)
+    with pnl_c1:
+        pnl_region = st.selectbox("Region", ["Luzon", "Visayas", "Mindanao"], key="pnl_region")
+    with pnl_c2:
+        pnl_power  = st.number_input("BESS Power (MW)", 1.0, 1000.0, 50.0, 10.0, key="pnl_power")
+        pnl_dur    = st.selectbox("Duration (h)", [1, 2, 4, 6], index=1, key="pnl_dur")
+    with pnl_c3:
+        pnl_rte    = st.slider("Round-trip eff (%)", 70, 98, 85, key="pnl_rte") / 100.0
+        pnl_ptype  = st.selectbox("Price type", ["LWAP_orig", "LWAP_final"], key="pnl_ptype")
+    with pnl_c4:
+        pnl_as_rate = st.number_input(
+            "Ancillary rate (PHP/MW/h)", 0.0, 5000.0, 1000.0, 100.0, key="pnl_as_rate"
+        )
+        st.caption("Reserve (regulating) rate, earned 8760 h/yr on contracted capacity")
+
+    if st.button("Compute BESS P&L", type="primary", key="pnl_run"):
+        with st.spinner("Running LP dispatch…"):
+            dispatch_df = _run_bess_dispatch(pnl_region, pnl_power, float(pnl_dur), pnl_rte, pnl_ptype)
+
+        if dispatch_df.empty:
+            st.warning(
+                "No WESM price data found. Use Data Management → WESM Spot Price Data "
+                "to fetch prices first."
+            )
+        else:
+            n_days             = len(dispatch_df)
+            total_arb_php      = dispatch_df["pf_profit_php"].sum()
+            total_options_php  = dispatch_df["options_value_php"].sum()
+            reserve_annual_php = pnl_as_rate * pnl_power * 8760
+            reserve_prorated   = reserve_annual_php * n_days / 365
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Arbitrage P&L (total)",    f"PHP {total_arb_php/1e6:.2f}M",
+                      help=f"Over {n_days} trading days")
+            m2.metric("Avg Daily Arbitrage",      f"PHP {total_arb_php/n_days:,.0f}")
+            m3.metric("Reserve Value (prorated)", f"PHP {reserve_prorated/1e6:.2f}M",
+                      help=f"{pnl_as_rate} PHP/MW/h × {pnl_power} MW × 8760 h, "
+                           f"prorated {n_days}/365 days")
+            m4.metric("Options Value (total)",    f"PHP {total_options_php/1e6:.2f}M",
+                      help="PF dispatch premium over naive 1-cycle dispatch")
+
+            # Daily P&L line chart
+            fig_pnl = px.line(
+                dispatch_df, x="trading_date", y="pf_profit_php",
+                title=f"Daily Arbitrage P&L — {pnl_region} {pnl_power}MW/{pnl_dur}h BESS",
+                labels={"pf_profit_php": "P&L (PHP)", "trading_date": "Date"},
+            )
+            fig_pnl.update_layout(height=320, margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig_pnl, use_container_width=True)
+
+            # Monthly bar chart (if ≥60 days data)
+            if n_days >= 60:
+                dispatch_df["month"] = (
+                    pd.to_datetime(dispatch_df["trading_date"]).dt.to_period("M").astype(str)
+                )
+                monthly = (
+                    dispatch_df.groupby("month")[["pf_profit_php", "options_value_php"]]
+                    .sum()
+                    .reset_index()
+                )
+                fig_bar = px.bar(
+                    monthly, x="month",
+                    y=["pf_profit_php", "options_value_php"],
+                    title="Monthly P&L: Arbitrage vs Options Value",
+                    labels={"value": "PHP", "variable": "Component"},
+                    barmode="overlay",
+                )
+                fig_bar.update_layout(height=300, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Dispatch profile for a selected day
+            st.subheader("Daily Dispatch Profile")
+            chosen_date = st.selectbox(
+                "Select date",
+                sorted(dispatch_df["trading_date"].tolist(), reverse=True),
+                key="pnl_date",
+            )
+            if chosen_date:
+                day_df = _query(
+                    "SELECT hour, price_php_kwh FROM intl_market.ph_wesm_prices "
+                    "WHERE region=%s AND price_type=%s AND trading_date=%s ORDER BY hour",
+                    (pnl_region, pnl_ptype, chosen_date),
+                )
+                if len(day_df) == 24:
+                    day_prices = day_df["price_php_kwh"].values.astype(float)
+                    day_res    = optimise_day(day_prices, pnl_power, float(pnl_dur), pnl_rte)
+                    disp_df    = pd.DataFrame({
+                        "Hour":            list(range(24)),
+                        "Price (PHP/kWh)": day_prices,
+                        "Charge (MW)":     day_res.charge_mw,
+                        "Discharge (MW)":  day_res.discharge_mw,
+                        "SoC (MWh)":       day_res.soc_mwh,
+                    })
+                    fig_disp = px.bar(
+                        disp_df, x="Hour",
+                        y=["Charge (MW)", "Discharge (MW)"],
+                        title=f"Dispatch — {chosen_date}  |  Profit: PHP {day_res.profit:,.0f}",
+                        barmode="overlay",
+                        color_discrete_map={"Charge (MW)": "#1f77b4", "Discharge (MW)": "#d62728"},
+                    )
+                    fig_price_line = px.line(disp_df, x="Hour", y="Price (PHP/kWh)")
+                    fig_price_line.update_traces(yaxis="y2", line_color="#2ca02c", name="Price")
+                    fig_disp.add_traces(fig_price_line.data)
+                    fig_disp.update_layout(
+                        height=340,
+                        yaxis2=dict(overlaying="y", side="right", title="PHP/kWh"),
+                        margin=dict(l=0, r=0, t=40, b=0),
+                    )
+                    st.plotly_chart(fig_disp, use_container_width=True)
+
 
 # ═══════════════════════════════════════════════════════════════
 # Tab 4 — Investment Analysis
@@ -1351,6 +1519,92 @@ with tab_irr:
                 sens_df = pd.DataFrame(sens)
                 pivot = sens_df.pivot(index="capex", columns="revenue", values="unlevered_irr")
                 st.dataframe(pivot, use_container_width=True)
+
+    st.divider()
+    st.subheader("Market-Data Driven BESS IRR (WESM Price History)")
+    st.caption(
+        "Computes IRR using actual PF dispatch P&L from scraped WESM prices. "
+        "Requires price data in DB."
+    )
+
+    md_c1, md_c2 = st.columns(2)
+    with md_c1:
+        md_regions = st.multiselect(
+            "Regions to compare", ["Luzon", "Visayas", "Mindanao"],
+            default=["Luzon", "Visayas", "Mindanao"], key="md_regions",
+        )
+        md_power = st.number_input("BESS Power (MW)", 1.0, 1000.0, 50.0, 10.0, key="md_power")
+        md_dur   = st.selectbox("Duration (h)", [1, 2, 4, 6], index=1, key="md_dur")
+    with md_c2:
+        md_rte   = st.slider("Round-trip eff (%)", 70, 98, 85, key="md_rte") / 100.0
+        md_ptype = st.selectbox("Price type", ["LWAP_orig", "LWAP_final"], key="md_ptype")
+        md_capex = st.number_input(
+            "CAPEX (USD/kW)", 100.0, 2000.0,
+            float(_TECH_PRESETS["bess_2h"]["capex_usd_kwh"] * 2), 50.0, key="md_capex",
+        )
+        md_wacc  = st.slider("WACC (%)", 5.0, 20.0, 10.0, 0.5, key="md_wacc")
+        md_lev   = st.slider("Leverage (%)", 0, 80, 60, 5, key="md_lev")
+
+    if st.button("Compute Market-Data IRR", type="primary", key="md_irr_run"):
+        irr_results = []
+        with st.status("Computing dispatch IRR by region…") as irr_status:
+            for region in md_regions:
+                irr_status.update(label=f"Running LP dispatch for {region}…")
+                disp_df = _run_bess_dispatch(
+                    region, md_power, float(md_dur), md_rte, md_ptype
+                )
+                if disp_df.empty:
+                    irr_results.append({
+                        "Region": region, "Days": 0,
+                        "Avg Daily P&L": "N/A", "Annual P&L (PHP M)": "N/A",
+                        "Unlevered IRR": "N/A", "Equity IRR": "N/A", "NPV (PHP M)": "N/A",
+                    })
+                    continue
+
+                n_days     = len(disp_df)
+                total_arb  = disp_df["pf_profit_php"].sum()
+                annual_rev = total_arb * 365 / n_days
+
+                life      = 15
+                capex_php = md_power * md_capex * _USD_PHP * 1000  # MW × USD/kW × PHP/USD × 1000 kW/MW
+                om_php    = capex_php * (_TECH_PRESETS["bess_2h"]["om_pct"] / 100)
+                degrad    = _TECH_PRESETS["bess_2h"]["degradation"]
+
+                cfs_unlev = [-capex_php] + [
+                    annual_rev * (1 - degrad) ** (yr - 1) - om_php
+                    for yr in range(1, life + 1)
+                ]
+                unlev_irr = _compute_irr(cfs_unlev)
+                npv       = sum(
+                    cf / (1 + md_wacc / 100) ** t for t, cf in enumerate(cfs_unlev)
+                )
+
+                debt   = capex_php * (md_lev / 100)
+                equity = capex_php - debt
+                ds     = debt * 0.07 / (1 - (1.07) ** (-life))
+                cfs_eq = [-equity] + [
+                    annual_rev * (1 - degrad) ** (yr - 1) - om_php - (ds if yr <= life else 0)
+                    for yr in range(1, life + 1)
+                ]
+                eq_irr = _compute_irr(cfs_eq)
+
+                irr_results.append({
+                    "Region":             region,
+                    "Days":               n_days,
+                    "Avg Daily P&L":      f"PHP {total_arb/n_days:,.0f}",
+                    "Annual P&L (PHP M)": f"{annual_rev/1e6:.2f}",
+                    "Unlevered IRR":      f"{unlev_irr * 100:.1f}%",
+                    "Equity IRR":         f"{eq_irr * 100:.1f}%",
+                    "NPV (PHP M)":        f"{npv/1e6:.1f}",
+                })
+            irr_status.update(label="Done", state="complete")
+
+        if irr_results:
+            st.dataframe(pd.DataFrame(irr_results), use_container_width=True, hide_index=True)
+            st.caption(
+                f"Based on actual WESM {md_ptype} prices · {md_power}MW/{md_dur}h BESS · "
+                f"CAPEX {md_capex} USD/kW · WACC {md_wacc}% · Leverage {md_lev}%"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════
