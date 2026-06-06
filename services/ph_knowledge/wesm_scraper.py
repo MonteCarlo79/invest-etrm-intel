@@ -59,18 +59,33 @@ _REGION_NODES = {
 class WESMPriceScraper:
     """Scrapes WESM LWAP (Load-Weighted Average Price) data from IEMOP.
 
-    IEMOP publishes daily 5-minute interval LWAP CSVs at:
-      https://www.iemop.ph/market-data/load-weighted-average-prices-final/
-      ?post=276300&sort=desc&page=N&start=&end=
+    Two endpoints, tried in order:
 
-    Each page returns a ZIP archive containing CSVs named final_lwap_YYYYMMDD.csv
-    Each CSV has columns: RUN_TIME, MKT_TYPE, TIME_INTERVAL, REGION_NAME, LWAP
-    LWAP values are in PHP/MWh.  Region codes: CLUZ, CMIN, CVIS, SYSTEM.
-    Approximately 24 days of data per page (desc order, page 1 = most recent).
+    1. Original LWAP  — published ~02:15 MNL next day (1-day lag), post=5768
+       URL: /market-data/load-weighted-average-prices-original/
+       Files: original_lwap_YYYYMMDD.csv
+
+    2. Final LWAP     — published with ~10-day settlement lag, post=276300
+       URL: /market-data/load-weighted-average-prices-final/
+       Files: final_lwap_YYYYMMDD.csv
+
+    Both use the same pattern:
+      ?post=<ID>&sort=desc&page=N&start=&end=  →  ZIP of daily CSVs
+    CSV columns: RUN_TIME, MKT_TYPE, TIME_INTERVAL, REGION_NAME (CLUZ/CMIN/CVIS), LWAP (PHP/MWh)
+    ~24 days per page, desc order.
     """
 
-    _LWAP_URL  = "https://www.iemop.ph/market-data/load-weighted-average-prices-final/"
-    _POST_ID   = 276300
+    _SOURCES = [
+        # (base_url, post_id, filename_prefix, price_type)
+        (
+            "https://www.iemop.ph/market-data/load-weighted-average-prices-original/",
+            5768, "original_lwap_", "LWAP_orig",
+        ),
+        (
+            "https://www.iemop.ph/market-data/load-weighted-average-prices-final/",
+            276300, "final_lwap_", "LWAP_final",
+        ),
+    ]
     _DAYS_PER_PAGE = 25   # conservative estimate for page-count calculations
 
     _REGION_MAP = {
@@ -87,63 +102,71 @@ class WESMPriceScraper:
         max_pages: int = 1,
         since: Optional[date] = None,
     ) -> dict[str, list[dict]]:
-        """Fetch up to *max_pages* pages; return {date_str: [records]}.
+        """Fetch up to *max_pages* pages from both LWAP sources; return {date_str: [records]}.
 
-        Stops early when all dates on a page are older than *since* (if given).
+        Original LWAP (1-day lag) is tried first; Final LWAP (10-day lag) fills
+        any remaining gaps.  Stops early per-source when dates go before *since*.
         """
         import io
         import zipfile
 
         all_data: dict[str, list[dict]] = {}
 
-        for page in range(1, max_pages + 1):
-            url = (
-                f"{self._LWAP_URL}"
-                f"?post={self._POST_ID}&sort=desc&page={page}&start=&end="
-            )
-            try:
-                resp = session.get(url, timeout=30)
-                resp.raise_for_status()
-            except Exception as exc:
-                logger.warning("[wesm_price] page %d fetch failed: %s", page, exc)
-                break
+        for base_url, post_id, file_prefix, price_type in self._SOURCES:
+            source_data: dict[str, list[dict]] = {}
 
-            # Response must be a ZIP (magic bytes PK)
-            if resp.content[:2] != b"PK":
-                logger.debug("[wesm_price] page %d: not a ZIP (got HTML?)", page)
-                break
-
-            try:
-                with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-                    for name in zf.namelist():
-                        m = re.match(r"final_lwap_(\d{4})(\d{2})(\d{2})\.csv", name)
-                        if not m:
-                            continue
-                        trading_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                        date_str = str(trading_date)
-                        if date_str in all_data:
-                            continue
-                        csv_bytes = zf.read(name)
-                        records = self._parse_lwap_csv(
-                            csv_bytes.decode("utf-8", errors="replace"),
-                            trading_date,
-                        )
-                        if records:
-                            all_data[date_str] = records
-            except Exception as exc:
-                logger.warning("[wesm_price] page %d ZIP parse failed: %s", page, exc)
-                break
-
-            if not all_data:
-                break
-
-            # Early stop: if all dates on this page are before *since*, done
-            if since is not None:
-                page_dates = sorted(all_data.keys())
-                if page_dates and page_dates[0] < str(since):
+            for page in range(1, max_pages + 1):
+                url = f"{base_url}?post={post_id}&sort=desc&page={page}&start=&end="
+                try:
+                    resp = session.get(url, timeout=30)
+                    resp.raise_for_status()
+                except Exception as exc:
+                    logger.warning("[wesm_price:%s] page %d fetch failed: %s", price_type, page, exc)
                     break
 
-            time.sleep(0.5)
+                if resp.content[:2] != b"PK":
+                    logger.debug("[wesm_price:%s] page %d not a ZIP", price_type, page)
+                    break
+
+                try:
+                    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                        for name in zf.namelist():
+                            pattern = re.escape(file_prefix) + r"(\d{4})(\d{2})(\d{2})\.csv"
+                            m = re.match(pattern, name)
+                            if not m:
+                                continue
+                            trading_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                            date_str = str(trading_date)
+                            if date_str in source_data:
+                                continue
+                            csv_bytes = zf.read(name)
+                            records = self._parse_lwap_csv(
+                                csv_bytes.decode("utf-8", errors="replace"),
+                                trading_date,
+                                price_type=price_type,
+                            )
+                            if records:
+                                source_data[date_str] = records
+                except Exception as exc:
+                    logger.warning("[wesm_price:%s] page %d ZIP parse failed: %s", price_type, page, exc)
+                    break
+
+                if not source_data:
+                    break
+
+                if since is not None:
+                    page_dates = sorted(source_data.keys())
+                    if page_dates and page_dates[0] < str(since):
+                        break
+
+                time.sleep(0.5)
+
+            # Merge: don't overwrite dates already fetched from a higher-priority source
+            for date_str, records in source_data.items():
+                if date_str not in all_data:
+                    all_data[date_str] = records
+
+            logger.info("[wesm_price:%s] fetched %d dates", price_type, len(source_data))
 
         return all_data
 
@@ -178,7 +201,7 @@ class WESMPriceScraper:
 
     # ── CSV parser ────────────────────────────────────────────────────────────
 
-    def _parse_lwap_csv(self, csv_text: str, trading_date: date) -> list[dict]:
+    def _parse_lwap_csv(self, csv_text: str, trading_date: date, price_type: str = "LWAP") -> list[dict]:
         """Parse a final_lwap_YYYYMMDD.csv file into price records."""
         import io
         import pandas as pd
@@ -220,7 +243,7 @@ class WESMPriceScraper:
                     "region":       region,
                     "node":         region_code,
                     "price_php_kwh": price_kwh,
-                    "price_type":   "LWAP",
+                    "price_type":   price_type,
                 })
             except Exception:
                 continue

@@ -1683,8 +1683,9 @@ with tab_mgmt:
     # ── WESM Price Data ───────────────────────────────────────────────────────
     st.subheader("WESM Spot Price Data")
     st.caption(
-        "Daily settlement interval prices for Luzon, Visayas, and Mindanao reference "
-        "trading nodes scraped from IEMOP. Scheduler runs at **07:15 MNL** daily."
+        "5-minute interval LWAP prices for Luzon, Visayas, and Mindanao scraped from IEMOP. "
+        "Original LWAP (1-day lag) + Final LWAP (10-day settlement lag). "
+        "Scheduler runs at **07:15 MNL** daily."
     )
 
     wesm_stat_c1, wesm_stat_c2, wesm_stat_c3 = st.columns(3)
@@ -1723,10 +1724,11 @@ with tab_mgmt:
                     if total > 0:
                         st.success(f"Fetched {total} new price records: {results}")
                     else:
-                        st.warning(
-                            f"Scraper ran but found 0 new records ({results}). "
-                            "IEMOP may not have published yesterday's data yet — "
-                            "prices are typically available by 09:00 MNL."
+                        st.info(
+                            f"All records already stored or no new data ({results}). "
+                            "Original LWAP is published with ~1-day lag; "
+                            "Final LWAP has ~10-day settlement lag. "
+                            "Latest data shown above."
                         )
                 except Exception as exc:
                     st.error(f"WESM price scrape failed: {exc}")
