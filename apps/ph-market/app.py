@@ -737,9 +737,9 @@ def _run_bess_dispatch(region: str, power_mw: float, duration_h: float,
         )
         results.append({
             "trading_date":      date_val,
-            "pf_profit_php":     res.profit,
-            "naive_profit_php":  max(naive_profit, 0.0),
-            "options_value_php": max(res.profit - max(naive_profit, 0.0), 0.0),
+            "pf_profit_php":     res.profit * 1000,
+            "naive_profit_php":  max(naive_profit * 1000, 0.0),
+            "options_value_php": max((res.profit - max(naive_profit, 0.0)) * 1000, 0.0),
             "charge_mwh":        float(res.charge_mw.sum()),
             "discharge_mwh":     float(res.discharge_mw.sum()),
         })
