@@ -1,0 +1,8 @@
+{
+  "containerOverrides": [
+    {
+      "name": "trading-performance-agent",
+      "command": ["python", "/app/services/ops/run_trading_agent.py", "--date", "2026-04-17", "--dry-run"]
+    }
+  ]
+}

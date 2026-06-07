@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     "python-pptx>=0.6" \
     "reportlab>=4.0" \
     pypsa \
+    pulp \
     "openai>=1.0" \
     "pydub>=0.25"
 
@@ -29,6 +30,7 @@ COPY apps/ph-market/               ./apps/ph-market/
 COPY services/common/               ./services/common/
 COPY services/ph_knowledge/         ./services/ph_knowledge/
 COPY services/intl_market_common/   ./services/intl_market_common/
+COPY services/bess_map/             ./services/bess_map/
 
 ENV PYTHONPATH=/app
 
