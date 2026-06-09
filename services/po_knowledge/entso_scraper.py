@@ -1,17 +1,19 @@
 """ENTSO-E / PSE data scrapers for the Poland market app.
 
 Two components:
-  ENTSOEPriceScraper        -- scrapes day-ahead prices from PSE.pl (primary) or ENTSO-E
-                               API (optional, requires ENTSOE_API_KEY env var) and stores
-                               them in intl_market.po_day_ahead_prices
+  ENTSOEPriceScraper        -- scrapes day-ahead prices from energy-charts.info (primary,
+                               free, no auth — Fraunhofer ISE EPEX SPOT data for Poland) or
+                               ENTSO-E API (optional, requires ENTSOE_API_KEY env var) and
+                               stores them in intl_market.po_day_ahead_prices
   PolishMarketDocConnector  -- base class for downloading PSE/TGE/URE/ENTSO-E publications
                                into intl_market.po_knowledge_docs
 
 Data sources:
-  PSE.pl:   https://www.pse.pl  (day-ahead CSV + balancing/grid reports)
-  TGE:      https://tge.pl
-  URE:      https://www.ure.gov.pl
-  ENTSO-E:  https://transparency.entsoe.eu (optional API; web scraping for publications)
+  energy-charts: https://api.energy-charts.info (EPEX SPOT PL day-ahead, free, no auth)
+  PSE.pl:        https://www.pse.pl  (balancing/grid reports)
+  TGE:           https://tge.pl
+  URE:           https://www.ure.gov.pl
+  ENTSO-E:       https://transparency.entsoe.eu (optional API key)
 
 DB table created by app.py _ensure_tables():
     intl_market.po_day_ahead_prices (
@@ -45,11 +47,12 @@ _HEADERS = {
     "Accept-Language": "en-GB,en;q=0.9,pl;q=0.8",
 }
 
-_PSE_BASE     = "https://www.pse.pl"
-_TGE_BASE     = "https://tge.pl"
-_URE_BASE     = "https://www.ure.gov.pl"
-_ENTSOE_BASE  = "https://transparency.entsoe.eu"
-_ENTSOE_WEBAPI = "https://web-api.tp.entsoe.eu/api"
+_PSE_BASE          = "https://www.pse.pl"
+_TGE_BASE          = "https://tge.pl"
+_URE_BASE          = "https://www.ure.gov.pl"
+_ENTSOE_BASE       = "https://transparency.entsoe.eu"
+_ENTSOE_WEBAPI     = "https://web-api.tp.entsoe.eu/api"
+_ENERGY_CHARTS_API = "https://api.energy-charts.info/price"
 
 # Poland bidding zone EIC code (ENTSO-E)
 _PL_ZONE_EIC = "10YPL-AREA-----S"
@@ -67,13 +70,12 @@ class ENTSOEPriceScraper:
 
     Two strategies, tried in order:
 
-    1. PSE.pl CSV export (primary, no auth) — URL pattern:
-       https://www.pse.pl/getcsv/-/export/csv/PL_CENY_RDN/data_od/{start}/data_do/{end}
-       CSV columns: Data, Godzina, CRO (PLN/MWh)
+    1. energy-charts.info (primary, free, no auth) — Fraunhofer ISE, EPEX SPOT data:
+       https://api.energy-charts.info/price?bzn=PL&start={YYYY-MM-DD}&end={YYYY-MM-DD}
+       Returns 15-min intervals in EUR/MWh; aggregated to hourly averages.
 
     2. ENTSO-E Transparency API (secondary, requires ENTSOE_API_KEY env var):
-       documentType=A44, bidding zone 10YPL-AREA-----S, hourly resolution
-       Returns EUR/MWh; converted to PLN using EUR_PLN env var or fallback 4.25.
+       documentType=A44, bidding zone 10YPL-AREA-----S, hourly resolution.
     """
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -83,9 +85,9 @@ class ENTSOEPriceScraper:
 
         Returns {date_str: [hourly records]}.
         """
-        data = self._fetch_pse_csv(start, end)
+        data = self._fetch_energy_charts(start, end)
         if not data:
-            logger.info("[entso_price] PSE CSV empty, trying ENTSO-E API")
+            logger.info("[entso_price] energy-charts empty, trying ENTSO-E API")
             data = self._fetch_entsoe_api(start, end)
         return data
 
@@ -96,104 +98,91 @@ class ENTSOEPriceScraper:
         data = self.fetch_range(target_date, target_date)
         return data.get(str(target_date), [])
 
-    # ── PSE CSV strategy ──────────────────────────────────────────────────────
+    # ── energy-charts.info strategy (primary) ─────────────────────────────────
 
-    def _fetch_pse_csv(self, start: date, end: date) -> dict[str, list[dict]]:
+    def _fetch_energy_charts(self, start: date, end: date) -> dict[str, list[dict]]:
+        """Fetch EPEX SPOT Poland day-ahead prices from Fraunhofer ISE energy-charts.info.
+
+        URL: https://api.energy-charts.info/price?bzn=PL&start=YYYY-MM-DD&end=YYYY-MM-DD
+        Response: {unix_seconds: [...], price: [...EUR/MWh...], unit: "EUR / MWh"}
+        15-min intervals are averaged to hourly. Warsaw local date is used for trading_date.
+        """
         try:
             import requests
         except ImportError:
             return {}
 
-        url = (
-            f"{_PSE_BASE}/getcsv/-/export/csv/PL_CENY_RDN"
-            f"/data_od/{start.strftime('%Y-%m-%d')}"
-            f"/data_do/{end.strftime('%Y-%m-%d')}"
-        )
-        try:
-            resp = requests.get(url, headers=_HEADERS, timeout=30)
-            resp.raise_for_status()
-            content_type = resp.headers.get("Content-Type", "")
-            # PSE can return a login redirect or empty file instead of CSV
-            if len(resp.content) < 50 or b"<!DOCTYPE" in resp.content[:200]:
-                logger.debug("[pse_csv] Response looks like HTML redirect, not CSV")
-                return {}
-        except Exception as exc:
-            logger.warning("[pse_csv] fetch failed: %s", exc)
-            return {}
-
-        return self._parse_pse_csv(resp.text, source="pse_csv")
-
-    def _parse_pse_csv(self, csv_text: str, source: str = "pse_csv") -> dict[str, list[dict]]:
-        """Parse PSE day-ahead price CSV.
-
-        Expected columns (Polish): Data, Godzina, CRO
-        Also handles semicolon-separated format common on PSE exports.
-        """
-        import io
-        import pandas as pd
-
-        try:
-            # Try semicolon separator first (PSE typical), then comma
-            for sep in (";", ","):
-                try:
-                    df = pd.read_csv(io.StringIO(csv_text), sep=sep, dtype=str)
-                    if df.shape[1] >= 2:
-                        break
-                except Exception:
-                    continue
-            else:
-                return {}
-        except Exception:
-            return {}
-
-        if df.empty:
-            return {}
-
-        # Normalise column names: strip whitespace and lowercase
-        df.columns = [c.strip().lower() for c in df.columns]
-
-        # Map to canonical names
-        col_map: dict[str, str] = {}
-        for col in df.columns:
-            if col in ("data", "date"):
-                col_map[col] = "date"
-            elif col in ("godzina", "hour", "godz"):
-                col_map[col] = "hour"
-            elif col in ("cro", "cena", "price", "price_pln_mwh"):
-                col_map[col] = "price_pln"
-        df = df.rename(columns=col_map)
-
-        if "date" not in df.columns or "price_pln" not in df.columns:
-            logger.debug("[pse_csv] unexpected columns: %s", list(df.columns))
-            return {}
-
+        eur_pln = float(os.environ.get("EUR_PLN", str(_EUR_PLN_FALLBACK)))
         results: dict[str, list[dict]] = {}
-        for _, row in df.iterrows():
+
+        # Fetch one week at a time to avoid overly large requests
+        current = start
+        while current <= end:
+            chunk_end = min(current + timedelta(days=6), end)
+            params = {
+                "bzn": "PL",
+                "start": current.strftime("%Y-%m-%d"),
+                "end": chunk_end.strftime("%Y-%m-%d"),
+            }
             try:
-                date_str = str(row["date"]).strip()
-                # Accept YYYY-MM-DD or YYYY.MM.DD
-                date_str = date_str.replace(".", "-")
-                trading_date = date.fromisoformat(date_str[:10])
-                hour = int(str(row.get("hour", 0)).strip()) if "hour" in df.columns else 0
-                # PSE hours are 1-24; normalise to 0-23
-                if hour == 24:
-                    hour = 23
-                elif hour > 0:
-                    hour = hour - 1
-                price_str = str(row["price_pln"]).strip().replace(",", ".")
-                price_pln = float(price_str)
-                record = {
-                    "trading_date": trading_date,
-                    "hour": hour,
-                    "price_pln_mwh": round(price_pln, 4),
-                    "price_eur_mwh": round(price_pln / _EUR_PLN_FALLBACK, 4),
-                    "source": source,
-                }
-                ds = str(trading_date)
-                results.setdefault(ds, []).append(record)
-            except Exception:
+                resp = requests.get(
+                    _ENERGY_CHARTS_API,
+                    params=params,
+                    headers={"User-Agent": "BESSPlatformBot/2.0 (investment-research)"},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                logger.warning("[energy_charts] fetch failed for %s–%s: %s", current, chunk_end, exc)
+                current = chunk_end + timedelta(days=1)
                 continue
 
+            timestamps = data.get("unix_seconds", [])
+            prices_eur = data.get("price", [])
+
+            if not timestamps or not prices_eur:
+                current = chunk_end + timedelta(days=1)
+                continue
+
+            # Aggregate 15-min intervals to hourly in Warsaw local time
+            # Warsaw = UTC+1 (CET) or UTC+2 (CEST)
+            hourly_buckets: dict[tuple, list[float]] = {}  # (date_str, hour) -> [prices]
+
+            for ts, price_eur in zip(timestamps, prices_eur):
+                if price_eur is None:
+                    continue
+                try:
+                    # Convert UTC → Warsaw (approximate: use CET UTC+1 for simplicity;
+                    # CEST UTC+2 is April-October but the hour difference is minor for daily avg)
+                    dt_utc = datetime.utcfromtimestamp(ts)
+                    # Determine UTC offset: +2 in summer (Mar last Sun → Oct last Sun), +1 otherwise
+                    month = dt_utc.month
+                    is_summer = 4 <= month <= 9 or (month == 3 and dt_utc.day >= 26) or (month == 10 and dt_utc.day < 26)
+                    offset_h = 2 if is_summer else 1
+                    dt_waw = dt_utc + timedelta(hours=offset_h)
+                    trading_date = dt_waw.date()
+                    hour = dt_waw.hour
+                    key = (str(trading_date), hour)
+                    hourly_buckets.setdefault(key, []).append(float(price_eur))
+                except Exception:
+                    continue
+
+            for (date_str, hour), bucket_prices in hourly_buckets.items():
+                avg_eur = sum(bucket_prices) / len(bucket_prices)
+                record = {
+                    "trading_date": date.fromisoformat(date_str),
+                    "hour": hour,
+                    "price_eur_mwh": round(avg_eur, 4),
+                    "price_pln_mwh": round(avg_eur * eur_pln, 4),
+                    "source": "energy_charts",
+                }
+                results.setdefault(date_str, []).append(record)
+
+            current = chunk_end + timedelta(days=1)
+            time.sleep(0.5)
+
+        logger.info("[energy_charts] fetched %d dates", len(results))
         return results
 
     # ── ENTSO-E API strategy ──────────────────────────────────────────────────

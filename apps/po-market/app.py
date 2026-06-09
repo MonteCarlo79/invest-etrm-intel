@@ -151,7 +151,7 @@ def _ensure_tables():
             hour          INTEGER       NOT NULL,
             price_pln_mwh NUMERIC(10,4),
             price_eur_mwh NUMERIC(10,4),
-            source        TEXT          NOT NULL DEFAULT 'pse_csv',
+            source        TEXT          NOT NULL DEFAULT 'energy_charts',
             fetched_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
             CONSTRAINT po_day_ahead_prices_uq UNIQUE (trading_date, hour, source)
         )
@@ -1633,7 +1633,8 @@ with tab_mgmt:
     # ── Day-Ahead Price Data ──────────────────────────────────────────────────
     st.subheader("TGE Day-Ahead Price Data")
     st.caption(
-        "Hourly day-ahead prices (PLN/MWh and EUR/MWh) from PSE.pl CSV export. "
+        "Hourly day-ahead prices (EUR/MWh → PLN/MWh) from **energy-charts.info** "
+        "(Fraunhofer ISE, EPEX SPOT Poland, free, no auth). "
         "Optional ENTSO-E API fallback (set **ENTSOE_API_KEY** env var). "
         "Scheduler runs at **07:15 WAW** daily."
     )
@@ -1726,9 +1727,8 @@ with tab_mgmt:
         st.info("No day-ahead price data yet. Click 'Scrape Prices Now' above to fetch.")
 
     st.caption(
-        "**ENTSO-E API:** Set `ENTSOE_API_KEY` environment variable for direct ENTSO-E Transparency "
-        "Platform API access (free registration at transparency.entsoe.eu). "
-        "Without the key, prices are fetched from PSE.pl CSV exports."
+        "Source: **energy-charts.info** (Fraunhofer ISE, CC BY 4.0). "
+        "Optional: set `ENTSOE_API_KEY` env var for direct ENTSO-E Transparency Platform API access."
     )
 
     st.divider()
