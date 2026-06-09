@@ -33,6 +33,12 @@ st.set_page_config(
 
 from services.po_knowledge.config import MARKET_CONFIG
 from services.po_knowledge.ingest import run_knowledge_ingest
+from services.po_knowledge.entso_scraper import (
+    ENTSOEPriceScraper,
+    run_entso_price_scrape,
+    run_po_doc_backfill,
+    _PO_DOC_CONNECTOR_MAP,
+)
 from services.intl_market_common.advanced_retrieval_base import retrieve_for_agent
 from services.intl_market_common.expert_memory_base import (
     extract_insights, get_insights, inject_memory, digest_kb_docs,
@@ -138,6 +144,22 @@ def _ensure_tables():
         f"CREATE INDEX IF NOT EXISTS {PREFIX}report_library_freq_period "
         f"ON intl_market.{PREFIX}report_library (frequency, period DESC)"
     )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intl_market.po_day_ahead_prices (
+            id            SERIAL PRIMARY KEY,
+            trading_date  DATE          NOT NULL,
+            hour          INTEGER       NOT NULL,
+            price_pln_mwh NUMERIC(10,4),
+            price_eur_mwh NUMERIC(10,4),
+            source        TEXT          NOT NULL DEFAULT 'pse_csv',
+            fetched_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+            CONSTRAINT po_day_ahead_prices_uq UNIQUE (trading_date, hour, source)
+        )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS po_day_ahead_prices_date_idx "
+        "ON intl_market.po_day_ahead_prices (trading_date DESC)"
+    )
     _conn().commit()
 
 
@@ -165,9 +187,38 @@ def _start_scheduler():
         except Exception as exc:
             logger.error("[po_scheduler] digest: %s", exc)
 
+    def _price_job():
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                keepalives=1, keepalives_idle=30,
+            )
+            conn.autocommit = True
+            results = run_entso_price_scrape(conn, days_back=2)
+            conn.close()
+            total = sum(v for v in results.values() if v > 0)
+            logger.info("[po_scheduler] price scrape done: %s (%d new rows)", results, total)
+        except Exception as exc:
+            logger.error("[po_scheduler] price scrape failed: %s", exc)
+
+    def _docs_job():
+        """Weekly: scrape PSE, TGE, URE, and ENTSO-E document sources."""
+        try:
+            run_knowledge_ingest(only=[
+                "pse_pl", "pse_grid", "pse_afrr",
+                "tge_reports", "ure_regulatory", "entsoe_publications",
+            ], verbose=False)
+            logger.info("[po_scheduler] docs job done")
+        except Exception as exc:
+            logger.error("[po_scheduler] docs job failed: %s", exc)
+
     sched = BackgroundScheduler(timezone="Europe/Warsaw")
     sched.add_job(_ingest_job, "cron", hour=3, minute=30, id="po_ingest", misfire_grace_time=3600)
     sched.add_job(_digest_job, "cron", hour=3, minute=45, id="po_digest", misfire_grace_time=3600)
+    sched.add_job(_price_job,  "cron", hour=7, minute=15, id="po_price",  misfire_grace_time=3600)
+    sched.add_job(_docs_job,   "cron", day_of_week="mon", hour=4, minute=5,
+                  id="po_docs", misfire_grace_time=7200)
     sched.start()
     return sched
 
@@ -231,7 +282,41 @@ def _po_table_counts(prefix: str) -> pd.DataFrame:
         rows.append({"Table": "marketdata.agent_memory", "Rows": int(df2["n"].iloc[0])})
     except Exception:
         rows.append({"Table": "marketdata.agent_memory", "Rows": "error"})
+    try:
+        df3 = _query("SELECT COUNT(*) AS n FROM intl_market.po_day_ahead_prices")
+        rows.append({"Table": "intl_market.po_day_ahead_prices", "Rows": int(df3["n"].iloc[0])})
+    except Exception:
+        rows.append({"Table": "intl_market.po_day_ahead_prices", "Rows": "error"})
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=60)
+def _po_latest_price_date() -> str:
+    try:
+        df = _query("SELECT MAX(trading_date) AS latest FROM intl_market.po_day_ahead_prices")
+        val = df["latest"].iloc[0]
+        return str(val) if val is not None else "—"
+    except Exception:
+        return "—"
+
+
+@st.cache_data(ttl=60)
+def _po_price_history(days: int = 30) -> pd.DataFrame:
+    try:
+        since = date.today() - timedelta(days=days)
+        return _query(
+            "SELECT trading_date, "
+            "  AVG(price_pln_mwh) AS avg_pln, "
+            "  MIN(price_pln_mwh) AS min_pln, "
+            "  MAX(price_pln_mwh) AS max_pln, "
+            "  AVG(price_eur_mwh) AS avg_eur "
+            "FROM intl_market.po_day_ahead_prices "
+            "WHERE trading_date >= %s "
+            "GROUP BY trading_date ORDER BY trading_date",
+            (since,),
+        )
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=120)
@@ -722,6 +807,40 @@ def _dispatch_tool_po(name: str, inputs: dict) -> str:
         elif name == "get_policy_snapshot":
             return json.dumps(_POLICY_SNAPSHOT_PO, indent=2)
 
+        elif name == "get_entso_price_data":
+            try:
+                days = int(inputs.get("days", 30))
+                df = _po_price_history(days=days)
+                if df.empty:
+                    return (
+                        "No day-ahead price data available yet. "
+                        "Use 'Scrape Prices Now' in the Data Management tab to fetch historical prices."
+                    )
+                latest = df["trading_date"].max()
+                avg_pln = df["avg_pln"].mean()
+                min_pln = df["min_pln"].min()
+                max_pln = df["max_pln"].max()
+                summary = {
+                    "period": f"Last {days} days",
+                    "latest_trading_date": str(latest),
+                    "avg_da_price_pln_mwh": round(float(avg_pln), 1),
+                    "min_da_price_pln_mwh": round(float(min_pln), 1),
+                    "max_da_price_pln_mwh": round(float(max_pln), 1),
+                    "avg_da_price_eur_mwh": round(float(avg_pln / _EUR_PLN), 1),
+                    "source": "PSE.pl day-ahead market (TGE RDN)",
+                    "days_of_data": len(df),
+                    "note": "Prices from PSE.pl CSV export. ENTSO-E API available with ENTSOE_API_KEY env var.",
+                }
+                # Include recent daily series
+                recent = df.tail(10)[["trading_date", "avg_pln", "avg_eur"]].copy()
+                recent["trading_date"] = recent["trading_date"].astype(str)
+                recent["avg_pln"] = recent["avg_pln"].round(1)
+                recent["avg_eur"] = recent["avg_eur"].round(1)
+                summary["recent_daily_avg"] = recent.to_dict("records")
+                return json.dumps(summary, indent=2)
+            except Exception as exc:
+                return f"Price data query failed: {exc}"
+
         elif name == "list_knowledge_docs":
             limit = int(inputs.get("limit") or 30)
             try:
@@ -816,6 +935,22 @@ _TOOLS_PO = [
         "name": "get_policy_snapshot",
         "description": "Poland energy policy — PEP2040, RES Act, OZE auctions, offshore wind programme, foreign investment rules, key risks.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_entso_price_data",
+        "description": (
+            "Returns Polish day-ahead electricity price statistics from the PSE.pl database "
+            "(TGE RDN prices in PLN/MWh and EUR/MWh). Includes recent daily average/min/max "
+            "prices from the live scraped dataset. Use this for up-to-date price trend analysis, "
+            "arbitrage revenue estimation, and any question about recent Polish power prices."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Number of historical days to summarise (default 30)"},
+            },
+            "required": [],
+        },
     },
     {
         "name": "list_knowledge_docs",
@@ -1486,12 +1621,238 @@ with tab_mgmt:
             if jobs:
                 next_run = min((j.next_run_time for j in jobs if j.next_run_time), default=None)
                 next_str = next_run.strftime("%Y-%m-%d %H:%M WAW") if next_run else "—"
-                st.success(f"Running · Next: **{next_str}**")
+                st.success(f"Running · Next job: **{next_str}**")
+                for j in jobs:
+                    nrt = j.next_run_time.strftime("%H:%M") if j.next_run_time else "—"
+                    st.caption(f"`{j.id}` — next: {nrt}")
         except Exception as exc:
             st.error(f"Scheduler error: {exc}")
 
     st.divider()
+
+    # ── Day-Ahead Price Data ──────────────────────────────────────────────────
+    st.subheader("TGE Day-Ahead Price Data")
+    st.caption(
+        "Hourly day-ahead prices (PLN/MWh and EUR/MWh) from PSE.pl CSV export. "
+        "Optional ENTSO-E API fallback (set **ENTSOE_API_KEY** env var). "
+        "Scheduler runs at **07:15 WAW** daily."
+    )
+
+    price_stat_c1, price_stat_c2, price_stat_c3 = st.columns(3)
+    with price_stat_c1:
+        latest_price_date = _po_latest_price_date()
+        st.metric("Latest trading date", latest_price_date.split(" ")[0] if latest_price_date != "—" else "—")
+    with price_stat_c2:
+        try:
+            n_price_rows = _query("SELECT COUNT(*) AS n FROM intl_market.po_day_ahead_prices")
+            st.metric("Price rows stored", int(n_price_rows["n"].iloc[0]))
+        except Exception:
+            st.metric("Price rows stored", "—")
+    with price_stat_c3:
+        try:
+            n_days_df = _query("SELECT COUNT(DISTINCT trading_date) AS n FROM intl_market.po_day_ahead_prices")
+            st.metric("Trading days", int(n_days_df["n"].iloc[0]))
+        except Exception:
+            st.metric("Trading days", "—")
+
+    price_btn_c1, price_btn_c2 = st.columns(2)
+    with price_btn_c1:
+        if st.button("Scrape Prices Now", type="primary", key="po_price_scrape_now"):
+            with st.spinner("Fetching prices from PSE.pl…"):
+                try:
+                    import psycopg2
+                    _pconn = psycopg2.connect(
+                        os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                        keepalives=1, keepalives_idle=30,
+                    )
+                    _pconn.autocommit = True
+                    results = run_entso_price_scrape(_pconn, days_back=1)
+                    _pconn.close()
+                    _po_latest_price_date.clear()
+                    _po_price_history.clear()
+                    total = sum(v for v in results.values() if v > 0)
+                    if total > 0:
+                        st.success(f"Fetched {total} new price records: {results}")
+                    else:
+                        st.info(
+                            f"All records already stored or no new data ({results}). "
+                            "PSE.pl publishes day-ahead prices with ~1-day lag. "
+                            "Verify the latest date shown above."
+                        )
+                except Exception as exc:
+                    st.error(f"Price scrape failed: {exc}")
+    with price_btn_c2:
+        backfill_price_days = st.number_input(
+            "Backfill days", min_value=1, max_value=365, value=30, key="po_price_backfill_days"
+        )
+        if st.button("Backfill Price History", key="po_price_backfill"):
+            with st.spinner(f"Backfilling {backfill_price_days} days of day-ahead prices…"):
+                try:
+                    import psycopg2
+                    _pconn = psycopg2.connect(
+                        os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                        keepalives=1, keepalives_idle=30,
+                    )
+                    _pconn.autocommit = True
+                    results = run_entso_price_scrape(_pconn, days_back=int(backfill_price_days))
+                    _pconn.close()
+                    _po_latest_price_date.clear()
+                    _po_price_history.clear()
+                    total = sum(v for v in results.values() if v > 0)
+                    st.success(f"Backfill complete: {total} new rows across {len(results)} dates.")
+                    with st.expander("Per-date results"):
+                        for dt, n in sorted(results.items(), reverse=True):
+                            st.caption(f"{dt}: {n} rows")
+                except Exception as exc:
+                    st.error(f"Backfill failed: {exc}")
+
+    # Price chart
+    price_df = _po_price_history(days=30)
+    if not price_df.empty:
+        st.markdown("**Last 30 days — Daily average day-ahead price**")
+        try:
+            fig_p = px.line(
+                price_df[price_df["avg_pln"].notna()],
+                x="trading_date", y="avg_pln",
+                labels={"trading_date": "Date", "avg_pln": "PLN/MWh"},
+                color_discrete_sequence=["#1f77b4"],
+            )
+            fig_p.update_layout(height=300, margin=dict(t=20, b=20))
+            st.plotly_chart(fig_p, use_container_width=True)
+        except Exception:
+            st.dataframe(price_df[["trading_date", "avg_pln", "avg_eur"]],
+                         use_container_width=True, hide_index=True)
+    else:
+        st.info("No day-ahead price data yet. Click 'Scrape Prices Now' above to fetch.")
+
+    st.caption(
+        "**ENTSO-E API:** Set `ENTSOE_API_KEY` environment variable for direct ENTSO-E Transparency "
+        "Platform API access (free registration at transparency.entsoe.eu). "
+        "Without the key, prices are fetched from PSE.pl CSV exports."
+    )
+
+    st.divider()
+
+    # ── Polish Market Document Sources ────────────────────────────────────────
+    st.subheader("Polish Market Document Sources")
+    st.caption(
+        "PSE balancing/grid/aFRR reports · TGE market reports · URE regulatory publications · "
+        "ENTSO-E news and publications. Scheduled every **Monday 04:05 WAW**."
+    )
+
+    _PO_DOC_SOURCE_LABELS = [
+        ("local_reports",       "Local Reports (Aurora PDFs/Excel)"),
+        ("pse_pl",              "PSE Balancing Reports"),
+        ("pse_grid",            "PSE Grid/Transmission Reports"),
+        ("pse_afrr",            "PSE aFRR/FCR Tender Results"),
+        ("tge_reports",         "TGE Market Reports"),
+        ("ure_regulatory",      "URE Regulatory Publications"),
+        ("entsoe_publications",  "ENTSO-E News & Publications"),
+    ]
+
+    # Status table
+    try:
+        src_rows = []
+        for src_key, src_label in _PO_DOC_SOURCE_LABELS:
+            row_df = _query(
+                f"SELECT COUNT(*) AS n, MAX(fetched_at) AS last_fetched "
+                f"FROM intl_market.{PREFIX}knowledge_docs WHERE source=%s",
+                (src_key,),
+            )
+            n_docs = int(row_df["n"].iloc[0]) if not row_df.empty else 0
+            last_ft = row_df["last_fetched"].iloc[0] if not row_df.empty else None
+            last_str = str(last_ft)[:16] if last_ft is not None else "Never"
+            src_rows.append({"Source": src_label, "Docs": n_docs, "Last Fetched": last_str})
+        st.dataframe(pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
+    except Exception as exc:
+        st.warning(f"Could not load source stats: {exc}")
+
+    doc_btn_c1, doc_btn_c2 = st.columns(2)
+    with doc_btn_c1:
+        if st.button("Auto-ingest Local Reports", type="primary", key="po_ingest_local_dm"):
+            with st.spinner("Ingesting from data/market-fundamentals-po/…"):
+                try:
+                    results = run_knowledge_ingest(only=["local_reports"], verbose=False)
+                    st.success(f"Done — {results.get('local_reports', 0)} new docs")
+                    _knowledge_doc_counts.clear()
+                except Exception as exc:
+                    st.error(f"Failed: {exc}")
+    with doc_btn_c2:
+        if st.button("Fetch All Online Sources Now", key="po_docs_fetch_all"):
+            with st.spinner("Scraping PSE/TGE/URE/ENTSO-E (may take 2–5 min)…"):
+                try:
+                    online_keys = [s for s, _ in _PO_DOC_SOURCE_LABELS if s != "local_reports"]
+                    results = run_knowledge_ingest(only=online_keys, verbose=False)
+                    total = sum(v for v in results.values() if isinstance(v, int) and v > 0)
+                    st.success(f"Done — {total} new documents added.")
+                    with st.expander("Per-source results"):
+                        for src_key, src_label in _PO_DOC_SOURCE_LABELS:
+                            if src_key in results:
+                                st.caption(f"{src_label}: {results.get(src_key, 0)} new docs")
+                    _knowledge_doc_counts.clear()
+                except Exception as exc:
+                    st.error(f"Fetch failed: {exc}")
+
+    st.markdown("**Historical Backfill**")
+    st.caption("Paginate deeply through listing pages to retrieve documents since a chosen start date.")
+
+    po_bf_c1, po_bf_c2 = st.columns(2)
+    with po_bf_c1:
+        po_backfill_start = st.date_input(
+            "Backfill from date", value=date(2023, 1, 1), key="po_bf_start"
+        )
+        po_backfill_sources = st.multiselect(
+            "Sources to backfill",
+            options=[s for s, _ in _PO_DOC_SOURCE_LABELS if s != "local_reports"],
+            format_func=lambda s: dict(_PO_DOC_SOURCE_LABELS).get(s, s),
+            default=[s for s, _ in _PO_DOC_SOURCE_LABELS if s != "local_reports"],
+            key="po_bf_sources",
+        )
+    with po_bf_c2:
+        st.markdown("")
+        st.markdown("")
+        if st.button("Run Historical Backfill", type="primary", key="po_bf_run"):
+            if not po_backfill_sources:
+                st.warning("Select at least one source.")
+            else:
+                with st.status(
+                    f"Backfilling {len(po_backfill_sources)} sources since {po_backfill_start}…",
+                    expanded=True,
+                ) as bf_status:
+                    try:
+                        import psycopg2
+                        _bf_conn = psycopg2.connect(
+                            os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                            keepalives=1, keepalives_idle=30,
+                        )
+                        _bf_conn.autocommit = False
+                        bf_results: dict = {}
+                        for src_key in po_backfill_sources:
+                            src_label = dict(_PO_DOC_SOURCE_LABELS).get(src_key, src_key)
+                            st.write(f"Fetching **{src_label}** …")
+                            per = run_po_doc_backfill(
+                                _bf_conn, [src_key], po_backfill_start, PREFIX
+                            )
+                            n_src = per.get(src_key, 0)
+                            bf_results[src_key] = n_src
+                            st.write(f"  → {n_src} new docs")
+                        _bf_conn.close()
+                        total_bf = sum(v for v in bf_results.values() if v > 0)
+                        bf_status.update(
+                            label=f"Backfill complete — {total_bf} new documents added.",
+                            state="complete",
+                        )
+                        with st.expander("Per-source results", expanded=True):
+                            for src_key, src_label in _PO_DOC_SOURCE_LABELS:
+                                if src_key in bf_results:
+                                    st.caption(f"{src_label}: {bf_results[src_key]} new docs")
+                        _knowledge_doc_counts.clear()
+                    except Exception as exc:
+                        st.error(f"Backfill failed: {exc}")
+
+    st.divider()
     st.subheader("Knowledge Base Digest → Expert Memory")
+    st.caption("Extracts durable insights from KB documents. Runs at 03:45 WAW nightly.")
     if st.button("Digest KB into Expert Memory", type="primary", key="po_digest_kb"):
         with st.spinner("Extracting insights (1-2 min)…"):
             try:

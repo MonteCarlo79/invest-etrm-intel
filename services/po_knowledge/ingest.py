@@ -174,60 +174,22 @@ def _extract_text(path: pathlib.Path, ext: str) -> str:
 
 
 class PSEPublicationsConnector:
-    """Fetches recent PSE (Polish TSO) market publications and reports."""
+    """Thin wrapper — delegates to the richer PSEBalancingReportsConnector in entso_scraper."""
 
     source = "pse_pl"
-    _BASE_URL = "https://www.pse.pl/en/transmission-system-operator/market-publications"
 
     def fetch(self) -> list[dict]:
         try:
-            import requests
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.warning("[pse_pl] requests/beautifulsoup4 not installed")
-            return []
-
-        docs = []
-        try:
-            resp = requests.get(
-                self._BASE_URL,
-                headers={"User-Agent": "BESSPlatformBot/1.0 (investment research)"},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            for link in soup.find_all("a", href=True)[:30]:
-                href = link["href"]
-                text = link.get_text(" ", strip=True)
-                if not text or len(text) < 10:
-                    continue
-                if not any(kw in text.lower() for kw in ["report", "bulletin", "market", "fcr", "afrr", "reserve"]):
-                    continue
-                if not href.startswith("http"):
-                    href = "https://www.pse.pl" + href if href.startswith("/") else href
-
-                try:
-                    art_resp = requests.get(href, headers={"User-Agent": "BESSPlatformBot/1.0"}, timeout=15)
-                    art_soup = BeautifulSoup(art_resp.text, "html.parser")
-                    for tag in art_soup.find_all(["script", "style"]):
-                        tag.decompose()
-                    content = art_soup.get_text(" ", strip=True)
-                    if len(content.strip()) < 100:
-                        continue
-                    docs.append({
-                        "doc_type": "market_report",
-                        "title": text[:250],
-                        "url": href,
-                        "published_date": date.today(),
-                        "content": f"PSE Poland — {text}\n\n{content[:5000]}",
-                    })
-                except Exception:
-                    pass
+            from services.po_knowledge.entso_scraper import PSEBalancingReportsConnector
+            conn = PSEBalancingReportsConnector()
+            docs = conn.fetch(max_pages=3)
+            # Normalise source tag to pse_pl for backwards compatibility
+            for d in docs:
+                d["source"] = "pse_pl"
+            return docs
         except Exception as exc:
-            logger.warning("[pse_pl] Fetch failed: %s", exc)
-
-        return docs
+            logger.warning("[pse_pl] fetch failed: %s", exc)
+            return []
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -268,9 +230,22 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
         )
     conn.commit()
 
+    from services.po_knowledge.entso_scraper import (
+        PSEGridReportsConnector,
+        PSEAFRRDataConnector,
+        TGEMarketReportsConnector,
+        UREPublicationsConnector,
+        ENTSOEPublicationsConnector,
+    )
+
     connectors = [
-        ("local_reports", "Local Aurora reports (PDF/Excel)",  LocalReportsConnector()),
-        ("pse_pl",        "PSE publications",                   PSEPublicationsConnector()),
+        ("local_reports",      "Local Aurora reports (PDF/Excel)", LocalReportsConnector()),
+        ("pse_pl",             "PSE balancing publications",        PSEPublicationsConnector()),
+        ("pse_grid",           "PSE grid/transmission reports",     PSEGridReportsConnector()),
+        ("pse_afrr",           "PSE aFRR/FCR tender results",       PSEAFRRDataConnector()),
+        ("tge_reports",        "TGE market reports",                TGEMarketReportsConnector()),
+        ("ure_regulatory",     "URE regulatory publications",       UREPublicationsConnector()),
+        ("entsoe_publications","ENTSO-E news and publications",     ENTSOEPublicationsConnector()),
     ]
 
     results: dict[str, int] = {}
