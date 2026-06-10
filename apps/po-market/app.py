@@ -1618,14 +1618,14 @@ with tab_bess:
         _prev_arb_pct = _prev.get("arb_pct", 100) if _prev else 100
         _prev_power   = st.session_state.get("po_da_power", 50.0) or 50.0
         _prev_dur     = st.session_state.get("po_da_dur", 2.0) or 2.0
-        _prev_eff_raw = st.session_state.get("po_da_eff", 0.85) or 0.85
+        _prev_eff_pct = st.session_state.get("po_da_eff", 85.0) or 85.0  # widget stores % (85.0), not fraction
         km_power = st.number_input("Power (MW)", 1.0, 1000.0,
                                     float(_prev_arb_pct / 100 * _prev_power),
                                     10.0, key="po_km_power")
         km_dur   = st.number_input("Duration (h)", 0.5, 8.0,
                                     float(_prev_dur), 0.5, key="po_km_dur")
         km_eff   = st.number_input("Efficiency (%)", 50.0, 100.0,
-                                    float(_prev_eff_raw * 100),
+                                    float(_prev_eff_pct),
                                     1.0, key="po_km_eff") / 100.0
 
     if st.button("Value Strip", type="primary", key="po_km_run"):
