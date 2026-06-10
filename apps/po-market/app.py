@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "config", ".env"))
 
 import anthropic
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -38,6 +39,7 @@ from services.po_knowledge.entso_scraper import (
     run_entso_price_scrape,
     run_po_doc_backfill,
     _PO_DOC_CONNECTOR_MAP,
+    get_as_revenue_estimate,
 )
 from services.intl_market_common.advanced_retrieval_base import retrieve_for_agent
 from services.intl_market_common.expert_memory_base import (
@@ -160,6 +162,36 @@ def _ensure_tables():
         "CREATE INDEX IF NOT EXISTS po_day_ahead_prices_date_idx "
         "ON intl_market.po_day_ahead_prices (trading_date DESC)"
     )
+    # Ancillary service weekly auction prices (FCR, aFRR)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intl_market.po_as_prices (
+            id                SERIAL PRIMARY KEY,
+            week_start        DATE NOT NULL,
+            market_type       TEXT NOT NULL,
+            price_pln_mw_week NUMERIC(12,2),
+            accepted_mw       NUMERIC(10,2),
+            source            TEXT DEFAULT 'pse',
+            fetched_at        TIMESTAMPTZ DEFAULT now(),
+            UNIQUE (week_start, market_type)
+        )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS po_as_prices_week_idx "
+        "ON intl_market.po_as_prices (week_start DESC)"
+    )
+    # Rynek Mocy (Capacity Market) annual auction results
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intl_market.po_capacity_market (
+            id              SERIAL PRIMARY KEY,
+            delivery_year   INT  NOT NULL,
+            auction_date    DATE,
+            price_pln_mw_yr NUMERIC(12,2),
+            accepted_mw     NUMERIC(10,2),
+            source          TEXT DEFAULT 'tge',
+            fetched_at      TIMESTAMPTZ DEFAULT now(),
+            UNIQUE (delivery_year)
+        )
+    """)
     _conn().commit()
 
 
@@ -213,12 +245,51 @@ def _start_scheduler():
         except Exception as exc:
             logger.error("[po_scheduler] docs job failed: %s", exc)
 
+    def _as_scrape_job():
+        """Scheduled: scrape FCR and aFRR prices from PSE (Tuesdays 06:05 CET)."""
+        try:
+            import psycopg2 as _psycopg2
+            _c = _psycopg2.connect(
+                os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                keepalives=1, keepalives_idle=30,
+            )
+            _c.autocommit = True
+            from services.po_knowledge.entso_scraper import (
+                scrape_po_fcr_prices, scrape_po_afrr_prices,
+            )
+            n_fcr  = scrape_po_fcr_prices(_c, weeks_back=4)
+            n_afrr = scrape_po_afrr_prices(_c, weeks_back=4)
+            _c.close()
+            logger.info("[po_scheduler] po_as_prices: FCR=%d rows, aFRR=%d rows", n_fcr, n_afrr)
+        except Exception as exc:
+            logger.error("[po_scheduler] po_as_prices failed: %s", exc)
+
+    def _cap_market_job():
+        """Scheduled: scrape Rynek Mocy results from TGE (1st of month 05:10 CET)."""
+        try:
+            import psycopg2 as _psycopg2
+            _c = _psycopg2.connect(
+                os.environ.get("PGURL", "postgresql://postgres:root@127.0.0.1:5433/marketdata"),
+                keepalives=1, keepalives_idle=30,
+            )
+            _c.autocommit = True
+            from services.po_knowledge.entso_scraper import scrape_po_capacity_market
+            n = scrape_po_capacity_market(_c)
+            _c.close()
+            logger.info("[po_scheduler] po_capacity_market: %d rows", n)
+        except Exception as exc:
+            logger.error("[po_scheduler] po_capacity_market failed: %s", exc)
+
     sched = BackgroundScheduler(timezone="Europe/Warsaw")
-    sched.add_job(_ingest_job, "cron", hour=3, minute=30, id="po_ingest", misfire_grace_time=3600)
-    sched.add_job(_digest_job, "cron", hour=3, minute=45, id="po_digest", misfire_grace_time=3600)
-    sched.add_job(_price_job,  "cron", hour=7, minute=15, id="po_price",  misfire_grace_time=3600)
-    sched.add_job(_docs_job,   "cron", day_of_week="mon", hour=4, minute=5,
-                  id="po_docs", misfire_grace_time=7200)
+    sched.add_job(_ingest_job,     "cron", hour=3, minute=30, id="po_ingest",     misfire_grace_time=3600)
+    sched.add_job(_digest_job,     "cron", hour=3, minute=45, id="po_digest",     misfire_grace_time=3600)
+    sched.add_job(_price_job,      "cron", hour=7, minute=15, id="po_price",      misfire_grace_time=3600)
+    sched.add_job(_docs_job,       "cron", day_of_week="mon", hour=4, minute=5,
+                  id="po_docs",       misfire_grace_time=7200)
+    sched.add_job(_as_scrape_job,  "cron", day_of_week="tue", hour=6, minute=5,
+                  id="po_as_prices",  misfire_grace_time=3600)
+    sched.add_job(_cap_market_job, "cron", day=1, hour=5, minute=10,
+                  id="po_cap_market", misfire_grace_time=3600)
     sched.start()
     return sched
 
@@ -1058,6 +1129,149 @@ def _run_agent_turn(messages: list, system: str) -> tuple[str, list, list]:
         messages = messages + [{"role": "user", "content": tool_results}]
 
 
+# ── BESS Dispatch & Calibration ───────────────────────────────────────────────
+
+def _run_bess_dispatch_po(
+    power_mw: float,
+    duration_h: float,
+    roundtrip_eff: float,
+    price_col: str = "price_pln_mwh",
+) -> pd.DataFrame:
+    """Run LP perfect-forecast BESS dispatch against Polish day-ahead prices.
+
+    Args:
+        power_mw: Arbitrage-slice power rating (MW) — caller passes power × arb_pct/100
+        duration_h: Battery duration in hours (energy = power_mw × duration_h MWh)
+        roundtrip_eff: Round-trip efficiency (e.g. 0.85)
+        price_col: 'price_pln_mwh' or 'price_eur_mwh'
+
+    Returns DataFrame with columns:
+        trading_date, pf_profit_pln, naive_profit_pln, options_value_pln,
+        charge_mwh, discharge_mwh
+    """
+    from services.bess_map.optimisation_engine import optimise_day
+
+    prices_df = _query(
+        "SELECT trading_date, hour, price_pln_mwh, price_eur_mwh "
+        "FROM intl_market.po_day_ahead_prices "
+        "ORDER BY trading_date, hour"
+    )
+    if prices_df.empty:
+        return pd.DataFrame(columns=[
+            "trading_date", "pf_profit_pln", "naive_profit_pln",
+            "options_value_pln", "charge_mwh", "discharge_mwh",
+        ])
+
+    # Keep only complete 24-hour days
+    day_counts = prices_df.groupby("trading_date")["hour"].count()
+    complete_days = day_counts[day_counts == 24].index
+    prices_df = prices_df[prices_df["trading_date"].isin(complete_days)]
+
+    rows = []
+    for day, grp in prices_df.groupby("trading_date"):
+        grp = grp.sort_values("hour")
+        prices_arr = grp[price_col].to_numpy(dtype=float)  # PLN/MWh (or EUR/MWh)
+
+        # LP dispatch — prices in PLN/MWh → profit in PLN directly (MW × PLN/MWh × 1h = PLN)
+        res = optimise_day(prices_arr, power_mw, duration_h, roundtrip_eff)
+        pf_profit = res.profit if res.status == "Optimal" else 0.0
+
+        # Naive: charge at cheapest hour, discharge at most expensive hour (1 cycle)
+        min_h, max_h = int(np.argmin(prices_arr)), int(np.argmax(prices_arr))
+        eta_c = np.sqrt(roundtrip_eff)
+        eta_d = np.sqrt(roundtrip_eff)
+        energy_mwh = power_mw * duration_h
+        if max_h > min_h:
+            naive_profit = (
+                prices_arr[max_h] * eta_d * energy_mwh
+                - prices_arr[min_h] / eta_c * energy_mwh
+            )
+        else:
+            naive_profit = 0.0
+
+        options_value = max(pf_profit - max(naive_profit, 0.0), 0.0)
+
+        charge_mwh    = float(np.sum(res.charge_mw))    if res.status == "Optimal" else 0.0
+        discharge_mwh = float(np.sum(res.discharge_mw)) if res.status == "Optimal" else 0.0
+
+        rows.append({
+            "trading_date":     day,
+            "pf_profit_pln":    pf_profit,
+            "naive_profit_pln": naive_profit,
+            "options_value_pln": options_value,
+            "charge_mwh":       charge_mwh,
+            "discharge_mwh":    discharge_mwh,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _calibrate_po_strip_params(
+    conn,
+    peak_start_h: int = 8,
+    peak_end_h: int = 20,
+    window_days: int = 90,
+) -> dict:
+    """Calibrate Kirk-Margrabe inputs from po_day_ahead_prices history.
+
+    Args:
+        conn: psycopg2 connection (unused directly — uses _query)
+        peak_start_h: First peak hour (inclusive), default 8
+        peak_end_h: Last peak hour (exclusive), default 20
+        window_days: Look-back window in days
+
+    Returns dict:
+        peak_forward_pln, offpeak_forward_pln,
+        peak_vol, offpeak_vol,
+        n_days  (data coverage)
+    """
+    from datetime import date, timedelta
+
+    cutoff = (date.today() - timedelta(days=window_days)).isoformat()
+    df = _query(
+        "SELECT trading_date, hour, price_pln_mwh "
+        "FROM intl_market.po_day_ahead_prices "
+        "WHERE trading_date >= %s AND price_pln_mwh IS NOT NULL "
+        "ORDER BY trading_date, hour",
+        params=(cutoff,),
+    )
+
+    _default = {
+        "peak_forward_pln": 0.0, "offpeak_forward_pln": 0.0,
+        "peak_vol": 0.30, "offpeak_vol": 0.30, "n_days": 0,
+    }
+
+    if df.empty:
+        return _default
+
+    is_peak = df["hour"].between(peak_start_h, peak_end_h - 1)
+    peak_df    = df[is_peak].groupby("trading_date")["price_pln_mwh"].mean()
+    offpeak_df = df[~is_peak].groupby("trading_date")["price_pln_mwh"].mean()
+
+    # Align to common dates
+    common = peak_df.index.intersection(offpeak_df.index)
+    if len(common) < 5:
+        return _default
+
+    peak_series    = peak_df.loc[common].sort_index()
+    offpeak_series = offpeak_df.loc[common].sort_index()
+
+    peak_fwd    = float(peak_series.mean())
+    offpeak_fwd = float(offpeak_series.mean())
+
+    def _annualised_vol(series: pd.Series) -> float:
+        log_ret = np.log(series.values[1:] / np.maximum(series.values[:-1], 1e-6))
+        return float(np.std(log_ret) * np.sqrt(252)) if len(log_ret) > 1 else 0.30
+
+    return {
+        "peak_forward_pln":    peak_fwd,
+        "offpeak_forward_pln": offpeak_fwd,
+        "peak_vol":    _annualised_vol(peak_series),
+        "offpeak_vol": _annualised_vol(offpeak_series),
+        "n_days":      len(common),
+    }
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -1238,6 +1452,243 @@ with tab_bess:
     ])
     st.dataframe(config_df, use_container_width=True, hide_index=True)
 
+    # ── Subsection A: Perfect-Forecast Dispatch P&L ────────────────────────
+    st.divider()
+    st.subheader("BESS P&L Analysis — Perfect-Forecast Dispatch")
+    st.caption(
+        "LP optimal dispatch on arbitrage slice · Compares to naive 1-cycle · "
+        "AS revenue stacked from DB average auction prices"
+    )
+
+    da_c1, da_c2, da_c3, da_c4 = st.columns(4)
+    with da_c1:
+        da_power = st.number_input("Power (MW)", min_value=1.0, max_value=1000.0,
+                                    value=50.0, step=10.0, key="po_da_power")
+    with da_c2:
+        da_dur   = st.number_input("Duration (h)", min_value=0.5, max_value=8.0,
+                                    value=2.0, step=0.5, key="po_da_dur")
+    with da_c3:
+        da_eff   = st.number_input("Efficiency (%)", min_value=50.0, max_value=100.0,
+                                    value=85.0, step=1.0, key="po_da_eff") / 100.0
+    with da_c4:
+        da_pcol  = st.selectbox("Price", ["price_pln_mwh", "price_eur_mwh"],
+                                 format_func=lambda x: "PLN/MWh" if "pln" in x else "EUR/MWh",
+                                 key="po_da_pcol")
+
+    al_c1, al_c2, al_c3 = st.columns(3)
+    with al_c1:
+        fcr_pct  = st.number_input("FCR allocation (%)", 0.0, 100.0, 20.0, 5.0, key="po_fcr_pct")
+    with al_c2:
+        afrr_pct = st.number_input("aFRR allocation (%)", 0.0, 100.0, 20.0, 5.0, key="po_afrr_pct")
+    with al_c3:
+        arb_pct  = 100.0 - fcr_pct - afrr_pct
+        st.metric("Arbitrage allocation (%)", f"{arb_pct:.0f}")
+        if arb_pct < 0:
+            st.error("FCR + aFRR > 100% — reduce allocations")
+
+    if st.button("Run Dispatch Model", type="primary", key="po_run_dispatch",
+                 disabled=(arb_pct < 0)):
+        with st.spinner("Running LP dispatch…"):
+            arb_mw = da_power * arb_pct / 100.0
+            dispatch_df = _run_bess_dispatch_po(arb_mw, da_dur, da_eff, da_pcol)
+
+            as_rev = get_as_revenue_estimate(_conn(), da_power, fcr_pct, afrr_pct)
+
+            pf_annual   = float(dispatch_df["pf_profit_pln"].sum())   if not dispatch_df.empty else 0.0
+            opts_annual = float(dispatch_df["options_value_pln"].sum()) if not dispatch_df.empty else 0.0
+            total_rev   = pf_annual + as_rev["total_pln_yr"]
+
+            st.session_state["po_dispatch_results"] = {
+                "arb_pln_yr":      pf_annual,
+                "fcr_pln_yr":      as_rev["fcr_pln_yr"],
+                "afrr_pln_yr":     as_rev["afrr_pln_yr"],
+                "capacity_pln_yr": as_rev["capacity_pln_yr"],
+                "total_pln_yr":    total_rev,
+                "options_pln_yr":  opts_annual,
+                "fcr_pct":         fcr_pct,
+                "afrr_pct":        afrr_pct,
+                "arb_pct":         arb_pct,
+                "df":              dispatch_df,
+            }
+            st.rerun()
+
+    disp = st.session_state.get("po_dispatch_results")
+    if disp is not None:
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Total Annual Revenue",
+                  f"zł{disp['total_pln_yr']/1e6:.2f}M")
+        m2.metric("Arbitrage P&L",
+                  f"zł{disp['arb_pln_yr']/1e6:.2f}M")
+        m3.metric("FCR Revenue",
+                  f"zł{disp['fcr_pln_yr']/1e6:.2f}M",
+                  f"{disp['fcr_pct']:.0f}% capacity")
+        m4.metric("aFRR Revenue",
+                  f"zł{disp['afrr_pln_yr']/1e6:.2f}M",
+                  f"{disp['afrr_pct']:.0f}% capacity")
+        m5.metric("Rynek Mocy",
+                  f"zł{disp['capacity_pln_yr']/1e6:.2f}M")
+        m6.metric("Options Value",
+                  f"zł{disp['options_pln_yr']/1e6:.2f}M",
+                  help="PF dispatch premium over naive 1-cycle dispatch")
+
+        df_disp = disp["df"]
+        if not df_disp.empty:
+            # Chart 1: Daily P&L line
+            fig1 = px.line(
+                df_disp, x="trading_date", y="pf_profit_pln",
+                title="Daily Arbitrage P&L (PLN)",
+                labels={"trading_date": "Date", "pf_profit_pln": "Profit (PLN)"},
+            )
+            st.plotly_chart(fig1, use_container_width=True)
+
+            # Chart 2: Monthly stacked bar (arb + AS layers)
+            df2 = df_disp.copy()
+            df2["month"] = pd.to_datetime(df2["trading_date"]).dt.to_period("M").astype(str)
+            monthly_arb = df2.groupby("month")["pf_profit_pln"].sum().reset_index()
+            monthly_arb["FCR"]        = disp["fcr_pln_yr"]        / 12 if disp["fcr_pln_yr"] else 0
+            monthly_arb["aFRR"]       = disp["afrr_pln_yr"]       / 12 if disp["afrr_pln_yr"] else 0
+            monthly_arb["Rynek Mocy"] = disp["capacity_pln_yr"]   / 12 if disp["capacity_pln_yr"] else 0
+            monthly_arb = monthly_arb.rename(columns={"pf_profit_pln": "Arbitrage"})
+            fig2 = px.bar(
+                monthly_arb.melt(id_vars="month",
+                                  value_vars=["Arbitrage", "FCR", "aFRR", "Rynek Mocy"]),
+                x="month", y="value", color="variable",
+                title="Monthly Revenue Stack (PLN)",
+                labels={"month": "Month", "value": "Revenue (PLN)", "variable": "Source"},
+                barmode="stack",
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+            # Chart 3: Dispatch profile for selected date
+            sel_date = st.selectbox(
+                "Dispatch profile date",
+                options=sorted(df_disp["trading_date"].unique()),
+                key="po_disp_date",
+            )
+            day_prices = _query(
+                "SELECT hour, price_pln_mwh FROM intl_market.po_day_ahead_prices "
+                "WHERE trading_date = %s ORDER BY hour",
+                params=(str(sel_date),),
+            )
+            if not day_prices.empty:
+                from services.bess_map.optimisation_engine import optimise_day
+                arb_mw_sel = da_power * arb_pct / 100.0
+                res = optimise_day(
+                    day_prices["price_pln_mwh"].to_numpy(dtype=float),
+                    arb_mw_sel, da_dur, da_eff,
+                )
+                fig3 = go.Figure()
+                hours = list(range(24))
+                fig3.add_bar(x=hours, y=list(-res.charge_mw),
+                              name="Charge (MW)", marker_color="steelblue")
+                fig3.add_bar(x=hours, y=list(res.discharge_mw),
+                              name="Discharge (MW)", marker_color="coral")
+                fig3.add_scatter(x=hours, y=day_prices["price_pln_mwh"].tolist(),
+                                  name="Price (PLN/MWh)", yaxis="y2",
+                                  line=dict(color="gold", width=2))
+                fig3.update_layout(
+                    title=f"Dispatch Profile — {sel_date}",
+                    barmode="relative",
+                    yaxis=dict(title="Power (MW)"),
+                    yaxis2=dict(title="Price (PLN/MWh)", overlaying="y", side="right"),
+                    legend=dict(orientation="h"),
+                )
+                st.plotly_chart(fig3, use_container_width=True)
+
+    # ── Subsection B: Kirk-Margrabe Strip Valuation ────────────────────────
+    st.divider()
+    st.subheader("BESS Spread Option Strip Valuation (Kirk-Margrabe)")
+    st.caption(
+        "Treats BESS as a strip of N daily peak/offpeak spread call options · "
+        "Calibrated from last 90 days of TGE day-ahead prices"
+    )
+
+    km_c1, km_c2 = st.columns(2)
+    with km_c1:
+        km_peak_start = st.slider("Peak hours start", 6, 12, 8, key="po_km_pk_start")
+        km_peak_end   = st.slider("Peak hours end",   14, 22, 20, key="po_km_pk_end")
+        km_om_cost    = st.number_input("O&M cost / strike K (PLN/MWh)",
+                                         0.0, 200.0, 20.0, 5.0, key="po_km_om")
+        km_horizon    = st.number_input("Valuation horizon (days)",
+                                         30, 730, 365, 30, key="po_km_horizon")
+    with km_c2:
+        km_corr = st.slider("Peak/offpeak correlation", 0.0, 1.0, 0.85, 0.05,
+                              key="po_km_corr")
+        _prev = st.session_state.get("po_dispatch_results", {})
+        _prev_arb_pct = _prev.get("arb_pct", 100) if _prev else 100
+        _prev_power   = st.session_state.get("po_da_power", 50.0) or 50.0
+        _prev_dur     = st.session_state.get("po_da_dur", 2.0) or 2.0
+        _prev_eff_raw = st.session_state.get("po_da_eff", 0.85) or 0.85
+        km_power = st.number_input("Power (MW)", 1.0, 1000.0,
+                                    float(_prev_arb_pct / 100 * _prev_power),
+                                    10.0, key="po_km_power")
+        km_dur   = st.number_input("Duration (h)", 0.5, 8.0,
+                                    float(_prev_dur), 0.5, key="po_km_dur")
+        km_eff   = st.number_input("Efficiency (%)", 50.0, 100.0,
+                                    float(_prev_eff_raw * 100),
+                                    1.0, key="po_km_eff") / 100.0
+
+    if st.button("Value Strip", type="primary", key="po_km_run"):
+        with st.spinner("Calibrating from price history and pricing strip…"):
+            params = _calibrate_po_strip_params(
+                _conn(), km_peak_start, km_peak_end, window_days=90
+            )
+
+            if params["peak_forward_pln"] == 0.0:
+                st.warning("Insufficient price history for calibration (< 5 days). "
+                           "Scrape more day-ahead prices first.")
+            else:
+                from libs.decision_models.bess_spread_call_strip import _run as _km_run
+
+                km_result = _km_run(
+                    asset_code="PO-BESS",
+                    as_of_date=str(pd.Timestamp.today().date()),
+                    n_days_remaining=int(km_horizon),
+                    peak_forward_yuan=params["peak_forward_pln"],
+                    offpeak_forward_yuan=params["offpeak_forward_pln"],
+                    peak_vol=params["peak_vol"],
+                    offpeak_vol=params["offpeak_vol"],
+                    peak_offpeak_corr=km_corr,
+                    roundtrip_eff=km_eff,
+                    power_mw=km_power,
+                    duration_h=km_dur,
+                    om_cost_yuan_per_mwh=km_om_cost,
+                )
+
+                # Display metrics (output fields use "_yuan" suffix but values are PLN)
+                sv    = km_result["strip_value_yuan"]
+                iv    = km_result["intrinsic_value_yuan"]
+                tv    = km_result["time_value_yuan"]
+                mon   = km_result["moneyness_pct"]
+                delta = km_result["delta_yuan_per_yuan"]
+                vega  = km_result["vega_yuan_per_vol_point"]
+
+                km1, km2, km3, km4, km5, km6 = st.columns(6)
+                km1.metric("Strip Value",     f"zł{sv/1e6:.2f}M")
+                km2.metric("Intrinsic Value", f"zł{iv/1e6:.2f}M")
+                km3.metric("Time Value",      f"zł{tv/1e6:.2f}M")
+                km4.metric(
+                    "Moneyness",
+                    f"{mon:+.1f}%",
+                    delta="ITM" if mon > 0 else "OTM",
+                    delta_color="normal" if mon > 0 else "inverse",
+                )
+                km5.metric("Delta", f"{delta:.3f}")
+                km6.metric("Vega",  f"zł{vega/1e3:.1f}K / 1% vol")
+
+                with st.expander("Calibration details"):
+                    col_a, col_b = st.columns(2)
+                    col_a.markdown(
+                        f"**Peak forward:** zł{params['peak_forward_pln']:.1f}/MWh  \n"
+                        f"**Peak vol:** {params['peak_vol']*100:.1f}%  \n"
+                        f"**Data window:** {params['n_days']} days"
+                    )
+                    col_b.markdown(
+                        f"**Offpeak forward:** zł{params['offpeak_forward_pln']:.1f}/MWh  \n"
+                        f"**Offpeak vol:** {params['offpeak_vol']*100:.1f}%  \n"
+                        f"**Spread vol:** {km_result['spread_vol_used']*100:.1f}%"
+                    )
+
 
 # ═══════════════════════════════════════════════════════════════
 # Tab 4 — Investment Analysis
@@ -1263,9 +1714,32 @@ with tab_irr:
             capex_val = st.number_input("CAPEX (EUR/kW-AC)", min_value=100.0, max_value=2000.0,
                                          value=float(default_capex), step=50.0, key="po_capex")
             st.caption("Revenue = FCR + aFRR + Rynek Mocy combined (PLN/MW/yr)")
+            # Load from dispatch model if available
+            _disp = st.session_state.get("po_dispatch_results")
+            if _disp is not None:
+                _total_pln_yr = _disp["total_pln_yr"]
+                _total_mw_yr  = _total_pln_yr / da_power if da_power else _total_pln_yr
+                if st.button(
+                    f"📥 Load from dispatch model  (zł{_total_pln_yr/1e6:.2f}M/yr total)",
+                    key="po_load_dispatch",
+                ):
+                    st.session_state["po_irr_rev_override"] = _total_mw_yr
+                with st.expander("Revenue breakdown", expanded=False):
+                    _total = _disp["total_pln_yr"]
+                    for _label, _key in [
+                        ("Arbitrage (PF dispatch)", "arb_pln_yr"),
+                        ("FCR", "fcr_pln_yr"),
+                        ("aFRR", "afrr_pln_yr"),
+                        ("Rynek Mocy", "capacity_pln_yr"),
+                    ]:
+                        _val = _disp.get(_key, 0.0)
+                        _pct = _val / _total * 100 if _total else 0
+                        st.markdown(f"**{_label}:** zł{_val/1e6:.2f}M &nbsp;&nbsp; `{_pct:.0f}%`")
+                    st.markdown(f"---  \n**Total:** zł{_total/1e6:.2f}M")
+            _rev_default = st.session_state.pop("po_irr_rev_override", 300_000.0)
             rev_val = st.number_input("Combined Revenue (PLN/MW/yr)",
-                                       min_value=50_000.0, max_value=800_000.0,
-                                       value=300_000.0, step=10_000.0, key="po_rev")
+                                       min_value=0.0, max_value=2_000_000.0,
+                                       value=float(_rev_default), step=10_000.0, key="po_rev")
             cf_val = None
         else:
             capex_val = st.number_input("CAPEX (EUR/kW)", min_value=200.0, max_value=3000.0,
@@ -1907,6 +2381,126 @@ with tab_mgmt:
         if st.form_submit_button("Save"):
             _save_memory(cat, subj, cont, source="manual")
             st.success("Saved")
+
+    # ── Ancillary Service Prices ───────────────────────────────────────────
+    st.divider()
+    st.subheader("Ancillary Service Market Prices")
+    st.caption(
+        "FCR and aFRR weekly clearing prices from PSE reporting API · "
+        "Rynek Mocy annual auction results from TGE · "
+        "Scheduler: FCR/aFRR every Tuesday 06:05, Capacity Market 1st of month 05:10 (WAW)"
+    )
+
+    try:
+        as_status = _query(
+            "SELECT market_type, COUNT(*) as weeks, "
+            "MAX(week_start) as latest_week, "
+            "AVG(price_pln_mw_week) as avg_price "
+            "FROM intl_market.po_as_prices "
+            "GROUP BY market_type"
+        )
+    except Exception:
+        as_status = pd.DataFrame()
+    try:
+        cap_status = _query(
+            "SELECT delivery_year, price_pln_mw_yr, auction_date "
+            "FROM intl_market.po_capacity_market "
+            "ORDER BY delivery_year DESC LIMIT 1"
+        )
+    except Exception:
+        cap_status = pd.DataFrame()
+
+    sc1, sc2, sc3 = st.columns(3)
+    _fcr_row = as_status[as_status["market_type"] == "FCR"]        if not as_status.empty else pd.DataFrame()
+    _afr_row = as_status[as_status["market_type"] == "aFRR_capacity"] if not as_status.empty else pd.DataFrame()
+
+    with sc1:
+        if not _fcr_row.empty:
+            st.metric("FCR",
+                       f"zł{float(_fcr_row['avg_price'].iloc[0]):,.0f}/MW/wk",
+                       f"{int(_fcr_row['weeks'].iloc[0])} weeks · latest {_fcr_row['latest_week'].iloc[0]}")
+        else:
+            st.metric("FCR", "No data")
+    with sc2:
+        if not _afr_row.empty:
+            st.metric("aFRR capacity",
+                       f"zł{float(_afr_row['avg_price'].iloc[0]):,.0f}/MW/wk",
+                       f"{int(_afr_row['weeks'].iloc[0])} weeks · latest {_afr_row['latest_week'].iloc[0]}")
+        else:
+            st.metric("aFRR capacity", "No data")
+    with sc3:
+        if not cap_status.empty:
+            st.metric("Rynek Mocy",
+                       f"zł{float(cap_status['price_pln_mw_yr'].iloc[0]):,.0f}/MW/yr",
+                       f"{int(cap_status['delivery_year'].iloc[0])} delivery year")
+        else:
+            st.metric("Rynek Mocy", "No data")
+
+    bt1, bt2, bt3 = st.columns(3)
+    with bt1:
+        if st.button("Scrape FCR prices", key="po_scrape_fcr"):
+            with st.spinner("Fetching FCR auction results from PSE…"):
+                from services.po_knowledge.entso_scraper import scrape_po_fcr_prices
+                n = scrape_po_fcr_prices(_conn(), weeks_back=52)
+            st.success(f"FCR: {n} new rows inserted")
+    with bt2:
+        if st.button("Scrape aFRR prices", key="po_scrape_afrr"):
+            with st.spinner("Fetching aFRR auction results from PSE…"):
+                from services.po_knowledge.entso_scraper import scrape_po_afrr_prices
+                n = scrape_po_afrr_prices(_conn(), weeks_back=52)
+            st.success(f"aFRR: {n} new rows inserted")
+    with bt3:
+        if st.button("Scrape Capacity Market", key="po_scrape_cap"):
+            with st.spinner("Fetching Rynek Mocy results from TGE…"):
+                from services.po_knowledge.entso_scraper import scrape_po_capacity_market
+                n = scrape_po_capacity_market(_conn())
+            st.success(f"Rynek Mocy: {n} rows upserted")
+
+    # 52-week AS price chart
+    try:
+        as_history = _query(
+            "SELECT week_start, market_type, price_pln_mw_week "
+            "FROM intl_market.po_as_prices "
+            "WHERE week_start >= CURRENT_DATE - INTERVAL '52 weeks' "
+            "AND price_pln_mw_week IS NOT NULL "
+            "ORDER BY week_start"
+        )
+    except Exception:
+        as_history = pd.DataFrame()
+    if not as_history.empty:
+        fig_as = px.line(
+            as_history, x="week_start", y="price_pln_mw_week", color="market_type",
+            title="FCR & aFRR Weekly Clearing Prices (PLN/MW/week)",
+            labels={"week_start": "Week", "price_pln_mw_week": "PLN/MW/week",
+                     "market_type": "Market"},
+        )
+        st.plotly_chart(fig_as, use_container_width=True)
+    else:
+        st.info("No AS price history yet. Click 'Scrape FCR prices' or 'Scrape aFRR prices' above.")
+
+    # ── AS Backfill ────────────────────────────────────────────────────────
+    st.subheader("AS Data Backfill")
+    bf_c1, bf_c2, bf_c3 = st.columns(3)
+    with bf_c1:
+        bf_start = st.date_input("Backfill from week", key="po_as_bf_start",
+                                  value=pd.Timestamp.today() - pd.Timedelta(weeks=104))
+    with bf_c2:
+        bf_type = st.selectbox("Market", ["FCR", "aFRR", "Both"], key="po_as_bf_type")
+    with bf_c3:
+        st.write("")
+        st.write("")
+        if st.button("Run Backfill", key="po_as_bf_run"):
+            weeks_back = max(1, (pd.Timestamp.today().date() - bf_start).days // 7)
+            with st.spinner(f"Backfilling {bf_type} for {weeks_back} weeks…"):
+                from services.po_knowledge.entso_scraper import (
+                    scrape_po_fcr_prices, scrape_po_afrr_prices,
+                )
+                total = 0
+                if bf_type in ("FCR", "Both"):
+                    total += scrape_po_fcr_prices(_conn(), weeks_back=weeks_back)
+                if bf_type in ("aFRR", "Both"):
+                    total += scrape_po_afrr_prices(_conn(), weeks_back=weeks_back)
+            st.success(f"Backfill complete: {total} new rows inserted")
 
 
 # ═══════════════════════════════════════════════════════════════

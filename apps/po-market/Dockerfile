@@ -23,12 +23,15 @@ RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     "reportlab>=4.0" \
     pypsa \
     "openai>=1.0" \
-    "pydub>=0.25"
+    "pydub>=0.25" \
+    pulp
 
 COPY apps/po-market/               ./apps/po-market/
 COPY services/common/               ./services/common/
 COPY services/po_knowledge/         ./services/po_knowledge/
 COPY services/intl_market_common/   ./services/intl_market_common/
+COPY services/bess_map/             ./services/bess_map/
+COPY libs/                          ./libs/
 
 ENV PYTHONPATH=/app
 

@@ -729,3 +729,257 @@ def run_entso_price_scrape(conn, days_back: int = 1) -> dict[str, int]:
             results[d] = 0
 
     return results
+
+
+# ── Polish AS Revenue Helpers ─────────────────────────────────────────────
+
+
+def get_as_revenue_estimate(
+    conn,
+    power_mw: float,
+    fcr_pct: float,
+    afrr_pct: float,
+) -> dict:
+    """Return annualised AS revenue estimate from DB average prices.
+
+    Args:
+        conn: psycopg2 connection (autocommit)
+        power_mw: Total BESS power rating (MW)
+        fcr_pct: % of capacity allocated to FCR (0-100)
+        afrr_pct: % of capacity allocated to aFRR (0-100)
+
+    Returns dict with keys:
+        fcr_pln_yr, afrr_pln_yr, capacity_pln_yr, total_pln_yr,
+        fcr_weeks, afrr_weeks
+    """
+    fcr_mw  = power_mw * fcr_pct  / 100.0
+    afrr_mw = power_mw * afrr_pct / 100.0
+
+    result = {
+        "fcr_pln_yr": 0.0, "afrr_pln_yr": 0.0, "capacity_pln_yr": 0.0,
+        "total_pln_yr": 0.0, "fcr_weeks": 0, "afrr_weeks": 0,
+    }
+
+    try:
+        with conn.cursor() as cur:
+            # FCR average weekly price
+            cur.execute(
+                "SELECT AVG(price_pln_mw_week), COUNT(*) "
+                "FROM intl_market.po_as_prices "
+                "WHERE market_type = 'FCR' AND price_pln_mw_week IS NOT NULL"
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                result["fcr_pln_yr"] = float(row[0]) * fcr_mw * 52
+                result["fcr_weeks"]  = int(row[1])
+
+            # aFRR average weekly capacity price
+            cur.execute(
+                "SELECT AVG(price_pln_mw_week), COUNT(*) "
+                "FROM intl_market.po_as_prices "
+                "WHERE market_type = 'aFRR_capacity' AND price_pln_mw_week IS NOT NULL"
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                result["afrr_pln_yr"] = float(row[0]) * afrr_mw * 52
+                result["afrr_weeks"]  = int(row[1])
+
+            # Latest Rynek Mocy clearing price (PLN/MW/yr)
+            cur.execute(
+                "SELECT price_pln_mw_yr FROM intl_market.po_capacity_market "
+                "WHERE price_pln_mw_yr IS NOT NULL ORDER BY delivery_year DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                result["capacity_pln_yr"] = float(row[0]) * power_mw
+
+    except Exception as exc:
+        logger.warning("[get_as_revenue_estimate] DB query failed: %s", exc)
+
+    result["total_pln_yr"] = (
+        result["fcr_pln_yr"] + result["afrr_pln_yr"] + result["capacity_pln_yr"]
+    )
+    return result
+
+
+def _pse_api_get(endpoint: str, params: dict, timeout: int = 20) -> list:
+    """Fetch from PSE reporting API. Returns list of value records or [] on failure.
+
+    Base URL: https://api.raporty.pse.pl/api/
+    If the endpoint path is wrong, check https://api.raporty.pse.pl/docs
+    """
+    import requests
+    try:
+        resp = requests.get(
+            f"https://api.raporty.pse.pl/api/{endpoint}",
+            params=params,
+            timeout=timeout,
+            headers={"Accept": "application/json"},
+        )
+        resp.raise_for_status()
+        return resp.json().get("value", [])
+    except Exception as exc:
+        logger.warning("[_pse_api_get] %s failed: %s", endpoint, exc)
+        return []
+
+
+def _iso_week_monday(week_offset: int) -> date:
+    """Return the Monday of the week `week_offset` weeks ago."""
+    from datetime import timedelta
+    today = date.today()
+    start = today - timedelta(days=today.weekday())
+    return start - timedelta(weeks=week_offset)
+
+
+def scrape_po_fcr_prices(conn, weeks_back: int = 52) -> int:
+    """Fetch FCR weekly auction clearing prices from PSE API and store in po_as_prices.
+
+    PSE endpoint: /rcr (Rezerwa Czestotliwosci Regulacyjnej)
+    Expected response fields: data (date string), cena (PLN/MW/week), ilosc (MW)
+    Returns number of rows inserted.
+    """
+    start = _iso_week_monday(weeks_back).isoformat()
+    end   = date.today().isoformat()
+
+    records = _pse_api_get(
+        "rcr",
+        {"$filter": f"data ge '{start}' and data le '{end}'", "$top": 1000},
+    )
+
+    if not records:
+        logger.warning(
+            "[scrape_po_fcr_prices] No FCR records returned from PSE API "
+            "(endpoint may have changed — verify at https://api.raporty.pse.pl/docs)"
+        )
+        return 0
+
+    n = 0
+    try:
+        with conn.cursor() as cur:
+            for r in records:
+                week_start = r.get("data")
+                price      = r.get("cena")
+                volume     = r.get("ilosc")
+                if not week_start or price is None:
+                    continue
+                cur.execute(
+                    "INSERT INTO intl_market.po_as_prices "
+                    "(week_start, market_type, price_pln_mw_week, accepted_mw, source) "
+                    "VALUES (%s, 'FCR', %s, %s, 'pse') "
+                    "ON CONFLICT (week_start, market_type) DO NOTHING",
+                    (week_start, float(price), float(volume) if volume else None),
+                )
+                n += cur.rowcount
+    except Exception as exc:
+        logger.warning("[scrape_po_fcr_prices] DB insert failed: %s", exc)
+
+    return n
+
+
+def scrape_po_afrr_prices(conn, weeks_back: int = 52) -> int:
+    """Fetch aFRR capacity weekly auction prices from PSE API and store in po_as_prices.
+
+    PSE endpoint: /rar2 (Rezerwa Automatycznej Regulacji 2)
+    Expected response fields: data (date string), cena_mocy (PLN/MW/week), ilosc (MW)
+    Returns number of rows inserted.
+    """
+    start = _iso_week_monday(weeks_back).isoformat()
+    end   = date.today().isoformat()
+
+    records = _pse_api_get(
+        "rar2",
+        {"$filter": f"data ge '{start}' and data le '{end}'", "$top": 1000},
+    )
+
+    if not records:
+        logger.warning(
+            "[scrape_po_afrr_prices] No aFRR records returned from PSE API "
+            "(endpoint may have changed — verify at https://api.raporty.pse.pl/docs)"
+        )
+        return 0
+
+    n = 0
+    try:
+        with conn.cursor() as cur:
+            for r in records:
+                week_start = r.get("data")
+                price      = r.get("cena_mocy") or r.get("cena")  # field name may vary
+                volume     = r.get("ilosc")
+                if not week_start or price is None:
+                    continue
+                cur.execute(
+                    "INSERT INTO intl_market.po_as_prices "
+                    "(week_start, market_type, price_pln_mw_week, accepted_mw, source) "
+                    "VALUES (%s, 'aFRR_capacity', %s, %s, 'pse') "
+                    "ON CONFLICT (week_start, market_type) DO NOTHING",
+                    (week_start, float(price), float(volume) if volume else None),
+                )
+                n += cur.rowcount
+    except Exception as exc:
+        logger.warning("[scrape_po_afrr_prices] DB insert failed: %s", exc)
+
+    return n
+
+
+def scrape_po_capacity_market(conn) -> int:
+    """Scrape TGE Rynek Mocy annual auction results into po_capacity_market.
+
+    Source: https://tge.pl/rynek-mocy/wyniki-aukcji
+    If the page structure changes, inspect the HTML table column order.
+    Returns number of rows inserted.
+    """
+    import re
+    import requests
+    from bs4 import BeautifulSoup
+
+    url = "https://tge.pl/rynek-mocy/wyniki-aukcji"
+    try:
+        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("[scrape_po_capacity_market] HTTP failed: %s", exc)
+        return 0
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    table = soup.find("table")
+    if not table:
+        logger.warning("[scrape_po_capacity_market] No table found at TGE page")
+        return 0
+
+    def _parse_number(text: str):
+        cleaned = re.sub(r"[^\d.,]", "", text.strip().replace("\xa0", "").replace(" ", ""))
+        cleaned = cleaned.replace(",", ".")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    n = 0
+    try:
+        with conn.cursor() as cur:
+            for row in table.find_all("tr")[1:]:  # skip header
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) < 3:
+                    continue
+                # Columns: Rok dostaw | Data aukcji | Cena (PLN/MW/rok) | Wolumen (MW)
+                year       = _parse_number(cells[0])
+                price      = _parse_number(cells[2])
+                volume     = _parse_number(cells[3]) if len(cells) > 3 else None
+                auction_dt = cells[1].strip() or None
+                if year is None or price is None:
+                    continue
+                cur.execute(
+                    "INSERT INTO intl_market.po_capacity_market "
+                    "(delivery_year, auction_date, price_pln_mw_yr, accepted_mw, source) "
+                    "VALUES (%s, %s, %s, %s, 'tge') "
+                    "ON CONFLICT (delivery_year) DO UPDATE SET "
+                    "price_pln_mw_yr = EXCLUDED.price_pln_mw_yr, "
+                    "accepted_mw = EXCLUDED.accepted_mw, "
+                    "fetched_at = now()",
+                    (int(year), auction_dt, price, volume),
+                )
+                n += cur.rowcount
+    except Exception as exc:
+        logger.warning("[scrape_po_capacity_market] DB insert failed: %s", exc)
+
+    return n
