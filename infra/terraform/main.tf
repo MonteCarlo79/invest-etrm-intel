@@ -2573,3 +2573,48 @@ resource "aws_cloudwatch_event_target" "dev_agent_target" {
     }
   }
 }
+
+# ─────────────────────────────────────────────────────────────
+# SSM access for Hermes EC2 (i-078297b9e83f03dc1)
+# Allows aws ssm start-session without SSH keys
+# ─────────────────────────────────────────────────────────────
+resource "aws_iam_role" "hermes_ec2_ssm" {
+  name = "${var.name}-hermes-ec2-ssm"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "hermes_ec2_ssm_core" {
+  role       = aws_iam_role.hermes_ec2_ssm.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "hermes_ec2_ssm" {
+  name = "${var.name}-hermes-ec2-ssm"
+  role = aws_iam_role.hermes_ec2_ssm.name
+
+  tags = local.tags
+}
+
+# Using aws ec2 associate-iam-instance-profile CLI since terraform resource not available
+resource "null_resource" "hermes_ssm_profile_association" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws ec2 associate-iam-instance-profile \
+        --instance-id i-078297b9e83f03dc1 \
+        --iam-instance-profile Name=${aws_iam_instance_profile.hermes_ec2_ssm.name} \
+        --region us-east-1 2>/dev/null || echo "Profile already associated or instance in different state"
+    EOT
+  }
+
+  depends_on = [aws_iam_instance_profile.hermes_ec2_ssm]
+}
