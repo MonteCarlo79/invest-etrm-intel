@@ -2605,14 +2605,18 @@ resource "aws_iam_instance_profile" "hermes_ec2_ssm" {
   tags = local.tags
 }
 
-# Using aws ec2 associate-iam-instance-profile CLI since terraform resource not available
-resource "null_resource" "hermes_ssm_profile_association" {
+resource "null_resource" "hermes_ec2_ssm_association" {
+  triggers = {
+    instance_profile = aws_iam_instance_profile.hermes_ec2_ssm.name
+  }
+
   provisioner "local-exec" {
     command = <<-EOT
       aws ec2 associate-iam-instance-profile \
         --instance-id i-078297b9e83f03dc1 \
         --iam-instance-profile Name=${aws_iam_instance_profile.hermes_ec2_ssm.name} \
-        --region us-east-1 2>/dev/null || echo "Profile already associated or instance in different state"
+        --region ${var.region} 2>/dev/null || \
+      echo "Profile already associated"
     EOT
   }
 
