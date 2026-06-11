@@ -97,11 +97,12 @@ Node.js 20 service. Runs **directly on EC2** (not in ECS). Deployed via SSH + PM
 **What it does:**
 - Maintains WeChat personal session (QR scan once, session persists in `~/.wechaty/`)
 - On message received: POST to `http://{hermes_ecs_private_ip}/hermes/inbound/wechat`
-- Exposes `POST /send` endpoint on port `3000` (private only) so Hermes can push outbound messages
+- Exposes `POST /send` on port `3000` (private only) so Hermes can push outbound messages
+- Exposes `GET /qr` on port `3001` (temporary, for initial setup) — renders QR code as HTML page for browser-based scanning via SSM port-forward tunnel
 
 ```
 apps/hermes-wechaty/
-├── index.js           # Wechaty bot: listen, forward to Hermes, expose /send
+├── index.js           # Wechaty bot: listen, forward to Hermes, expose /send + /qr
 ├── package.json
 └── ecosystem.config.js  # PM2 process config
 ```
@@ -154,17 +155,50 @@ New ECR repo + lifecycle policy (keep last 5 images), consistent with other serv
 
 ---
 
-## EC2 Setup (one-time)
+## EC2 Access & Setup (one-time)
 
-The EC2 (`i-078297b9e83f03dc1`) needs:
-1. Node.js 20 installed
-2. PM2 installed globally
-3. `apps/hermes-wechaty/` deployed (rsync or git pull)
-4. `npm install` in the app directory
-5. First run: `node index.js` to display QR code, scan with personal WeChat
-6. After scan: `pm2 start ecosystem.config.js`, `pm2 save`, `pm2 startup`
+The EC2 (`i-078297b9e83f03dc1`) currently has **no IAM instance profile** and no SSH key on record. Access is via **AWS Systems Manager Session Manager** after attaching a role.
 
-Session state persists in `~/.wechaty/`. If the session expires (WeChat requires re-login), re-scan QR. Expected session lifetime: weeks to months.
+**Step 1 — Attach SSM IAM role (Terraform):**
+```hcl
+resource "aws_iam_role" "hermes_ec2" { ... }  # AmazonSSMManagedInstanceCore policy
+resource "aws_iam_instance_profile" "hermes_ec2" { ... }
+resource "aws_iam_instance_profile_association" "hermes_ec2" {
+  instance_id          = "i-078297b9e83f03dc1"
+  iam_instance_profile = aws_iam_instance_profile.hermes_ec2.name
+}
+```
+
+**Step 2 — Connect via SSM (no SSH key needed):**
+```bash
+aws ssm start-session --target i-078297b9e83f03dc1 --region ap-southeast-1
+```
+
+**Step 3 — Install and deploy:**
+```bash
+# Inside SSM session
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g pm2
+cd ~ && git clone {repo} && cd bess-platform/apps/hermes-wechaty
+npm install
+```
+
+**Step 4 — QR code scan (no interactive terminal needed):**
+Wechaty bridge exposes a `/qr` HTTP endpoint on port `3001` (temporary, internal only) that renders the QR code as an HTML page. To scan:
+1. Open an SSM port-forward tunnel: `aws ssm start-session --target i-... --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["3001"],"localPortNumber":["3001"]}'`
+2. Open `http://localhost:3001/qr` in browser, scan with WeChat mobile
+
+After scan, session persists in `~/.wechaty/`. Close the port-forward tunnel.
+
+**Step 5 — Start with PM2:**
+```bash
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup  # follow the printed sudo command
+```
+
+Session state persists in `~/.wechaty/`. If the session expires (WeChat requires re-login), repeat Step 4. Expected session lifetime: weeks to months.
 
 ---
 
@@ -184,7 +218,7 @@ Session state persists in `~/.wechaty/`. If the session expires (WeChat requires
 | `apps/hermes-wechaty/index.js` | New: Wechaty Node.js bridge |
 | `apps/hermes-wechaty/package.json` | New |
 | `apps/hermes-wechaty/ecosystem.config.js` | New: PM2 config |
-| `infra/terraform/main.tf` | Add: ECR repo, ECS task/service, target groups, ALB rules, SG rules |
+| `infra/terraform/main.tf` | Add: ECR repo, ECS task/service, target groups, ALB rules, SG rules, SSM IAM role + instance profile for EC2 |
 | `infra/terraform/variables.tf` | Add: Hermes variables |
 | `infra/terraform/terraform.tfvars` | Add: values |
 

@@ -14,11 +14,12 @@ Deploy [Planka](https://github.com/plankanban/planka) — an open-source Trello 
 ## Architecture
 
 ```
-Browser → ALB (host-based rule: planka.{domain}) → ECS Fargate (Planka) → RDS PostgreSQL (planka DB)
+Browser → ALB (host-based rule: todo.pjh-etrm.ai) → ECS Fargate (Planka) → RDS PostgreSQL (planka DB)
 ```
 
 **Key decisions:**
-- Planka does not support sub-path deployment, so it uses **host-based ALB routing** (`planka.{domain}`) rather than path-based (like `/todo`)
+- Planka does not support sub-path deployment, so it uses **host-based ALB routing** (`todo.pjh-etrm.ai`) rather than path-based (like `/todo`)
+- ACM cert is a wildcard `*.pjh-etrm.ai` — `todo.pjh-etrm.ai` is fully covered, no cert changes needed
 - No ECR repository needed — pulls `ghcr.io/plankanban/planka:latest` directly
 - Uses existing RDS PostgreSQL instance with a dedicated `planka` database
 - Planka has its own login screen — **Cognito auth is not used** for this app; the ALB listener rule forwards directly with no `authenticate-cognito` action
@@ -49,7 +50,7 @@ Browser → ALB (host-based rule: planka.{domain}) → ECS Fargate (Planka) → 
 
 ### 3. ALB Listener Rule (`planka_host`)
 - Priority: `45` (next free slot after priority 40)
-- Condition: `host_header = ["planka.{domain}"]`
+- Condition: `host_header = ["todo.pjh-etrm.ai"]`
 - Action: forward to Planka target group (no Cognito step)
 
 ### 4. Terraform Variables (new)
@@ -57,11 +58,11 @@ Browser → ALB (host-based rule: planka.{domain}) → ECS Fargate (Planka) → 
 variable "planka_secret_key"        { type = string, sensitive = true }
 variable "planka_admin_email"        { type = string }
 variable "planka_admin_password"     { type = string, sensitive = true }
-variable "planka_base_url"           { type = string }  # e.g. https://planka.yourdomain.com
+variable "planka_base_url"           { type = string }  # https://todo.pjh-etrm.ai
 ```
 
 ### 5. DNS
-User must add an **A record** (alias) in Route53 pointing `planka.{domain}` → the existing ALB DNS name. The existing ACM certificate must cover this subdomain (wildcard certs like `*.domain.com` cover this automatically; single-domain certs will need a new SAN added).
+Add an **A record (alias)** in Route53 pointing `todo.pjh-etrm.ai` → the existing ALB DNS name. The wildcard cert `*.pjh-etrm.ai` already covers this — no cert changes needed.
 
 ### 6. RDS: `planka` database
 Before first deploy, create the database on the existing RDS instance:
@@ -119,8 +120,8 @@ No new `apps/` directory. No custom application code.
 1. Add `planka` database to RDS: `CREATE DATABASE planka;`
 2. Add Terraform resources and variables
 3. `terraform plan` / `terraform apply`
-4. Add DNS A record: `planka.{domain}` → ALB DNS name
-5. Visit `https://planka.{domain}`, log in with `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD`
+4. Add DNS A alias record in Route53: `todo.pjh-etrm.ai` → ALB DNS name
+5. Visit `https://todo.pjh-etrm.ai`, log in with `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD`
 6. Change admin password immediately after first login
 
 ---
@@ -129,7 +130,7 @@ No new `apps/` directory. No custom application code.
 
 | Risk | Mitigation |
 |------|-----------|
-| ACM cert doesn't cover `planka.{domain}` | Check cert SANs before apply; add SAN or use wildcard |
+| ACM cert coverage | Wildcard `*.pjh-etrm.ai` confirmed — no action needed |
 | Planka login is not behind Cognito | Acceptable for personal tool; use a strong password |
 | `ghcr.io` rate limits in CI/CD | Pull image once, push to ECR if needed |
 | Planka stores uploaded attachments in-container | For now: no file attachments (ephemeral ECS storage); Hermes will handle file collection separately |
