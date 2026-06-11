@@ -16,10 +16,28 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: marketdata
+      POSTGRES_MULTIPLE_DATABASES: planka
     networks:
       - default
     volumes:
       - pgdata:/var/lib/postgresql
+      - ./infra/docker/postgres-init:/docker-entrypoint-initdb.d
+
+  planka:
+    image: ghcr.io/plankanban/planka:latest
+    container_name: bess-planka
+    ports:
+      - "1337:1337"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/planka
+      SECRET_KEY: local-dev-secret-key-change-in-production
+      BASE_URL: http://localhost:1337
+      DEFAULT_ADMIN_EMAIL: admin@local.dev
+      DEFAULT_ADMIN_PASSWORD: changeme123
+      TRUST_PROXY: "0"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   uploader:
     build: ./apps/uploader
