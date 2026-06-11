@@ -481,3 +481,29 @@ variable "cognito_callback_urls" {
 variable "cognito_default_redirect_uri" {
   type = string
 }
+
+#################################################
+# Planka Kanban Board
+#################################################
+variable "planka_secret_key" {
+  description = "Random 64-char secret for Planka session signing"
+  type        = string
+  sensitive   = true
+}
+
+variable "planka_admin_email" {
+  description = "Initial Planka admin account email"
+  type        = string
+}
+
+variable "planka_admin_password" {
+  description = "Initial Planka admin account password"
+  type        = string
+  sensitive   = true
+}
+
+variable "planka_base_url" {
+  description = "Public base URL for Planka (e.g. https://todo.pjh-etrm.ai)"
+  type        = string
+  default     = "https://todo.pjh-etrm.ai"
+}
