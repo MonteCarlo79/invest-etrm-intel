@@ -2059,6 +2059,29 @@ resource "aws_ecs_service" "model_catalogue" {
   tags       = local.tags
 }
 
+resource "aws_ecs_service" "planka" {
+  name            = "${var.name}-planka-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.planka.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.planka.arn
+    container_name   = "planka"
+    container_port   = 1337
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
 resource "aws_ecs_task_definition" "execution_report" {
   family                   = "${var.name}-execution-report"
   requires_compatibilities = ["FARGATE"]
