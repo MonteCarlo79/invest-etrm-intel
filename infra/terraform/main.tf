@@ -500,6 +500,31 @@ resource "aws_lb_target_group" "portal" {
   tags = local.tags
 }
 
+resource "aws_lb_target_group" "planka" {
+  name_prefix = "tgpln-"
+  port        = 1337
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  health_check {
+    path                = "/"
+    protocol            = "HTTP"
+    matcher             = "200-302"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  deregistration_delay = 30
+  tags                 = local.tags
+}
+
 
 # -------------------------
 # ECS Cluster
@@ -1403,6 +1428,22 @@ resource "aws_lb_listener_rule" "spot_markets_path" {
   condition {
     path_pattern {
       values = ["/spot-markets", "/spot-markets/", "/spot-markets/*"]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "planka_host" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 45
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.planka.arn
+  }
+
+  condition {
+    host_header {
+      values = ["todo.pjh-etrm.ai"]
     }
   }
 }
