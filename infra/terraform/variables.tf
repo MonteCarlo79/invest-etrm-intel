@@ -507,3 +507,42 @@ variable "planka_base_url" {
   type        = string
   default     = "https://todo.pjh-etrm.ai"
 }
+
+#################################################
+# Hermes Service
+#################################################
+variable "hermes_image_tag" {
+  description = "Docker image tag for Hermes service"
+  type        = string
+  default     = "latest"
+}
+
+variable "hermes_anthropic_api_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "hermes_wecom_corp_id" { type = string }
+variable "hermes_wecom_agent_id" { type = string }
+
+variable "hermes_wecom_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "hermes_wecom_user_id" {
+  type        = string
+  description = "Your WeCom user ID to receive reminders"
+}
+
+variable "hermes_wechat_owner_id" {
+  type        = string
+  description = "Your personal WeChat ID (wxid_...)"
+}
+
+variable "hermes_planka_email" { type = string }
+
+variable "hermes_planka_password" {
+  type      = string
+  sensitive = true
+}

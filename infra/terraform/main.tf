@@ -2622,3 +2622,168 @@ resource "null_resource" "hermes_ec2_ssm_association" {
 
   depends_on = [aws_iam_instance_profile.hermes_ec2_ssm]
 }
+
+# ─────────────────────────────────────────────────────────────
+# HERMES ECR REPOSITORY
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecr_repository" "hermes" {
+  name                 = "${var.name}-hermes"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_ecr_lifecycle_policy" "hermes" {
+  repository = aws_ecr_repository.hermes.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+# Allow EC2 (Wechaty bridge at 172.31.30.155) to call Hermes ECS on port 8000
+resource "aws_security_group_rule" "ec2_to_hermes" {
+  type              = "ingress"
+  from_port         = 8000
+  to_port           = 8000
+  protocol          = "tcp"
+  cidr_blocks       = ["172.31.30.155/32"]
+  security_group_id = aws_security_group.ecs_tasks.id
+  description       = "Hermes Wechaty bridge EC2 to Hermes ECS"
+}
+
+resource "aws_lb_target_group" "hermes" {
+  name_prefix = "tghrm-"
+  port        = 8000
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  lifecycle { create_before_destroy = true }
+
+  health_check {
+    path                = "/hermes/health"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  tags = local.tags
+}
+
+# WeCom webhook — no Cognito (WeCom calls this unauthenticated)
+resource "aws_lb_listener_rule" "hermes_wecom_webhook" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 46
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.hermes.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/hermes/inbound/wecom", "/hermes/inbound/wecom/*"]
+    }
+  }
+}
+
+# All other Hermes paths — Cognito auth
+resource "aws_lb_listener_rule" "hermes_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 47
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.hermes.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/hermes", "/hermes/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "hermes" {
+  family                   = "${var.name}-hermes"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([{
+    name      = "hermes"
+    image     = "${aws_ecr_repository.hermes.repository_url}:${var.hermes_image_tag}"
+    essential = true
+
+    portMappings = [{ containerPort = 8000, protocol = "tcp" }]
+
+    environment = [
+      { name = "PLANKA_BASE_URL",      value = var.planka_base_url },
+      { name = "PLANKA_EMAIL",         value = var.hermes_planka_email },
+      { name = "PLANKA_PASSWORD",      value = var.hermes_planka_password },
+      { name = "ANTHROPIC_API_KEY",    value = var.hermes_anthropic_api_key },
+      { name = "WECOM_CORP_ID",        value = var.hermes_wecom_corp_id },
+      { name = "WECOM_AGENT_ID",       value = var.hermes_wecom_agent_id },
+      { name = "WECOM_SECRET",         value = var.hermes_wecom_secret },
+      { name = "WECOM_USER_ID",        value = var.hermes_wecom_user_id },
+      { name = "WECHAT_OWNER_ID",      value = var.hermes_wechat_owner_id },
+      { name = "WECHATY_BRIDGE_URL",   value = "http://172.31.30.155:3000" },
+      { name = "AWS_DEFAULT_REGION",   value = var.region },
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = local.log_group
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "hermes"
+      }
+    }
+  }])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "hermes" {
+  name            = "${var.name}-hermes-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.hermes.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.hermes.arn
+    container_name   = "hermes"
+    container_port   = 8000
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
