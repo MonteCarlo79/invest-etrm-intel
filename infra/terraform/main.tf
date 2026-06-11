@@ -2349,6 +2349,83 @@ resource "aws_ecs_task_definition" "dev_agent" {
   ])
 }
 
+############################################
+# PLANKA TASK
+# Personal Kanban board. No custom image — pulls from ghcr.io directly.
+# 256/512 is generous for a single-user Planka instance.
+############################################
+resource "aws_ecs_task_definition" "planka" {
+  family                   = "${var.name}-planka"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "planka"
+      image     = "ghcr.io/plankanban/planka:latest"
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 1337
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "DATABASE_URL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/planka?sslmode=require"
+        },
+        {
+          name  = "SECRET_KEY"
+          value = var.planka_secret_key
+        },
+        {
+          name  = "BASE_URL"
+          value = var.planka_base_url
+        },
+        {
+          name  = "DEFAULT_ADMIN_EMAIL"
+          value = var.planka_admin_email
+        },
+        {
+          name  = "DEFAULT_ADMIN_PASSWORD"
+          value = var.planka_admin_password
+        },
+        {
+          name  = "TRUST_PROXY"
+          value = "0"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "planka"
+        }
+      }
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "wget -qO- http://localhost:1337/ || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 60
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
 
 resource "aws_s3_bucket_policy" "alb_logs" {
   bucket = aws_s3_bucket.uploads.id
