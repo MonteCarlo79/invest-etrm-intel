@@ -33,6 +33,25 @@ st.set_page_config(
 )
 
 from services.po_knowledge.config import MARKET_CONFIG
+from services.intl_market_common.market_config import MarketConfig as _MarketConfig
+
+_GB_CFG = _MarketConfig(
+    name="Great Britain Power Market",
+    code="GB",
+    table_prefix="gb_",
+    port=8512,
+    app_slug="gb-market",
+    app_key="gb_market",
+    currency_sym="£",
+    currency_code="GBP",
+    timezone="Europe/London",
+    flag_emoji="🇬🇧",
+    flag_url="",
+    intervals_per_day=48,
+    system_operator="National Grid ESO",
+    wholesale_label="EPEX Spot / N2EX day-ahead",
+    ancillary_label="BM / FFR / DCR / Capacity Market",
+)
 from services.po_knowledge.ingest import run_knowledge_ingest
 from services.po_knowledge.entso_scraper import (
     ENTSOEPriceScraper,
@@ -935,6 +954,9 @@ def _dispatch_tool_po(name: str, inputs: dict) -> str:
             except Exception as exc:
                 return f"DB error listing docs: {exc}"
 
+        elif name == "consult_gb_advisor":
+            return _consult_gb_advisor(inputs.get("question", ""))
+
     except Exception as exc:
         return f"Tool error: {exc}"
     return "Unknown tool"
@@ -1037,7 +1059,75 @@ _TOOLS_PO = [
             "required": [],
         },
     },
+    {
+        "name": "consult_gb_advisor",
+        "description": (
+            "Consult the GB (Great Britain) BESS market specialist for cross-market perspective. "
+            "Use this when the user asks about lessons from GB, how GB compares to Poland, "
+            "best practices from a mature BESS market, or when a second opinion from a different "
+            "market would strengthen the analysis. The GB market is the world's most mature BESS "
+            "market (5+ GW deployed) and leads on FFR/DCR/BM ancillary service design, merchant "
+            "trading strategies, and BESS project financing structures."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "Specific question to ask the GB specialist (e.g. 'What FCR/FFR revenue levels do GB BESS projects achieve?' or 'How does GB capacity market compare to Polish Rynek Mocy?')",
+                },
+            },
+            "required": ["question"],
+        },
+    },
 ]
+
+
+def _consult_gb_advisor(question: str) -> str:
+    """Consult the GB BESS market knowledge base via a Haiku sub-agent for cross-market insight."""
+    if not question.strip():
+        return "No question provided."
+    # Pull GB expert insights + KB docs from DB (no extra API cost)
+    gb_insights: list = []
+    gb_kb_context = ""
+    try:
+        gb_insights = get_insights(question, prefix="gb_", limit=5)
+    except Exception as exc:
+        logger.debug("GB insights fetch failed: %s", exc)
+    try:
+        gb_kb_context = retrieve_for_agent(question, _ANTHROPIC_KEY, _GB_CFG, top_k=3)
+    except Exception as exc:
+        logger.debug("GB KB retrieval failed: %s", exc)
+
+    gb_memory_block = inject_memory(gb_insights, _GB_CFG.name) if gb_insights else ""
+
+    system = (
+        "You are a senior Great Britain Power Market Investment Expert specialising in BESS. "
+        "The GB market is the world's most mature utility-scale BESS market (5+ GW deployed). "
+        "Key market mechanics: National Grid ESO Balancing Mechanism (BM), "
+        "Dynamic Frequency Response (FFR/DCR/DM), Enhanced Frequency Response (EFR), "
+        "capacity market (T-4/T-1 auctions, £/kW/yr), Contracts for Difference (CfD). "
+        "BESS revenue stack: arbitrage (BM spread), ancillary services (FFR £10-20/MW/h, "
+        "DCR £5-15/MW/h), capacity market (£40-75/kW/yr 2023-2025). "
+        "Answer concisely (3-6 sentences). Focus on what is most directly relevant to the question "
+        "and what lessons or data points would be most useful for a Poland BESS investor."
+    )
+    if gb_kb_context:
+        system += f"\n\n## GB knowledge base context:\n{gb_kb_context}"
+    if gb_memory_block:
+        system += f"\n\n{gb_memory_block}"
+
+    try:
+        resp = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=system,
+            messages=[{"role": "user", "content": question}],
+        )
+        answer = next((b.text for b in resp.content if hasattr(b, "text")), "")
+        return f"[GB Market Specialist]\n{answer}"
+    except Exception as exc:
+        return f"GB advisor unavailable: {exc}"
 
 
 def _build_system_po(query: str = "") -> str:

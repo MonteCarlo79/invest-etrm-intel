@@ -802,25 +802,33 @@ def get_as_revenue_estimate(
     return result
 
 
-def _pse_api_get(endpoint: str, params: dict, timeout: int = 20) -> list:
-    """Fetch from PSE reporting API. Returns list of value records or [] on failure.
+def _pse_api_get_paginated(endpoint: str, page_size: int = 5000, max_records: int = 25000) -> list:
+    """Fetch all pages from a PSE reporting API endpoint (cursor-based pagination).
 
     Base URL: https://api.raporty.pse.pl/api/
-    If the endpoint path is wrong, check https://api.raporty.pse.pl/docs
+    Uses $first/{page_size} and $after cursor token from nextLink.
+    Data is returned oldest-first; pages through all records up to max_records.
     """
     import requests
+    headers = {"Accept": "application/json"}
+    url = f"https://api.raporty.pse.pl/api/{endpoint}"
+    params: dict = {"$first": page_size}
+    all_records: list = []
     try:
-        resp = requests.get(
-            f"https://api.raporty.pse.pl/api/{endpoint}",
-            params=params,
-            timeout=timeout,
-            headers={"Accept": "application/json"},
-        )
-        resp.raise_for_status()
-        return resp.json().get("value", [])
+        while url and len(all_records) < max_records:
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            records = data.get("value", [])
+            all_records.extend(records)
+            url = data.get("nextLink")
+            params = {}  # nextLink already contains all query params
     except Exception as exc:
-        logger.warning("[_pse_api_get] %s failed: %s", endpoint, exc)
-        return []
+        logger.warning(
+            "[_pse_api_get_paginated] %s failed after %d records: %s",
+            endpoint, len(all_records), exc,
+        )
+    return all_records
 
 
 def _iso_week_monday(week_offset: int) -> date:
@@ -832,44 +840,58 @@ def _iso_week_monday(week_offset: int) -> date:
 
 
 def scrape_po_fcr_prices(conn, weeks_back: int = 52) -> int:
-    """Fetch FCR weekly auction clearing prices from PSE API and store in po_as_prices.
+    """Fetch FCR weekly clearing prices from PSE reporting API and store in po_as_prices.
 
-    PSE endpoint: /rcr (Rezerwa Czestotliwosci Regulacyjnej)
-    Expected response fields: data (date string), cena (PLN/MW/week), ilosc (MW)
-    Returns number of rows inserted.
+    Source: api.raporty.pse.pl /api/cmbp-tp
+      "Ceny mocy bilansujących nabytych w trybie podstawowym"
+      (Prices of balancing capacities acquired in basic mode)
+    Fields used: fcr_g (upward PLN/MW/h), fcr_d (downward PLN/MW/h), business_date
+    Available from 2024-06-14 (new Polish balancing mechanism start date).
+
+    Aggregation: group hourly records by ISO week Monday, compute
+      mean(fcr_g, fcr_d) × 168 h/week → PLN/MW/week stored in po_as_prices.
     """
-    start = _iso_week_monday(weeks_back).isoformat()
-    end   = date.today().isoformat()
+    from collections import defaultdict
 
-    records = _pse_api_get(
-        "rcr",
-        {"$filter": f"data ge '{start}' and data le '{end}'", "$top": 1000},
-    )
+    cutoff = _iso_week_monday(weeks_back)
+    all_records = _pse_api_get_paginated("cmbp-tp")
 
-    if not records:
+    week_prices: dict = defaultdict(list)
+    for r in all_records:
+        bd = r.get("business_date")
+        if not bd or bd < str(cutoff):
+            continue
+        fcr_g = r.get("fcr_g")
+        fcr_d = r.get("fcr_d")
+        vals = [v for v in [fcr_g, fcr_d] if v is not None]
+        if not vals:
+            continue
+        avg_h = sum(vals) / len(vals)
+        d = date.fromisoformat(bd)
+        monday = d - timedelta(days=d.weekday())
+        week_prices[monday].append(avg_h)
+
+    if not week_prices:
         logger.warning(
-            "[scrape_po_fcr_prices] No FCR records returned from PSE API "
-            "(endpoint may have changed — verify at https://api.raporty.pse.pl/docs)"
+            "[scrape_po_fcr_prices] No FCR records in the requested window "
+            "(cmbp-tp data available from 2024-06-14 onwards)"
         )
         return 0
 
     n = 0
     try:
         with conn.cursor() as cur:
-            for r in records:
-                week_start = r.get("data")
-                price      = r.get("cena")
-                volume     = r.get("ilosc")
-                if not week_start or price is None:
-                    continue
+            for week_start, prices in sorted(week_prices.items()):
+                pln_mw_week = (sum(prices) / len(prices)) * 168
                 cur.execute(
                     "INSERT INTO intl_market.po_as_prices "
-                    "(week_start, market_type, price_pln_mw_week, accepted_mw, source) "
-                    "VALUES (%s, 'FCR', %s, %s, 'pse') "
+                    "(week_start, market_type, price_pln_mw_week, source) "
+                    "VALUES (%s, 'FCR', %s, 'pse_cmbp_tp') "
                     "ON CONFLICT (week_start, market_type) DO NOTHING",
-                    (week_start, float(price), float(volume) if volume else None),
+                    (week_start, pln_mw_week),
                 )
                 n += cur.rowcount
+        conn.commit()
     except Exception as exc:
         logger.warning("[scrape_po_fcr_prices] DB insert failed: %s", exc)
 
@@ -877,44 +899,58 @@ def scrape_po_fcr_prices(conn, weeks_back: int = 52) -> int:
 
 
 def scrape_po_afrr_prices(conn, weeks_back: int = 52) -> int:
-    """Fetch aFRR capacity weekly auction prices from PSE API and store in po_as_prices.
+    """Fetch aFRR capacity weekly clearing prices from PSE reporting API and store in po_as_prices.
 
-    PSE endpoint: /rar2 (Rezerwa Automatycznej Regulacji 2)
-    Expected response fields: data (date string), cena_mocy (PLN/MW/week), ilosc (MW)
-    Returns number of rows inserted.
+    Source: api.raporty.pse.pl /api/cmbp-tp
+      "Ceny mocy bilansujących nabytych w trybie podstawowym"
+      (Prices of balancing capacities acquired in basic mode)
+    Fields used: afrr_g (upward PLN/MW/h), afrr_d (downward PLN/MW/h), business_date
+    Available from 2024-06-14 (new Polish balancing mechanism start date).
+
+    Aggregation: group hourly records by ISO week Monday, compute
+      mean(afrr_g, afrr_d) × 168 h/week → PLN/MW/week stored in po_as_prices.
     """
-    start = _iso_week_monday(weeks_back).isoformat()
-    end   = date.today().isoformat()
+    from collections import defaultdict
 
-    records = _pse_api_get(
-        "rar2",
-        {"$filter": f"data ge '{start}' and data le '{end}'", "$top": 1000},
-    )
+    cutoff = _iso_week_monday(weeks_back)
+    all_records = _pse_api_get_paginated("cmbp-tp")
 
-    if not records:
+    week_prices: dict = defaultdict(list)
+    for r in all_records:
+        bd = r.get("business_date")
+        if not bd or bd < str(cutoff):
+            continue
+        afrr_g = r.get("afrr_g")
+        afrr_d = r.get("afrr_d")
+        vals = [v for v in [afrr_g, afrr_d] if v is not None]
+        if not vals:
+            continue
+        avg_h = sum(vals) / len(vals)
+        d = date.fromisoformat(bd)
+        monday = d - timedelta(days=d.weekday())
+        week_prices[monday].append(avg_h)
+
+    if not week_prices:
         logger.warning(
-            "[scrape_po_afrr_prices] No aFRR records returned from PSE API "
-            "(endpoint may have changed — verify at https://api.raporty.pse.pl/docs)"
+            "[scrape_po_afrr_prices] No aFRR records in the requested window "
+            "(cmbp-tp data available from 2024-06-14 onwards)"
         )
         return 0
 
     n = 0
     try:
         with conn.cursor() as cur:
-            for r in records:
-                week_start = r.get("data")
-                price      = r.get("cena_mocy") or r.get("cena")  # field name may vary
-                volume     = r.get("ilosc")
-                if not week_start or price is None:
-                    continue
+            for week_start, prices in sorted(week_prices.items()):
+                pln_mw_week = (sum(prices) / len(prices)) * 168
                 cur.execute(
                     "INSERT INTO intl_market.po_as_prices "
-                    "(week_start, market_type, price_pln_mw_week, accepted_mw, source) "
-                    "VALUES (%s, 'aFRR_capacity', %s, %s, 'pse') "
+                    "(week_start, market_type, price_pln_mw_week, source) "
+                    "VALUES (%s, 'aFRR_capacity', %s, 'pse_cmbp_tp') "
                     "ON CONFLICT (week_start, market_type) DO NOTHING",
-                    (week_start, float(price), float(volume) if volume else None),
+                    (week_start, pln_mw_week),
                 )
                 n += cur.rowcount
+        conn.commit()
     except Exception as exc:
         logger.warning("[scrape_po_afrr_prices] DB insert failed: %s", exc)
 
