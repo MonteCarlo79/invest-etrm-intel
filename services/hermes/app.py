@@ -20,11 +20,13 @@ def _make_clients():
         email=os.environ["PLANKA_EMAIL"],
         password=os.environ["PLANKA_PASSWORD"],
     )
-    wecom = WeComClient(
-        corp_id=os.environ["WECOM_CORP_ID"],
-        agent_id=int(os.environ["WECOM_AGENT_ID"]),
-        secret=os.environ["WECOM_SECRET"],
-    )
+    wecom = None
+    if os.environ.get("WECOM_CORP_ID"):
+        wecom = WeComClient(
+            corp_id=os.environ["WECOM_CORP_ID"],
+            agent_id=int(os.environ["WECOM_AGENT_ID"]),
+            secret=os.environ["WECOM_SECRET"],
+        )
     wechat_bridge = WechatyBridgeClient(bridge_url=os.environ["WECHATY_BRIDGE_URL"])
     agent = HermesAgent(planka=planka, anthropic_api_key=os.environ["ANTHROPIC_API_KEY"])
     return planka, wecom, wechat_bridge, agent
@@ -74,14 +76,14 @@ def create_app() -> FastAPI:
 def _handle_message(
     msg: InboundMessage,
     agent: HermesAgent,
-    wecom: WeComClient,
+    wecom: Optional[WeComClient],
     wechat_bridge: WechatyBridgeClient,
 ) -> None:
     try:
         action = agent.process(msg)
         agent.execute(action)
         if action.reply:
-            if msg.source == "wecom":
+            if msg.source == "wecom" and wecom:
                 wecom.send_text(user_id=msg.sender_id, text=action.reply)
             else:
                 wechat_bridge.send(to=msg.sender_id, text=action.reply)

@@ -522,22 +522,25 @@ variable "hermes_anthropic_api_key" {
   sensitive = true
 }
 
-variable "hermes_wecom_corp_id" { type = string }
-variable "hermes_wecom_agent_id" { type = string }
+variable "hermes_wecom_corp_id"   { type = string; default = "" }
+variable "hermes_wecom_agent_id"  { type = string; default = "" }
 
 variable "hermes_wecom_secret" {
   type      = string
   sensitive = true
+  default   = ""
 }
 
 variable "hermes_wecom_user_id" {
   type        = string
   description = "Your WeCom user ID to receive reminders"
+  default     = ""
 }
 
 variable "hermes_wechat_owner_id" {
   type        = string
   description = "Your personal WeChat ID (wxid_...)"
+  default     = ""
 }
 
 variable "hermes_planka_email" { type = string }

@@ -8,7 +8,7 @@ from services.hermes.wechat_client import WechatyBridgeClient
 
 def send_due_reminders(
     planka: PlankaClient,
-    wecom: WeComClient,
+    wecom: Optional[WeComClient],
     wechat_bridge: WechatyBridgeClient,
     wecom_user_id: str,
     wechat_id: str,
@@ -21,10 +21,11 @@ def send_due_reminders(
     for card in cards:
         due_str = card.get("dueDate", "")[:10]
         text = f"Reminder: '{card['name']}' is due on {due_str}"
-        try:
-            wecom.send_text(user_id=wecom_user_id, text=text)
-        except Exception:
-            pass
+        if wecom and wecom_user_id:
+            try:
+                wecom.send_text(user_id=wecom_user_id, text=text)
+            except Exception:
+                pass
         try:
             wechat_bridge.send(to=wechat_id, text=text)
         except Exception:
