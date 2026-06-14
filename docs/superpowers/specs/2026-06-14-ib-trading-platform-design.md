@@ -75,6 +75,8 @@ ib-platform/                              # separate repo
 │       ├── base.py                       # BaseConnector, kb_docs table, FTS search
 │       ├── expert_memory.py              # Insight extraction/retrieval + model-derived insights
 │       ├── daily_briefing.py             # Generates structured daily market briefing
+│       ├── trade_monitor.py              # Watches closed positions → post-trade P&L explain
+│       │                                 #   → extract_from_trade_outcome()
 │       └── connectors/                   # FRED, CBOE, SEC EDGAR, Fed, Treasury, BIS, RSS, local
 ├── apps/
 │   ├── portfolio/                        # Pillar 1: P&L + risk dashboard
@@ -157,7 +159,12 @@ trading.kb_docs           -- id, source, doc_type, title, url, published_date,
                           --   content, fetched_at, search_vector (GIN tsvector)
 trading.kb_insights       -- id, insight_text, insight_type, confidence,
                           --   source_session, source_doc_url, source_model_run,
+                          --   source_backtest_id, source_trade_id,
                           --   validated_at, active, created_at
+                          -- insight_type values:
+                          --   market_regime | price_driver | vol_signal | macro_risk |
+                          --   opportunity | strategy | model_insight |
+                          --   strategy_backtest | trade_outcome
 trading.kb_briefings      -- id, briefing_date, market_section, content,
                           --   model_outputs_json, generated_at
 ```
@@ -596,6 +603,8 @@ trading.kb_briefings   -- id, briefing_date, market_section, content,
 | Daily 06:30 | `digest_kb_docs()` — undigested docs → Haiku insight extraction | `trading.kb_insights` |
 | Daily 07:00 | `daily_briefing.py` — run standard questions + model scans | `trading.kb_briefings` |
 | Weekly Mon | Run PCA regime detection on past 60d returns → extract regime insight | `trading.kb_insights` |
+| Daily 08:00 | `trade_monitor.py` — scan newly closed positions → P&L explain → `extract_from_trade_outcome()` | `trading.kb_insights` |
+| On backtest run | `extract_from_backtest()` called by `libs/backtest/engine.py` automatically | `trading.kb_insights` |
 | On VIX spike (>20% 1d) | Trigger deep-dive: vol surface analysis + news + model run → insights | `trading.kb_insights` |
 
 ---
@@ -681,6 +690,59 @@ if pca_result.regime_changed:
 ```
 
 This closes the loop: the agent's recommendations improve not just from reading documents and conversations, but from what the quant models are observing in live market data.
+
+**4. Strategy backtest learning** (new)
+When a backtest completes, Haiku extracts durable strategy insights — what conditions drove performance, what regimes to avoid, what parameter sensitivities matter:
+
+```python
+extract_from_backtest(
+    strategy_id="iv_rank_straddle",
+    backtest_result=result,   # BacktestResult: metrics, trades, regime_breakdown
+    api_key=api_key,
+    insight_type="strategy_backtest"
+)
+# Example insight stored:
+# "IV rank straddle produced Sharpe 1.8 in VIX contango regime but 0.3 in spike
+#  regime — strategy should be suspended when vix_regime='spike'. Backtest 2023–2026."
+```
+
+Trigger: automatically called by `libs/backtest/engine.py` after every run. Also surfaced in Model Lab tab as "Extract insights from this backtest" button.
+
+**5. Actual trade outcome learning** (new)
+When a position closes, a post-trade analysis compares actual P&L against the signal's expectation and the model's attribution. Haiku extracts what the model got right, what it missed, and what to adjust:
+
+```python
+extract_from_trade_outcome(
+    trade_id=trade_id,
+    signal_source="ml",              # rule / ml / agent
+    expected_pnl=signal.strength,   # directional expectation at signal time
+    actual_pnl=realized_pnl,
+    pnl_explain=explain_result,      # delta/gamma/vega/theta attribution
+    market_context=context_snapshot, # VIX regime, yield curve shape, etc. at entry
+    api_key=api_key,
+    insight_type="trade_outcome"
+)
+# Example insight stored:
+# "AAPL delta-hedge: 68% of P&L came from vega vs 15% expected — vol surface moved
+#  more than GARCH forecast predicted. GARCH systematically underestimates vol after
+#  FOMC announcements. Increase vega hedge size on Fed days."
+```
+
+Trigger: `services/knowledge/trade_monitor.py` — scheduled daily, watches `trading.trades` for newly closed positions (status flips from open to closed), runs P&L explain via `libs/pricing/pnl_explain.py`, calls `extract_from_trade_outcome()`.
+
+**Complete 5-channel learning loop:**
+
+```
+Channel 1: Conversation    → Haiku extracts insights from advisor chat turns
+Channel 2: Documents       → Haiku digests KB docs (FRED, CBOE, SEC, Fed, BIS...)
+Channel 3: Model outputs   → PCA regime shifts, GARCH spikes → model_insight
+Channel 4: Backtest runs   → Strategy condition/regime performance → strategy_backtest
+Channel 5: Live trades     → Post-trade attribution vs expectation → trade_outcome
+
+All → trading.kb_insights → injected into every advisor session system prompt
+```
+
+Over time the advisor builds a self-consistent picture: it knows which strategies work in which regimes (channel 4), whether its live recommendations are being validated by actual outcomes (channel 5), and how the current market regime relates to historical patterns (channels 2–3). The insight types `strategy_backtest` and `trade_outcome` are filtered at retrieval time — when the user asks about a strategy, relevant backtest and outcome history is surfaced automatically.
 
 ---
 
