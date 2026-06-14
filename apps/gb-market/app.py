@@ -682,8 +682,27 @@ def _start_scheduler():
                       id="gb_pricing_batch", misfire_grace_time=3600)
     scheduler.add_job(_daily_report_job, "cron", hour=6, minute=0,
                       id="gb_daily_report", misfire_grace_time=3600)
+
+    def _elexon_ops_job():
+        """Ingest Elexon settlement system prices + wind forecast for yesterday.
+
+        Runs at 09:15 SGT (01:15 UTC) — after the final settlement run publishes
+        all 48 half-hourly periods for the previous day (~01:00 UTC).
+        """
+        yesterday = date.today() - timedelta(days=1)
+        try:
+            from services.gb_knowledge.elexon_ops import run_elexon_ops_ingest
+            result = run_elexon_ops_ingest(yesterday)
+            logger.info("Elexon ops ingest: %s for %s", result, yesterday)
+            _get_elexon_sp_daily.clear()
+            _get_elexon_sp_hh.clear()
+            _get_wind_forecast.clear()
+        except Exception as _exc:
+            logger.error("Elexon ops ingest failed: %s", _exc)
+
+    scheduler.add_job(_elexon_ops_job, "cron", hour=9, minute=15,
+                      id="gb_elexon_ops", misfire_grace_time=3600)
     scheduler.start()
-    global _scheduler_instance
     _scheduler_instance = scheduler
     print("[SCHEDULER] GB scheduler started", flush=True)
     return scheduler
@@ -1128,6 +1147,23 @@ _STRATEGIST_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_elexon_ops",
+        "description": (
+            "Elexon-official GB settlement system prices (SSP/SBP, NIV, accepted bid/offer volumes, "
+            "price derivation code) and wind generation forecast from the BMRS Insights API. "
+            "Use for authoritative system price data, scarcity pricing events (PDC != 'N'), "
+            "system balance analysis, and wind output context."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "ISO date e.g. '2026-06-01'"},
+                "end_date":   {"type": "string", "description": "ISO date e.g. '2026-06-13'"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
 ]
 
 
@@ -1360,6 +1396,27 @@ def _dispatch_strategist(name: str, inputs: dict) -> str:
                 f"Total: {len(df)} assets, "
                 f"Total rated power: {df['rated_power_mw'].sum():.0f} MW\n"
                 + df.to_json(orient="records", date_format="iso")
+            )
+
+        elif name == "get_elexon_ops":
+            sp_df = _get_elexon_sp_daily(inputs["start_date"], inputs["end_date"])
+            if sp_df.empty:
+                return (
+                    "No Elexon system price data in gb_elexon_sp for this range. "
+                    "Run the Elexon Ops backfill in Data Management."
+                )
+            sp_summary = sp_df.round(2).to_json(orient="records", date_format="iso")
+            # Wind forecast for the next 48 h
+            now_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            future_utc = (datetime.utcnow() + timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            wf_df = _get_wind_forecast(now_utc, future_utc)
+            wf_summary = (
+                wf_df[["start_time", "generation_mw"]].to_json(orient="records", date_format="iso")
+                if not wf_df.empty else "[]"
+            )
+            return (
+                f"Settlement system prices (daily avg, £/MWh):\n{sp_summary}\n\n"
+                f"Wind generation forecast (next 48h, MW):\n{wf_summary}"
             )
 
     except Exception as e:
@@ -1806,6 +1863,62 @@ def _get_dx_range(start: str, end: str) -> pd.DataFrame:
         "ORDER BY efa_date, efa, service",
         (start, end),
     )
+
+
+# ---------------------------------------------------------------------------
+# Elexon operational data queries
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_elexon_sp_daily(start: str, end: str) -> pd.DataFrame:
+    """Daily avg SSP / SBP / NIV / accepted volumes from gb_elexon_sp."""
+    try:
+        return _query(
+            "SELECT settlement_date, "
+            "  AVG(system_sell_price) AS avg_ssp, "
+            "  AVG(system_buy_price)  AS avg_sbp, "
+            "  AVG(net_imbalance_volume) AS avg_niv, "
+            "  AVG(total_accepted_offer_vol) AS avg_offer_vol, "
+            "  AVG(total_accepted_bid_vol)   AS avg_bid_vol "
+            "FROM intl_market.gb_elexon_sp "
+            "WHERE settlement_date BETWEEN %s AND %s "
+            "GROUP BY settlement_date ORDER BY settlement_date",
+            (start, end),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_elexon_sp_hh(start: str, end: str) -> pd.DataFrame:
+    """Half-hourly SSP / SBP / NIV from gb_elexon_sp."""
+    try:
+        return _query(
+            "SELECT settlement_date, settlement_period, start_time, "
+            "  system_sell_price, system_buy_price, net_imbalance_volume, "
+            "  price_derivation_code, reserve_scarcity_price "
+            "FROM intl_market.gb_elexon_sp "
+            "WHERE settlement_date BETWEEN %s AND %s "
+            "ORDER BY settlement_date, settlement_period",
+            (start, end),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_wind_forecast(from_utc: str, to_utc: str) -> pd.DataFrame:
+    """Wind generation forecast rows (MW) with start_time in [from_utc, to_utc]."""
+    try:
+        return _query(
+            "SELECT start_time, publish_time, generation_mw "
+            "FROM intl_market.gb_wind_forecast "
+            "WHERE start_time BETWEEN %s AND %s "
+            "ORDER BY start_time",
+            (from_utc, to_utc),
+        )
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -2544,6 +2657,117 @@ with tab_overview:
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
                 )
                 st.plotly_chart(fig_scat, use_container_width=True)
+
+    # ---- Elexon BMRS Operational Data ---------------------------------------
+    st.markdown("---")
+    st.subheader("BMRS Settlement System Prices — Elexon Official (£/MWh)")
+    _elexon_sp_hh = _get_elexon_sp_hh(date_start, date_end)
+    if _elexon_sp_hh.empty:
+        st.info(
+            "No Elexon settlement price data yet. "
+            "Run **Elexon Ops Backfill** in Data Management to populate gb_elexon_sp. "
+            "The scheduler ingests yesterday's data daily at 09:15 SGT."
+        )
+    else:
+        _elexon_sp_hh["ts"] = pd.to_datetime(_elexon_sp_hh["start_time"], utc=True).dt.tz_convert("Europe/London")
+        _fig_elx = go.Figure()
+        _fig_elx.add_trace(go.Scatter(
+            x=_elexon_sp_hh["ts"], y=_elexon_sp_hh["system_buy_price"],
+            mode="lines", name="SBP (System Buy Price)",
+            line=dict(color="#d62728", width=1.2),
+        ))
+        _fig_elx.add_trace(go.Scatter(
+            x=_elexon_sp_hh["ts"], y=_elexon_sp_hh["system_sell_price"],
+            mode="lines", name="SSP (System Sell Price)",
+            line=dict(color="#1f77b4", width=1.2),
+        ))
+        # Highlight scarcity pricing periods (PDC != 'N' and not null)
+        _scarcity = _elexon_sp_hh[
+            _elexon_sp_hh["price_derivation_code"].notna() &
+            (_elexon_sp_hh["price_derivation_code"] != "N")
+        ]
+        if not _scarcity.empty:
+            _fig_elx.add_trace(go.Scatter(
+                x=_scarcity["ts"], y=_scarcity["system_buy_price"],
+                mode="markers", name="Scarcity pricing",
+                marker=dict(color="#ff7f0e", size=6, symbol="star"),
+            ))
+        _fig_elx.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
+        _fig_elx.update_layout(
+            height=300,
+            margin=dict(l=0, r=0, t=0, b=0),
+            yaxis_title="£/MWh",
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0),
+        )
+        st.plotly_chart(_fig_elx, use_container_width=True)
+        st.caption(
+            "**SBP** = system buy price (paid by parties that were short); "
+            "**SSP** = system sell price (paid to parties that were long). "
+            "SBP > SSP when system is short. ⭐ = scarcity pricing event (PDC ≠ 'N'). "
+            "Source: Elexon BMRS Insights API (`/balancing/settlement/system-prices`)."
+        )
+
+        # NIV chart
+        _elx_daily = _get_elexon_sp_daily(date_start, date_end)
+        if not _elx_daily.empty:
+            col_niv1, col_niv2 = st.columns(2)
+            with col_niv1:
+                st.markdown("**Net Imbalance Volume — daily avg (MW)**")
+                _niv_elx = _elx_daily.dropna(subset=["avg_niv"])
+                if not _niv_elx.empty:
+                    _niv_elx = _niv_elx.copy()
+                    _niv_elx["colour"] = _niv_elx["avg_niv"].apply(
+                        lambda x: "short" if x < 0 else "long"
+                    )
+                    _fig_niv2 = px.bar(
+                        _niv_elx, x="settlement_date", y="avg_niv", color="colour",
+                        color_discrete_map={"short": "#d62728", "long": "#2ca02c"},
+                        labels={"avg_niv": "MW", "settlement_date": ""},
+                    )
+                    _fig_niv2.update_layout(
+                        height=220, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+                    )
+                    st.plotly_chart(_fig_niv2, use_container_width=True)
+            with col_niv2:
+                st.markdown("**Accepted Offer / Bid Volume — daily avg (MWh)**")
+                _vol_df = _elx_daily.dropna(subset=["avg_offer_vol", "avg_bid_vol"])
+                if not _vol_df.empty:
+                    _fig_vol = go.Figure()
+                    _fig_vol.add_trace(go.Bar(
+                        x=_vol_df["settlement_date"], y=_vol_df["avg_offer_vol"],
+                        name="Accepted Offers", marker_color="#2ca02c",
+                    ))
+                    _fig_vol.add_trace(go.Bar(
+                        x=_vol_df["settlement_date"], y=_vol_df["avg_bid_vol"].abs(),
+                        name="Accepted Bids (abs)", marker_color="#d62728",
+                    ))
+                    _fig_vol.update_layout(
+                        height=220, barmode="group",
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        yaxis_title="MWh",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0),
+                    )
+                    st.plotly_chart(_fig_vol, use_container_width=True)
+
+    # Wind generation forecast
+    st.subheader("Wind Generation Forecast (MW)")
+    _wf_from = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    _wf_to   = (datetime.utcnow() + timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _wf_df = _get_wind_forecast(_wf_from, _wf_to)
+    if _wf_df.empty:
+        st.info("No wind forecast data yet. Run Elexon Ops Backfill to populate gb_wind_forecast.")
+    else:
+        _wf_df["ts"] = pd.to_datetime(_wf_df["start_time"], utc=True).dt.tz_convert("Europe/London")
+        _fig_wf = px.area(
+            _wf_df, x="ts", y="generation_mw",
+            labels={"ts": "", "generation_mw": "MW"},
+        )
+        _fig_wf.update_traces(fillcolor="rgba(44, 160, 44, 0.3)", line_color="#2ca02c")
+        _fig_wf.update_layout(
+            height=240, margin=dict(l=0, r=0, t=0, b=0), yaxis_title="Wind MW",
+        )
+        st.plotly_chart(_fig_wf, use_container_width=True)
+        st.caption("Source: Elexon BMRS WINDFOR dataset. Latest published forecast per hour.")
 
 # ---- Ancillary Markets -----------------------------------------------------
 with tab_ancillary:
@@ -3816,6 +4040,49 @@ with tab_mgmt:
                 st.error(f"Fuel mix backfill failed: {_fm_exc2}")
 
     st.divider()
+    st.subheader("Elexon Ops Backfill")
+    st.caption(
+        "Backfill Elexon settlement system prices + wind forecast from the public "
+        "BMRS Insights API into `gb_elexon_sp` and `gb_wind_forecast`. "
+        "Scheduler runs daily at **09:15 SGT** for yesterday's data."
+    )
+    _eo_col1, _eo_col2, _eo_col3 = st.columns(3)
+    _eo_from = _eo_col1.date_input("From", value=date.today() - timedelta(days=30), key="eo_from")
+    _eo_to   = _eo_col2.date_input("To",   value=date.today() - timedelta(days=1),  key="eo_to")
+    with _eo_col3:
+        st.write("")
+        st.write("")
+        _run_eo = st.button("Run Elexon Ops Backfill", key="run_eo_btn")
+
+    try:
+        from services.gb_knowledge.elexon_ops import get_missing_sp_dates
+        _eo_missing = get_missing_sp_dates(_eo_from, _eo_to, _conn())
+        if _eo_missing:
+            st.warning(
+                f"**{len(_eo_missing)} date(s) missing** from gb_elexon_sp (< 48 periods): "
+                + ", ".join(_eo_missing[:10])
+                + ("…" if len(_eo_missing) > 10 else "")
+            )
+    except Exception:
+        pass
+
+    if _run_eo:
+        with st.spinner(f"Fetching Elexon ops data {_eo_from} → {_eo_to}…"):
+            try:
+                from services.gb_knowledge.elexon_ops import run_elexon_ops_range
+                _eo_result = run_elexon_ops_range(_eo_from, _eo_to, _conn())
+                st.success(
+                    f"Elexon ops backfill complete ({_eo_from} → {_eo_to}): "
+                    f"{_eo_result.get('system_prices', 0)} system price rows, "
+                    f"{_eo_result.get('wind_forecast', 0)} wind forecast rows upserted."
+                )
+                _get_elexon_sp_daily.clear()
+                _get_elexon_sp_hh.clear()
+                _get_wind_forecast.clear()
+            except Exception as _eo_exc:
+                st.error(f"Elexon ops backfill failed: {_eo_exc}")
+
+    st.divider()
     st.subheader("Scheduled Downloads")
 
     # Scheduler status
@@ -3882,4 +4149,3 @@ with tab_mgmt:
 with tab_library:
     from services.common.report_library_ui import render_library_tab
     render_library_tab("gb", "GB Market", "gb")
-            st.rerun()
