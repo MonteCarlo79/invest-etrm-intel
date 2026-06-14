@@ -90,7 +90,11 @@ ib-platform/                              # separate repo
 │   ├── fixed_income/                     # Bond analytics, yield curve, swaps
 │   ├── fx/                               # FX forwards, vol surface, CCY risk
 │   ├── ml/                               # PCA, factor models, HMM, GARCH
-│   ├── risk/                             # Unified cross-asset portfolio risk
+│   ├── risk/                             # Unified cross-asset portfolio risk (VaR suite,
+│   │                                     #   performance metrics, cashflow, margin)
+│   ├── simulation/                       # Forward simulation engines (MC paths,
+│   │                                     #   portfolio MC, options scenario matrix,
+│   │                                     #   strategy forward sim)
 │   ├── signals/                          # Rule-based + ML signal generators
 │   ├── backtest/                         # Vectorized + event-driven engine
 │   └── strategies/                       # Strategy ABC, registry, examples
@@ -147,7 +151,13 @@ trading.vol_surface       -- underlying, ts_date, expiry, strike, iv (historical
 trading.yield_curves      -- curve_id, ts_date, tenor_label, tenor_years, rate, source
 trading.portfolio_risk    -- ts, account_id, total_delta, total_gamma, total_theta,
                           --   total_vega, dv01, fx_delta_usd, var_1d_95, nav
-trading.strategy_pnl      -- strategy_id, ts_date, realized_pnl, unrealized_pnl, trades_n
+trading.strategy_pnl      -- strategy_id, ts_date, realized_pnl, unrealized_pnl, trades_n,
+                          --   capital_employed, roace_daily, sharpe_rolling_30d
+trading.cashflows         -- cf_id, ts, cf_type (trade|margin|dividend|coupon|roll|funding),
+                          --   symbol, amount, currency, strategy_id, description
+trading.capital_summary   -- ts_date, nav, cash_free, margin_posted, margin_available,
+                          --   capital_employed, capital_utilisation_pct,
+                          --   gross_notional, leverage_ratio
 trading.vix_term_structure -- ts_date, vix_index, m1..m8, contango_pct,
                            --   roll_yield_annualised, vvix, regime, source
 ```
@@ -261,6 +271,8 @@ Hard blocks (reject order, return error):
 - Every 5min: 1h bars for held positions → `trading.bars_1h`
 - On market close: EOD 1d bars for watchlist → `trading.bars_1d`
 - Every 15min (market hours): options chain for held options → `trading.options_chain`
+- End of day: account summary → `trading.capital_summary` (NAV, cash, margin, utilisation)
+- On fill event: cashflow record → `trading.cashflows` (premium paid/received, commission)
 
 ---
 
@@ -271,10 +283,48 @@ Hard blocks (reject order, return error):
 | Tab | Content |
 |---|---|
 | Positions | Live holdings table, unrealised P&L, cost basis, asset class breakdown |
-| P&L | Daily/MTD/YTD realised + unrealised; strategy attribution waterfall |
-| Risk | Portfolio Greeks (Δ, Γ, Θ, Vega), DV01, FX delta, VaR gauge, concentration heatmap |
-| Options Book | Per-expiry Greek ladder, vol surface 3D chart, P&L explain waterfall |
+| P&L | Daily/MTD/YTD realised + unrealised; strategy attribution waterfall (by strategy, asset class, instrument) |
+| Risk | Portfolio Greeks (Δ, Γ, Θ, Vega), DV01, FX delta; VaR panel (see below); concentration heatmap by position and asset class |
+| Options Book | Per-expiry Greek ladder, vol surface 3D chart, P&L explain waterfall (Δ/Γ/Vega/Theta/residual) |
 | Fixed Income | Duration ladder, DV01 bucketing by tenor, yield curve position overlay |
+| Performance | Capital return + utilisation metrics (see below) |
+| Cash Flow | Daily/MTD/YTD cashflow statement; margin utilisation gauge |
+
+#### Risk Tab — VaR Panel
+
+| Panel | Content |
+|---|---|
+| VaR Summary | 1d VaR at 95% and 99% — all three methods (Historical / Parametric / MC) side-by-side for cross-check |
+| CVaR / ES | Expected Shortfall alongside VaR — average loss in the tail (Basel IV standard) |
+| Horizon Term Structure | VaR at 1d / 5d / 10d / 1m |
+| Component VaR | Bar chart: top 10 positions by VaR contribution — where is the risk concentrated? |
+| Options Scenario Matrix | 2D grid: portfolio P&L across spot ±20% × vol ±50% — from `libs/simulation/options_scenarios.py` |
+| VaR Backtest | Rolling exceptions chart (actual loss > VaR); Kupiec p-value — is the model calibrated? |
+
+#### Performance Tab — Capital Return + Utilisation
+
+| Metric | Definition | Display |
+|---|---|---|
+| **ROACE** | Total P&L / Avg Capital Employed | Daily / MTD / YTD gauge + time series; per-strategy table |
+| **Return on Risk** | P&L / 1d VaR (95%) | Risk-adjusted return per unit of capital at risk |
+| **Capital Utilisation** | Margin posted / Total NAV | Gauge: how much of your capital is deployed |
+| **Leverage Ratio** | Gross notional / NAV | Current leverage across all asset classes |
+| **Margin Utilisation** | Current margin / Margin available | Gauge + headroom in $ — how close to margin call |
+| **Sharpe (rolling 30d)** | Annualised return / vol of daily returns | Per-strategy + portfolio |
+| **Sortino (rolling 30d)** | Return / downside deviation only | More relevant for strategies with skewed returns |
+| **Calmar** | Annualised return / max drawdown | Capital preservation quality |
+| **Max Drawdown** | Peak-to-trough NAV decline | Current drawdown + historical worst; recovery time |
+| **Capital Efficiency** | Gross notional / equity deployed | How much market exposure per $ of capital |
+| **Win Rate / Profit Factor** | % winning trades; gross profit / gross loss | Per-strategy + portfolio |
+
+#### Cash Flow Tab
+
+| Panel | Content |
+|---|---|
+| Daily Statement | Trade proceeds, option premiums, commissions, variation margin, dividends/coupons, roll costs, funding costs → Net daily cash flow |
+| MTD / YTD Cumulative | Running cash P&L vs unrealised P&L decomposition — shows realised vs paper gains |
+| By Strategy | Cashflow attribution per strategy — which strategies are actually generating cash |
+| Margin Summary | Initial margin posted per asset class; variation margin history; margin headroom |
 
 ### `apps/markets/` — Market Analytics
 
@@ -372,11 +422,100 @@ Hard blocks (reject order, return error):
 | Module | Content |
 |---|---|
 | `greeks.py` | Aggregate book Greeks across all asset classes using pricing libs |
-| `var.py` | Historical VaR, parametric VaR, Monte Carlo VaR (uses `ml/pca.py` for correlated scenario generation) |
+| `var.py` | Full VaR suite — see expanded detail below |
 | `scenarios.py` | Stress tests + PCA-driven shock generation; cross-asset scenario propagation |
 | `margin.py` | SPAN margin estimator (futures), portfolio margin (options), initial margin for FX |
+| `performance.py` | ROACE, Return on Risk, capital efficiency, Sharpe/Sortino/Calmar, drawdown analysis |
+| `cashflow.py` | Cashflow aggregation: trade fills, margin calls, dividends, coupons, roll costs, funding |
 
 Unified `Position` dataclass with `asset_class` field routes to the correct pricing/risk function per instrument type.
+
+#### `libs/risk/var.py` — Expanded VaR Suite
+
+```python
+historical_var(positions, confidence, horizon_days)
+    # Rolling window of actual P&L → percentile. Captures fat tails, no distribution assumption.
+
+parametric_var(positions, confidence, horizon_days)
+    # Delta-Normal: Greeks × covariance matrix (PCA-derived). Fast; underestimates for options.
+
+monte_carlo_var(positions, confidence, horizon_days, n_paths=10000)
+    # Correlated paths via libs/simulation/asset_paths.py → full revaluation per path.
+    # Best for options-heavy books (captures gamma/vega P&L non-linearity).
+
+cvar(positions, confidence, horizon_days, method)
+    # Expected Shortfall (CVaR): average loss beyond VaR threshold.
+    # More informative than VaR for tail risk; Basel IV regulatory standard.
+
+component_var(positions, confidence)
+    # Per-position VaR contribution → shows which positions dominate portfolio risk.
+
+incremental_var(positions, new_position, confidence)
+    # Δ VaR from adding one new trade → used by order_router.py pre-trade.
+
+var_backtest(var_series, actual_pnl_series, confidence)
+    # Kupiec test: count exceptions (actual loss > VaR).
+    # Tells you if VaR model is correctly calibrated.
+```
+
+#### `libs/risk/performance.py` — Capital & Return Metrics
+
+```python
+roace(pnl_series, capital_employed_series)
+    # Return on Average Capital Employed = Total P&L / Avg(Capital Employed)
+    # Capital Employed = margin posted + unrealised losses (capital at risk)
+    # Computed daily, monthly, YTD; per-strategy and portfolio-level
+
+return_on_risk(pnl, var_1d_95)
+    # P&L / VaR — risk-adjusted return per unit of risk capital consumed
+
+sharpe(returns, risk_free_rate=0.0, annualise=True)
+sortino(returns, target=0.0, annualise=True)
+calmar(returns)                    # annualised return / max drawdown
+omega(returns, threshold=0.0)      # probability-weighted gain/loss ratio
+
+capital_efficiency(gross_notional, nav)
+    # Leverage ratio: how much notional per unit of equity
+
+drawdown_analysis(nav_series)
+    # Max drawdown, current drawdown, drawdown duration, recovery time
+
+win_stats(trades_df)
+    # Win rate, profit factor, average winner/loser, expectancy per trade
+
+attribution(pnl_series, strategy_pnl_dict)
+    # P&L decomposed by strategy, asset class, instrument type
+```
+
+#### `libs/risk/cashflow.py`
+
+```python
+daily_cashflow_statement(date, account_id)
+    # Aggregates trading.cashflows for date:
+    # + trade proceeds (sales) / - trade cost (purchases)
+    # + option premium received / - option premium paid
+    # - commissions
+    # +/- variation margin settlements (futures/swaps)
+    # + dividends received / + coupons received
+    # - roll costs (futures calendar spreads)
+    # - funding costs (margin financing)
+    # = Net cash flow for day
+
+cumulative_cashflow(start, end, account_id)
+    # Running cash P&L vs unrealised P&L decomposition
+
+margin_utilisation(account_id)
+    # Current margin posted vs available → utilisation %
+```
+
+### `libs/simulation/` — Forward Simulation Engines (new)
+
+| Module | Content |
+|---|---|
+| `asset_paths.py` | GBM + Heston (stochastic vol) correlated multi-asset path generation via Cholesky decomposition of PCA covariance matrix |
+| `portfolio_mc.py` | Portfolio NAV distribution over N paths → P&L fan chart, probability of ruin, expected drawdown at percentiles |
+| `options_scenarios.py` | 2D scenario matrix: portfolio P&L as f(spot_move %, vol_move %) — the standard options desk tool |
+| `strategy_sim.py` | Run `Strategy.generate_signals()` + `size_position()` on MC paths or historical analog periods → forward P&L distribution |
 
 ### `libs/backtest/` — Strategy Validation
 
@@ -621,7 +760,7 @@ The screener (`apps/screener/`) is tactical — what to trade today. The advisor
 | **Market Briefing** | Daily auto-generated briefing (stored in `trading.kb_briefings`): macro / rates / vol / equity / FX sections |
 | **Knowledge Base** | Document browser: search docs by source/type/date; ingestion status; manual upload |
 | **Insights Library** | Accumulated expert insights: searchable, filterable by type/confidence/date; mark as validated/inactive |
-| **Model Lab** | Interactive model runner: run any lib (pricing, risk, ML) with custom inputs, view outputs, optionally extract insights |
+| **Model Lab** | Interactive model runner with sub-panels: Pricing (options/bonds/FX), Risk (VaR all methods, component VaR, Greeks), Simulation (portfolio MC fan chart, options 2D scenario matrix, strategy forward sim), Performance (ROACE/Sharpe/drawdown calculator), Backtest (run any strategy, auto-extract insights) |
 
 ### Claude Investment Advisor Agent Tools
 
@@ -656,10 +795,22 @@ run_scenario(shock_dict)                            # libs/risk/scenarios
 run_pca(asset_class, lookback_days=60)             # libs/ml/pca
 detect_regime()                                     # libs/ml/regime (HMM)
 forecast_vol(symbol, horizon_days=30)              # libs/ml/vol_forecast (GARCH)
-run_backtest(strategy_id, lookback_days=90)        # libs/backtest/engine
-run_kirk_margrabe(F1, F2, K, T, vol1, vol2, rho)  # libs/pricing/kirk_margrabe
-run_bond_analytics(isin)                           # libs/fixed_income/bonds
-run_yield_curve_fit(curve)                         # libs/fixed_income/yield_curve
+run_backtest(strategy_id, lookback_days=90)         # libs/backtest/engine
+run_kirk_margrabe(F1, F2, K, T, vol1, vol2, rho)   # libs/pricing/kirk_margrabe
+run_bond_analytics(isin)                            # libs/fixed_income/bonds
+run_yield_curve_fit(curve)                          # libs/fixed_income/yield_curve
+
+# Simulation
+run_portfolio_mc(n_paths, horizon_days)             # libs/simulation/portfolio_mc
+run_options_scenario_matrix(spot_range, vol_range)  # libs/simulation/options_scenarios
+run_strategy_sim(strategy_id, n_paths)              # libs/simulation/strategy_sim
+
+# Capital & performance
+get_roace(period='mtd')                             # libs/risk/performance.roace
+get_capital_summary()                               # trading.capital_summary latest
+get_cashflow_statement(date=None)                   # libs/risk/cashflow
+get_performance_metrics(strategy_id=None)           # Sharpe/Sortino/Calmar/drawdown
+get_var(confidence=0.95, method='historical')       # libs/risk/var — all methods
 ```
 
 ### Learning & Evolution Mechanism
