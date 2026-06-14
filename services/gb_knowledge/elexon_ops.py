@@ -301,27 +301,32 @@ def run_elexon_ops_ingest(settlement_date: date, conn=None) -> dict[str, int]:
 
 
 def run_elexon_ops_range(date_from: date, date_to: date, conn=None) -> dict[str, int]:
-    """Ingest Elexon ops data for each date in [date_from, date_to] inclusive."""
-    _close_conn = conn is None
-    if conn is None:
-        conn = _get_conn()
+    """Ingest Elexon ops data for each date in [date_from, date_to] inclusive.
 
-    _ensure_tables(conn)
+    Opens a fresh DB connection per date so a transient SSL drop on one day
+    does not abort the entire backfill.
+    """
+    # Ensure tables exist using the caller-supplied conn (or a temp one)
+    _init_conn = conn if conn is not None else _get_conn()
+    try:
+        _ensure_tables(_init_conn)
+    finally:
+        if conn is None:
+            _init_conn.close()
 
     totals: dict[str, int] = {"system_prices": 0, "wind_forecast": 0}
     d = date_from
     while d <= date_to:
         try:
-            result = run_elexon_ops_ingest(d, conn=conn)
+            # Always open a fresh connection per date — avoids cascading failures
+            # on long-running backfills where the DB drops idle connections.
+            result = run_elexon_ops_ingest(d)
             for k, v in result.items():
                 totals[k] = totals.get(k, 0) + v
         except Exception as exc:
             logger.error("Elexon ops ingest failed for %s: %s", d, exc)
         d += timedelta(days=1)
         time.sleep(_INTER_REQUEST_SLEEP)
-
-    if _close_conn:
-        conn.close()
 
     return totals
 
