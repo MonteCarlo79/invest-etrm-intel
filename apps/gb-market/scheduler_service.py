@@ -12,6 +12,7 @@ Jobs (all times Asia/Singapore):
   04:00  Modo AI distillation
   04:30  Pricing batch
   06:00  Daily report → email + WeCom
+  09:15  Elexon ops ingest (settlement system prices + wind forecast)
 """
 import json
 import logging
@@ -162,6 +163,16 @@ def _pricing_batch_job():
         logger.error("Pricing batch failed: %s", exc)
 
 
+def _elexon_ops_job():
+    yesterday = date.today() - timedelta(days=1)
+    try:
+        from services.gb_knowledge.elexon_ops import run_elexon_ops_ingest
+        result = run_elexon_ops_ingest(yesterday)
+        logger.info("Elexon ops ingest: %s", result)
+    except Exception as exc:
+        logger.error("Elexon ops ingest failed: %s", exc)
+
+
 def _daily_report_job():
     if not _is_report_enabled():
         logger.info("Daily report disabled for GB — skipping")
@@ -240,6 +251,8 @@ def start_scheduler():
                       id="gb_pricing_batch",   misfire_grace_time=3600)
     scheduler.add_job(_daily_report_job,    "cron", hour=6, minute=0,
                       id="gb_daily_report",    misfire_grace_time=3600)
+    scheduler.add_job(_elexon_ops_job,      "cron", hour=9, minute=15,
+                      id="gb_elexon_ops",      misfire_grace_time=3600)
     scheduler.start()
     return scheduler
 
