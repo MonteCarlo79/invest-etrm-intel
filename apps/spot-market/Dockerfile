@@ -36,6 +36,7 @@ COPY services/spot_ingest/              ./services/spot_ingest/
 COPY services/spot_mcp/                 ./services/spot_mcp/
 COPY services/knowledge_pool/           ./services/knowledge_pool/
 COPY services/market_fundamentals/      ./services/market_fundamentals/
+COPY services/common/                   ./services/common/
 COPY apps/spot-watcher/                 ./apps/spot-watcher/
 # data/market-fundamentals/ omitted — ECS reads from S3, not local folder
 
