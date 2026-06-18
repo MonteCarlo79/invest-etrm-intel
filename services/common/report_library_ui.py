@@ -88,18 +88,17 @@ def render_library_tab(market_code: str, market_name: str, key_prefix: str) -> N
     )
     sel_row = filtered.iloc[sel_idx]
 
-    with st.spinner("Loading PDF…"):
-        pdf_data = _cached_get_pdf(int(sel_row["id"]))
-
-    if pdf_data:
-        st.download_button(
-            "⬇ Download PDF",
-            data=pdf_data,
-            file_name=sel_row["filename"],
-            mime="application/pdf",
-            key=f"{key_prefix}_lib_dl",
-            type="primary",
-        )
-        st.caption(f"{len(pdf_data) // 1024} KB · {sel_row['filename']}")
-    else:
-        st.error("PDF not found in database.")
+    if st.button("⬇ Load PDF for download", key=f"{key_prefix}_lib_load", type="primary"):
+        with st.spinner("Loading PDF…"):
+            pdf_data = _cached_get_pdf(int(sel_row["id"]))
+        if pdf_data:
+            st.download_button(
+                "⬇ Download PDF",
+                data=pdf_data,
+                file_name=sel_row["filename"],
+                mime="application/pdf",
+                key=f"{key_prefix}_lib_dl_btn",
+            )
+            st.caption(f"{len(pdf_data) // 1024} KB · {sel_row['filename']}")
+        else:
+            st.error("PDF not found in database.")

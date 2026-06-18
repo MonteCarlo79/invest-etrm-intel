@@ -107,8 +107,15 @@ py -m streamlit run apps/bess-inner-mongolia/im/app.py --server.port 8504
 # 6) spot-markets :8505
 
 Start-AppWindow "spot-markets-8505" @"
+`$env:PYTHONPATH      = '$RepoRoot'
 `$env:DB_URL          = '$dsn'
-py -m streamlit run apps/spot-agent/ui/spot_dashboard.py --server.port 8505
+`$env:PGURL           = '$dsn'
+`$env:DB_DSN          = '$dsn'
+`$env:AUTH_MODE       = 'dev'
+`$env:DEV_USER_EMAIL  = '$Email'
+`$env:DEV_USER_ROLE   = '$Role'
+$awsProfileBlock
+py -m streamlit run apps/spot-market/app.py --server.port 8505
 "@
 
 # 7) model-catalogue :8506
