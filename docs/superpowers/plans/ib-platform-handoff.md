@@ -37,6 +37,48 @@ All under `libs/` and tested in `tests/libs/`:
 | `libs/fx/vol_surface_fx.py` | `FXVolSmile`, `build_fx_smile`, `delta_to_strike` |
 | `libs/signals/vix.py` | `VixTermStructure`, `vix_regime`, `contango_pct`, `roll_yield_annualised`, `implied_vol_premium` |
 
+### Phase 6 — Advisor App (complete, 394 tests passing)
+Latest commit: `740fe20` — pushed 2026-06-19.
+
+**`expert_memory.py` additions (Channel 1):**
+- `tags TEXT[]` added to Haiku JSON schema; `_write_insight` extended to 6-column INSERT including `tags`
+- `inject_memory(conn, tags, top_k=5) -> list[dict]` — `WHERE active=TRUE AND tags && %s::text[]`
+- `extract_insights(conn, session_text, api_key) -> int` — session notes → Haiku → KB; prompt framed with "Extract durable trading insights from this session note."
+
+**`services/knowledge/daily_briefing.py`:**
+- `generate_daily_briefing(conn, api_key) -> dict[str, str]` — 5 sections (macro/rates/vol/equity/fx) via Haiku; writes to `trading.kb_briefings`; per-section error isolation + `conn.rollback()` on upsert failure
+
+**`apps/shared/db.py` additions:**
+- `get_kb_insights(conn, tags, limit=10)` — DataFrame from `kb_insights WHERE tags && %s::text[]`
+- `get_kb_briefing(conn, date)` — DataFrame from `kb_briefings WHERE briefing_date = %s`
+
+**Portfolio app (`apps/portfolio/`) — now 9 tabs:**
+- `advisor_pretrade.py` — symbol + strategy selectbox, `inject_memory` KB panel, recent news, Sonnet streaming chat (session state reset on symbol/strategy change)
+- `advisor_daily.py` — loads today's briefing or generates on demand; "Extract Insights from Session Notes" panel via `extract_insights`
+
+**`services/broker_service/trade_monitor.py`:**
+- APScheduler service; Mon–Fri 18:00 ET `CronTrigger`; `_get_recent_trade_groups` + `_is_already_processed` dedup; calls `extract_from_trade_outcome`; run: `python -m services.broker_service.trade_monitor`
+
+**DB:** `db/migrations/003_kb_insights_tags.sql` — `tags TEXT[] NOT NULL DEFAULT '{}'` + GIN index (run once: `psql $PGURL -f db/migrations/003_kb_insights_tags.sql`)
+
+### Phase 5 — Knowledge Base Pipeline (complete, 372 tests passing)
+Latest commit: `226624f` — pushed 2026-06-19.
+
+**Knowledge ingestion service (`services/knowledge/`):**
+- `config.py` — `FRED_SERIES` (11 series), `RSS_FEEDS` (3 feeds), `INSIGHT_TYPES`, `TRADE_OUTCOME_MIN_PNL=50.0`, `DIGEST_STALE_DAYS=30`
+- `base.py` — `BaseConnector` ABC, `upsert_doc(conn, doc) -> bool` (ON CONFLICT url, returns True if inserted/updated), `_parse_feedparser_date`
+- `connectors/fred.py` — FRED API (11 series); returns `[]` if `FRED_API_KEY` missing; content=`json.dumps({"observations": [...]})`
+- `connectors/fed_speeches.py` — Fed speeches + press_monetary RSS feeds; `doc_type="speech"/"minutes"`
+- `connectors/treasury.py` — Treasury yield curve CSV; synthetic URL `treasury://yield-curve/{date}` for dedup
+- `connectors/bis.py` — BIS quarterly-review + working-papers RSS; `doc_type="research_paper"`
+- `connectors/news_rss.py` — 3 RSS feeds from `config.RSS_FEEDS` (NOT imported from `services/news/sources.py`); `doc_type="news_article"`
+- `expert_memory.py` — `digest_kb_docs(conn, api_key, batch_size=20)` (Channel 2); `extract_from_trade_outcome(...)` (Channel 5); both use `claude-haiku-4-5-20251001`
+- `ingest.py` — `BlockingScheduler` + 2 `CronTrigger` jobs: `ingest_docs` Mon–Fri 06:00 ET, `digest_docs` Mon–Fri 06:30 ET; `build_scheduler()` for testability
+
+**DB:** `db/migrations/002_kb_tables.sql` — `trading.kb_docs`, `trading.kb_insights`, `trading.kb_briefings` (run once: `psql $PGURL -f db/migrations/002_kb_tables.sql`)
+
+**Phase 6 design notes (non-blocking):** FRED series use static URL → only digested once per series (consider date-versioned URLs or re-digest logic); `_fetch_undigested` has no `ORDER BY`; `ANTHROPIC_API_KEY` missing causes silent Anthropic client error in `job_digest_docs`.
+
 ### Phase 4 — Market Data Pipeline + News Service (complete, 337 tests passing)
 Latest commit: `24f0e49` — pushed 2026-06-18.
 
@@ -154,7 +196,7 @@ Python: `/c/Users/dipeng.chen/AppData/Local/Programs/Python/Python313/python.exe
 
 Branch: `master` (all work directly on master — no feature branches)
 Remote: `git@github.com:MonteCarlo79/ib-platform.git`
-Latest commit: `24f0e49 fix(apps/news/digest): safe headline access in briefing prompt`
+Latest commit: `740fe20` — pushed 2026-06-19.
 
 All commits pushed.
 
@@ -162,5 +204,5 @@ All commits pushed.
 
 ## What To Build Next
 
-### Phase 5 — (Not yet designed)
-No design spec exists yet for Phase 5. Start with `superpowers:brainstorming` to define the next phase.
+### Phase 7 — (not yet designed)
+No design spec exists yet. Start with `superpowers:brainstorming`.
