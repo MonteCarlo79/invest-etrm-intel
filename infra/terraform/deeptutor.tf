@@ -133,21 +133,9 @@ resource "aws_lb_listener_rule" "deeptutor_host" {
 }
 
 # ── Route53 DNS ───────────────────────────────────────────────────────────────
-data "aws_route53_zone" "pjh_etrm" {
-  name = "pjh-etrm.ai."
-}
-
-resource "aws_route53_record" "deeptutor" {
-  zone_id = data.aws_route53_zone.pjh_etrm.zone_id
-  name    = "tutor"
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.app.dns_name
-    zone_id                = aws_lb.app.zone_id
-    evaluate_target_health = true
-  }
-}
+# DNS for pjh-etrm.ai is managed outside Route53 (external DNS provider).
+# After terraform apply, add a CNAME/A record manually:
+#   tutor.pjh-etrm.ai  →  <ALB DNS name from aws_lb.app.dns_name>
 
 # ── ECS task definition ───────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "deeptutor" {
