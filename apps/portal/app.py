@@ -26,6 +26,7 @@ st.set_page_config(page_title="BESS Intelligence Platform", layout="wide")
 
 from shared.agents.registry import get_visible_apps, get_visible_by_category
 from auth.rbac import get_user, get_groups, get_email
+from shared.service_control import get_all_status, set_service_mode, SERVICES
 
 # --------------------------------------------------
 # AWS DEBUG
@@ -621,6 +622,62 @@ if CAN_MANAGE_USERS:
     st.divider()
 
 # --------------------------------------------------
+# APP SERVICE CONTROL  (Admin only)
+# --------------------------------------------------
+
+if CAN_MANAGE_USERS:
+    st.subheader("App Service Control")
+    st.caption(
+        "Start or stop Streamlit web UIs on AWS. "
+        "Schedulers and data pipelines always keep running independently."
+    )
+
+    _MODE_ICON = {"web": "🟢 Web", "scheduler": "🟡 Scheduler-only", "stopped": "🔴 Stopped", "unknown": "❓ Unknown"}
+
+    try:
+        _svc_statuses = get_all_status(ecs, cluster)
+    except Exception as _svc_err:
+        _svc_statuses = []
+        st.warning(f"Could not load service statuses: {_svc_err}")
+
+    if _svc_statuses:
+        _svc_cols = st.columns(4)
+        for _i, _s in enumerate(_svc_statuses):
+            with _svc_cols[_i % 4]:
+                with st.container(border=True):
+                    st.markdown(f"**{_s['label']}**")
+                    st.caption(_MODE_ICON.get(_s["mode"], _s["mode"]))
+
+                    if _s["mode"] == "web":
+                        st.link_button(
+                            "Open →", _s["web_url"],
+                            type="primary", use_container_width=True,
+                        )
+                        if st.button("Stop Web", key=f"svc_stop_{_s['market']}", use_container_width=True):
+                            try:
+                                _new_mode = "scheduler" if SERVICES[_s["market"]]["has_scheduler"] else "stop"
+                                set_service_mode(_s["market"], _new_mode, ecs, cluster)
+                                st.success(f"Stopping {_s['label']}…")
+                                st.rerun()
+                            except Exception as _e:
+                                st.error(f"Failed: {_e}")
+                    else:
+                        if st.button("Start Web", key=f"svc_start_{_s['market']}", type="primary", use_container_width=True):
+                            try:
+                                set_service_mode(_s["market"], "web", ecs, cluster)
+                                st.success(f"Starting {_s['label']}… ready in ~90 seconds.")
+                                st.rerun()
+                            except Exception as _e:
+                                st.error(f"Failed: {_e}")
+                        with st.expander("Local", expanded=False):
+                            st.code(
+                                f"docker-compose -f docker-compose.local.yml up {_s['market']}",
+                                language="bash",
+                            )
+
+    st.divider()
+
+# --------------------------------------------------
 # 4 AGENT SECTIONS
 # --------------------------------------------------
 
@@ -765,95 +822,96 @@ with col_gb:
         available=True,
     )
 
-    st.markdown("### International Markets")
-    intl_cols = st.columns(2)
-    with intl_cols[0]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="Australia (NEM) Market Intelligence",
-            subtitle="AEMO · NEM spot · FCAS · AI Strategist",
-            description=(
-                "Real-time NEM BESS intelligence: spot prices by region (QLD/NSW/VIC/SA), "
-                "FCAS regulation and contingency markets, BESS leaderboard, and Strategist agent "
-                "grounded on Modo Energy data."
-            ),
-            capabilities=[
-                "NEM spot price by region (QLD/NSW/VIC/SA)",
-                "FCAS regulation and contingency clearing prices",
-                "BESS daily and monthly revenue index",
-                "Asset leaderboard: revenue by owner/operator",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: AEMO notices + Modo research",
-            ],
-            app_slug="au-market",
-            agent_key="au_analyst",
-            available=True,
-        )
-    with intl_cols[1]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="ERCOT (Texas) Market Intelligence",
-            subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
-            description=(
-                "Texas BESS intelligence: real-time and day-ahead LMPs, ancillary services "
-                "(Reg-Up/Down, RRS, ECRS), BESS revenue benchmarking, and Strategist agent."
-            ),
-            capabilities=[
-                "ERCOT RT and DA nodal LMP prices",
-                "Ancillary services: Reg-Up/Down, RRS, ECRS, Non-Spin",
-                "BESS daily and monthly revenue index",
-                "Asset leaderboard by owner/operator",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: ERCOT market notices + Modo research",
-            ],
-            app_slug="ercot-market",
-            agent_key="ercot_analyst",
-            available=True,
-        )
 
-    intl_cols2 = st.columns(2)
-    with intl_cols2[0]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="PJM (US East) Market Intelligence",
-            subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
-            description=(
-                "PJM BESS intelligence: nodal LMPs, capacity market, regulation (RegD/RegA), "
-                "synchronised reserve, BESS revenue benchmarking, and Strategist agent."
-            ),
-            capabilities=[
-                "PJM nodal LMP prices by zone",
-                "Ancillary services: Regulation (RegD/RegA), Sync Reserve",
-                "Capacity market (RPM) context",
-                "BESS daily and monthly revenue index",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: PJM market notices + Modo research",
-            ],
-            app_slug="pjm-market",
-            agent_key="pjm_analyst",
-            available=True,
-        )
-    with intl_cols2[1]:
-        _render_agent_section(
-            icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-            name="CAISO (California) Market Intelligence",
-            subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
-            description=(
-                "California BESS intelligence: CAISO LMPs, ancillary services (Regulation, "
-                "Spinning/Non-Spin), duck curve dynamics, Resource Adequacy, and Strategist agent."
-            ),
-            capabilities=[
-                "CAISO RT and DA LMP prices",
-                "Ancillary services: Regulation, Spinning/Non-Spin reserve",
-                "Duck curve and solar curtailment context",
-                "BESS daily and monthly revenue index",
-                "AI Strategist: grounded on live DB data",
-                "Knowledge base: CAISO market notices + Modo research",
-            ],
-            app_slug="caiso-market",
-            agent_key="caiso_analyst",
-            available=True,
-        )
+st.markdown("### International Markets")
+intl_cols = st.columns(2)
+with intl_cols[0]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="Australia (NEM) Market Intelligence",
+        subtitle="AEMO · NEM spot · FCAS · AI Strategist",
+        description=(
+            "Real-time NEM BESS intelligence: spot prices by region (QLD/NSW/VIC/SA), "
+            "FCAS regulation and contingency markets, BESS leaderboard, and Strategist agent "
+            "grounded on Modo Energy data."
+        ),
+        capabilities=[
+            "NEM spot price by region (QLD/NSW/VIC/SA)",
+            "FCAS regulation and contingency clearing prices",
+            "BESS daily and monthly revenue index",
+            "Asset leaderboard: revenue by owner/operator",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: AEMO notices + Modo research",
+        ],
+        app_slug="au-market",
+        agent_key="au_analyst",
+        available=True,
+    )
+with intl_cols[1]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="ERCOT (Texas) Market Intelligence",
+        subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
+        description=(
+            "Texas BESS intelligence: real-time and day-ahead LMPs, ancillary services "
+            "(Reg-Up/Down, RRS, ECRS), BESS revenue benchmarking, and Strategist agent."
+        ),
+        capabilities=[
+            "ERCOT RT and DA nodal LMP prices",
+            "Ancillary services: Reg-Up/Down, RRS, ECRS, Non-Spin",
+            "BESS daily and monthly revenue index",
+            "Asset leaderboard by owner/operator",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: ERCOT market notices + Modo research",
+        ],
+        app_slug="ercot-market",
+        agent_key="ercot_analyst",
+        available=True,
+    )
+
+intl_cols2 = st.columns(2)
+with intl_cols2[0]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="PJM (US East) Market Intelligence",
+        subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
+        description=(
+            "PJM BESS intelligence: nodal LMPs, capacity market, regulation (RegD/RegA), "
+            "synchronised reserve, BESS revenue benchmarking, and Strategist agent."
+        ),
+        capabilities=[
+            "PJM nodal LMP prices by zone",
+            "Ancillary services: Regulation (RegD/RegA), Sync Reserve",
+            "Capacity market (RPM) context",
+            "BESS daily and monthly revenue index",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: PJM market notices + Modo research",
+        ],
+        app_slug="pjm-market",
+        agent_key="pjm_analyst",
+        available=True,
+    )
+with intl_cols2[1]:
+    _render_agent_section(
+        icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
+        name="CAISO (California) Market Intelligence",
+        subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
+        description=(
+            "California BESS intelligence: CAISO LMPs, ancillary services (Regulation, "
+            "Spinning/Non-Spin), duck curve dynamics, Resource Adequacy, and Strategist agent."
+        ),
+        capabilities=[
+            "CAISO RT and DA LMP prices",
+            "Ancillary services: Regulation, Spinning/Non-Spin reserve",
+            "Duck curve and solar curtailment context",
+            "BESS daily and monthly revenue index",
+            "AI Strategist: grounded on live DB data",
+            "Knowledge base: CAISO market notices + Modo research",
+        ],
+        app_slug="caiso-market",
+        agent_key="caiso_analyst",
+        available=True,
+    )
 
 # --------------------------------------------------
 # FOOTER

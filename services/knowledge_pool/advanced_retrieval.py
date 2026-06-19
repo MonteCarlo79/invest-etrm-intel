@@ -41,7 +41,7 @@ from typing import Optional
 import anthropic
 
 from .db import get_conn
-from .knowledge_docs import search_reference_docs
+from .knowledge_docs import search_reference_docs, vector_search_reference_docs
 from .synthesis import search_summaries, search_qa_pairs
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,31 @@ def hyde_expand(query: str, api_key: str) -> tuple[str, list[str]]:
 
 # ── Phase 5b: Multi-source retrieval ──────────────────────────────────────────
 
+def _rrf_fuse(ranked_lists: list[list[dict]], k: int = 60) -> list[dict]:
+    """
+    Reciprocal Rank Fusion across multiple ranked result lists.
+    Each entry is keyed by (doc_id, text[:80]) to merge duplicates.
+    Returns a unified ranked list.
+    """
+    rrf_scores: dict[tuple, float] = {}
+    entries: dict[tuple, dict] = {}
+
+    for ranked_list in ranked_lists:
+        for rank, hit in enumerate(ranked_list):
+            key = (hit["doc_id"], hit["text"][:80])
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+            if key not in entries:
+                entries[key] = hit
+
+    merged = sorted(entries.keys(), key=lambda k: rrf_scores[k], reverse=True)
+    result = []
+    for key in merged:
+        entry = entries[key].copy()
+        entry["rank"] = rrf_scores[key]
+        result.append(entry)
+    return result
+
+
 def _retrieve_with_hyde(
     query: str,
     search_terms: list[str],
@@ -110,101 +135,107 @@ def _retrieve_with_hyde(
     n_chunks: int = 10,
 ) -> list[dict]:
     """
-    Retrieve candidates from summaries, Q&A pairs, and raw chunks.
-    Uses the original query + HyDE-expanded terms.
+    Retrieve candidates from summaries, Q&A pairs, FTS chunks, and vector chunks.
+    Fuses FTS + vector results with RRF for better recall.
     """
-    candidates: list[dict] = []
-    seen_ids: set = set()
-
-    # Build a composite query from HyDE terms
     composite_query = " ".join(search_terms[:6]) if search_terms else query
 
-    # 1. Synthesized summaries (highest density)
+    # ── 1. Summaries (FTS, highest density) ──────────────────────────────────
+    summaries: list[dict] = []
+    seen_summary_ids: set = set()
     for hit in search_summaries(composite_query, app=app, limit=n_summaries):
         key = ("summary", hit["doc_id"])
-        if key not in seen_ids:
-            seen_ids.add(key)
-            candidates.append({
-                "source": "summary",
-                "doc_id": hit["doc_id"],
-                "file_name": hit["file_name"],
-                "category": hit["category"],
-                "text": hit["summary_text"],
-                "rank": float(hit.get("rank", 0)),
+        if key not in seen_summary_ids:
+            seen_summary_ids.add(key)
+            summaries.append({
+                "source": "summary", "doc_id": hit["doc_id"],
+                "file_name": hit["file_name"], "category": hit["category"],
+                "text": hit["summary_text"], "rank": float(hit.get("rank", 0)),
             })
-
-    # Also search with original query for summaries
     for hit in search_summaries(query, app=app, limit=n_summaries):
         key = ("summary", hit["doc_id"])
-        if key not in seen_ids:
-            seen_ids.add(key)
-            candidates.append({
-                "source": "summary",
-                "doc_id": hit["doc_id"],
-                "file_name": hit["file_name"],
-                "category": hit["category"],
-                "text": hit["summary_text"],
-                "rank": float(hit.get("rank", 0)),
+        if key not in seen_summary_ids:
+            seen_summary_ids.add(key)
+            summaries.append({
+                "source": "summary", "doc_id": hit["doc_id"],
+                "file_name": hit["file_name"], "category": hit["category"],
+                "text": hit["summary_text"], "rank": float(hit.get("rank", 0)),
             })
 
-    # 2. Synthetic Q&A pairs (intent-matched)
+    # ── 2. Q&A pairs (FTS, intent-matched) ───────────────────────────────────
+    qa_results: list[dict] = []
+    seen_qa_ids: set = set()
     for hit in search_qa_pairs(composite_query, app=app, limit=n_qa):
         key = ("qa", hit["doc_id"], hit["question"][:50])
-        if key not in seen_ids:
-            seen_ids.add(key)
-            candidates.append({
-                "source": "qa_pair",
-                "doc_id": hit["doc_id"],
-                "file_name": hit["file_name"],
-                "category": hit["category"],
+        if key not in seen_qa_ids:
+            seen_qa_ids.add(key)
+            qa_results.append({
+                "source": "qa_pair", "doc_id": hit["doc_id"],
+                "file_name": hit["file_name"], "category": hit["category"],
                 "text": f"Q: {hit['question']}\nA: {hit['answer']}",
-                "rank": float(hit.get("rank", 0)) * 1.2,  # Boost Q&A matches
+                "rank": float(hit.get("rank", 0)) * 1.2,
             })
-
-    # Also search Q&A with original query
     for hit in search_qa_pairs(query, app=app, limit=n_qa):
         key = ("qa", hit["doc_id"], hit["question"][:50])
-        if key not in seen_ids:
-            seen_ids.add(key)
-            candidates.append({
-                "source": "qa_pair",
-                "doc_id": hit["doc_id"],
-                "file_name": hit["file_name"],
-                "category": hit["category"],
+        if key not in seen_qa_ids:
+            seen_qa_ids.add(key)
+            qa_results.append({
+                "source": "qa_pair", "doc_id": hit["doc_id"],
+                "file_name": hit["file_name"], "category": hit["category"],
                 "text": f"Q: {hit['question']}\nA: {hit['answer']}",
                 "rank": float(hit.get("rank", 0)) * 1.2,
             })
 
-    # 3. Raw chunks (fallback + coverage)
-    for hit in search_reference_docs(composite_query, app=app, limit=n_chunks):
-        key = ("chunk", hit["doc_id"], hit.get("page_no"))
-        if key not in seen_ids:
-            seen_ids.add(key)
-            candidates.append({
-                "source": "chunk",
-                "doc_id": hit["doc_id"],
-                "file_name": hit["file_name"],
-                "category": hit["category"],
-                "text": hit["chunk_text"],
-                "rank": float(hit.get("rank", 0)),
-            })
+    # ── 3. FTS chunks ─────────────────────────────────────────────────────────
+    fts_chunks: list[dict] = []
+    seen_fts: set = set()
+    for q in (composite_query, query):
+        for hit in search_reference_docs(q, app=app, limit=n_chunks):
+            key = (hit["doc_id"], hit.get("page_no"))
+            if key not in seen_fts:
+                seen_fts.add(key)
+                fts_chunks.append({
+                    "source": "chunk", "doc_id": hit["doc_id"],
+                    "file_name": hit["file_name"], "category": hit["category"],
+                    "text": hit["chunk_text"], "rank": float(hit.get("rank", 0)),
+                })
 
-    for hit in search_reference_docs(query, app=app, limit=n_chunks):
-        key = ("chunk", hit["doc_id"], hit.get("page_no"))
-        if key not in seen_ids:
-            seen_ids.add(key)
-            candidates.append({
-                "source": "chunk",
-                "doc_id": hit["doc_id"],
-                "file_name": hit["file_name"],
-                "category": hit["category"],
-                "text": hit["chunk_text"],
-                "rank": float(hit.get("rank", 0)),
+    # ── 4. Vector chunks (semantic similarity) ────────────────────────────────
+    vec_chunks: list[dict] = []
+    try:
+        for hit in vector_search_reference_docs(query, app=app, limit=n_chunks):
+            vec_chunks.append({
+                "source": "chunk", "doc_id": hit["doc_id"],
+                "file_name": hit["file_name"], "category": hit["category"],
+                "text": hit["chunk_text"], "rank": float(hit.get("rank", 0)),
             })
+        # Also search with HyDE composite query
+        for hit in vector_search_reference_docs(composite_query, app=app, limit=n_chunks):
+            if not any(h["text"][:80] == hit["chunk_text"][:80] for h in vec_chunks):
+                vec_chunks.append({
+                    "source": "chunk", "doc_id": hit["doc_id"],
+                    "file_name": hit["file_name"], "category": hit["category"],
+                    "text": hit["chunk_text"], "rank": float(hit.get("rank", 0)),
+                })
+    except Exception as exc:
+        logger.debug("Vector search skipped: %s", exc)
 
-    # Sort by rank descending, take top candidates for re-ranking
-    candidates.sort(key=lambda x: x["rank"], reverse=True)
-    return candidates[:24]
+    # ── 5. RRF fusion of FTS + vector chunks ──────────────────────────────────
+    fused_chunks = _rrf_fuse([fts_chunks, vec_chunks]) if vec_chunks else fts_chunks
+
+    # ── Combine all sources, summaries first ──────────────────────────────────
+    candidates = summaries + qa_results + fused_chunks
+    # Deduplicate by text fingerprint
+    seen_final: set = set()
+    deduped = []
+    for c in candidates:
+        fp = (c["doc_id"], c["text"][:80])
+        if fp not in seen_final:
+            seen_final.add(fp)
+            deduped.append(c)
+
+    deduped.sort(key=lambda x: x["rank"], reverse=True)
+    return deduped[:24]
 
 
 # ── Phase 5c: Cross-encoder re-ranking ────────────────────────────────────────

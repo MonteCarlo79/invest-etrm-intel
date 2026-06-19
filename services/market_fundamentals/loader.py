@@ -53,11 +53,21 @@ _SEASON_MAP = {"度夏": "summer", "度冬": "winter", "其余月份": "other"}
 
 
 def _latest_excel() -> Path | None:
-    """Return the most recently modified .xlsx in the data directory (file may be renamed)."""
+    """Return the province-summary .xlsx from the data directory.
+
+    Preference order:
+      1. Any file whose name contains '全国' or '市场基础' (the national summary).
+      2. Largest file by size (most data).
+    """
     if not _EXCEL_DIR.exists():
         return None
-    candidates = sorted(_EXCEL_DIR.glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
+    candidates = list(_EXCEL_DIR.glob("*.xlsx"))
+    if not candidates:
+        return None
+    # Prefer files with province-summary keywords in the name
+    preferred = [p for p in candidates if "全国" in p.name or "市场基础" in p.name]
+    pool = preferred if preferred else candidates
+    return max(pool, key=lambda p: p.stat().st_size)
 
 
 def _sheet_province(name: str) -> str | None:
@@ -171,7 +181,22 @@ def load_province_data() -> dict[str, dict]:
     if path is None:
         return {}
 
-    wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+    import io as _io, shutil as _shutil, tempfile as _tempfile
+    # On Windows with certain Unicode path encodings, io.open() may fail with
+    # PermissionError even though shutil can read the file.  Copy to a temp
+    # location with an ASCII name and load from there.
+    try:
+        _raw = path.read_bytes()
+    except (PermissionError, OSError):
+        _tmp = _tempfile.mktemp(suffix=".xlsx")
+        _shutil.copy2(str(path), _tmp)
+        with open(_tmp, "rb") as _fh:
+            _raw = _fh.read()
+        try:
+            import os as _os; _os.unlink(_tmp)
+        except OSError:
+            pass
+    wb = openpyxl.load_workbook(_io.BytesIO(_raw), read_only=True, data_only=True)
     result: dict[str, dict] = {}
 
     for sheet_name in wb.sheetnames:
@@ -284,3 +309,86 @@ def get_fundamentals_summary(
 
     rows.sort(key=lambda r: r["province_en"])
     return {"year": year, "provinces": rows}
+
+
+# ── DB-backed loader ─────────────────────────────────────────────────────────
+
+_FUEL_CN_FROM_COL = {
+    "wind":    "风电",
+    "solar":   "光伏",
+    "thermal": "火电",
+    "hydro":   "水电",
+    "nuclear": "核电",
+    "storage": "储能",
+}
+
+
+def load_province_data_from_db(dsn: str, schema: str = "marketdata") -> dict[str, dict]:
+    """
+    Load province fundamentals from the DB table (populated by
+    scripts/ingest_province_fundamentals.py).
+
+    Returns the same structure as load_province_data():
+        {
+            province_cn: {
+                "province_en": str,
+                "capacity":   {2024: {fuel_cn: {"value": float, "share": float}}, 2025: {...}},
+                "generation": {2024: {fuel_cn: {"value": float, "share": float}}, 2025: {...}},
+                "peak_load":  {2024: {"summer": float, "winter": float}, 2025: {...}},
+            }
+        }
+    """
+    import psycopg2
+    sql = f"""
+        SELECT province_cn, province_en, year,
+               wind_cap_10kw, solar_cap_10kw, thermal_cap_10kw,
+               hydro_cap_10kw, nuclear_cap_10kw, storage_cap_10kw,
+               wind_gen_100gwh, solar_gen_100gwh, thermal_gen_100gwh,
+               hydro_gen_100gwh, nuclear_gen_100gwh, storage_gen_100gwh,
+               peak_summer_mw, peak_winter_mw, peak_other_mw
+        FROM {schema}.province_fundamentals
+        ORDER BY province_cn, year
+    """
+    result: dict[str, dict] = {}
+    with psycopg2.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            for row in cur.fetchall():
+                (pcn, pen, year,
+                 w_cap, s_cap, th_cap, h_cap, n_cap, st_cap,
+                 w_gen, s_gen, th_gen, h_gen, n_gen, st_gen,
+                 p_sum, p_win, p_oth) = row
+
+                if pcn not in result:
+                    result[pcn] = {
+                        "province_en": pen,
+                        "capacity":   {},
+                        "generation": {},
+                        "peak_load":  {},
+                    }
+
+                cap_vals = [w_cap, s_cap, th_cap, h_cap, n_cap, st_cap]
+                gen_vals = [w_gen, s_gen, th_gen, h_gen, n_gen, st_gen]
+                fuel_keys = ["风电", "光伏", "火电", "水电", "核电", "储能"]
+
+                result[pcn]["capacity"][year] = {
+                    fuel: {"value": v, "share": None}
+                    for fuel, v in zip(fuel_keys, cap_vals)
+                    if v is not None
+                }
+                result[pcn]["generation"][year] = {
+                    fuel: {"value": v, "share": None}
+                    for fuel, v in zip(fuel_keys, gen_vals)
+                    if v is not None
+                }
+                pl: dict[str, float] = {}
+                if p_sum is not None:
+                    pl["summer"] = p_sum
+                if p_win is not None:
+                    pl["winter"] = p_win
+                if p_oth is not None:
+                    pl["other"] = p_oth
+                if pl:
+                    result[pcn]["peak_load"][year] = pl
+
+    return result

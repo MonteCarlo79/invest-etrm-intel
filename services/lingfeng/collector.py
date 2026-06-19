@@ -27,6 +27,23 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _LOGIN_URL = "https://lingfeng-saas.tradingthink.cn/#/login"
+
+# Substrings that indicate wrong credentials (not a transient/network error).
+# When any of these appear in the login-page error message the run halts
+# immediately to avoid triggering the account-lock mechanism.
+_CREDENTIAL_ERROR_PHRASES = (
+    "密码错误", "账号或密码", "用户名或密码", "账号不存在",
+    "密码不正确", "password", "incorrect", "invalid",
+    "账户已被锁定", "账号已锁定", "locked",
+)
+
+
+class CredentialError(RuntimeError):
+    """Raised when the LingFeng login fails due to wrong credentials.
+
+    Signals to the pipeline that it must halt immediately without retrying,
+    to prevent the account-lock mechanism from triggering.
+    """
 _DATA_URL  = "https://lingfeng-saas.tradingthink.cn/#/powerTrading/sass/data-consultation"
 
 # Element UI select option click timeout (ms)
@@ -97,24 +114,35 @@ async def _collect_async(
             except Exception:
                 pass
             # Check for error message (Element UI and Ant Design variants)
+            _login_err_msg = ""
             for _sel in ("div.el-message--error", ".ant-message-error", ".ant-alert-error",
                          "div[class*='error']", "span[class*='error']"):
                 _err = page.locator(_sel)
                 if await _err.count() > 0:
                     try:
-                        msg = await _err.first.inner_text()
-                        if msg.strip():
-                            raise RuntimeError(f"Login failed: {msg.strip()}")
-                    except RuntimeError:
-                        raise
+                        _login_err_msg = (await _err.first.inner_text()).strip()
                     except Exception:
                         pass
-            # Log body text snippet to surface any dialog or verification prompt
+                    if _login_err_msg:
+                        break
+            # Also scan body text for credential error phrases
+            _body = ""
             try:
                 _body = await page.locator("body").inner_text()
                 logger.error(f"Page body (first 400 chars): {_body[:400]!r}")
             except Exception:
                 pass
+            _combined = (_login_err_msg + " " + _body).lower()
+            if any(ph.lower() in _combined for ph in _CREDENTIAL_ERROR_PHRASES):
+                hint = _login_err_msg or "(see page body above)"
+                raise CredentialError(
+                    f"Login credentials rejected by LingFeng — pipeline halted to "
+                    f"prevent account lockout. Error: {hint!r}. "
+                    f"Update LINGFENG_PASSWORD in config/.env and delete "
+                    f"services/lingfeng/CREDENTIAL_HALT to resume."
+                )
+            if _login_err_msg:
+                raise RuntimeError(f"Login failed: {_login_err_msg}")
             raise RuntimeError("Login did not redirect away from login page within 15 s.")
 
         logger.info(f"Logged in — current URL: {page.url}")

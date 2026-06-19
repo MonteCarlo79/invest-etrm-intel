@@ -22,10 +22,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && python -c "import matplotlib.font_manager as _fm; _fm.fontManager = _fm.FontManager(); print('matplotlib font cache rebuilt')"
 
-COPY apps/bess-map/      ./apps/bess-map/
-COPY services/bess_map/  ./services/bess_map/
-COPY shared/             ./shared/
-COPY auth/               ./auth/
+COPY apps/bess-map/                    ./apps/bess-map/
+COPY services/bess_map/                ./services/bess_map/
+COPY services/market_fundamentals/     ./services/market_fundamentals/
+COPY shared/                           ./shared/
+COPY auth/                             ./auth/
 
 ENV PYTHONPATH=/app
 EXPOSE 8503

@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import logging
+
+logger = logging.getLogger(__name__)
 import io
 import re
 from typing import Optional
@@ -554,6 +557,14 @@ def register_and_ingest(
                 )
         conn.commit()
 
+    # Embed chunks in background (non-blocking, best-effort)
+    threading_mod = __import__("threading")
+    threading_mod.Thread(
+        target=_embed_chunks_for_doc,
+        args=(doc_id,),
+        daemon=True,
+    ).start()
+
     # Phase 1 hook: synthesize in background (best-effort, non-blocking)
     # Disabled during bulk ingestion (synthesize=False) to avoid burst-limit 403s;
     # the ECS synthesis task handles those docs instead.
@@ -570,6 +581,53 @@ def register_and_ingest(
             pass
 
     return doc_id, True, category
+
+
+def _embed_chunks_for_doc(doc_id: int) -> None:
+    """Embed all un-embedded chunks for a document. Runs in a background thread."""
+    try:
+        from .embeddings import embed_texts, vec_to_pg
+    except ImportError:
+        return  # fastembed not installed — skip silently
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, chunk_text FROM staging.spot_knowledge_chunks "
+                    "WHERE doc_id = %s AND embedding IS NULL",
+                    (doc_id,),
+                )
+                rows = cur.fetchall()
+
+        if not rows:
+            return
+
+        ids = [r[0] for r in rows]
+        texts = [r[1] for r in rows]
+        BATCH = 64
+        for i in range(0, len(texts), BATCH):
+            batch_ids = ids[i:i + BATCH]
+            batch_texts = texts[i:i + BATCH]
+            vecs = embed_texts(batch_texts)
+            updates = [
+                (vec_to_pg(v), cid)
+                for v, cid in zip(vecs, batch_ids)
+                if v is not None
+            ]
+            if updates:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.executemany(
+                            "UPDATE staging.spot_knowledge_chunks "
+                            "SET embedding = %s::vector WHERE id = %s",
+                            updates,
+                        )
+                    conn.commit()
+
+        logger.info("Embedded %d chunks for doc_id=%d", len(rows), doc_id)
+    except Exception as exc:
+        logger.error("Chunk embedding failed for doc_id=%d: %s", doc_id, exc)
 
 
 def register_url(
@@ -770,6 +828,59 @@ def search_reference_docs(
             cur.execute(sql, params)
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def vector_search_reference_docs(
+    query: str,
+    app: Optional[str] = None,
+    limit: int = 10,
+) -> list[dict]:
+    """
+    Vector similarity search over staging.spot_knowledge_chunks.
+    Returns chunks ordered by cosine similarity to the query embedding.
+    Falls back to empty list if embeddings not available.
+    """
+    try:
+        from .embeddings import embed_one, vec_to_pg
+    except ImportError:
+        return []
+
+    qvec = embed_one(query)
+    if qvec is None:
+        return []
+
+    qvec_str = vec_to_pg(qvec)
+    conditions = ["d.active = TRUE", "c.embedding IS NOT NULL"]
+    params: list = [qvec_str]
+
+    if app:
+        conditions.append("(d.app = %s OR d.app = 'shared')")
+        params.append(app)
+
+    where = " AND ".join(conditions)
+    params.extend([qvec_str, limit])
+
+    sql = f"""
+        SELECT d.id AS doc_id, d.file_name, d.category, d.app,
+               c.page_no, c.chunk_text,
+               1 - (c.embedding <=> %s::vector) AS rank
+        FROM staging.spot_knowledge_chunks c
+        JOIN staging.spot_knowledge_docs d ON d.id = c.doc_id
+        WHERE {where}
+        ORDER BY c.embedding <=> %s::vector
+        LIMIT %s
+    """
+
+    try:
+        init_knowledge_tables()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as exc:
+        logger.error("Vector search failed: %s", exc)
+        return []
 
 
 # ── Doc management ────────────────────────────────────────────────────────────
