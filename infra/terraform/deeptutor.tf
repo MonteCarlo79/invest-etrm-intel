@@ -116,9 +116,11 @@ resource "aws_lb_target_group" "deeptutor" {
 }
 
 # Host-header rule: tutor.pjh-etrm.ai → deeptutor TG
+# Priority 1: evaluated before path-pattern rules (e.g. rule 2 redirects / → /portal/)
+# so tutor.pjh-etrm.ai requests are forwarded directly without hitting Cognito auth.
 resource "aws_lb_listener_rule" "deeptutor_host" {
   listener_arn = aws_lb_listener.https.arn
-  priority     = 60
+  priority     = 1
 
   action {
     type             = "forward"
