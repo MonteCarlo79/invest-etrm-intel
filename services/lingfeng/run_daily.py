@@ -20,9 +20,16 @@ Usage — explicit date range:
         --start-date 2026-01-01 --end-date 2026-05-09
 
 Credentials are read from env vars:
-    LINGFENG_USERNAME   account username
-    LINGFENG_PASSWORD   account password
-    PGURL               Postgres DSN (already in config/.env)
+    LINGFENG_USERNAME        account username
+    LINGFENG_PASSWORD        account password
+    PGURL                    Postgres DSN (already in config/.env)
+
+Hermes notification (optional — set in config/.env to enable alerts):
+    FEISHU_APP_ID            Feishu app ID
+    FEISHU_APP_SECRET        Feishu app secret
+    FEISHU_OWNER_OPEN_ID     Your Feishu open_id (for proactive alerts)
+    TELEGRAM_BOT_TOKEN       Telegram bot token
+    TELEGRAM_OWNER_CHAT_ID   Your Telegram chat_id (for proactive alerts)
 
 Or pass --username / --password on the command line (not recommended for scheduled use).
 
@@ -79,6 +86,122 @@ _DEFAULT_MODELS = "ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1"
 
 # Default indicator for all markets
 _DEFAULT_INDICATOR = "市场供需数据"
+
+# Sentinel file written when a CredentialError is detected.
+# Its presence causes the pipeline to refuse to run (protecting against lockout).
+# Deleted automatically when the user supplies a new password via Hermes.
+_CREDENTIAL_HALT_FILE = _HERE / "CREDENTIAL_HALT"
+
+
+# ---------------------------------------------------------------------------
+# Hermes integration helpers
+# ---------------------------------------------------------------------------
+
+def _db_get_setting(key: str) -> str | None:
+    """Read a value from hermes_settings using PGURL (graceful fallback)."""
+    import psycopg2
+    pgurl = os.environ.get("PGURL") or os.environ.get("DATABASE_URL")
+    if not pgurl:
+        return None
+    try:
+        with psycopg2.connect(pgurl) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT value FROM hermes_settings WHERE key = %s", (key,)
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.debug(f"_db_get_setting({key!r}) failed: {e}")
+        return None
+
+
+def _db_set_setting(key: str, value: str) -> None:
+    """Write a value to hermes_settings using PGURL (graceful fallback)."""
+    import psycopg2
+    pgurl = os.environ.get("PGURL") or os.environ.get("DATABASE_URL")
+    if not pgurl:
+        return
+    try:
+        with psycopg2.connect(pgurl) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO hermes_settings (key, value, updated_at) VALUES (%s, %s, NOW()) "
+                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                    (key, value),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.debug(f"_db_set_setting({key!r}) failed: {e}")
+
+
+def _send_hermes_alert(text: str) -> None:
+    """Send an alert via Feishu and/or Telegram if credentials are configured."""
+    feishu_app_id     = os.environ.get("FEISHU_APP_ID", "")
+    feishu_app_secret = os.environ.get("FEISHU_APP_SECRET", "")
+    feishu_open_id    = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+    if feishu_app_id and feishu_app_secret and feishu_open_id:
+        try:
+            sys.path.insert(0, str(_REPO))
+            from services.hermes.feishu_client import FeishuClient
+            FeishuClient(feishu_app_id, feishu_app_secret).send_text(feishu_open_id, text)
+            logger.info("Hermes alert sent via Feishu.")
+        except Exception as e:
+            logger.warning(f"Hermes Feishu alert failed: {e}")
+
+    tg_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    tg_chat_id = os.environ.get("TELEGRAM_OWNER_CHAT_ID", "")
+    if tg_token and tg_chat_id:
+        try:
+            sys.path.insert(0, str(_REPO))
+            from services.hermes.telegram_client import TelegramClient
+            TelegramClient(tg_token).send_text(tg_chat_id, text)
+            logger.info("Hermes alert sent via Telegram.")
+        except Exception as e:
+            logger.warning(f"Hermes Telegram alert failed: {e}")
+
+
+def _find_data_gaps(halt_date: date, end_date: date) -> dict[str, list[str]]:
+    """
+    Return {province: [missing_date_str, ...]} for dates in [halt_date, end_date]
+    for provinces that already have some data in spot_fundamentals_hourly.
+    """
+    import psycopg2
+    pgurl = os.environ.get("PGURL") or os.environ.get("DATABASE_URL")
+    if not pgurl:
+        return {}
+    sql = """
+        WITH expected AS (
+            SELECT DISTINCT province FROM marketdata.spot_fundamentals_hourly
+        ),
+        date_series AS (
+            SELECT generate_series(%s::date, %s::date, '1 day'::interval)::date AS d
+        ),
+        present AS (
+            SELECT province, datetime::date AS d
+            FROM marketdata.spot_fundamentals_hourly
+            WHERE load_mw > 0
+              AND datetime::date BETWEEN %s::date AND %s::date
+            GROUP BY province, datetime::date
+        )
+        SELECT e.province, ds.d
+        FROM expected e
+        CROSS JOIN date_series ds
+        LEFT JOIN present p ON p.province = e.province AND p.d = ds.d
+        WHERE p.d IS NULL
+        ORDER BY e.province, ds.d
+    """
+    try:
+        gaps: dict[str, list[str]] = {}
+        with psycopg2.connect(pgurl) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (halt_date, end_date, halt_date, end_date))
+                for province, d in cur.fetchall():
+                    gaps.setdefault(province, []).append(str(d))
+        return gaps
+    except Exception as e:
+        logger.warning(f"Gap check failed: {e}")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +272,12 @@ def _collect_and_ingest_chunk(
 
     logger.info(f"  Chunk {chunk_start} → {chunk_end}")
 
-    # Download
+    # Download — let CredentialError propagate immediately (do not catch it here)
+    try:
+        from services.lingfeng.collector import CredentialError
+    except ImportError:
+        CredentialError = None  # type: ignore[assignment,misc]
+
     try:
         raw_path = collect_fn(
             username=username,
@@ -162,6 +290,8 @@ def _collect_and_ingest_chunk(
             headless=headless,
         )
     except Exception as exc:
+        if CredentialError and isinstance(exc, CredentialError):
+            raise  # propagate to run_pipeline which writes the halt sentinel
         logger.error(f"  [FAIL] Download failed for chunk {chunk_start}–{chunk_end}: {exc}")
         return False
 
@@ -236,6 +366,19 @@ def run_pipeline(
     chunk_days: int,
 ) -> None:
 
+    # ── Credential halt check ──────────────────────────────────────────────────
+    if _CREDENTIAL_HALT_FILE.exists():
+        msg = _CREDENTIAL_HALT_FILE.read_text(encoding="utf-8").strip()
+        logger.error("=" * 60)
+        logger.error("CREDENTIAL HALT — pipeline refused to start.")
+        logger.error(f"Reason: {msg}")
+        logger.error(
+            f"Action: update LINGFENG_PASSWORD in config/.env, then delete "
+            f"{_CREDENTIAL_HALT_FILE} to re-enable the pipeline."
+        )
+        logger.error("=" * 60)
+        sys.exit(2)
+
     total_days = (end_date - start_date).days + 1
 
     logger.info("=" * 60)
@@ -247,10 +390,10 @@ def run_pipeline(
     logger.info("=" * 60)
 
     try:
-        from services.lingfeng.collector import collect
+        from services.lingfeng.collector import collect, CredentialError
     except ImportError:
         sys.path.insert(0, str(_REPO))
-        from services.lingfeng.collector import collect
+        from services.lingfeng.collector import collect, CredentialError
 
     # Try to load ops_log; degrade gracefully if unavailable
     try:
@@ -277,26 +420,57 @@ def run_pipeline(
         op_id = _ops_log.start_op("lingfeng_ingest", market=market, date_range=dr_str) if _use_ops_log else None
 
         failed_chunks = []
-        for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
-            logger.info(f"[CHUNK {i}/{len(chunks)}]")
-            ok = _collect_and_ingest_chunk(
-                collect_fn=collect,
-                username=username,
-                password=password,
-                market=market,
-                indicator=indicator,
-                chunk_start=chunk_start,
-                chunk_end=chunk_end,
-                province_cn=province_cn,
-                schema=schema,
-                skip_prices=skip_prices,
-                skip_fundamentals=skip_fundamentals,
-                headless=headless,
-                download_dir=download_dir,
-                keep_files=keep_files,
+        try:
+            for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
+                logger.info(f"[CHUNK {i}/{len(chunks)}]")
+                ok = _collect_and_ingest_chunk(
+                    collect_fn=collect,
+                    username=username,
+                    password=password,
+                    market=market,
+                    indicator=indicator,
+                    chunk_start=chunk_start,
+                    chunk_end=chunk_end,
+                    province_cn=province_cn,
+                    schema=schema,
+                    skip_prices=skip_prices,
+                    skip_fundamentals=skip_fundamentals,
+                    headless=headless,
+                    download_dir=download_dir,
+                    keep_files=keep_files,
+                )
+                if not ok:
+                    failed_chunks.append((chunk_start, chunk_end))
+        except CredentialError as _ce:
+            # Write sentinel to prevent any further login attempts
+            _halt_msg = str(_ce)
+            try:
+                _CREDENTIAL_HALT_FILE.write_text(_halt_msg, encoding="utf-8")
+            except Exception:
+                pass
+            if _use_ops_log and op_id is not None:
+                _ops_log.finish_op(op_id, False, f"CREDENTIAL HALT: {_halt_msg}")
+            logger.error("=" * 60)
+            logger.error("CREDENTIAL HALT — wrong password detected, pipeline stopped.")
+            logger.error(_halt_msg)
+            logger.error(
+                f"Sentinel written to {_CREDENTIAL_HALT_FILE}. "
+                f"Send new password via Hermes (Feishu/Telegram): 'lingfeng password: NEW_PW'"
             )
-            if not ok:
-                failed_chunks.append((chunk_start, chunk_end))
+            logger.error("=" * 60)
+            # Store halt date so backfill knows the gap start
+            _db_set_setting("lingfeng_halt_date", str(start_date))
+            # Notify user via Feishu / Telegram
+            _alert = (
+                f"🔴 LingFeng数据采集已停止 — 密码错误\n\n"
+                f"时间：{date.today()}\n"
+                f"最后采集起始日期：{start_date}\n\n"
+                f"请通过飞书或Telegram发送新密码恢复采集：\n"
+                f"  lingfeng password: 新密码\n\n"
+                f"收到新密码后，下次定时运行（凌晨4点）将自动恢复并补填缺失数据。"
+            )
+            _send_hermes_alert(_alert)
+            sys.exit(2)
 
         market_ok = len(failed_chunks) == 0
         msg = "" if market_ok else f"Failed chunks: {failed_chunks}"
@@ -399,6 +573,19 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Do not delete downloaded Excel after ingestion")
     p.add_argument("--show-browser", action="store_true",
                    help="Run browser in visible (non-headless) mode for debugging")
+    p.add_argument("--reset-credential-halt", action="store_true",
+                   help=(
+                       "Delete the CREDENTIAL_HALT sentinel file and exit. "
+                       "Run this after updating LINGFENG_PASSWORD in config/.env "
+                       "to re-enable the pipeline."
+                   ))
+    p.add_argument("--check-trigger", action="store_true",
+                   help=(
+                       "Check hermes_settings.lingfeng_trigger_run in DB. "
+                       "Exit silently if no trigger is set; otherwise run pipeline "
+                       "with the requested date range. Intended for the 15-min "
+                       "Task Scheduler task."
+                   ))
 
     return p
 
@@ -416,6 +603,16 @@ def main() -> None:
 
     args = _build_parser().parse_args()
 
+    # Handle --reset-credential-halt before anything else
+    if args.reset_credential_halt:
+        if _CREDENTIAL_HALT_FILE.exists():
+            _CREDENTIAL_HALT_FILE.unlink()
+            logger.info(f"Credential halt cleared: {_CREDENTIAL_HALT_FILE}")
+            logger.info("Pipeline will resume on next run. Make sure LINGFENG_PASSWORD is updated.")
+        else:
+            logger.info("No credential halt sentinel found — nothing to reset.")
+        sys.exit(0)
+
     # Resolve credentials
     username = args.username or os.environ.get("LINGFENG_USERNAME")
     password = args.password or os.environ.get("LINGFENG_PASSWORD")
@@ -426,6 +623,56 @@ def main() -> None:
             "or pass --username / --password on the command line."
         )
         sys.exit(1)
+
+    # ── Check DB for manual trigger sent via Hermes ───────────────────────────
+    if args.check_trigger:
+        _trigger_val = _db_get_setting("lingfeng_trigger_run")
+        if not _trigger_val:
+            sys.exit(0)   # nothing pending — silent no-op
+        _db_set_setting("lingfeng_trigger_run", "")   # consume immediately
+        logger.info(f"Manual trigger received via Hermes: {_trigger_val!r}")
+        # Override date args based on trigger value
+        # Formats: "auto" | "YYYY-MM-DD" | "YYYY-MM-DD:YYYY-MM-DD"
+        if _trigger_val != "auto":
+            if ":" in _trigger_val:
+                _t_start, _t_end = _trigger_val.split(":", 1)
+                args.start_date = _t_start.strip()
+                args.end_date   = _t_end.strip()
+            else:
+                args.start_date = _trigger_val.strip()
+                args.end_date   = None
+        # If account is halted, inform user and exit rather than re-locking the account
+        if _CREDENTIAL_HALT_FILE.exists():
+            _halt_msg = (
+                "⚠️ LingFeng手动补填被阻止 — 账号处于密码锁定状态。\n"
+                "请先发送新密码：lingfeng password: 新密码\n\n"
+                "⚠️ LingFeng manual backfill blocked — credential halt is active.\n"
+                "Send new password first: lingfeng password: NEW_PASSWORD"
+            )
+            logger.warning(_halt_msg)
+            _send_hermes_alert(_halt_msg)
+            sys.exit(0)
+
+    # ── Check DB for new password sent via Hermes ─────────────────────────────
+    _new_pw_via_hermes = _db_get_setting("lingfeng_new_password")
+    _resuming_from_halt = False
+    _halt_start: date | None = None
+    if _new_pw_via_hermes:
+        logger.info("New LingFeng password received via Hermes — resuming pipeline.")
+        password = _new_pw_via_hermes
+        _db_set_setting("lingfeng_new_password", "")   # consume; don't reuse on next run
+        _resuming_from_halt = True
+        # Clear sentinel so run_pipeline() doesn't refuse to start
+        if _CREDENTIAL_HALT_FILE.exists():
+            _CREDENTIAL_HALT_FILE.unlink()
+            logger.info("Credential halt sentinel cleared.")
+        # Extend backfill range to cover the gap since halt
+        _halt_date_str = _db_get_setting("lingfeng_halt_date")
+        if _halt_date_str:
+            try:
+                _halt_start = date.fromisoformat(_halt_date_str)
+            except ValueError:
+                pass
 
     # Resolve markets
     if args.markets.strip().lower() == "all":
@@ -450,6 +697,11 @@ def main() -> None:
     else:
         end_date   = date.fromisoformat(args.end_date) if args.end_date else today - timedelta(days=1)
         start_date = end_date - timedelta(days=args.lookback - 1)
+
+    # If resuming from a credential halt, extend start_date to cover the full gap
+    if _resuming_from_halt and _halt_start and _halt_start < start_date:
+        logger.info(f"Backfill: extending start_date {start_date} → {_halt_start} to cover gap.")
+        start_date = _halt_start
 
     # Resolve download dir
     if args.download_dir:
@@ -476,6 +728,41 @@ def main() -> None:
         keep_files=args.keep_files,
         chunk_days=args.chunk_days,
     )
+
+    # ── Post-resume gap check ─────────────────────────────────────────────────
+    if _resuming_from_halt:
+        _db_set_setting("lingfeng_halt_date", "")   # clear halt marker
+        _gap_start = _halt_start or start_date
+        _yesterday = today - timedelta(days=1)
+        logger.info(f"Checking for remaining data gaps {_gap_start} → {_yesterday} …")
+        _gaps = _find_data_gaps(_gap_start, _yesterday)
+        if not _gaps:
+            _ok_msg = (
+                f"✅ LingFeng采集已恢复\n"
+                f"补填区间：{_gap_start} → {_yesterday}\n"
+                f"所有省份数据完整，无缺口。"
+            )
+            logger.info(_ok_msg)
+            _send_hermes_alert(_ok_msg)
+        else:
+            _gap_lines = []
+            for _prov, _dates in sorted(_gaps.items()):
+                if len(_dates) <= 5:
+                    _gap_lines.append(f"  {_prov}: {', '.join(_dates)}")
+                else:
+                    _gap_lines.append(
+                        f"  {_prov}: {_dates[0]} ~ {_dates[-1]} ({len(_dates)}天)"
+                    )
+            _gap_msg = (
+                f"⚠️ LingFeng采集已恢复，但仍有缺口：\n\n"
+                + "\n".join(_gap_lines[:30])
+                + ("\n  ..." if len(_gap_lines) > 30 else "")
+                + f"\n\n共 {len(_gaps)} 省有缺口。"
+                f"请运行：py services/lingfeng/run_daily.py --markets <省份> "
+                f"--start-date {_gap_start} --end-date {_yesterday}"
+            )
+            logger.warning(_gap_msg)
+            _send_hermes_alert(_gap_msg)
 
 
 if __name__ == "__main__":

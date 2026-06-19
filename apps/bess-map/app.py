@@ -182,11 +182,13 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_no_files":   "No files uploaded this session. Upload Excel files above first.",
         "mgmt_fund_s3_needed":  "S3 not configured — cannot download files for ingestion.",
         "mgmt_col_last_fund":   "Last fundamentals date",
-        "mgmt_col_missing_dates": "Missing dates (gaps)",
+        "mgmt_col_missing_dates":      "Price gaps",
+        "mgmt_col_missing_fund_dates": "Fundamentals gaps",
         "data_ops_log_title":   "Data Operations Log",
         "mgmt_batch_title":     "Batch Backfill",
         "mgmt_batch_caption":   "Download + ingest + capture for stale or missing provinces via the LingFeng scheduled pipeline.",
-        "mgmt_batch_lookback":  "Lookback days",
+        "mgmt_batch_start":     "Start date",
+        "mgmt_batch_end":       "End date",
         "mgmt_batch_markets":   "Provinces to backfill",
         "mgmt_batch_btn":       "Run Batch Backfill",
         "mgmt_batch_no_creds":  "LINGFENG_USERNAME / LINGFENG_PASSWORD not set — batch download will fail.",
@@ -236,6 +238,51 @@ _T: dict[str, dict[str, str]] = {
         "geo_unavailable":         "Province boundary data unavailable.",
         "geo_2h_title":            "2h BESS — Annual Revenue (¥/MWh/yr)",
         "geo_4h_title":            "4h BESS — Annual Revenue (¥/MWh/yr)",
+        # pca
+        "tab_pca":                 "Price Profile PCA",
+        "pca_title":               "Hourly Price Profile — Principal Component Analysis",
+        "pca_caption":             "Eigendecomposition of the daily RT-price covariance matrix (rows = trading days, cols = hours 0–23). Loadings normalised so mean = 1.0 (sum = 24).",
+        "pca_province":            "Province",
+        "pca_compare":             "Compare multiple provinces (overlay PC1–PC4)",
+        "pca_no_data":             "No price data available for this province / period.",
+        "pca_not_enough":          "Fewer than 30 trading days — PCA results may be unreliable.",
+        "pca_days":                "Trading days in sample",
+        "pca_mean_title":          "Mean Daily Price Profile (¥/kWh)",
+        "pca_var_title":           "Variance Explained by PC",
+        "pca_loading_label":       "PC{n} — {pct}% variance",
+        "pca_hour":                "Hour of day",
+        "pca_loading_y":           "Normalised loading",
+        "pca_cumvar":              "Cumulative",
+        # bess demand
+        "tab_demand":              "BESS Demand",
+        "demand_title":            "BESS Demand Analysis",
+        "demand_caption":          "Two complementary sizing methods: (1) spot-market arbitrage from intraday bidding-space swing; (2) frequency-response reserve from provincial rules on installed renewable capacity.",
+        "demand_province":         "Province",
+        "demand_arb_title":        "① Arbitrage Sizing — Intraday Bidding Space",
+        "demand_arb_caption":      "Bidding space = Total Load − Renewable generation − Must-run generation. Max BESS power for arbitrage = (daily max − min) ÷ 2.",
+        "demand_profile_title":    "Mean Intraday Bidding Space Profile (MW)",
+        "demand_swing_title":      "Daily BESS Arbitrage Sizing (MW)",
+        "demand_swing_y":          "Max BESS power (MW)",
+        "demand_fr_title":         "② System FR Capacity Requirement",
+        "demand_fr_caption":       "Frequency response capacity required by the grid operator per provincial FM market rules. Formula: % of peak load + % of installed renewables + floor (MW). Sources: provincial FM market rules and GB/T 45905.6-2025.",
+        "demand_fr_rule":          "FR rule / formula",
+        "demand_fr_pct":           "Effective % of Renewables",
+        "demand_fr_peak_load":     "Peak Load (MW)",
+        "demand_fr_wind":          "Wind (万kW)",
+        "demand_fr_solar":         "Solar (万kW)",
+        "demand_fr_renewable":     "Total Renewable (万kW)",
+        "demand_fr_req_mw":        "FR Requirement (MW)",
+        "demand_fr_bess_cap":      "BESS Installed (万kW)",
+        "demand_compare_title":    "③ Combined: Arbitrage vs Frequency Response vs Existing BESS",
+        "demand_compare_caption":  "Recommended BESS = max(Arbitrage sizing, FR requirement). Gap = Recommended − Existing BESS installed.",
+        "demand_arb_p50":          "Arbitrage p50 (MW)",
+        "demand_arb_p90":          "Arbitrage p90 (MW)",
+        "demand_recommended":      "Recommended BESS (MW)",
+        "demand_bess_installed":   "Existing BESS (MW)",
+        "demand_bess_gap":         "Gap (Demand − Existing, MW)",
+        "demand_no_fund":          "Market fundamentals not available — FR sizing unavailable.",
+        "demand_no_hourly":        "No hourly fundamentals data for this province/period.",
+        "demand_source_note":      "⚠️ FR capacity requirements from provincial/regional FM market rules and national standard GB/T 45905.6-2025. Formula: FR = pct_load × peak load + pct_renew × installed renewables + floor. 'Confirmed' = official documents; 'Estimate' = derived from regional rules or national baseline. Co-location mandates (配储比例) abolished by No. 136 policy and are NOT used here.",
     },
     "zh": {
         "app_title":            "量化分析师",
@@ -330,11 +377,13 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_fund_no_files":   "本次会话无已上传文件，请先在上方上传Excel文件。",
         "mgmt_fund_s3_needed":  "S3未配置——无法下载文件进行导入。",
         "mgmt_col_last_fund":   "最新基本面日期",
-        "mgmt_col_missing_dates": "缺失日期（断档）",
+        "mgmt_col_missing_dates":      "现货价格断档",
+        "mgmt_col_missing_fund_dates": "基本面数据断档",
         "data_ops_log_title":   "数据操作日志",
         "mgmt_batch_title":     "批量补录",
         "mgmt_batch_caption":   "对过旧或缺失数据的省份执行自动下载、导入和捕获流程。",
-        "mgmt_batch_lookback":  "回溯天数",
+        "mgmt_batch_start":     "开始日期",
+        "mgmt_batch_end":       "结束日期",
         "mgmt_batch_markets":   "待补录省份",
         "mgmt_batch_btn":       "运行批量补录",
         "mgmt_batch_no_creds":  "未设置 LINGFENG_USERNAME / LINGFENG_PASSWORD，批量下载将失败。",
@@ -383,6 +432,51 @@ _T: dict[str, dict[str, str]] = {
         "geo_unavailable":         "省级边界数据不可用。",
         "geo_2h_title":            "2h储能 — 年收益（元/MWh/年）",
         "geo_4h_title":            "4h储能 — 年收益（元/MWh/年）",
+        # pca
+        "tab_pca":                 "价格曲线主成分",
+        "pca_title":               "小时电价曲线主成分分析",
+        "pca_caption":             "日内实时电价协方差矩阵的特征分解（行=交易日，列=0–23时）。载荷已归一化，均值=1.0（总和=24）。",
+        "pca_province":            "省份",
+        "pca_compare":             "多省对比（叠加PC1–PC4）",
+        "pca_no_data":             "该省份/时段无可用价格数据。",
+        "pca_not_enough":          "交易日数少于30天 — 主成分结果可能不可靠。",
+        "pca_days":                "样本交易日数",
+        "pca_mean_title":          "日均电价曲线（元/千瓦时）",
+        "pca_var_title":           "各主成分方差解释比例",
+        "pca_loading_label":       "PC{n} — {pct}%方差",
+        "pca_hour":                "小时",
+        "pca_loading_y":           "归一化载荷",
+        "pca_cumvar":              "累计",
+        # bess demand
+        "tab_demand":              "储能需求",
+        "demand_title":            "储能需求分析",
+        "demand_caption":          "两种互补的容量估算方法：①日内竞价空间波动的现货套利需求；②各省对装机可再生能源的调频储备规定。",
+        "demand_province":         "省份",
+        "demand_arb_title":        "① 套利容量 — 日内竞价空间",
+        "demand_arb_caption":      "竞价空间 = 总负荷 − 可再生能源出力 − 必开机组出力。套利最大储能功率 = （日内最大值 − 最小值）÷ 2。",
+        "demand_profile_title":    "日均竞价空间曲线（MW）",
+        "demand_swing_title":      "每日储能套利容量（MW）",
+        "demand_swing_y":          "最大储能功率（MW）",
+        "demand_fr_title":         "② 系统调频容量需求",
+        "demand_fr_caption":       "电网调度机构依据各省调频辅助服务市场规则计算的系统调频容量需求。公式：最高负荷×比例 + 新能源装机×比例 + 兜底容量（MW）。来源：各省调频辅助服务市场实施细则及GB/T 45905.6-2025。",
+        "demand_fr_rule":          "调频规则/计算公式",
+        "demand_fr_pct":           "有效配储比例（%）",
+        "demand_fr_peak_load":     "最高负荷（MW）",
+        "demand_fr_wind":          "风电装机（万千瓦）",
+        "demand_fr_solar":         "光伏装机（万千瓦）",
+        "demand_fr_renewable":     "可再生能源合计（万千瓦）",
+        "demand_fr_req_mw":        "调频容量需求（MW）",
+        "demand_fr_bess_cap":      "储能装机（万千瓦）",
+        "demand_compare_title":    "③ 综合对比：套利 vs 调频容量需求 vs 已有储能装机",
+        "demand_compare_caption":  "建议储能容量 = max（套利容量, 调频容量需求）。缺口 = 建议容量 − 已有储能装机。",
+        "demand_arb_p50":          "套利中位数（MW）",
+        "demand_arb_p90":          "套利P90（MW）",
+        "demand_recommended":      "建议储能容量（MW）",
+        "demand_bess_installed":   "已有储能装机（MW）",
+        "demand_bess_gap":         "缺口（需求-装机，MW）",
+        "demand_no_fund":          "市场基础数据不可用 — 无法计算调频需求。",
+        "demand_no_hourly":        "该省份/时段无小时基础数据。",
+        "demand_source_note":      "⚠️ 调频容量需求来源于各省/区域调频辅助服务市场实施细则及GB/T 45905.6-2025国家标准。公式：调频需求 = 最高负荷×比例 + 新能源装机×比例 + 兜底容量。[已确认]=来自官方文件；[估算]=参考区域规则或国家基准值。注：强制配储比例（配储比例）已由136号文废除，本处不适用。",
     },
 }
 
@@ -671,6 +765,37 @@ def load_coverage_gaps(_eng_key):
     except Exception:
         return {}
 
+@st.cache_data(ttl=3600)
+def load_fundamentals_gaps(_eng_key):
+    """Return {province: compressed_gap_string} for days with zero/missing bidding_space_mw."""
+    sql = sql_text("""
+        WITH date_series AS (
+            SELECT province, MIN(datetime)::date AS fd, MAX(datetime)::date AS ld
+            FROM marketdata.spot_fundamentals_hourly GROUP BY province
+        ),
+        all_dates AS (
+            SELECT ds.province,
+                   generate_series(ds.fd, ds.ld, interval '1 day')::date AS d
+            FROM date_series ds
+        ),
+        present AS (
+            SELECT province, datetime::date AS d
+            FROM marketdata.spot_fundamentals_hourly
+            WHERE load_mw > 0
+            GROUP BY province, datetime::date
+        )
+        SELECT a.province, array_agg(a.d ORDER BY a.d) AS missing_dates
+        FROM all_dates a
+        LEFT JOIN present p USING (province, d)
+        WHERE p.d IS NULL
+        GROUP BY a.province
+    """)
+    try:
+        df = pd.read_sql(sql, _eng())
+        return {row["province"]: _compress_dates(row["missing_dates"]) for _, row in df.iterrows()}
+    except Exception:
+        return {}
+
 @st.cache_data(ttl=60)
 def load_data_ops_log(_eng_key):
     """Recent 48-hour data operations log, newest first."""
@@ -679,6 +804,203 @@ def load_data_ops_log(_eng_key):
         return get_recent_ops(_eng(), hours=48)
     except Exception:
         return pd.DataFrame()
+
+
+# ── PCA helpers ───────────────────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_pca_hourly(_eng_key, province: str, start: str, end: str) -> pd.DataFrame:
+    """Return a (n_days × 24) DataFrame of hourly RT prices for one province."""
+    sql = sql_text("""
+        SELECT datetime::date AS trading_date,
+               EXTRACT(hour FROM datetime)::int AS hour,
+               AVG(rt_price) AS rt_price
+        FROM marketdata.spot_prices_hourly
+        WHERE province = :p
+          AND datetime::date BETWEEN :s AND :e
+        GROUP BY trading_date, hour
+        ORDER BY trading_date, hour
+    """)
+    df = pd.read_sql(sql, _eng(), params={"p": province, "s": start, "e": end})
+    if df.empty:
+        return pd.DataFrame()
+    # Pivot to wide: rows = dates, columns = hours 0-23
+    pivot = df.pivot(index="trading_date", columns="hour", values="rt_price")
+    # Keep only days that have all 24 hours
+    pivot = pivot.dropna(axis=0)
+    pivot = pivot[[c for c in range(24) if c in pivot.columns]]
+    pivot = pivot.dropna(axis=0)
+    return pivot
+
+
+def compute_pca(price_matrix: pd.DataFrame, n_pcs: int = 4) -> dict:
+    """
+    PCA on a (days × 24) price matrix using covariance matrix eigendecomposition.
+    Loadings are normalised to sum=24 (mean=1.0) — same convention as reference model.
+    Returns dict with keys: loadings, eigenvalues, variance_explained, mean_profile, n_days.
+    """
+    X = price_matrix.values.astype(float)
+    mean_profile = X.mean(axis=0)          # shape (24,)
+    X_centered = X - mean_profile          # mean-centre each day
+
+    cov_mat = np.cov(X_centered.T)         # 24×24 covariance matrix
+    # eigh for symmetric real matrix — guaranteed real eigenvalues, stable
+    eig_vals, eig_vecs = np.linalg.eigh(cov_mat)
+
+    # Sort descending by eigenvalue magnitude
+    order = np.argsort(np.abs(eig_vals))[::-1]
+    eig_vals = eig_vals[order]
+    eig_vecs = eig_vecs[:, order]          # columns are eigenvectors
+
+    total_var = eig_vals.sum()
+    variance_explained = (eig_vals / total_var * 100) if total_var > 0 else eig_vals * 0
+
+    loadings = []
+    for i in range(min(n_pcs, eig_vecs.shape[1])):
+        vec = eig_vecs[:, i].copy()
+        s = vec.sum()
+        if abs(s) > 1e-10:
+            vec = vec / s * 24.0           # normalise: mean=1, sum=24
+        else:
+            vec = vec / (np.abs(vec).sum() + 1e-10) * 24.0
+        loadings.append(vec)
+
+    return {
+        "loadings": loadings,              # list of n_pcs arrays, each shape (24,)
+        "eigenvalues": eig_vals,
+        "variance_explained": variance_explained,
+        "mean_profile": mean_profile,
+        "n_days": len(X),
+    }
+
+
+# ── BESS Demand: Mandatory co-location ratios (配储比例) ──────────────────────
+# Source: provincial energy bureau development plans, grid-connection rules, and
+#         operator ancillary-service documents (confirmed via policy research).
+# Regime: Mandatory BESS co-location for NEW wind/solar projects (配储比例).
+#         Applied here to total installed renewable capacity as a proxy for the
+#         aggregate provincial BESS demand implied by the build-out pipeline.
+# Basis: fraction of wind + solar installed capacity (万kW × 10 → MW).
+# FR capacity requirement rules per province.
+# Format: (description, pct_of_peak_load, pct_of_installed_renew_mw, floor_mw)
+# FR_mw = max(floor_mw, peak_load_mw * pct_load + renew_installed_mw * pct_renew)
+# Source labels: [Confirmed] = from official FM market rule documents;
+#                [Estimate]  = derived from regional rules or national standard.
+# NOTE: verify against latest regulations before use in investment decisions.
+_FR_RULES: dict[str, tuple[str, float, float, float]] = {
+    # ── Confirmed from official FM market rule documents ──────────────────────
+    "陕西":   ("[Confirmed] 2.5%×peak load + 10%×max wind forecast "
+               "(Shaanxi FM Market Rule V2, Art.17, 2025)",                  0.025, 0.025, 0.0),
+    "江西":   ("[Confirmed] 2–5%×peak load (mid-range 3.5%) "
+               "(Jiangxi FM Market Rule, 华中区域)",                          0.035, 0.0,   0.0),
+    "湖北":   ("[Confirmed] 2–5%×peak load (mid-range 3%) "
+               "(Central China regional FM rule, 华中区域)",                  0.030, 0.0,   0.0),
+    "重庆":   ("[Confirmed] 2–5%×peak load (mid-range 3%) "
+               "(Central China regional FM rule, 华中区域)",                  0.030, 0.0,   0.0),
+    "云南":   ("[Confirmed] 0.6%×load + 0.6%×renewables + 450 MW floor "
+               "(Yunnan FM Market Rule, Appendix 3)",                         0.006, 0.006, 450.0),
+    "广东":   ("[Confirmed] ~1.5%×peak load + ~1.5%×renewables "
+               "(South Grid FM Rule 2025, R1=0.8–1.5%, R2=0.8–3%)",         0.015, 0.015, 0.0),
+    "广西":   ("[Confirmed] ~1.5%×peak load + ~1.5%×renewables "
+               "(South Grid FM Rule 2025)",                                   0.015, 0.015, 0.0),
+    "贵州":   ("[Confirmed] ~1.5%×peak load + ~1.5%×renewables "
+               "(South Grid FM Rule 2025)",                                   0.015, 0.015, 0.0),
+    "海南":   ("[Confirmed] ~1.5%×peak load + ~1.5%×renewables "
+               "(South Grid FM Rule 2025)",                                   0.015, 0.015, 0.0),
+    # ── Estimates based on regional grid rules / national standard ────────────
+    "甘肃":   ("[Estimate] ~2.5%×peak load + ~5%×renewables "
+               "(high RE penetration; Northwest Grid)",                       0.025, 0.050, 0.0),
+    "新疆":   ("[Estimate] ~2.5%×peak load + ~3%×renewables "
+               "(Northwest Grid; high wind penetration)",                     0.025, 0.030, 0.0),
+    "宁夏":   ("[Estimate] ~2.5%×peak load + ~3%×renewables "
+               "(Northwest Grid)",                                            0.025, 0.030, 0.0),
+    "青海":   ("[Estimate] ~2.5%×peak load + ~3%×renewables "
+               "(high RE penetration; Northwest Grid)",                       0.025, 0.030, 0.0),
+    "蒙西":   ("[Estimate] ~2.5%×peak load + ~3%×renewables "
+               "(high wind penetration; Inner Mongolia West Grid)",           0.025, 0.030, 0.0),
+    "蒙东":   ("[Estimate] ~2.5%×peak load + ~2.5%×renewables "
+               "(Northeast Grid)",                                            0.025, 0.025, 0.0),
+    "山东":   ("[Estimate] ~2%×peak load + ~2%×renewables "
+               "(North China Grid; GB/T 45905.6-2025 baseline)",             0.020, 0.020, 0.0),
+    "山西":   ("[Estimate] ~2.5%×peak load + ~2%×renewables "
+               "(North China Grid)",                                          0.025, 0.020, 0.0),
+    "冀北":   ("[Estimate] ~2%×peak load + ~2%×renewables "
+               "(North China Grid)",                                          0.020, 0.020, 0.0),
+    "冀南":   ("[Estimate] ~2%×peak load + ~2%×renewables "
+               "(North China Grid)",                                          0.020, 0.020, 0.0),
+    "河南":   ("[Estimate] ~2.5%×peak load + ~1.5%×renewables "
+               "(Central China Grid)",                                        0.025, 0.015, 0.0),
+    "湖南":   ("[Estimate] ~3%×peak load + ~1%×renewables "
+               "(Central China Grid)",                                        0.030, 0.010, 0.0),
+    "江苏":   ("[Estimate] ~2%×peak load + ~1%×renewables "
+               "(East China Grid)",                                           0.020, 0.010, 0.0),
+    "浙江":   ("[Estimate] ~2%×peak load + ~1%×renewables "
+               "(Zhejiang FM rule draft, 2024)",                              0.020, 0.010, 0.0),
+    "安徽":   ("[Estimate] ~2%×peak load + ~1%×renewables "
+               "(East China Grid)",                                           0.020, 0.010, 0.0),
+    "福建":   ("[Estimate] ~2%×peak load + ~1%×renewables "
+               "(East China Grid)",                                           0.020, 0.010, 0.0),
+    "辽宁":   ("[Estimate] ~2.5%×peak load + ~2%×renewables "
+               "(Northeast Grid)",                                            0.025, 0.020, 0.0),
+    "吉林":   ("[Estimate] ~2.5%×peak load + ~2%×renewables "
+               "(Northeast Grid)",                                            0.025, 0.020, 0.0),
+    "黑龙江": ("[Estimate] ~2.5%×peak load + ~2%×renewables "
+               "(Northeast Grid)",                                            0.025, 0.020, 0.0),
+    "四川":   ("[Estimate] ~1%×peak load + ~0.5%×renewables "
+               "(hydro-dominant grid; hydro provides primary FR)",            0.010, 0.005, 0.0),
+}
+_FR_DEFAULT: tuple[str, float, float, float] = (
+    "[Estimate] ~2%×peak load + ~1.5%×renewables (national standard GB/T 45905.6-2025 baseline)",
+    0.020, 0.015, 0.0,
+)
+
+
+@st.cache_data(ttl=3600)
+def load_demand_hourly(_eng_key, provinces: tuple, start: str, end: str) -> pd.DataFrame:
+    """
+    Daily bidding-space swing per province.
+    Returns: province | date | max_bs | min_bs | swing | bess_arb_mw
+    """
+    sql = sql_text("""
+        SELECT province,
+               datetime::date                               AS date,
+               MAX(bidding_space_mw)                        AS max_bs,
+               MIN(bidding_space_mw)                        AS min_bs,
+               MAX(bidding_space_mw) - MIN(bidding_space_mw) AS swing
+        FROM marketdata.spot_fundamentals_hourly
+        WHERE province = ANY(:provs)
+          AND datetime::date BETWEEN :s AND :e
+          AND bidding_space_mw IS NOT NULL
+        GROUP BY province, datetime::date
+        HAVING MAX(bidding_space_mw) > 0
+        ORDER BY province, date
+    """)
+    df = pd.read_sql(sql, _eng(), params={"provs": list(provinces), "s": start, "e": end})
+    if not df.empty:
+        df["bess_arb_mw"] = df["swing"] / 2.0
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_demand_intraday_profile(_eng_key, province: str, start: str, end: str) -> pd.DataFrame:
+    """
+    Mean ± std of bidding_space_mw and its components by hour of day.
+    Returns: hour | load_mean | renewable_mean | bs_mean | bs_std
+    """
+    sql = sql_text("""
+        SELECT EXTRACT(hour FROM datetime)::int AS hour,
+               AVG(load_mw)              AS load_mean,
+               AVG(renewable_total_mw)   AS renewable_mean,
+               AVG(bidding_space_mw)     AS bs_mean,
+               STDDEV(bidding_space_mw)  AS bs_std
+        FROM marketdata.spot_fundamentals_hourly
+        WHERE province = :p
+          AND datetime::date BETWEEN :s AND :e
+          AND bidding_space_mw IS NOT NULL
+          AND load_mw > 0
+        GROUP BY hour
+        ORDER BY hour
+    """)
+    return pd.read_sql(sql, _eng(), params={"p": province, "s": start, "e": end})
 
 
 # ── Agent memory ──────────────────────────────────────────────────────────────
@@ -1027,9 +1349,9 @@ focused exclusively on China's provincial electricity spot markets.
 """
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_ranking, tab_geo, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
-    _t("tab_ranking"), _t("tab_geo"), _t("tab_dispatch"), _t("tab_irr"),
-    _t("tab_mgmt"), _t("tab_agent"),
+tab_ranking, tab_geo, tab_pca, tab_demand, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
+    _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_demand"),
+    _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
 ])
 
 _ENG_KEY = "bess_map"   # hashable cache-bust token (stable)
@@ -1183,7 +1505,478 @@ with tab_geo:
     elif geo_rank_df.empty:
         st.warning("No ranking data available for this period.")
 
-# ── Tab 3: Dispatch & Economics ───────────────────────────────────────────────
+# ── Tab 3: Price Profile PCA ──────────────────────────────────────────────────
+_PC_COLORS = ["#4C78A8", "#F58518", "#54A24B", "#E45756",
+              "#B279A2", "#9D755D", "#BAB0AC", "#72B7B2"]
+_PC_FILL   = ["rgba(76,120,168,0.12)", "rgba(245,133,24,0.12)",
+              "rgba(84,162,75,0.12)",  "rgba(228,87,86,0.12)"]
+
+with tab_pca:
+    st.subheader(_t("pca_title"))
+    st.caption(_t("pca_caption"))
+
+    all_provs_pca = load_province_list(_ENG_KEY)
+
+    pca_col_left, pca_col_right = st.columns([1, 3])
+    with pca_col_left:
+        compare_mode = st.checkbox(_t("pca_compare"), value=False, key="pca_compare")
+        if compare_mode:
+            pca_provinces = st.multiselect(
+                _t("pca_province"),
+                options=all_provs_pca,
+                default=all_provs_pca[:3] if len(all_provs_pca) >= 3 else all_provs_pca,
+                key="pca_provinces_multi",
+            )
+        else:
+            pca_prov_single = st.selectbox(
+                _t("pca_province"),
+                options=all_provs_pca,
+                index=0,
+                key="pca_province_single",
+            )
+            pca_provinces = [pca_prov_single] if pca_prov_single else []
+        n_pcs = st.slider("PCs to show", min_value=2, max_value=6, value=4, key="pca_n_pcs")
+        use_l2 = st.checkbox(
+            "Normalise for comparison (L2 unit vector)",
+            value=compare_mode,
+            key="pca_l2_norm",
+            help="L2-normalise each loading to unit length so all provinces share the same scale. "
+                 "Useful for shape comparison. Default (unchecked) uses sum=24 normalisation from the reference model.",
+        )
+
+    # helper: apply the chosen normalisation
+    def _norm_loading(vec: np.ndarray) -> np.ndarray:
+        if use_l2:
+            n = np.linalg.norm(vec)
+            return vec / n if n > 1e-10 else vec
+        return vec  # already sum=24 from compute_pca
+
+    _ref_y    = 0.0 if use_l2 else 1.0
+    _y_label  = ("L2-normalised loading" if use_l2 else _t("pca_loading_y"))
+
+    if not pca_provinces:
+        st.info(_t("pca_no_data"))
+    else:
+        # ── Load & compute for each province ──────────────────────────────
+        pca_results: dict[str, dict] = {}
+        for prov in pca_provinces:
+            mat = load_pca_hourly(_ENG_KEY, prov, sel_start, sel_end)
+            if mat.empty or len(mat) < 10:
+                continue
+            pca_results[prov] = compute_pca(mat, n_pcs=n_pcs)
+
+        if not pca_results:
+            st.warning(_t("pca_no_data"))
+        elif not compare_mode:
+            # ── Single-province detail view ────────────────────────────────
+            prov  = pca_provinces[0]
+            res   = pca_results.get(prov)
+            if res is None:
+                st.warning(_t("pca_no_data"))
+            else:
+                if res["n_days"] < 30:
+                    st.warning(_t("pca_not_enough"))
+                st.caption(f"{_t('pca_days')}: **{res['n_days']}**")
+
+                hours = list(range(24))
+                var_exp = res["variance_explained"]
+
+                # Row A: mean profile + variance bar
+                rA1, rA2 = st.columns(2)
+                with rA1:
+                    fig_mean = go.Figure()
+                    fig_mean.add_trace(go.Scatter(
+                        x=hours, y=res["mean_profile"],
+                        mode="lines+markers",
+                        line=dict(color=_PC_COLORS[0], width=2),
+                        fill="tozeroy", fillcolor=_PC_FILL[0],
+                        name="mean",
+                    ))
+                    fig_mean.update_layout(
+                        title=f"{prov} — {_t('pca_mean_title')}",
+                        xaxis_title=_t("pca_hour"), yaxis_title="¥/kWh",
+                        height=280, margin=dict(t=40, b=30, l=40, r=10),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_mean, use_container_width=True, key=f"pca_mean_{prov}")
+
+                with rA2:
+                    n_show = min(n_pcs, len(var_exp))
+                    cumvar = [float(var_exp[:i+1].sum()) for i in range(n_show)]
+                    fig_var = go.Figure()
+                    fig_var.add_trace(go.Bar(
+                        x=[f"PC{i+1}" for i in range(n_show)],
+                        y=[float(var_exp[i]) for i in range(n_show)],
+                        marker_color=_PC_COLORS[:n_show],
+                        name="% var",
+                    ))
+                    fig_var.add_trace(go.Scatter(
+                        x=[f"PC{i+1}" for i in range(n_show)],
+                        y=cumvar,
+                        mode="lines+markers",
+                        line=dict(color="#555", width=1.5, dash="dot"),
+                        name=_t("pca_cumvar"),
+                        yaxis="y2",
+                    ))
+                    fig_var.update_layout(
+                        title=_t("pca_var_title"),
+                        yaxis=dict(title="% variance"),
+                        yaxis2=dict(title="cumulative %", overlaying="y", side="right",
+                                    range=[0, 105]),
+                        height=280, margin=dict(t=40, b=30, l=40, r=50),
+                        legend=dict(orientation="h", y=-0.25),
+                    )
+                    st.plotly_chart(fig_var, use_container_width=True, key=f"pca_var_{prov}")
+
+                # Row B+: PC loading charts in 2-column grid
+                ncols = 2
+                loadings = res["loadings"]
+                for row_start in range(0, len(loadings), ncols):
+                    cols = st.columns(ncols)
+                    for col_idx, pc_idx in enumerate(range(row_start, min(row_start + ncols, len(loadings)))):
+                        with cols[col_idx]:
+                            loading = _norm_loading(loadings[pc_idx])
+                            pct = f"{var_exp[pc_idx]:.1f}"
+                            label = _t("pca_loading_label", n=pc_idx + 1, pct=pct)
+                            fig_pc = go.Figure()
+                            fig_pc.add_hline(y=_ref_y, line_dash="dot",
+                                             line_color="rgba(0,0,0,0.25)", line_width=1)
+                            fig_pc.add_trace(go.Scatter(
+                                x=hours + hours[::-1],
+                                y=list(loading) + [_ref_y] * 24,
+                                fill="toself",
+                                fillcolor=_PC_FILL[pc_idx % len(_PC_FILL)],
+                                line=dict(width=0),
+                                showlegend=False,
+                                hoverinfo="skip",
+                            ))
+                            fig_pc.add_trace(go.Scatter(
+                                x=hours, y=loading.tolist(),
+                                mode="lines+markers",
+                                line=dict(color=_PC_COLORS[pc_idx % len(_PC_COLORS)], width=2),
+                                marker=dict(size=5),
+                                name=label,
+                            ))
+                            fig_pc.update_layout(
+                                title=label,
+                                xaxis=dict(title=_t("pca_hour"), dtick=2),
+                                yaxis=dict(title=_y_label),
+                                height=280, margin=dict(t=40, b=30, l=40, r=10),
+                                showlegend=False,
+                            )
+                            st.plotly_chart(fig_pc, use_container_width=True,
+                                            key=f"pca_pc{pc_idx+1}_{prov}")
+        else:
+            # ── Multi-province comparison: one chart per PC ────────────────
+            n_show = min(n_pcs, min(len(r["loadings"]) for r in pca_results.values()))
+            hours  = list(range(24))
+
+            # PC loading overlay charts
+            for pc_idx in range(n_show):
+                fig_cmp = go.Figure()
+                fig_cmp.add_hline(y=_ref_y, line_dash="dot",
+                                  line_color="rgba(0,0,0,0.25)", line_width=1)
+                for p_idx, (prov, res) in enumerate(pca_results.items()):
+                    loading = _norm_loading(res["loadings"][pc_idx])
+                    pct     = f"{res['variance_explained'][pc_idx]:.1f}"
+                    fig_cmp.add_trace(go.Scatter(
+                        x=hours, y=loading.tolist(),
+                        mode="lines+markers",
+                        line=dict(color=_PC_COLORS[p_idx % len(_PC_COLORS)], width=2),
+                        marker=dict(size=4),
+                        name=f"{prov} ({pct}%)",
+                    ))
+                fig_cmp.update_layout(
+                    title=f"PC{pc_idx+1} — {_y_label} by province",
+                    xaxis=dict(title=_t("pca_hour"), dtick=2),
+                    yaxis=dict(title=_y_label),
+                    height=300, margin=dict(t=40, b=30, l=40, r=10),
+                    legend=dict(orientation="h", y=-0.3),
+                )
+                st.plotly_chart(fig_cmp, use_container_width=True, key=f"pca_cmp_pc{pc_idx+1}")
+
+            # Variance-explained comparison table
+            st.markdown("**Variance explained (%) by province**")
+            ve_rows = {}
+            for prov, res in pca_results.items():
+                ve_rows[prov] = {f"PC{i+1}": f"{res['variance_explained'][i]:.1f}%"
+                                 for i in range(n_show)}
+            st.dataframe(pd.DataFrame(ve_rows).T, use_container_width=True)
+
+# ── Tab 4: BESS Demand Analysis ───────────────────────────────────────────────
+with tab_demand:
+    st.subheader(_t("demand_title"))
+    st.caption(_t("demand_caption"))
+
+    _all_provs_d = load_province_list(_ENG_KEY)
+    _d_col_sel, _d_col_yr = st.columns([3, 1])
+    with _d_col_sel:
+        _d_provs = st.multiselect(
+            _t("demand_province"),
+            options=_all_provs_d,
+            default=_all_provs_d[:6] if len(_all_provs_d) >= 6 else _all_provs_d,
+            key="demand_provinces",
+        )
+    with _d_col_yr:
+        _fund_yr = st.radio("Installed capacity year", [2025, 2024], key="demand_fund_yr", horizontal=True)
+
+    if not _d_provs:
+        st.info(_t("demand_no_hourly"))
+    else:
+        # ── ① Arbitrage Sizing ───────────────────────────────────────────
+        st.markdown(f"### {_t('demand_arb_title')}")
+        st.caption(_t("demand_arb_caption"))
+
+        _swing_df = load_demand_hourly(_ENG_KEY, tuple(sorted(_d_provs)), sel_start, sel_end)
+
+        if _swing_df.empty:
+            st.warning(_t("demand_no_hourly"))
+        else:
+            # Single-province intraday profile picker
+            _d_prov_single = st.selectbox(
+                "Province for intraday profile",
+                options=_d_provs,
+                key="demand_profile_prov",
+            )
+            _profile_df = load_demand_intraday_profile(
+                _ENG_KEY, _d_prov_single, sel_start, sel_end)
+
+            _arb_col1, _arb_col2 = st.columns(2)
+
+            with _arb_col1:
+                # Mean intraday profile: load / renewable / bidding space
+                if not _profile_df.empty:
+                    _hours = _profile_df["hour"].tolist()
+                    fig_profile = go.Figure()
+                    # Load
+                    if _profile_df["load_mean"].notna().any():
+                        fig_profile.add_trace(go.Scatter(
+                            x=_hours, y=_profile_df["load_mean"].tolist(),
+                            name="Load", mode="lines",
+                            line=dict(color="#9E9E9E", width=2, dash="dot"),
+                        ))
+                    # Renewable
+                    if _profile_df["renewable_mean"].notna().any():
+                        fig_profile.add_trace(go.Scatter(
+                            x=_hours, y=_profile_df["renewable_mean"].tolist(),
+                            name="Renewable", mode="lines",
+                            line=dict(color="#54A24B", width=2),
+                            fill="tozeroy", fillcolor="rgba(84,162,75,0.10)",
+                        ))
+                    # Bidding space ± 1 std band
+                    _bs_mean = _profile_df["bs_mean"].tolist()
+                    _bs_std  = _profile_df["bs_std"].fillna(0).tolist()
+                    _bs_hi   = [m + s for m, s in zip(_bs_mean, _bs_std)]
+                    _bs_lo   = [max(m - s, 0) for m, s in zip(_bs_mean, _bs_std)]
+                    fig_profile.add_trace(go.Scatter(
+                        x=_hours + _hours[::-1],
+                        y=_bs_hi + _bs_lo[::-1],
+                        fill="toself",
+                        fillcolor="rgba(76,120,168,0.15)",
+                        line=dict(width=0), showlegend=False, hoverinfo="skip",
+                    ))
+                    fig_profile.add_trace(go.Scatter(
+                        x=_hours, y=_bs_mean,
+                        name="Bidding Space", mode="lines",
+                        line=dict(color="#4C78A8", width=2.5),
+                    ))
+                    # Annotate the swing: peak and trough
+                    _pk_idx = int(np.argmax(_bs_mean))
+                    _tr_idx = int(np.argmin(_bs_mean))
+                    _swing_val = _bs_mean[_pk_idx] - _bs_mean[_tr_idx]
+                    fig_profile.add_annotation(
+                        x=_hours[_pk_idx], y=_bs_mean[_pk_idx],
+                        text=f"↑ {_bs_mean[_pk_idx]:,.0f} MW",
+                        showarrow=True, arrowhead=2, ax=0, ay=-30,
+                        font=dict(size=11, color="#4C78A8"),
+                    )
+                    fig_profile.add_annotation(
+                        x=_hours[_tr_idx], y=_bs_mean[_tr_idx],
+                        text=f"↓ {_bs_mean[_tr_idx]:,.0f} MW",
+                        showarrow=True, arrowhead=2, ax=0, ay=30,
+                        font=dict(size=11, color="#E45756"),
+                    )
+                    fig_profile.update_layout(
+                        title=f"{_d_prov_single} — {_t('demand_profile_title')}<br>"
+                              f"<sup>Swing = {_swing_val:,.0f} MW → Max BESS = {_swing_val/2:,.0f} MW</sup>",
+                        xaxis=dict(title="Hour", dtick=2),
+                        yaxis=dict(title="MW"),
+                        height=340, margin=dict(t=60, b=30, l=50, r=10),
+                        legend=dict(orientation="h", y=-0.25),
+                    )
+                    st.plotly_chart(fig_profile, use_container_width=True, key="demand_profile_chart")
+                else:
+                    st.warning(_t("demand_no_hourly"))
+
+            with _arb_col2:
+                # Time series of daily BESS_arb_mw for all selected provinces
+                fig_swing = go.Figure()
+                for _p_idx, _prov in enumerate(_d_provs):
+                    _pdf = _swing_df[_swing_df["province"] == _prov]
+                    if _pdf.empty:
+                        continue
+                    fig_swing.add_trace(go.Scatter(
+                        x=_pdf["date"].tolist(),
+                        y=_pdf["bess_arb_mw"].tolist(),
+                        name=_prov, mode="lines",
+                        line=dict(color=_PC_COLORS[_p_idx % len(_PC_COLORS)], width=1.5),
+                    ))
+                fig_swing.update_layout(
+                    title=_t("demand_swing_title"),
+                    xaxis_title="Date",
+                    yaxis_title=_t("demand_swing_y"),
+                    height=340, margin=dict(t=40, b=30, l=50, r=10),
+                    legend=dict(orientation="h", y=-0.3),
+                )
+                st.plotly_chart(fig_swing, use_container_width=True, key="demand_swing_ts")
+
+        # ── ② Frequency Response Sizing ──────────────────────────────────
+        st.markdown(f"### {_t('demand_fr_title')}")
+        st.caption(_t("demand_fr_caption"))
+        st.caption(_t("demand_source_note"))
+
+        try:
+            from services.market_fundamentals.loader import load_province_data_from_db as _load_fund_db
+            _dsn = (
+                os.environ.get("PGURL")
+                or os.environ.get("DATABASE_URL")
+                or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
+            )
+            _fund_all = _load_fund_db(_dsn)
+        except Exception:
+            _fund_all = {}
+
+        if not _fund_all:
+            st.warning(_t("demand_no_fund"))
+        else:
+            _fr_rows = []
+            for _prov in _d_provs:
+                _pdata = _fund_all.get(_prov, {})
+                _cap_yr = _pdata.get("capacity", {}).get(_fund_yr, {})
+                _wind_wkw    = (_cap_yr.get("风电", {}) or {}).get("value") or 0.0
+                _solar_wkw   = (_cap_yr.get("光伏", {}) or {}).get("value") or 0.0
+                _storage_wkw = (_cap_yr.get("储能", {}) or {}).get("value") or 0.0
+                _renew_wkw = _wind_wkw + _solar_wkw
+                _rule_desc, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
+                _pl = _pdata.get("peak_load", {}).get(_fund_yr, {})
+                _peak_load_mw = max((_pl.get("summer") or 0), (_pl.get("winter") or 0))
+                _renew_mw = _renew_wkw * 10  # 万kW → MW
+                _fr_mw = max(_floor_mw, _peak_load_mw * _pct_load + _renew_mw * _pct_renew_inst)
+                _eff_pct = (_fr_mw / _renew_mw * 100) if _renew_mw > 0 else 0.0
+                _fr_rows.append({
+                    _t("demand_province"):     _prov,
+                    _t("demand_fr_peak_load"): round(_peak_load_mw, 0),
+                    _t("demand_fr_wind"):      round(_wind_wkw,  1),
+                    _t("demand_fr_solar"):     round(_solar_wkw, 1),
+                    _t("demand_fr_renewable"): round(_renew_wkw, 1),
+                    _t("demand_fr_bess_cap"):  round(_storage_wkw, 1),
+                    _t("demand_fr_pct"):       f"{_eff_pct:.1f}%",
+                    _t("demand_fr_req_mw"):    round(_fr_mw, 0),
+                    _t("demand_fr_rule"):      _rule_desc,
+                })
+            if _fr_rows:
+                _fr_df = pd.DataFrame(_fr_rows).set_index(_t("demand_province"))
+                st.dataframe(_fr_df, use_container_width=True)
+
+                # Bar chart of FR requirement
+                fig_fr = go.Figure(go.Bar(
+                    x=_fr_df.index.tolist(),
+                    y=_fr_df[_t("demand_fr_req_mw")].tolist(),
+                    marker_color="#F58518",
+                    text=[f"{v:,.0f}" for v in _fr_df[_t("demand_fr_req_mw")]],
+                    textposition="outside",
+                ))
+                fig_fr.update_layout(
+                    title=f"{_t('demand_fr_title')} — {_fund_yr} installed capacity",
+                    xaxis_title=_t("demand_province"),
+                    yaxis_title="MW",
+                    height=320, margin=dict(t=40, b=60, l=50, r=10),
+                )
+                st.plotly_chart(fig_fr, use_container_width=True, key="demand_fr_bar")
+
+        # ── ③ Combined comparison ─────────────────────────────────────────
+        if not _swing_df.empty and _fund_all:
+            st.markdown(f"### {_t('demand_compare_title')}")
+            st.caption(_t("demand_compare_caption"))
+
+            _cmp_rows = []
+            for _prov in _d_provs:
+                _pdf = _swing_df[_swing_df["province"] == _prov]["bess_arb_mw"]
+                _arb_p50 = float(_pdf.quantile(0.50)) if not _pdf.empty else 0.0
+                _arb_p90 = float(_pdf.quantile(0.90)) if not _pdf.empty else 0.0
+
+                _pdata = _fund_all.get(_prov, {})
+                _cap_yr = _pdata.get("capacity", {}).get(_fund_yr, {})
+                _wind_wkw    = (_cap_yr.get("风电", {}) or {}).get("value") or 0.0
+                _solar_wkw   = (_cap_yr.get("光伏", {}) or {}).get("value") or 0.0
+                _storage_wkw = (_cap_yr.get("储能", {}) or {}).get("value") or 0.0
+                _renew_wkw = _wind_wkw + _solar_wkw
+                _, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
+                _pl = _pdata.get("peak_load", {}).get(_fund_yr, {})
+                _peak_load_mw = max((_pl.get("summer") or 0), (_pl.get("winter") or 0))
+                _renew_mw = _renew_wkw * 10
+                _fr_mw = max(_floor_mw, _peak_load_mw * _pct_load + _renew_mw * _pct_renew_inst)
+                _storage_mw = _storage_wkw * 10  # 万kW → MW
+
+                _recommended = max(_arb_p90, _fr_mw)
+                _gap_mw = max(_recommended - _storage_mw, 0.0)
+                _cmp_rows.append({
+                    "Province":                    _prov,
+                    _t("demand_arb_p50"):          round(_arb_p50,      0),
+                    _t("demand_arb_p90"):          round(_arb_p90,      0),
+                    _t("demand_fr_req_mw"):        round(_fr_mw,        0),
+                    _t("demand_recommended"):      round(_recommended,  0),
+                    _t("demand_bess_installed"):   round(_storage_mw,   0),
+                    _t("demand_bess_gap"):         round(_gap_mw,       0),
+                })
+            if _cmp_rows:
+                _cmp_df = pd.DataFrame(_cmp_rows).set_index("Province")
+                # Grouped bar chart
+                fig_cmp = go.Figure()
+                fig_cmp.add_trace(go.Bar(
+                    name=_t("demand_arb_p50"),
+                    x=_cmp_df.index.tolist(),
+                    y=_cmp_df[_t("demand_arb_p50")].tolist(),
+                    marker_color="rgba(76,120,168,0.6)",
+                ))
+                fig_cmp.add_trace(go.Bar(
+                    name=_t("demand_arb_p90"),
+                    x=_cmp_df.index.tolist(),
+                    y=_cmp_df[_t("demand_arb_p90")].tolist(),
+                    marker_color="#4C78A8",
+                ))
+                fig_cmp.add_trace(go.Bar(
+                    name=_t("demand_fr_req_mw"),
+                    x=_cmp_df.index.tolist(),
+                    y=_cmp_df[_t("demand_fr_req_mw")].tolist(),
+                    marker_color="#F58518",
+                ))
+                fig_cmp.add_trace(go.Bar(
+                    name=_t("demand_bess_installed"),
+                    x=_cmp_df.index.tolist(),
+                    y=_cmp_df[_t("demand_bess_installed")].tolist(),
+                    marker_color="#4CAF50",
+                ))
+                fig_cmp.add_trace(go.Scatter(
+                    name=_t("demand_recommended"),
+                    x=_cmp_df.index.tolist(),
+                    y=_cmp_df[_t("demand_recommended")].tolist(),
+                    mode="markers",
+                    marker=dict(symbol="diamond", size=10, color="#E45756",
+                                line=dict(color="white", width=1)),
+                ))
+                fig_cmp.update_layout(
+                    title=_t("demand_compare_title"),
+                    barmode="group",
+                    xaxis_title=_t("demand_province"),
+                    yaxis_title="MW",
+                    height=380, margin=dict(t=40, b=80, l=50, r=10),
+                    legend=dict(orientation="h", y=-0.35),
+                )
+                st.plotly_chart(fig_cmp, use_container_width=True, key="demand_cmp_bar")
+                st.dataframe(_cmp_df, use_container_width=True)
+
+# ── Tab 5: Dispatch & Economics ───────────────────────────────────────────────
 with tab_dispatch:
     all_provs = load_province_list(_ENG_KEY)
     col_dp, col_dd, col_dr = st.columns([2, 1, 3])
@@ -1445,12 +2238,15 @@ with tab_mgmt:
                    if pd.notna(row["last_capture"]) else 999)
             return _t("mgmt_status_ok") if lag <= 30 else _t("mgmt_status_stale")
         cov["status"] = cov.apply(_status, axis=1)
-        gaps = load_coverage_gaps(_ENG_KEY)
-        cov["missing_dates"] = cov["province"].map(gaps).fillna("")
+        gaps      = load_coverage_gaps(_ENG_KEY)
+        fund_gaps = load_fundamentals_gaps(_ENG_KEY)
+        cov["missing_dates"]      = cov["province"].map(gaps).fillna("")
+        cov["missing_fund_dates"] = cov["province"].map(fund_gaps).fillna("")
         cov_display = cov.copy()
         cov_display.columns = [_t("mgmt_col_province"), _t("mgmt_col_last_hourly"),
                                 _t("mgmt_col_last_capture"), _t("mgmt_col_last_fund"),
-                                _t("mgmt_col_status"), _t("mgmt_col_missing_dates")]
+                                _t("mgmt_col_status"), _t("mgmt_col_missing_dates"),
+                                _t("mgmt_col_missing_fund_dates")]
         st.dataframe(cov_display, use_container_width=True, hide_index=True)
 
     # ── Batch Backfill ────────────────────────────────────────────────────────
@@ -1478,9 +2274,16 @@ with tab_mgmt:
         default=_default_backfill,
         key="batch_markets_sel",
     )
-    _batch_lookback = st.number_input(
-        _t("mgmt_batch_lookback"), min_value=1, max_value=365, value=7,
-        key="batch_lookback",
+    _bf_col1, _bf_col2 = st.columns(2)
+    _batch_start = _bf_col1.date_input(
+        _t("mgmt_batch_start"),
+        value=_today_dt - dt.timedelta(days=7),
+        key="batch_start_date",
+    )
+    _batch_end = _bf_col2.date_input(
+        _t("mgmt_batch_end"),
+        value=_today_dt,
+        key="batch_end_date",
     )
     _batch_models = st.multiselect(
         _t("model_selector_label"),
@@ -1504,9 +2307,10 @@ with tab_mgmt:
         else:
             _batch_cmd = [
                 sys.executable, str(_run_daily_script),
-                "--markets",  ",".join(_batch_markets),
-                "--lookback", str(int(_batch_lookback)),
-                "--models",   ",".join(_batch_models),
+                "--markets",    ",".join(_batch_markets),
+                "--start-date", str(_batch_start),
+                "--end-date",   str(_batch_end),
+                "--models",     ",".join(_batch_models),
             ]
             st.caption(f"Running: {' '.join(_batch_cmd)}")
             _batch_log = st.empty()
