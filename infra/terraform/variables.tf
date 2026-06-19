@@ -763,3 +763,37 @@ variable "planka_base_url" {
   default     = ""
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DeepTutor
+# ─────────────────────────────────────────────────────────────────────────────
+variable "image_deeptutor_nginx" {
+  description = "Docker image for DeepTutor nginx proxy (ECR)"
+  type        = string
+  default     = ""
+}
+
+variable "image_deeptutor" {
+  description = "Docker image for DeepTutor main app"
+  type        = string
+  default     = "ghcr.io/hkuds/deeptutor:latest"
+}
+
+variable "desired_count_deeptutor" {
+  description = "Desired task count for the DeepTutor ECS service"
+  type        = number
+  default     = 1
+}
+
+variable "deeptutor_pb_admin_email" {
+  description = "PocketBase superadmin email for DeepTutor multi-user mode"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "deeptutor_pb_admin_password" {
+  description = "PocketBase superadmin password for DeepTutor multi-user mode"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
