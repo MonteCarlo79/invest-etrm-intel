@@ -237,6 +237,14 @@ resource "aws_ecs_task_definition" "deeptutor" {
         { name = "DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES", value = "1" }
       ]
 
+      healthCheck = {
+        command     = ["CMD-SHELL", "wget -q --spider http://localhost:8001/ || exit 1"]
+        interval    = 30
+        timeout     = 10
+        retries     = 5
+        startPeriod = 120
+      }
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -256,7 +264,7 @@ resource "aws_ecs_task_definition" "deeptutor" {
       portMappings = [{ containerPort = 8530, protocol = "tcp" }]
 
       dependsOn = [
-        { containerName = "deeptutor", condition = "START" }
+        { containerName = "deeptutor", condition = "HEALTHY" }
       ]
 
       healthCheck = {
