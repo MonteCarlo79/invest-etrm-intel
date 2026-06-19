@@ -226,9 +226,10 @@ resource "aws_ecs_task_definition" "deeptutor" {
       ]
 
       healthCheck = {
-        command     = ["CMD-SHELL", "wget -q --spider http://localhost:8001/ || exit 1"]
+        # python:3.11-slim has curl/python but NOT wget — use the built-in healthcheck.py
+        command     = ["CMD-SHELL", "python /app/healthcheck.py || exit 1"]
         interval    = 30
-        timeout     = 10
+        timeout     = 15
         retries     = 5
         startPeriod = 120
       }
