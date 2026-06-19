@@ -111,7 +111,7 @@ resource "aws_security_group" "ecs_tasks" {
   ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
-    to_port         = 8520
+    to_port         = 8530
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
