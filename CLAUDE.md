@@ -238,6 +238,9 @@ python services/bess_map/run_capture_pipeline.py --province shandong --model ols
 docker build -f <app>/Dockerfile -t <repo>:<vN> .
 docker tag <repo>:<vN> 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<repo>:<vN>
 docker push 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<repo>:<vN>
+# Also push as :latest so docker-compose.local.yml picks up the new version
+docker tag <repo>:<vN> 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<repo>:latest
+docker push 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<repo>:latest
 # Update tfvars image tag, then:
 terraform apply
 # If terraform shows "No changes", force ECS to use the latest task def:
@@ -369,11 +372,16 @@ The project uses a 5-layer Claude Code dev team setup in `.claude/`.
 
 ## Coding Rules
 
-1. **Ask, don't assume.** If intent, architecture, or requirements are unclear, ask before writing a line.
-2. **Simplest solution first.** No speculative abstractions, no unrequested flexibility.
-3. **Surgical edits only.** Only touch files, functions, and lines directly related to the current task.
-4. **No stealth improvements.** If something elsewhere is worth fixing, note it. Do not touch it.
-5. **Flag uncertainty.** If not confident about a library's behaviour or a technical detail, say so before proceeding.
+1. **Ask, don't assume.** If intent, architecture, or requirements are unclear, ask before writing a line. If multiple interpretations exist, present them — don't pick silently.
+2. **Simplest solution first.** No speculative abstractions, no unrequested flexibility. If 200 lines could be 50, rewrite it. Would a senior engineer say this is overcomplicated? If yes, simplify.
+3. **Surgical edits only.** Only touch files, functions, and lines directly related to the current task. Every changed line must trace directly to the user's request.
+4. **No stealth improvements.** If something elsewhere is worth fixing, note it. Do not touch it. Don't refactor things that aren't broken. Match existing style even if you'd do it differently.
+5. **Flag uncertainty.** If not confident about a library's behaviour or a technical detail, say so before proceeding. Don't hide confusion — surface it.
+6. **Goal-driven execution.** Transform imperative tasks into verifiable goals before starting:
+   - "Fix dispatch column bug" → "Write a test reproducing the bug, then make it pass"
+   - "Add new tab" → "Tab renders locally with correct data, passes existing tests"
+   - For multi-step tasks, state a brief plan: `1. [Step] → verify: [check]`
+   - Strong success criteria let you loop independently. Weak criteria require constant clarification.
 
 ---
 

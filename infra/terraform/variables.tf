@@ -652,3 +652,114 @@ variable "crystal_ball_wecom_webhook_url" {
   default     = ""
 }
 
+#################################################
+# Crystal-Ball Client Terminal
+#################################################
+variable "image_crystal_ball_client" {
+  description = "Docker image for Crystal-Ball client terminal app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_crystal_ball_client" {
+  description = "Desired task count for the crystal-ball-client ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# PH Market
+#################################################
+variable "image_ph_market" {
+  description = "Docker image for PH Market dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_ph_market" {
+  description = "Desired task count for the ph-market ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# PO Market
+#################################################
+variable "image_po_market" {
+  description = "Docker image for PO Market dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_po_market" {
+  description = "Desired task count for the po-market ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# Hermes — messaging hub
+#################################################
+variable "hermes_image_tag" {
+  description = "Image tag for bess-platform-hermes ECR image"
+  type        = string
+  default     = "latest"
+}
+
+variable "desired_count_hermes" {
+  description = "Desired task count for the hermes ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "hermes_anthropic_api_key" {
+  description = "Anthropic API key for Hermes"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "hermes_wecom_corp_id" {
+  description = "WeCom corp ID for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_wecom_agent_id" {
+  description = "WeCom agent ID for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_wecom_secret" {
+  description = "WeCom secret for Hermes"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "hermes_wecom_user_id" {
+  description = "WeCom user ID for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_planka_email" {
+  description = "Planka admin email for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_planka_password" {
+  description = "Planka admin password for Hermes"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "planka_base_url" {
+  description = "Planka base URL (e.g. https://todo.pjh-etrm.ai)"
+  type        = string
+  default     = ""
+}
+

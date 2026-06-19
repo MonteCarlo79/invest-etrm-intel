@@ -28,7 +28,7 @@ locals {
 # -------------------------
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = local.log_group
-  retention_in_days = 14
+  retention_in_days = 7
   tags              = local.tags
 }
 
@@ -55,6 +55,15 @@ resource "aws_s3_bucket_versioning" "uploads" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  rule {
+    id     = "expire-alb-logs"
+    status = "Enabled"
+    filter { prefix = "alb/" }
+    expiration { days = 7 }
+  }
+}
 
 # -------------------------
 # Networking: Security Groups
@@ -158,7 +167,7 @@ resource "aws_db_subnet_group" "pg" {
 resource "aws_db_instance" "pg" {
   identifier                   = "${var.name}-pg"
   engine                       = "postgres"
-  engine_version               = "18.2"
+  engine_version               = "18.3"
   instance_class               = var.db_instance_class
   allocated_storage            = 100
   storage_type                 = "gp3"   # was gp2; gp3 saves ~$1.90/month, same 3000 IOPS, in-place change
@@ -510,7 +519,7 @@ resource "aws_ecs_cluster" "this" {
   name = "${var.name}-cluster"
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = "disabled"
   }
 
   tags = local.tags
