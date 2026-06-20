@@ -34,21 +34,54 @@ cd /d "$RepoRoot" && "$PythonExe" "$ScriptPath" >> "$LogDir\capacity_scan.log" 2
 "@
 
 $Action   = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$Cmd`""
-# Run on the 5th of every month at 08:00
-$Trigger  = New-ScheduledTaskTrigger -Monthly -DaysOfMonth 5 -At "08:00"
 $Settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
     -MultipleInstances  IgnoreNew `
     -StartWhenAvailable
 
-Register-ScheduledTask `
-    -TaskName    $TaskName `
-    -Action      $Action `
-    -Trigger     $Trigger `
-    -Settings    $Settings `
-    -RunLevel    Highest `
-    -Description "Monthly scan of province installed-capacity Excel files → marketdata.province_installed_monthly" `
-    | Out-Null
+# New-ScheduledTaskTrigger -Monthly is not available on all Windows builds.
+# Build the monthly trigger via XML and register with full task XML.
+$TaskXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Monthly scan of province installed-capacity Excel files → marketdata.province_installed_monthly</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-07-05T08:00:00</StartBoundary>
+      <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+      <Enabled>true</Enabled>
+      <ScheduleByMonth>
+        <DaysOfMonth><Day>5</Day></DaysOfMonth>
+        <Months>
+          <January/><February/><March/><April/><May/><June/>
+          <July/><August/><September/><October/><November/><December/>
+        </Months>
+      </ScheduleByMonth>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions>
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c "$Cmd"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+
+Register-ScheduledTask -TaskName $TaskName -Xml $TaskXml | Out-Null
 
 Write-Host "✅ Task '$TaskName' registered — runs on 5th of each month at 08:00."
 Write-Host "   Log: $LogDir\capacity_scan.log"
