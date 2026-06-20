@@ -115,6 +115,10 @@ apps/bess-inner-mongolia/
 !shared/
 !services/bess_map/
 
+# lingfeng-ingest image exceptions
+!services/lingfeng/
+!services/hermes/
+
 # IDE / OS
 .idea/
 .vscode/
