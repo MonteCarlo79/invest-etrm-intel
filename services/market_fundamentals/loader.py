@@ -251,6 +251,72 @@ def load_province_data() -> dict[str, dict]:
     return result
 
 
+def load_latest_installed_monthly(dsn: str) -> dict[str, dict]:
+    """
+    Return the most recent monthly snapshot per province from
+    province_installed_monthly (populated by scripts/scan_installed_capacity.py).
+
+    Returns:
+        {
+            province_cn: {
+                "year_month":  datetime.date,
+                "wind_mw":     float | None,
+                "solar_mw":    float | None,
+                "thermal_mw":  float | None,
+                "hydro_mw":    float | None,
+                "nuclear_mw":  float | None,
+                "bess_mw":     float | None,
+                "total_mw":    float | None,
+                "renew_mw":    float,          # wind + solar
+                "source_file": str | None,
+            }
+        }
+    """
+    import psycopg2
+    sql = """
+        SELECT DISTINCT ON (province)
+            province, year_month,
+            wind_mw, solar_mw, thermal_mw, hydro_mw, nuclear_mw, bess_mw,
+            total_mw, source_file
+        FROM province_installed_monthly
+        ORDER BY province, year_month DESC
+    """
+    result: dict[str, dict] = {}
+    try:
+        conn = psycopg2.connect(dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                for row in cur.fetchall():
+                    (prov, ym, wind, solar, thermal, hydro, nuclear, bess,
+                     total, src) = row
+                    wind   = float(wind)   if wind   is not None else None
+                    solar  = float(solar)  if solar  is not None else None
+                    thermal = float(thermal) if thermal is not None else None
+                    hydro  = float(hydro)  if hydro  is not None else None
+                    nuclear = float(nuclear) if nuclear is not None else None
+                    bess   = float(bess)   if bess   is not None else None
+                    total  = float(total)  if total  is not None else None
+                    renew  = (wind or 0.0) + (solar or 0.0)
+                    result[prov] = {
+                        "year_month":  ym,
+                        "wind_mw":     wind,
+                        "solar_mw":    solar,
+                        "thermal_mw":  thermal,
+                        "hydro_mw":    hydro,
+                        "nuclear_mw":  nuclear,
+                        "bess_mw":     bess,
+                        "total_mw":    total,
+                        "renew_mw":    renew,
+                        "source_file": src,
+                    }
+        finally:
+            conn.close()
+    except Exception:
+        pass   # table may not exist yet; caller falls back to annual data
+    return result
+
+
 def get_fundamentals_summary(
     provinces: list[str] | None = None,
     year: int = 2025,

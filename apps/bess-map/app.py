@@ -1718,7 +1718,13 @@ with tab_demand:
             key="demand_provinces",
         )
     with _d_col_yr:
-        _fund_yr = st.radio("Installed capacity year", [2025, 2024], key="demand_fund_yr", horizontal=True)
+        _cap_src = st.radio(
+            "Installed capacity source",
+            ["Monthly (latest)", "Annual 2025", "Annual 2024"],
+            key="demand_cap_src",
+            horizontal=False,
+        )
+        _fund_yr = 2025 if _cap_src != "Annual 2024" else 2024
 
     if not _d_provs:
         st.info(_t("demand_no_hourly"))
@@ -1836,31 +1842,64 @@ with tab_demand:
         st.caption(_t("demand_source_note"))
 
         try:
-            from services.market_fundamentals.loader import load_province_data_from_db as _load_fund_db
+            from services.market_fundamentals.loader import (
+                load_province_data_from_db as _load_fund_db,
+                load_latest_installed_monthly as _load_monthly,
+            )
             _dsn = (
                 os.environ.get("PGURL")
                 or os.environ.get("DATABASE_URL")
                 or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
             )
             _fund_all = _load_fund_db(_dsn)
+            _monthly_all = _load_monthly(_dsn) if _cap_src == "Monthly (latest)" else {}
         except Exception:
             _fund_all = {}
+            _monthly_all = {}
 
         if not _fund_all:
             st.warning(_t("demand_no_fund"))
         else:
+            # Show data source label
+            if _monthly_all:
+                _sample_ym = next(iter(_monthly_all.values()), {}).get("year_month")
+                _src_label = f"Monthly data ({_sample_ym})" if _sample_ym else "Monthly data"
+            else:
+                _src_label = f"Annual {_fund_yr} fundamentals"
+            st.caption(f"Installed capacity source: **{_src_label}**")
+
             _fr_rows = []
             for _prov in _d_provs:
                 _pdata = _fund_all.get(_prov, {})
-                _cap_yr = _pdata.get("capacity", {}).get(_fund_yr, {})
-                _wind_wkw    = (_cap_yr.get("风电", {}) or {}).get("value") or 0.0
-                _solar_wkw   = (_cap_yr.get("光伏", {}) or {}).get("value") or 0.0
-                _storage_wkw = (_cap_yr.get("储能", {}) or {}).get("value") or 0.0
-                _renew_wkw = _wind_wkw + _solar_wkw
-                _rule_desc, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
+                # Peak load always comes from annual fundamentals (not in monthly files)
                 _pl = _pdata.get("peak_load", {}).get(_fund_yr, {})
                 _peak_load_mw = max((_pl.get("summer") or 0), (_pl.get("winter") or 0))
-                _renew_mw = _renew_wkw * 10  # 万kW → MW
+
+                _mon = _monthly_all.get(_prov)
+                if _mon:
+                    # Monthly data in MW directly
+                    _wind_mw     = _mon.get("wind_mw")    or 0.0
+                    _solar_mw    = _mon.get("solar_mw")   or 0.0
+                    _storage_mw  = _mon.get("bess_mw")    or 0.0
+                    _renew_mw    = _wind_mw + _solar_mw
+                    # Display in 万kW for table (÷10)
+                    _wind_wkw    = _wind_mw  / 10.0
+                    _solar_wkw   = _solar_mw / 10.0
+                    _storage_wkw = _storage_mw / 10.0
+                    _renew_wkw   = _renew_mw / 10.0
+                else:
+                    # Fall back to annual fundamentals (万kW → MW via ×10)
+                    _cap_yr = _pdata.get("capacity", {}).get(_fund_yr, {})
+                    _wind_wkw    = (_cap_yr.get("风电", {}) or {}).get("value") or 0.0
+                    _solar_wkw   = (_cap_yr.get("光伏", {}) or {}).get("value") or 0.0
+                    _storage_wkw = (_cap_yr.get("储能", {}) or {}).get("value") or 0.0
+                    _renew_wkw   = _wind_wkw + _solar_wkw
+                    _wind_mw     = _wind_wkw    * 10
+                    _solar_mw    = _solar_wkw   * 10
+                    _storage_mw  = _storage_wkw * 10
+                    _renew_mw    = _renew_wkw   * 10
+
+                _rule_desc, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
                 _fr_mw = max(_floor_mw, _peak_load_mw * _pct_load + _renew_mw * _pct_renew_inst)
                 _eff_pct = (_fr_mw / _renew_mw * 100) if _renew_mw > 0 else 0.0
                 _fr_rows.append({
@@ -1906,17 +1945,21 @@ with tab_demand:
                 _arb_p90 = float(_pdf.quantile(0.90)) if not _pdf.empty else 0.0
 
                 _pdata = _fund_all.get(_prov, {})
-                _cap_yr = _pdata.get("capacity", {}).get(_fund_yr, {})
-                _wind_wkw    = (_cap_yr.get("风电", {}) or {}).get("value") or 0.0
-                _solar_wkw   = (_cap_yr.get("光伏", {}) or {}).get("value") or 0.0
-                _storage_wkw = (_cap_yr.get("储能", {}) or {}).get("value") or 0.0
-                _renew_wkw = _wind_wkw + _solar_wkw
-                _, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
                 _pl = _pdata.get("peak_load", {}).get(_fund_yr, {})
                 _peak_load_mw = max((_pl.get("summer") or 0), (_pl.get("winter") or 0))
-                _renew_mw = _renew_wkw * 10
+                _mon = _monthly_all.get(_prov)
+                if _mon:
+                    _renew_mw   = _mon.get("renew_mw")  or 0.0
+                    _storage_mw = _mon.get("bess_mw")   or 0.0
+                else:
+                    _cap_yr = _pdata.get("capacity", {}).get(_fund_yr, {})
+                    _wind_wkw    = (_cap_yr.get("风电", {}) or {}).get("value") or 0.0
+                    _solar_wkw   = (_cap_yr.get("光伏", {}) or {}).get("value") or 0.0
+                    _storage_wkw = (_cap_yr.get("储能", {}) or {}).get("value") or 0.0
+                    _renew_mw    = (_wind_wkw + _solar_wkw) * 10
+                    _storage_mw  = _storage_wkw * 10
+                _, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
                 _fr_mw = max(_floor_mw, _peak_load_mw * _pct_load + _renew_mw * _pct_renew_inst)
-                _storage_mw = _storage_wkw * 10  # 万kW → MW
 
                 _recommended = max(_arb_p90, _fr_mw)
                 _gap_mw = max(_recommended - _storage_mw, 0.0)
