@@ -48,7 +48,7 @@ def run_daily() -> None:
 
 def run_trigger_check() -> None:
     _run(["--markets", "all",
-          "--models", "ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1",
+          "--models", "ols_rt_time_v1,naive_rt_ar17",
           "--check-trigger"])
 
 

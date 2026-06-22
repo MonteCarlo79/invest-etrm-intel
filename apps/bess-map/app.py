@@ -204,6 +204,8 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "ANTHROPIC_API_KEY is not set.",
         "agent_clear":          "Clear chat",
         "agent_error":          "Agent error: {err}",
+        "llm_selector_label":   "AI Model",
+        "llm_no_key":           "{provider} API key is not set.",
         # memory
         "mem_section":          "Agent Memory",
         "mem_caption":          "Facts, views, and decisions saved from past conversations. Injected into every session.",
@@ -398,6 +400,8 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "ANTHROPIC_API_KEY未设置。",
         "agent_clear":          "清空对话",
         "agent_error":          "助手错误：{err}",
+        "llm_selector_label":   "AI 模型",
+        "llm_no_key":           "{provider} API Key未设置。",
         # memory
         "mem_section":          "智能助手记忆",
         "mem_caption":          "从历史对话中保存的事实、观点和决策，每次会话自动注入。",
@@ -795,6 +799,56 @@ def load_fundamentals_gaps(_eng_key):
         return {row["province"]: _compress_dates(row["missing_dates"]) for _, row in df.iterrows()}
     except Exception:
         return {}
+
+@st.cache_data(ttl=120)
+def load_scraping_progress(_eng_key) -> pd.DataFrame:
+    """
+    Monthly fundamentals coverage per province from Dec 2025 to current month.
+    Returns long-form: province | month_start | expected_days | days_present | latest_date
+    """
+    sql = sql_text("""
+        WITH months AS (
+            SELECT generate_series(
+                DATE '2025-12-01',
+                date_trunc('month', CURRENT_DATE)::date,
+                '1 month'::interval
+            )::date AS month_start
+        ),
+        province_list AS (
+            SELECT DISTINCT province FROM marketdata.spot_fundamentals_hourly
+            WHERE datetime::date >= '2025-12-01'
+        ),
+        grid AS (
+            SELECT p.province, m.month_start,
+                   GREATEST(0,
+                       LEAST(
+                           (m.month_start + interval '1 month - 1 day')::date,
+                           (CURRENT_DATE - 1)::date
+                       ) - m.month_start + 1
+                   ) AS expected_days
+            FROM province_list p CROSS JOIN months m
+        ),
+        present AS (
+            SELECT province,
+                   date_trunc('month', datetime)::date AS month_start,
+                   COUNT(DISTINCT datetime::date) AS days_present,
+                   MAX(datetime::date)             AS latest_date
+            FROM marketdata.spot_fundamentals_hourly
+            WHERE bidding_space_mw IS NOT NULL
+              AND datetime::date >= '2025-12-01'
+            GROUP BY province, month_start
+        )
+        SELECT g.province, g.month_start, g.expected_days,
+               COALESCE(p.days_present, 0) AS days_present,
+               p.latest_date
+        FROM grid g
+        LEFT JOIN present p USING (province, month_start)
+        ORDER BY g.province, g.month_start
+    """)
+    try:
+        return pd.read_sql(sql, _eng())
+    except Exception:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_data_ops_log(_eng_key):
@@ -2273,24 +2327,111 @@ with tab_mgmt:
     st.subheader(_t("mgmt_coverage_title"))
     cov = load_coverage(_ENG_KEY)
     _today_dt = dt.date.today()
-    if not cov.empty:
-        def _status(row):
-            if pd.isna(row["last_capture"]):
-                return _t("mgmt_status_missing")
-            lag = ((_today_dt - row["last_capture"].date()).days
-                   if pd.notna(row["last_capture"]) else 999)
-            return _t("mgmt_status_ok") if lag <= 30 else _t("mgmt_status_stale")
-        cov["status"] = cov.apply(_status, axis=1)
-        gaps      = load_coverage_gaps(_ENG_KEY)
-        fund_gaps = load_fundamentals_gaps(_ENG_KEY)
-        cov["missing_dates"]      = cov["province"].map(gaps).fillna("")
-        cov["missing_fund_dates"] = cov["province"].map(fund_gaps).fillna("")
-        cov_display = cov.copy()
-        cov_display.columns = [_t("mgmt_col_province"), _t("mgmt_col_last_hourly"),
-                                _t("mgmt_col_last_capture"), _t("mgmt_col_last_fund"),
-                                _t("mgmt_col_status"), _t("mgmt_col_missing_dates"),
-                                _t("mgmt_col_missing_fund_dates")]
-        st.dataframe(cov_display, use_container_width=True, hide_index=True)
+
+    # ── Backfill Progress Grid ─────────────────────────────────────────────────
+    _prog = load_scraping_progress(_ENG_KEY)
+    if not _prog.empty:
+        import calendar as _cal
+
+        # Build pivot tables: display text + numeric pct for coloring
+        _months = sorted(_prog["month_start"].unique())
+        _month_labels = [pd.Timestamp(m).strftime("%b '%y") for m in _months]
+
+        _prov_order = (
+            _prog.groupby("province")["days_present"].sum()
+            .sort_values(ascending=False).index.tolist()
+        )
+
+        _display_rows = {}
+        _pct_rows     = {}
+        _latest_rows  = {}
+        _total_rows   = {}
+
+        for prov in _prov_order:
+            sub = _prog[_prog["province"] == prov].set_index("month_start")
+            row_txt, row_pct = {}, {}
+            total_present, total_expected = 0, 0
+            latest = None
+            for m, lbl in zip(_months, _month_labels):
+                if m in sub.index:
+                    dp = int(sub.loc[m, "days_present"])
+                    de = int(sub.loc[m, "expected_days"])
+                    ld = sub.loc[m, "latest_date"]
+                    if pd.notna(ld) and (latest is None or ld > latest):
+                        latest = ld
+                else:
+                    dp, de = 0, 0
+                de = max(de, 1)
+                row_txt[lbl] = f"{dp}/{de}"
+                row_pct[lbl] = round(dp / de * 100)
+                total_present += dp
+                total_expected += de
+            _display_rows[prov] = row_txt
+            _pct_rows[prov]     = row_pct
+            _latest_rows[prov]  = str(latest) if latest else "—"
+            _total_rows[prov]   = round(total_present / max(total_expected, 1) * 100)
+
+        _disp_df  = pd.DataFrame(_display_rows).T
+        _disp_df.index.name = "Province"
+        _disp_df = _disp_df[_month_labels]
+        _disp_df["Latest"]    = pd.Series(_latest_rows)
+        _disp_df["Total %"]   = pd.Series(_total_rows)
+
+        _pct_df = pd.DataFrame(_pct_rows).T[_month_labels]
+
+        def _color_cell(v):
+            try:
+                pct = int(v)
+            except (ValueError, TypeError):
+                return ""
+            if pct >= 90:
+                return "background-color:#d4edda;color:#155724"
+            elif pct >= 50:
+                return "background-color:#fff3cd;color:#856404"
+            elif pct >= 10:
+                return "background-color:#fde8d8;color:#9e4a00"
+            else:
+                return "background-color:#f8d7da;color:#721c24"
+
+        def _style_grid(df):
+            # Apply color based on pct_df for month columns only
+            styles = pd.DataFrame("", index=df.index, columns=df.columns)
+            for lbl in _month_labels:
+                if lbl in df.columns:
+                    styles[lbl] = _pct_df[lbl].map(_color_cell)
+            # Color Total % column
+            if "Total %" in df.columns:
+                styles["Total %"] = df["Total %"].map(_color_cell)
+            return styles
+
+        st.caption("Fundamentals scraping coverage (days filled / days expected). "
+                   "🟢 ≥90% · 🟡 50–89% · 🟠 10–49% · 🔴 <10%")
+        st.dataframe(
+            _disp_df.style.apply(_style_grid, axis=None),
+            use_container_width=True,
+        )
+        st.divider()
+
+    # ── Original detailed coverage table (collapsed) ───────────────────────────
+    with st.expander("Full coverage detail", expanded=False):
+        if not cov.empty:
+            def _status(row):
+                if pd.isna(row["last_capture"]):
+                    return _t("mgmt_status_missing")
+                lag = ((_today_dt - row["last_capture"].date()).days
+                       if pd.notna(row["last_capture"]) else 999)
+                return _t("mgmt_status_ok") if lag <= 30 else _t("mgmt_status_stale")
+            cov["status"] = cov.apply(_status, axis=1)
+            gaps      = load_coverage_gaps(_ENG_KEY)
+            fund_gaps = load_fundamentals_gaps(_ENG_KEY)
+            cov["missing_dates"]      = cov["province"].map(gaps).fillna("")
+            cov["missing_fund_dates"] = cov["province"].map(fund_gaps).fillna("")
+            cov_display = cov.copy()
+            cov_display.columns = [_t("mgmt_col_province"), _t("mgmt_col_last_hourly"),
+                                    _t("mgmt_col_last_capture"), _t("mgmt_col_last_fund"),
+                                    _t("mgmt_col_status"), _t("mgmt_col_missing_dates"),
+                                    _t("mgmt_col_missing_fund_dates")]
+            st.dataframe(cov_display, use_container_width=True, hide_index=True)
 
     # ── Batch Backfill ────────────────────────────────────────────────────────
     st.divider()
@@ -2560,15 +2701,52 @@ with tab_agent:
     _ensure_memory_table()  # deferred: runs once, only when agent tab is visited
 
     import anthropic as _ant
+    import json as _json
 
-    _api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not _api_key:
-        st.error(_t("agent_no_key"))
-        st.stop()
+    # ── LLM provider selector ─────────────────────────────────────────────────
+    _LLM_OPTIONS = {
+        "Claude (Anthropic)": ("anthropic", "claude-sonnet-4-6"),
+        "GPT-4o (OpenAI)":    ("openai",    "gpt-4o"),
+        "DeepSeek":           ("deepseek",  "deepseek-chat"),
+    }
+    _llm_label = st.radio(
+        _t("llm_selector_label"),
+        list(_LLM_OPTIONS.keys()),
+        horizontal=True,
+        key="llm_provider_sel",
+    )
+    _llm_provider, _llm_model = _LLM_OPTIONS[_llm_label]
 
-    _client = _ant.Anthropic(api_key=_api_key)
+    # ── initialise LLM client ─────────────────────────────────────────────────
+    # Anthropic client is always available (used for memory extraction with Haiku)
+    _ant_client = _ant.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+    if _llm_provider == "anthropic":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            st.error(_t("agent_no_key"))
+            st.stop()
+        _chat_client = None  # use _ant_client directly
+    elif _llm_provider == "openai":
+        _oai_key = os.environ.get("OPENAI_API_KEY")
+        if not _oai_key:
+            st.error(_t("llm_no_key", provider="OPENAI_API_KEY"))
+            st.stop()
+        from openai import OpenAI as _OAI
+        _chat_client = _OAI(api_key=_oai_key)
+    else:  # deepseek
+        _ds_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not _ds_key:
+            st.error(_t("llm_no_key", provider="DEEPSEEK_API_KEY"))
+            st.stop()
+        from openai import OpenAI as _OAI
+        _chat_client = _OAI(api_key=_ds_key, base_url="https://api.deepseek.com")
 
     # ── session state init ────────────────────────────────────────────────────
+    # Clear history when user switches LLM provider (incompatible tool formats)
+    if st.session_state.get("_last_llm_provider") != _llm_provider:
+        st.session_state["bess_agent_msgs"] = []
+        st.session_state["bess_mem_suggestions"] = []
+        st.session_state["_last_llm_provider"] = _llm_provider
     if "bess_agent_msgs" not in st.session_state:
         st.session_state["bess_agent_msgs"] = []
     if "bess_mem_suggestions" not in st.session_state:
@@ -2637,6 +2815,16 @@ with tab_agent:
         },
     ]
 
+    # OpenAI-format tools (used for GPT-4o and DeepSeek)
+    _OAI_TOOLS = [
+        {"type": "function", "function": {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["input_schema"],
+        }}
+        for t in _TOOLS
+    ]
+
     def _dispatch_tool(name: str, inp: dict) -> str:
         if name == "get_bess_economics":
             df = load_province_ranking(
@@ -2699,7 +2887,7 @@ with tab_agent:
     def _extract_memories(user_msg: str, agent_reply: str) -> list[dict]:
         """Ask Haiku to extract saveable facts from this exchange. Returns list of dicts."""
         try:
-            extract_resp = _client.messages.create(
+            extract_resp = _ant_client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=600,
                 system=(
@@ -2786,35 +2974,68 @@ with tab_agent:
                 _status = st.status(_t("agent_thinking"), expanded=False)
                 _reply_parts = []
 
-                while True:
-                    resp = _client.messages.create(
-                        model="claude-sonnet-4-6",
-                        max_tokens=4096,
-                        system=_sys,
-                        tools=_TOOLS,
-                        messages=_history,
-                    )
-                    if resp.stop_reason == "tool_use":
-                        _tool_results = []
-                        for blk in resp.content:
-                            if blk.type == "tool_use":
+                if _llm_provider == "anthropic":
+                    # ── Anthropic Claude ──────────────────────────────────────
+                    while True:
+                        resp = _ant_client.messages.create(
+                            model=_llm_model,
+                            max_tokens=4096,
+                            system=_sys,
+                            tools=_TOOLS,
+                            messages=_history,
+                        )
+                        if resp.stop_reason == "tool_use":
+                            _tool_results = []
+                            for blk in resp.content:
+                                if blk.type == "tool_use":
+                                    with _status:
+                                        st.caption(_t("agent_tool_call", tool=blk.name))
+                                    result = _dispatch_tool(blk.name, blk.input)
+                                    _tool_results.append({
+                                        "type": "tool_result",
+                                        "tool_use_id": blk.id,
+                                        "content": result,
+                                    })
+                                    with _status:
+                                        st.caption(_t("agent_tool_result", n=len(result)//50))
+                            _history.append({"role": "assistant", "content": resp.content})
+                            _history.append({"role": "user", "content": _tool_results})
+                        else:
+                            for blk in resp.content:
+                                if hasattr(blk, "text"):
+                                    _reply_parts.append(blk.text)
+                            break
+
+                else:
+                    # ── OpenAI-compatible (GPT-4o / DeepSeek) ────────────────
+                    _oai_history = [{"role": "system", "content": _sys}] + _history
+                    while True:
+                        resp = _chat_client.chat.completions.create(
+                            model=_llm_model,
+                            max_tokens=4096,
+                            tools=_OAI_TOOLS,
+                            messages=_oai_history,
+                        )
+                        msg = resp.choices[0].message
+                        if msg.tool_calls:
+                            _oai_history.append(msg)
+                            for tc in msg.tool_calls:
                                 with _status:
-                                    st.caption(_t("agent_tool_call", tool=blk.name))
-                                result = _dispatch_tool(blk.name, blk.input)
-                                _tool_results.append({
-                                    "type": "tool_result",
-                                    "tool_use_id": blk.id,
-                                    "content": result,
-                                })
+                                    st.caption(_t("agent_tool_call", tool=tc.function.name))
+                                result = _dispatch_tool(
+                                    tc.function.name,
+                                    _json.loads(tc.function.arguments),
+                                )
                                 with _status:
                                     st.caption(_t("agent_tool_result", n=len(result)//50))
-                        _history.append({"role": "assistant", "content": resp.content})
-                        _history.append({"role": "user", "content": _tool_results})
-                    else:
-                        for blk in resp.content:
-                            if hasattr(blk, "text"):
-                                _reply_parts.append(blk.text)
-                        break
+                                _oai_history.append({
+                                    "role": "tool",
+                                    "tool_call_id": tc.id,
+                                    "content": result,
+                                })
+                        else:
+                            _reply_parts.append(msg.content or "")
+                            break
 
                 _reply = "".join(_reply_parts)
                 _status.update(state="complete", expanded=False)

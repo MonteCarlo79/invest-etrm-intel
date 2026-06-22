@@ -2978,6 +2978,9 @@ with s3_key (file in the S3 uploads bucket) or file_path (local/repo-relative pa
 For spot market daily price PDFs specifically, use run_pipeline instead (it also extracts structured DA/RT price data).
 9. If the user says they already uploaded a file via the UI, call search_reference_docs directly — \
 the file is already ingested and searchable without calling ingest_kb_document again.
+10. For questions about Inner Mongolia BESS asset performance, P&L, dispatch cycles, or strategy \
+comparison across suyou/hangjinqi/siziwangqi/gushanliang, call get_bess_pnl. \
+It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
 """
 
     def _build_spot_system(query: str = "") -> str:
@@ -3214,6 +3217,31 @@ the file is already ingested and searchable without calling ingest_kb_document a
                 "required": ["query"],
             },
         },
+        {
+            "name": "get_bess_pnl",
+            "description": (
+                "Fetch daily P&L and dispatch metrics for Inner Mongolia BESS assets "
+                "across all strategy scenarios. Returns total_pnl, market_revenue, "
+                "compensation_revenue, discharge_mwh, charge_mwh, avg_daily_cycles. "
+                "The 4 assets: suyou, hangjinqi, siziwangqi, gushanliang. "
+                "Scenarios: perfect_foresight_hourly (LP upper bound), "
+                "forecast_ols_rt_time_v1 (LP forecast), nominated_dispatch (ops), "
+                "cleared_actual (ops actual), trading_cleared (id market). "
+                "Use this for BESS performance analysis, strategy comparison, or P&L attribution."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "ISO date, e.g. '2026-01-01'"},
+                    "end_date":   {"type": "string", "description": "ISO date, e.g. '2026-04-30'"},
+                    "asset_codes": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Optional list of asset codes. Omit for all 4 IM assets.",
+                    },
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
     ]
 
     # ── Tool dispatcher ────────────────────────────────────────────────────────
@@ -3249,6 +3277,13 @@ the file is already ingested and searchable without calling ingest_kb_document a
                 result = {"count": len(rows), "chunks": rows}
             elif name == "ingest_kb_document":
                 result = _ikd(**inputs)
+            elif name == "get_bess_pnl":
+                from services.bess_mcp.tools import bess_get_portfolio_pnl as _bgms
+                result = _bgms(
+                    asset_codes=inputs.get("asset_codes"),
+                    start_date=inputs["start_date"],
+                    end_date=inputs["end_date"],
+                )
             else:
                 result = {"error": f"Unknown tool: {name}"}
         except Exception as _e:
@@ -3349,18 +3384,207 @@ the file is already ingested and searchable without calling ingest_kb_document a
                         )
                         st.rerun()
 
+    # ── Tool result display helper ─────────────────────────────────────────────
+    _TOOL_ICONS = {
+        "get_spot_prices":        "📊",
+        "get_interprov_flow":     "🔀",
+        "get_market_summaries":   "📝",
+        "run_pipeline":           "⚙️",
+        "get_market_fundamentals": "🏭",
+        "search_reference_docs":  "🔍",
+        "ingest_kb_document":     "📥",
+        "get_bess_pnl":           "⚡",
+    }
+
+    def _render_tool_result(tool_name: str, content_str: str):
+        icon = _TOOL_ICONS.get(tool_name, "🔧")
+        try:
+            parsed = _json.loads(content_str)
+        except Exception:
+            st.code(content_str, language="json")
+            return
+
+        if "error" in parsed:
+            st.error(parsed["error"])
+            return
+
+        if tool_name == "get_spot_prices":
+            rows = parsed.get("rows", [])
+            n = len(rows)
+            provs = sorted({r.get("province_en", "") for r in rows})
+            dates = sorted({r.get("report_date", "") for r in rows})
+            date_range = f"{dates[0]} → {dates[-1]}" if dates else "—"
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Rows", f"{n:,}")
+            c2.metric("Provinces", f"{len(provs)}")
+            c3.metric("Date range", date_range)
+            if provs:
+                st.caption("Provinces: " + ", ".join(provs[:8]) + ("…" if len(provs) > 8 else ""))
+            with st.expander("Raw data", expanded=False):
+                st.json(parsed, expanded=1)
+
+        elif tool_name == "get_interprov_flow":
+            rows = parsed.get("rows", [])
+            n = len(rows)
+            dates = sorted({r.get("report_date", "") for r in rows})
+            date_range = f"{dates[0]} → {dates[-1]}" if dates else "—"
+            c1, c2 = st.columns(2)
+            c1.metric("Rows", f"{n:,}")
+            c2.metric("Date range", date_range)
+            with st.expander("Raw data", expanded=False):
+                st.json(parsed, expanded=1)
+
+        elif tool_name == "get_market_summaries":
+            items = parsed.get("summaries", [])
+            n = len(items)
+            dates = sorted({r.get("report_date", "") for r in items})
+            date_range = f"{dates[0]} → {dates[-1]}" if dates else "—"
+            c1, c2 = st.columns(2)
+            c1.metric("Summaries", f"{n:,}")
+            c2.metric("Date range", date_range)
+            if items:
+                with st.expander("Latest summary", expanded=False):
+                    st.markdown(items[0].get("summary_text", "")[:600])
+            with st.expander("All summaries (raw)", expanded=False):
+                st.json(parsed, expanded=1)
+
+        elif tool_name == "get_market_fundamentals":
+            provs = parsed.get("provinces", [])
+            n = len(provs)
+            year = parsed.get("year", "")
+            c1, c2 = st.columns(2)
+            c1.metric("Provinces", f"{n:,}")
+            c2.metric("Year", str(year))
+            with st.expander("Raw data", expanded=False):
+                st.json(parsed, expanded=1)
+
+        elif tool_name == "search_reference_docs":
+            chunks = parsed.get("chunks", parsed.get("results", []))
+            n = len(chunks)
+            docs = sorted({c.get("file_name", "") for c in chunks})
+            st.metric("Chunks found", f"{n}")
+            if docs:
+                st.caption("From: " + ", ".join(docs[:4]) + ("…" if len(docs) > 4 else ""))
+            if chunks:
+                with st.expander("Top result", expanded=False):
+                    top = chunks[0]
+                    st.caption(f"{top.get('file_name', '')} · p{top.get('page_no', '?')} · {top.get('category', '')}")
+                    st.markdown(top.get("chunk_text", "")[:500])
+            with st.expander("All chunks (raw)", expanded=False):
+                st.json(parsed, expanded=1)
+
+        elif tool_name == "ingest_kb_document":
+            status = parsed.get("status", "")
+            fname = parsed.get("filename", "")
+            cat = parsed.get("category", "")
+            if status == "ingested":
+                st.success(f"Ingested **{fname}** (category: {cat})")
+            elif status == "duplicate":
+                st.info(f"**{fname}** already in KB (doc_id={parsed.get('doc_id')})")
+            else:
+                st.warning(parsed.get("message", str(parsed)))
+
+        elif tool_name == "run_pipeline":
+            upserted = parsed.get("upserted", 0)
+            dates = parsed.get("dates", [])
+            errs = parsed.get("errors", [])
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Rows upserted", upserted)
+            c2.metric("Dates", len(dates))
+            c3.metric("Errors", len(errs))
+            if errs:
+                st.warning("\n".join(errs[:3]))
+            with st.expander("Raw data", expanded=False):
+                st.json(parsed, expanded=1)
+
+        elif tool_name == "get_bess_pnl":
+            rows = parsed.get("rows", [])
+            n = len(rows)
+            assets = sorted({r.get("asset_code", "") for r in rows})
+            dates = sorted({r.get("trade_date", "") for r in rows})
+            date_range = f"{dates[0]} → {dates[-1]}" if dates else "—"
+            scenarios = sorted({r.get("scenario_name", "") for r in rows})
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Rows", f"{n:,}")
+            c2.metric("Assets", len(assets))
+            c3.metric("Date range", date_range)
+            if assets:
+                st.caption("Assets: " + ", ".join(assets))
+            if scenarios:
+                st.caption("Scenarios: " + ", ".join(scenarios))
+            with st.expander("Raw data", expanded=False):
+                st.json(parsed, expanded=1)
+
+        else:
+            _n = parsed.get("count", parsed.get("rows", ""))
+            _n = len(_n) if isinstance(_n, list) else _n
+            st.caption(_t("agent_tool_result", n=_n) if isinstance(_n, int) else "")
+            st.json(parsed, expanded=1)
+
+    # ── Chat-area file upload ──────────────────────────────────────────────────
+    with st.expander("📎 Upload file to knowledge base", expanded=False):
+        _chat_uploads = st.file_uploader(
+            "Drop a file here to ingest it immediately — then ask the agent about it",
+            type=["pdf", "pptx", "ppt", "txt", "docx", "doc",
+                  "xlsx", "xls", "png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key="agent_chat_uploader",
+            label_visibility="collapsed",
+        )
+        if _chat_uploads:
+            from services.knowledge_pool.knowledge_docs import register_and_ingest as _rai_chat
+            _api_key_up = _os.environ.get("ANTHROPIC_API_KEY")
+            _processed = st.session_state.setdefault("_agent_processed_uploads", set())
+            _new_files = [
+                _f for _f in _chat_uploads
+                if f"{_f.name}_{_f.size}" not in _processed
+            ]
+            if _new_files and st.button(
+                f"Ingest {len(_new_files)} file(s)", key="agent_ingest_btn", type="primary"
+            ):
+                _ingest_results = []
+                _prog_up = st.progress(0, text="Ingesting…")
+                for _fi, _f in enumerate(_new_files):
+                    _prog_up.progress((_fi + 1) / len(_new_files), text=f"{_f.name}…")
+                    try:
+                        _doc_id, _is_new, _cat = _rai_chat(
+                            _f.read(), _f.name, api_key=_api_key_up, app="strategist"
+                        )
+                        _ingest_results.append((_f.name, _cat, _is_new))
+                        _processed.add(f"{_f.name}_{_f.size}")
+                    except Exception as _upe:
+                        st.error(f"{_f.name}: {_upe}")
+                _prog_up.empty()
+                if _ingest_results:
+                    _summary = "; ".join(
+                        f"**{n}** ({c}, {'new' if isnew else 'already indexed'})"
+                        for n, c, isnew in _ingest_results
+                    )
+                    _up_user_msg = f"📎 I uploaded: {_summary}"
+                    _up_asst_msg = (
+                        f"File(s) ingested into the knowledge base: {_summary}. "
+                        "You can now ask me to search or analyse their contents."
+                    )
+                    st.session_state["agent_display"].append(
+                        {"role": "user", "content": _up_user_msg, "tool": None}
+                    )
+                    st.session_state["agent_messages"].append(
+                        {"role": "user", "content": _up_user_msg}
+                    )
+                    st.session_state["agent_display"].append(
+                        {"role": "assistant", "content": _up_asst_msg, "tool": None}
+                    )
+                    st.session_state["agent_messages"].append(
+                        {"role": "assistant", "content": _up_asst_msg}
+                    )
+                    st.rerun()
+
     # ── Render existing chat history ───────────────────────────────────────────
     for _msg in st.session_state["agent_display"]:
         if _msg["role"] == "tool":
-            with st.expander(_t("agent_tool_call", tool=_msg["tool"]), expanded=False):
-                try:
-                    _parsed = _json.loads(_msg["content"])
-                    _n = _parsed.get("count", _parsed.get("rows", _parsed.get("summaries", "")))
-                    _n = len(_n) if isinstance(_n, list) else _n
-                    st.caption(_t("agent_tool_result", n=_n) if isinstance(_n, int) else "")
-                    st.json(_parsed, expanded=1)
-                except Exception:
-                    st.code(_msg["content"], language="json")
+            _icon = _TOOL_ICONS.get(_msg["tool"], "🔧")
+            with st.expander(f"{_icon} {_t('agent_tool_call', tool=_msg['tool'])}", expanded=False):
+                _render_tool_result(_msg["tool"], _msg["content"])
         else:
             with st.chat_message(_msg["role"]):
                 st.markdown(_msg["content"])

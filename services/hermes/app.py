@@ -18,6 +18,9 @@ _pending_folders: dict[str, str] = {}
 _pending_classify: dict[str, str] = {}
 # sender_id → (category, hint) for knowledge base ingestion
 _pending_kb_ingest: dict[str, tuple[str, str]] = {}
+# message_id → {sender_id, filename, file_key, resource_type, current_folder}
+# allows the post-upload routing card to re-route files to a different folder
+_pending_reroute: dict[str, dict] = {}
 from fastapi import FastAPI, BackgroundTasks, Query, Request, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from services.hermes.models import InboundMessage
@@ -29,8 +32,10 @@ from services.hermes.telegram_client import TelegramClient
 from services.hermes.onedrive_client import OneDriveClient
 from services.hermes.outlook_client import OutlookClient
 from services.hermes.scheduler import send_due_reminders, send_morning_briefing, send_email_digest, summarize_emails
+from services.hermes.mengxi_ranking_report import send_daily_ranking as _send_mengxi_ranking
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
-from services.hermes.market_classifier import classify_to_market_fundamentals
+from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
+from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -125,6 +130,114 @@ _FEISHU_MENU_CARD: dict = {
         },
     ],
 }
+
+_BASE_CN_CARD   = "etrm/bess-platform/data/market-fundamentals"
+_BASE_INTL_CARD = "etrm/bess-platform/data/intl-markets"
+
+
+def _build_route_card(filename: str, current_folder: str, message_id: str) -> dict:
+    """Post-upload routing card — lets the user re-route a file with one tap."""
+
+    def _btn(label: str, folder: str, btn_type: str = "default") -> dict:
+        return {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": label},
+            "type": btn_type,
+            "value": {"act": "route", "mid": message_id, "to": folder},
+        }
+
+    short = current_folder.replace("etrm/bess-platform/data/", "…/")
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "green",
+            "title": {"content": f"📁 {filename}", "tag": "plain_text"},
+        },
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md",
+                "content": f"已归档至 `{short}`\n路径有误？点击下方按钮重新存档："}},
+            {"tag": "hr"},
+            # Row 1 — confirm + cross-province specials
+            {"tag": "action", "actions": [
+                {"tag": "button", "text": {"tag": "plain_text", "content": "✓ 路径正确"},
+                 "type": "primary", "value": {"act": "confirm", "mid": message_id}},
+                _btn("🌐 全国政策",  f"{_BASE_CN_CARD}/【0全国】/1-政策"),
+                _btn("📊 各省装机",  f"{_BASE_CN_CARD}/【各省份装机数据】"),
+                _btn("📋 政策月报",  f"{_BASE_CN_CARD}/【政策研究月报】"),
+            ]},
+            # Row 2 — top provincial markets
+            {"tag": "action", "actions": [
+                _btn("山东", f"{_BASE_CN_CARD}/【15.山东】/1-信息披露"),
+                _btn("广东", f"{_BASE_CN_CARD}/【19.广东】/1-信息披露"),
+                _btn("蒙西", f"{_BASE_CN_CARD}/【5.1蒙西】/1-信息披露"),
+                _btn("山西", f"{_BASE_CN_CARD}/【4.山西】/1-信息披露"),
+                _btn("江苏", f"{_BASE_CN_CARD}/【10.江苏】/1-信息披露"),
+            ]},
+            # Row 3 — international markets
+            {"tag": "action", "actions": [
+                _btn("🇬🇧 GB",    f"{_BASE_INTL_CARD}/gb/reports"),
+                _btn("🇦🇺 AU",    f"{_BASE_INTL_CARD}/au/reports"),
+                _btn("ERCOT",   f"{_BASE_INTL_CARD}/ercot/reports"),
+                _btn("CAISO",   f"{_BASE_INTL_CARD}/caiso/reports"),
+                _btn("PJM",     f"{_BASE_INTL_CARD}/pjm/reports"),
+            ]},
+        ],
+    }
+
+
+def _build_save_picker_card() -> dict:
+    """Standalone /save picker — tap a button to set the folder for the next upload."""
+
+    def _btn(label: str, folder: str) -> dict:
+        return {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": label},
+            "type": "default",
+            "value": {"act": "set_folder", "to": folder},
+        }
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"content": "📁 选择下一个文件的存档位置", "tag": "plain_text"},
+        },
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md", "content": "点击目标文件夹，然后发送文件："}},
+            {"tag": "hr"},
+            {"tag": "action", "actions": [
+                _btn("🌐 全国政策",  f"{_BASE_CN_CARD}/【0全国】/1-政策"),
+                _btn("🌐 全国信披",  f"{_BASE_CN_CARD}/【0全国】/1-信息披露"),
+                _btn("📊 各省装机",  f"{_BASE_CN_CARD}/【各省份装机数据】"),
+                _btn("📋 政策月报",  f"{_BASE_CN_CARD}/【政策研究月报】"),
+            ]},
+            {"tag": "action", "actions": [
+                _btn("山东", f"{_BASE_CN_CARD}/【15.山东】/1-信息披露"),
+                _btn("广东", f"{_BASE_CN_CARD}/【19.广东】/1-信息披露"),
+                _btn("蒙西", f"{_BASE_CN_CARD}/【5.1蒙西】/1-信息披露"),
+                _btn("山西", f"{_BASE_CN_CARD}/【4.山西】/1-信息披露"),
+                _btn("江苏", f"{_BASE_CN_CARD}/【10.江苏】/1-信息披露"),
+            ]},
+            {"tag": "action", "actions": [
+                _btn("湖南", f"{_BASE_CN_CARD}/【18.湖南】/1-信息披露"),
+                _btn("浙江", f"{_BASE_CN_CARD}/【11.浙江】/1-信息披露"),
+                _btn("安徽", f"{_BASE_CN_CARD}/【12.安徽】/1-信息披露"),
+                _btn("湖北", f"{_BASE_CN_CARD}/【17.湖北】/1-信息披露"),
+                _btn("河南", f"{_BASE_CN_CARD}/【16.河南】/1-信息披露"),
+            ]},
+            {"tag": "action", "actions": [
+                _btn("🇬🇧 GB data",    f"{_BASE_INTL_CARD}/gb/data"),
+                _btn("🇬🇧 GB reports", f"{_BASE_INTL_CARD}/gb/reports"),
+                _btn("🇦🇺 AU",         f"{_BASE_INTL_CARD}/au/reports"),
+                _btn("ERCOT",        f"{_BASE_INTL_CARD}/ercot/reports"),
+                _btn("CAISO",        f"{_BASE_INTL_CARD}/caiso/reports"),
+            ]},
+            {"tag": "action", "actions": [
+                _btn("📤 Hermes Uploads", "Hermes Uploads"),
+            ]},
+        ],
+    }
+
 
 # Feishu / plain-text menu (fallback if send_card fails)
 _MENU_TEXT_PLAIN = """\
@@ -229,10 +342,12 @@ def create_app() -> FastAPI:
     tasks, wecom, feishu, telegram, agent, outlook = _make_clients()
 
     scheduler = BackgroundScheduler()
+    # Due reminders: once daily at 8:05 AM Beijing (00:05 UTC) — not every 15 min
     scheduler.add_job(
         send_due_reminders,
-        "interval",
-        minutes=15,
+        "cron",
+        hour=0,
+        minute=5,
         kwargs={
             "tasks": tasks,
             "wecom": wecom,
@@ -253,6 +368,20 @@ def create_app() -> FastAPI:
             "feishu_owner_open_id": os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
         },
     )
+    # Mengxi BESS ranking report: 7:00 AM Beijing (23:00 UTC previous day)
+    _mengxi_pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+    if _mengxi_pg_url:
+        scheduler.add_job(
+            _send_mengxi_ranking,
+            "cron",
+            hour=23, minute=0,
+            kwargs={
+                "feishu":            feishu,
+                "owner_open_id":     os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+                "pg_url":            _mengxi_pg_url,
+            },
+        )
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
@@ -509,8 +638,65 @@ def create_app() -> FastAPI:
             return {"challenge": payload["challenge"]}
 
         open_id = payload.get("open_id", "")
-        action = payload.get("action", {})
-        cat = (action.get("value") or {}).get("cat", "")
+        action  = payload.get("action", {})
+        value   = action.get("value") or {}
+        act     = value.get("act", "")
+
+        # ── Routing-card actions ──────────────────────────────────────────────
+        if act == "confirm":
+            # User confirmed the auto-detected folder — just clean up
+            mid = value.get("mid", "")
+            _pending_reroute.pop(mid, None)
+            if open_id and feishu:
+                feishu.send_text(open_id=open_id, text="✅ 路径确认。")
+            return {}
+
+        if act == "route":
+            # User tapped a re-route button — re-download and upload to new folder
+            mid       = value.get("mid", "")
+            new_folder = value.get("to", "")
+            info = _pending_reroute.pop(mid, None)
+            if not info or not new_folder:
+                if open_id and feishu:
+                    feishu.send_text(open_id=open_id, text="⚠️ 无法重新归档（记录已过期，请重新发送文件）。")
+                return {}
+
+            def _reroute():
+                try:
+                    fb = feishu.download_resource(
+                        info["filename"],  # message_id equivalent not needed — use file_key
+                        info["file_key"],
+                        info["resource_type"],
+                    )
+                    result = agent.onedrive.upload_file(
+                        folder_path=new_folder,
+                        filename=info["filename"],
+                        content=fb,
+                    )
+                    feishu.send_text(
+                        open_id=info["sender_id"],
+                        text=f"✅ 已重新归档《{result.get('name')}》到 OneDrive/{new_folder.strip('/')}",
+                    )
+                except Exception as exc:
+                    logger.error("Re-route failed: %s", exc)
+                    if feishu:
+                        feishu.send_text(open_id=info["sender_id"], text=f"重新归档失败：{exc}")
+
+            background.add_task(_reroute)
+            return {}
+
+        if act == "set_folder":
+            # /save picker — store as pending folder for next upload
+            folder_choice = value.get("to", "")
+            if open_id and folder_choice:
+                _pending_folders[open_id] = folder_choice
+                short = folder_choice.replace("etrm/bess-platform/data/", "…/")
+                if feishu:
+                    feishu.send_text(open_id=open_id, text=f"📁 下一个文件将存入：{short}\n请现在发送文件。")
+            return {}
+
+        # ── Legacy category menu buttons ─────────────────────────────────────
+        cat      = value.get("cat", "")
         question = _CALLBACK_MAP.get(f"cat:{cat}", "")
 
         if question and open_id:
@@ -730,24 +916,37 @@ def _handle_file_message(
         if feishu:
             feishu.send_text(open_id=sender_id, text="OneDrive 未配置，无法保存文件。")
         return False
-    # Priority: 1) explicit pending folder, 2) AI classify, 3) DB auto-route rule, 4) default
+    # Priority: 1) explicit pending folder, 2) explicit AI classify request,
+    #           3) DB auto-route rule, 4) auto-classify all documents, 5) Hermes Uploads
     folder = _pending_folders.pop(sender_id, None)
     if folder is None and sender_id in _pending_classify:
         hint = _pending_classify.pop(sender_id)
         try:
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
             folder = classify_to_market_fundamentals(filename, hint, api_key)
-            logger.info("AI-classified '%s' to '%s'", filename, folder)
+            logger.info("AI-classified (explicit) '%s' to '%s'", filename, folder)
         except Exception as exc:
             logger.error("AI classification failed: %s", exc)
+    matched_rule = None
     if folder is None:
         rules = agent.tasks.get_file_rules()
         for rule in rules:
             if rule["pattern"].lower() in filename.lower():
                 year = datetime.now().year
                 folder = rule["folder_template"].replace("{year}", str(year))
+                matched_rule = rule
                 logger.info("Auto-routing '%s' to '%s' via rule %s", filename, folder, rule["id"])
                 break
+    # Auto-classify all document files (xlsx, pdf, docx, etc.) if no folder yet
+    if folder is None and is_document_file(filename):
+        try:
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            classified = classify_to_market_fundamentals(filename, "", api_key)
+            if classified:  # None means NOT_MARKET
+                folder = classified
+                logger.info("Auto-classified '%s' → '%s'", filename, folder)
+        except Exception as exc:
+            logger.error("Auto-classify failed: %s", exc)
     if folder is None:
         folder = "Hermes Uploads"
     try:
@@ -760,13 +959,74 @@ def _handle_file_message(
         feishu.send_text(open_id=sender_id, text=reply)
         return False
 
-    feishu.send_text(open_id=sender_id, text=reply)
+    # Send interactive routing card for document files so the user can re-route with one tap.
+    # Fall back to plain text if card send fails.
+    _sent_card = False
+    if is_document_file(filename):
+        try:
+            _pending_reroute[message_id] = {
+                "sender_id": sender_id,
+                "filename": filename,
+                "file_key": file_key,
+                "resource_type": resource_type,
+                "current_folder": folder,
+            }
+            feishu.send_card(
+                open_id=sender_id,
+                card=_build_route_card(filename, folder, message_id),
+            )
+            _sent_card = True
+        except Exception as _ce:
+            logger.warning("Route card send failed, falling back to text: %s", _ce)
+            _pending_reroute.pop(message_id, None)
+
+    if not _sent_card:
+        feishu.send_text(open_id=sender_id, text=reply)
 
     # Knowledge base ingestion (explicit user request)
     if sender_id in _pending_kb_ingest:
         category, hint = _pending_kb_ingest.pop(sender_id)
         kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category=category)
         feishu.send_text(open_id=sender_id, text=kb_reply)
+    # Auto KB ingest via file rule
+    elif matched_rule and matched_rule.get("auto_kb"):
+        try:
+            kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
+            feishu.send_text(open_id=sender_id, text=kb_reply)
+        except Exception as exc:
+            logger.error("Auto KB ingest failed: %s", exc)
+
+    # Auto digest via file rule
+    if matched_rule and matched_rule.get("auto_digest"):
+        try:
+            digest = agent.generate_file_digest(filename, file_bytes)
+            feishu.send_text(open_id=sender_id, text=digest)
+        except Exception as exc:
+            logger.error("Auto digest failed: %s", exc)
+
+    # Auto ETL: upsert capacity data into province_installed_monthly
+    _should_etl = (matched_rule and matched_rule.get("auto_etl")) or is_capacity_file(filename)
+    if _should_etl:
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = upsert_capacity(file_bytes, filename, pg_url, api_key)
+            if result["upserted"] > 0:
+                prov_list = "、".join(result["provinces"][:8])
+                if len(result["provinces"]) > 8:
+                    prov_list += f"等{len(result['provinces'])}省"
+                etl_msg = (
+                    f"📊 装机数据已入库（{result['year_month']}）\n"
+                    f"更新 {result['upserted']} 个省份：{prov_list}\n"
+                    f"bess-map 储能需求Tab已自动更新。"
+                )
+            else:
+                errs = "; ".join(result["errors"][:2])
+                etl_msg = f"⚠️ 装机数据入库失败：{errs}"
+            feishu.send_text(open_id=sender_id, text=etl_msg)
+        except Exception as exc:
+            logger.error("Capacity ETL failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 装机数据入库失败：{exc}")
 
     # Spot market PDF: trigger ingestion pipeline
     if is_spot_pdf(filename) and resource_type == "file":
@@ -801,13 +1061,24 @@ def _handle_telegram_file(
         return False
     telegram.send_typing(chat_id)
     folder = _pending_folders.pop(chat_id, None)
+    matched_rule = None
     if folder is None:
         rules = agent.tasks.get_file_rules()
         for rule in rules:
             if rule["pattern"].lower() in filename.lower():
                 year = datetime.now().year
                 folder = rule["folder_template"].replace("{year}", str(year))
+                matched_rule = rule
                 break
+    if folder is None and is_document_file(filename):
+        try:
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            classified = classify_to_market_fundamentals(filename, "", api_key)
+            if classified:
+                folder = classified
+                logger.info("Auto-classified (Telegram) '%s' → '%s'", filename, folder)
+        except Exception as exc:
+            logger.error("Auto-classify (Telegram) failed: %s", exc)
     if folder is None:
         folder = "Hermes Uploads"
     try:
@@ -829,6 +1100,40 @@ def _handle_telegram_file(
         category, hint = _pending_kb_ingest.pop(chat_id)
         kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category=category)
         telegram.send_text(chat_id, kb_reply)
+    elif matched_rule and matched_rule.get("auto_kb"):
+        try:
+            kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
+            telegram.send_text(chat_id, kb_reply)
+        except Exception as exc:
+            logger.error("Auto KB ingest (Telegram) failed: %s", exc)
+
+    if matched_rule and matched_rule.get("auto_digest"):
+        try:
+            digest = agent.generate_file_digest(filename, file_bytes)
+            telegram.send_text(chat_id, digest)
+        except Exception as exc:
+            logger.error("Auto digest (Telegram) failed: %s", exc)
+
+    # Auto ETL: upsert capacity data
+    _should_etl_tg = (matched_rule and matched_rule.get("auto_etl")) or is_capacity_file(filename)
+    if _should_etl_tg:
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = upsert_capacity(file_bytes, filename, pg_url, api_key)
+            if result["upserted"] > 0:
+                prov_list = "、".join(result["provinces"][:8])
+                etl_msg = (
+                    f"📊 装机数据已入库（{result['year_month']}）\n"
+                    f"更新 {result['upserted']} 个省份：{prov_list}\n"
+                    f"bess-map 储能需求Tab已自动更新。"
+                )
+            else:
+                errs = "; ".join(result["errors"][:2])
+                etl_msg = f"⚠️ 装机数据入库失败：{errs}"
+            telegram.send_text(chat_id, etl_msg)
+        except Exception as exc:
+            logger.error("Capacity ETL (Telegram) failed: %s", exc, exc_info=True)
 
     # Spot market PDF ingest
     if is_spot_pdf(filename):
@@ -939,6 +1244,58 @@ def _handle_message(
         except Exception as _e:
             logger.error("Failed to reply lingfeng run ack: %s", _e)
         return True
+    # ── /save command — show folder picker card for next upload ─────────────
+    if _re.match(r'^/?save$', msg.text.strip(), _re.I) and msg.source == "feishu" and feishu:
+        try:
+            feishu.send_card(open_id=msg.sender_id, card=_build_save_picker_card())
+        except Exception as _se:
+            logger.error("/save card failed: %s", _se)
+            feishu.send_text(open_id=msg.sender_id, text="发送文件夹选择卡片失败，请使用文字指定路径（如：存到山东）。")
+        return True
+
+    # ── /model command — switch LLM without consuming agent tokens ───────────
+    _model_m = _re.match(r'^/?model(?:\s+(\S+))?$', msg.text.strip(), _re.I)
+    if _model_m:
+        arg = (_model_m.group(1) or "").strip().lower()
+        avail = agent.available_models()
+        _model_icons = {"gpt": "🟦", "deepseek": "🟩", "claude": "🟧"}
+
+        def _send_model_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("model reply send failed: %s", _e)
+
+        if not arg or arg == "status":
+            # Show current model and available options
+            current = agent.get_model_pref(chat_id)
+            lines = [f"🤖 Current model: {agent._MODEL_LABELS.get(current, current)}", ""]
+            lines.append("Available models:")
+            for m in avail:
+                icon = _model_icons.get(m, "⬜")
+                lines.append(f"  {icon} /model {m}  —  {agent._MODEL_LABELS.get(m, m)}")
+            lines.append("  🔄 /model auto  —  Auto (priority chain)")
+            _send_model_reply("\n".join(lines))
+        else:
+            try:
+                canon = agent.set_model_pref(chat_id, arg)
+                if canon != "auto" and canon not in avail:
+                    _send_model_reply(
+                        f"⚠️ Model '{agent._MODEL_LABELS.get(canon, canon)}' is not configured "
+                        f"(missing API key). Set as preference anyway — will fall back to next available."
+                    )
+                else:
+                    label = agent._MODEL_LABELS.get(canon, canon)
+                    _send_model_reply(f"✅ Model switched to: {label}")
+            except ValueError as ve:
+                avail_str = ", ".join(f"/model {m}" for m in [*avail, "auto"])
+                _send_model_reply(f"❌ {ve}\nAvailable: {avail_str}")
+        return True
     # ─────────────────────────────────────────────────────────────────────────
 
     try:
@@ -975,23 +1332,28 @@ def _handle_message(
         else:
             extra = agent.execute(action)
             reply = extra if extra else action.reply
+        logger.info("Action=%s reply_len=%s", action.action, len(reply) if reply else 0)
+        if not reply:
+            logger.warning("Empty reply for action=%s params=%s", action.action, action.params)
         if reply:
+            # Append Beijing time to every Hermes reply
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _bj_now = _dt.now(tz=_tz(_td(hours=8)))
+            reply = f"{reply}\n─\n[{_bj_now.strftime('%Y-%m-%d %H:%M')} 北京时间]"
             if msg.source == "feishu" and feishu:
                 feishu.send_text(open_id=msg.sender_id, text=reply)
             elif msg.source == "wecom" and wecom:
                 wecom.send_text(user_id=msg.sender_id, text=reply)
             elif msg.source == "telegram" and telegram:
                 telegram.send_text(chat_id=msg.sender_id, text=reply)
-            # Save assistant reply to conversation memory
+            # process() already saved raw JSON to assistant history.
+            # Only run post-processing here (insight extraction for MARKET_AGENT).
             try:
                 mem = agent._get_memory()
-                if mem and chat_id:
-                    mem.save_turn(chat_id, "assistant", reply)
-                    # Auto-extract insights from MARKET_AGENT answers
-                    if action.action == "MARKET_AGENT":
-                        mem.extract_and_save_insights(chat_id, msg.text, reply)
+                if mem and chat_id and action.action == "MARKET_AGENT":
+                    mem.extract_and_save_insights(chat_id, msg.text, reply)
             except Exception as _mem_err:
-                logger.debug("Memory save failed: %s", _mem_err)
+                logger.debug("Memory insight extraction failed: %s", _mem_err)
         return True
     except Exception as e:
         logger.error("Error handling message: %s", e)
