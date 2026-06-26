@@ -3291,37 +3291,69 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         return _json.dumps(result, default=str)
 
     # ── Agent turn (handles multi-step tool-use loop) ──────────────────────────
-    def _run_agent_turn(messages: list, system: str) -> tuple[str, list, list]:
+    def _run_agent_turn(
+        messages: list, system: str, text_placeholder=None
+    ) -> tuple[str, list, list]:
         _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
         if not _api_key:
             return _t("agent_no_key"), messages, []
 
         client = _anthropic.Anthropic(api_key=_api_key)
         tool_events: list[dict] = []
+        # Status line shown during tool calls (lives inside the same chat message)
+        _status_ph = st.empty() if text_placeholder is not None else None
 
         while True:
-            response = client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=4096,
-                system=system,
-                tools=_AGENT_TOOLS,
-                messages=messages,
-            )
+            streamed_text = ""
 
-            messages = messages + [{"role": "assistant", "content": response.content}]
-
-            if response.stop_reason == "end_turn":
-                text = next(
-                    (b.text for b in response.content if hasattr(b, "text")), ""
+            if text_placeholder is not None:
+                if _status_ph:
+                    _status_ph.caption("⏳ Thinking…")
+                with client.messages.stream(
+                    model="claude-sonnet-4-6",
+                    max_tokens=4096,
+                    system=system,
+                    tools=_AGENT_TOOLS,
+                    messages=messages,
+                ) as _stream:
+                    for _chunk in _stream.text_stream:
+                        streamed_text += _chunk
+                        if _status_ph:
+                            _status_ph.empty()
+                        text_placeholder.markdown(streamed_text + "▌")
+                    _final = _stream.get_final_message()
+            else:
+                _final = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=4096,
+                    system=system,
+                    tools=_AGENT_TOOLS,
+                    messages=messages,
                 )
-                return text, messages, tool_events
+                streamed_text = next(
+                    (b.text for b in _final.content if hasattr(b, "text")), ""
+                )
 
-            if response.stop_reason != "tool_use":
-                return f"Unexpected stop_reason: {response.stop_reason}", messages, tool_events
+            messages = messages + [{"role": "assistant", "content": _final.content}]
+
+            if _final.stop_reason == "end_turn":
+                if _status_ph:
+                    _status_ph.empty()
+                if text_placeholder is not None:
+                    text_placeholder.markdown(streamed_text)
+                return streamed_text, messages, tool_events
+
+            if _final.stop_reason != "tool_use":
+                if _status_ph:
+                    _status_ph.empty()
+                return f"Unexpected stop_reason: {_final.stop_reason}", messages, tool_events
 
             tool_results = []
-            for block in response.content:
+            for block in _final.content:
                 if block.type == "tool_use":
+                    if _status_ph:
+                        _icon = _TOOL_ICONS.get(block.name, "⚙️")
+                        _status_ph.caption(f"{_icon} Calling `{block.name}`…")
                     result_str = _dispatch_tool(block.name, block.input)
                     tool_events.append({"tool": block.name, "result": result_str})
                     tool_results.append({
@@ -3329,6 +3361,9 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                         "tool_use_id": block.id,
                         "content": result_str,
                     })
+
+            if _status_ph:
+                _status_ph.empty()
 
             messages = messages + [{"role": "user", "content": tool_results}]
 
@@ -3604,16 +3639,18 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         )
 
         with st.chat_message("assistant"):
-            with st.spinner(_t("agent_thinking")):
-                try:
-                    _reply, _new_msgs, _tool_events = _run_agent_turn(
-                        st.session_state["agent_messages"],
-                        _build_spot_system(_user_input),
-                    )
-                except Exception as _exc:
-                    _reply = _t("agent_error", err=str(_exc))
-                    _new_msgs = st.session_state["agent_messages"]
-                    _tool_events = []
+            _text_ph = st.empty()
+            try:
+                _reply, _new_msgs, _tool_events = _run_agent_turn(
+                    st.session_state["agent_messages"],
+                    _build_spot_system(_user_input),
+                    text_placeholder=_text_ph,
+                )
+            except Exception as _exc:
+                _reply = _t("agent_error", err=str(_exc))
+                _new_msgs = st.session_state["agent_messages"]
+                _tool_events = []
+                _text_ph.markdown(_reply)
 
             for _ev in _tool_events:
                 st.session_state["agent_display"].append({
@@ -3626,7 +3663,6 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
             st.session_state["agent_display"].append(
                 {"role": "assistant", "content": _reply, "tool": None}
             )
-            st.markdown(_reply)
 
         # ── Auto-save memories + log conversation turn ─────────────────────────
         try:
