@@ -37,6 +37,7 @@ from services.hermes.outlook_client import OutlookClient
 from services.hermes.scheduler import send_due_reminders, send_morning_briefing, send_email_digest, summarize_emails
 from services.hermes.mengxi_ranking_report import send_daily_ranking as _send_mengxi_ranking
 from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
+from services.hermes.news_screener import screen_news_sources as _screen_news_sources
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
 from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
@@ -446,6 +447,19 @@ def create_app() -> FastAPI:
             },
         )
 
+        # News screener: 06:00 UTC (14:00 Beijing) — scrape + score + ingest + send digest
+        scheduler.add_job(
+            _screen_news_sources,
+            "cron",
+            hour=6, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
@@ -488,6 +502,21 @@ def create_app() -> FastAPI:
                                  onedrive_client=agent.onedrive)
             return {"status": "triggered", "report": report}
         return {"status": "unknown_report", "report": report}
+
+    @app.post("/hermes/news-screener/run")
+    async def run_news_screener(background: BackgroundTasks):
+        """Trigger a manual news-screener run. Returns immediately; runs in background."""
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        background.add_task(
+            _screen_news_sources,
+            pg_url=_pg,
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            feishu=feishu,
+            owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+        )
+        return {"status": "started"}
 
     @app.get("/hermes/inbound/wecom")
     def wecom_verify(echostr: Optional[str] = Query(default=None)):
@@ -1394,6 +1423,41 @@ def _handle_message(
         except Exception as _e:
             logger.error("Failed to reply lingfeng run ack: %s", _e)
         return True
+    # ── /news command — manually trigger news screener ───────────────────────
+    if _re.match(r'^/?(?:news|新闻|资讯|news.screener)$', msg.text.strip(), _re.I):
+        def _news_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("news reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            _news_reply("⚠️ 数据库未配置，无法运行新闻筛查。")
+            return True
+        _news_reply("⏳ 正在运行新闻筛查，稍候…")
+
+        def _run_news():
+            try:
+                _screen_news_sources(
+                    pg_url=_pg,
+                    api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+                    feishu=feishu,
+                    owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", msg.sender_id),
+                )
+            except Exception as _e:
+                logger.error("Manual news screener failed: %s", _e)
+                _news_reply(f"⚠️ 新闻筛查失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_news, daemon=True).start()
+        return True
+
     # ── /report command — manually trigger a scheduled report ───────────────
     # Accepts: "/report mengxi"  /  "/报告 蒙西"  /  "resend mengxi report"  /  "蒙西储能日报"
     _report_m = _re.match(r'^/?report(?:\s+(mengxi|蒙西|ranking))?$', msg.text.strip(), _re.I)
