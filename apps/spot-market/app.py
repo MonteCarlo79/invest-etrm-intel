@@ -4143,6 +4143,32 @@ with tab_news:
     import psycopg2 as _ns_pg2
 
     # Inline CRUD helpers — avoids importing services.hermes (not in this image)
+    def _ns_init_db(pg_url: str) -> None:
+        """Create hermes schema + news_sources table if they don't exist."""
+        conn = _ns_pg2.connect(pg_url, options="-c statement_timeout=15000")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("CREATE SCHEMA IF NOT EXISTS hermes")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS hermes.news_sources (
+                        id                  SERIAL PRIMARY KEY,
+                        name                TEXT NOT NULL,
+                        url                 TEXT NOT NULL,
+                        source_type         TEXT NOT NULL DEFAULT 'wechat',
+                        biz_id              TEXT,
+                        region_bucket       TEXT,
+                        category_hint       TEXT,
+                        scrape_config       JSONB,
+                        active              BOOLEAN NOT NULL DEFAULT TRUE,
+                        last_scraped_at     TIMESTAMPTZ,
+                        consecutive_failures INT NOT NULL DEFAULT 0,
+                        created_at          TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(name, url)
+                    )
+                """)
+            conn.commit()
+        finally:
+            conn.close()
     def _ns_get_sources(pg_url: str, active_only: bool = True) -> list:
         conn = _ns_pg2.connect(pg_url, options="-c statement_timeout=10000")
         try:
@@ -4254,6 +4280,7 @@ with tab_news:
     # ── Sources table ─────────────────────────────────────────────────────────
     if _ns_pg_url:
         try:
+            _ns_init_db(_ns_pg_url)
             _ns_sources = _ns_get_sources(_ns_pg_url, active_only=False)
         except Exception as _ns_exc:
             st.error(f"Could not load sources: {_ns_exc}")
