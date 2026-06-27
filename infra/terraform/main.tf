@@ -624,7 +624,8 @@ resource "aws_iam_policy" "ecs_run_task_policy" {
         Action = ["iam:PassRole"]
         Resource = [
           aws_iam_role.task_execution.arn,
-          aws_iam_role.task_role.arn
+          aws_iam_role.task_role.arn,
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ecsTaskExecutionRole"
         ]
       }
 

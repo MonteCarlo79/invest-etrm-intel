@@ -252,6 +252,64 @@ def _date_chunks(start: date, end: date, chunk_days: int):
 # Single-chunk download + ingest
 # ---------------------------------------------------------------------------
 
+def _ingest_downloaded_chunk(
+    raw_path: Path,
+    chunk_start: date,
+    chunk_end: date,
+    province_cn: str,
+    schema: str,
+    skip_prices: bool,
+    skip_fundamentals: bool,
+    keep_files: bool,
+) -> bool:
+    """Run price + fundamentals ingest for an already-downloaded Excel file. Returns True on success."""
+    logger.info(f"  Ingesting chunk {chunk_start} → {chunk_end}  ({raw_path.name})")
+
+    # Rename to <province>.xlsx so ingest scripts resolve province from stem
+    target_name = f"{province_cn}.xlsx"
+    target_path = raw_path.parent / target_name
+    if raw_path.resolve() != target_path.resolve():
+        shutil.move(str(raw_path), str(target_path))
+
+    # Price ingestion
+    if not skip_prices:
+        ok = _run(
+            [sys.executable, _INGEST_PRICES_SCRIPT,
+             "--indir",    str(target_path.parent),
+             "--auto-cols", "--upload-db",
+             "--env",      "none",
+             "--schema",   schema,
+             "--continue-on-error"],
+            f"Price ingestion ({chunk_start}–{chunk_end})",
+        )
+        if not ok:
+            logger.warning("  Price ingestion failed — continuing.")
+
+    # Fundamentals ingestion
+    if not skip_fundamentals:
+        ok = _run(
+            [sys.executable, _INGEST_FUNDAMENTALS_SCRIPT,
+             "--indir",      str(target_path.parent),
+             "--env",        "none",
+             "--schema",     schema,
+             "--start-date", str(chunk_start),
+             "--end-date",   str(chunk_end),
+             "--continue-on-error"],
+            f"Fundamentals ingestion ({chunk_start}–{chunk_end})",
+        )
+        if not ok:
+            logger.warning("  Fundamentals ingestion failed — continuing.")
+
+    # Cleanup
+    if not keep_files:
+        try:
+            target_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"  Could not clean up {target_path}: {e}")
+
+    return True
+
+
 def _collect_and_ingest_chunk(
     collect_fn,
     username: str,
@@ -295,51 +353,16 @@ def _collect_and_ingest_chunk(
         logger.error(f"  [FAIL] Download failed for chunk {chunk_start}–{chunk_end}: {exc}")
         return False
 
-    logger.info(f"  Downloaded: {raw_path}")
-
-    # Rename to <province>.xlsx so ingest scripts resolve province from stem
-    target_name = f"{province_cn}.xlsx"
-    target_path = raw_path.parent / target_name
-    if raw_path.name != target_name:
-        shutil.move(str(raw_path), str(target_path))
-
-    # Price ingestion
-    if not skip_prices:
-        ok = _run(
-            [sys.executable, _INGEST_PRICES_SCRIPT,
-             "--indir",    str(target_path.parent),
-             "--auto-cols", "--upload-db",
-             "--env",      "none",
-             "--schema",   schema,
-             "--continue-on-error"],
-            f"Price ingestion ({chunk_start}–{chunk_end})",
-        )
-        if not ok:
-            logger.warning("  Price ingestion failed — continuing.")
-
-    # Fundamentals ingestion
-    if not skip_fundamentals:
-        ok = _run(
-            [sys.executable, _INGEST_FUNDAMENTALS_SCRIPT,
-             "--indir",      str(target_path.parent),
-             "--env",        "none",
-             "--schema",     schema,
-             "--start-date", str(chunk_start),
-             "--end-date",   str(chunk_end),
-             "--continue-on-error"],
-            f"Fundamentals ingestion ({chunk_start}–{chunk_end})",
-        )
-        if not ok:
-            logger.warning("  Fundamentals ingestion failed — continuing.")
-
-    # Cleanup
-    if not keep_files:
-        try:
-            target_path.unlink(missing_ok=True)
-        except Exception as e:
-            logger.warning(f"  Could not clean up {target_path}: {e}")
-
-    return True
+    return _ingest_downloaded_chunk(
+        raw_path=raw_path,
+        chunk_start=chunk_start,
+        chunk_end=chunk_end,
+        province_cn=province_cn,
+        schema=schema,
+        skip_prices=skip_prices,
+        skip_fundamentals=skip_fundamentals,
+        keep_files=keep_files,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -390,10 +413,10 @@ def run_pipeline(
     logger.info("=" * 60)
 
     try:
-        from services.lingfeng.collector import collect, CredentialError
+        from services.lingfeng.collector import collect, collect_province, CredentialError
     except ImportError:
         sys.path.insert(0, str(_REPO))
-        from services.lingfeng.collector import collect, CredentialError
+        from services.lingfeng.collector import collect, collect_province, CredentialError
 
     # Try to load ops_log; degrade gracefully if unavailable
     try:
@@ -421,26 +444,41 @@ def run_pipeline(
 
         failed_chunks = []
         try:
-            for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
-                logger.info(f"[CHUNK {i}/{len(chunks)}]")
-                ok = _collect_and_ingest_chunk(
-                    collect_fn=collect,
-                    username=username,
-                    password=password,
-                    market=market,
-                    indicator=indicator,
+            # Download ALL chunks for this province in ONE browser session (one login).
+            # collect_province() returns only the successfully downloaded chunks.
+            logger.info(f"  Logging in once for {len(chunks)} chunk(s) …")
+            downloaded = collect_province(
+                username=username,
+                password=password,
+                market=market,
+                indicator=indicator,
+                chunks=chunks,
+                download_dir=download_dir,
+                headless=headless,
+            )
+
+            # Identify which chunks failed to download
+            downloaded_starts = {cs for cs, _ce2, _p in downloaded}
+            failed_chunks = [(cs, ce) for cs, ce in chunks if cs not in downloaded_starts]
+            if failed_chunks:
+                logger.warning(f"  {market}: {len(failed_chunks)} chunk(s) failed to download: {failed_chunks}")
+
+            # Ingest each successfully downloaded chunk
+            for i, (chunk_start, chunk_end, raw_path) in enumerate(downloaded, 1):
+                logger.info(f"[CHUNK {i}/{len(downloaded)}]")
+                ok = _ingest_downloaded_chunk(
+                    raw_path=raw_path,
                     chunk_start=chunk_start,
                     chunk_end=chunk_end,
                     province_cn=province_cn,
                     schema=schema,
                     skip_prices=skip_prices,
                     skip_fundamentals=skip_fundamentals,
-                    headless=headless,
-                    download_dir=download_dir,
                     keep_files=keep_files,
                 )
                 if not ok:
                     failed_chunks.append((chunk_start, chunk_end))
+
         except CredentialError as _ce:
             # Write sentinel to prevent any further login attempts
             _halt_msg = str(_ce)

@@ -543,9 +543,15 @@ try:
         # ── Recent ops table (collapsible) ───────────────────────────────
         if not _ops.empty:
             with st.expander("Recent operations (last 48 h)", expanded=False):
+                _ops_disp = _ops[["op_name", "market", "date_range", "status", "message",
+                                   "started_at", "duration_s"]].copy()
+                _ops_disp["started_at (CST)"] = (
+                    pd.to_datetime(_ops_disp.pop("started_at"), utc=True)
+                    + pd.Timedelta(hours=8)
+                ).dt.strftime("%Y-%m-%d %H:%M")
                 st.dataframe(
-                    _ops[["op_name", "market", "date_range", "status", "message",
-                           "started_at", "duration_s"]],
+                    _ops_disp[["op_name", "market", "date_range", "status", "message",
+                                "started_at (CST)", "duration_s"]],
                     use_container_width=True,
                     hide_index=True,
                 )

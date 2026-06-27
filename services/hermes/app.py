@@ -12,8 +12,9 @@ from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 
-# sender_id → folder path for the next file upload
-_pending_folders: dict[str, str] = {}
+# sender_id → (folder_path, remaining_count)
+# remaining_count: N = save next N files to this folder; -1 = unlimited until cleared
+_pending_folders: dict[str, tuple[str, int]] = {}
 # sender_id → user hint for AI-based market-fundamentals classification
 _pending_classify: dict[str, str] = {}
 # sender_id → (category, hint) for knowledge base ingestion
@@ -21,6 +22,8 @@ _pending_kb_ingest: dict[str, tuple[str, str]] = {}
 # message_id → {sender_id, filename, file_key, resource_type, current_folder}
 # allows the post-upload routing card to re-route files to a different folder
 _pending_reroute: dict[str, dict] = {}
+# sender_id → (folder_path, region_label) — survey/research-report mode
+_pending_survey: dict[str, tuple[str, str]] = {}
 from fastapi import FastAPI, BackgroundTasks, Query, Request, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from services.hermes.models import InboundMessage
@@ -33,6 +36,7 @@ from services.hermes.onedrive_client import OneDriveClient
 from services.hermes.outlook_client import OutlookClient
 from services.hermes.scheduler import send_due_reminders, send_morning_briefing, send_email_digest, summarize_emails
 from services.hermes.mengxi_ranking_report import send_daily_ranking as _send_mengxi_ranking
+from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
 from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
@@ -42,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 # ── Hermes category menu ───────────────────────────────────────────────────────
 _MENU_TRIGGER_WORDS = {"/start", "/menu", "/help", "start", "menu", "help",
-                       "菜单", "帮助菜单", "/菜单"}
+                       "菜单", "帮助菜单", "/菜单", "menu mengxi", "/menu mengxi"}
 
 # Telegram inline keyboard menu (HTML parse mode)
 # callback_data must be ≤ 64 bytes — use short keys mapped to full questions below
@@ -131,8 +135,10 @@ _FEISHU_MENU_CARD: dict = {
     ],
 }
 
-_BASE_CN_CARD   = "etrm/bess-platform/data/market-fundamentals"
-_BASE_INTL_CARD = "etrm/bess-platform/data/intl-markets"
+_BASE_CN_CARD        = "etrm/bess-platform/data/market-fundamentals"
+_BASE_INTL_CARD      = "etrm/bess-platform/data/intl-markets"
+_SURVEY_REPORT_BASE  = "etrm/bess-platform/data/market-fundamentals/调研报告"
+_SURVEY_ASSET_BASE   = "etrm/bess-platform/assets/调研"
 
 
 def _build_route_card(filename: str, current_folder: str, message_id: str) -> dict:
@@ -234,6 +240,51 @@ def _build_save_picker_card() -> dict:
             ]},
             {"tag": "action", "actions": [
                 _btn("📤 Hermes Uploads", "Hermes Uploads"),
+            ]},
+        ],
+    }
+
+
+def _build_survey_card(mode: str) -> dict:
+    """Region picker for 调研报告 (mode='report') or 资产调研 (mode='asset')."""
+    def _btn(label: str, region: str) -> dict:
+        return {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": label},
+            "type": "default",
+            "value": {"act": "survey_region", "mode": mode, "region": region},
+        }
+
+    if mode == "report":
+        header_color = "orange"
+        title = "📋 调研报告 — 选择地区"
+        hint = "选择地区后，发送文字或文件，内容将保存到调研报告目录并录入知识库。发送「取消」退出。"
+    else:
+        header_color = "purple"
+        title = "🔍 资产调研 — 选择地区"
+        hint = "选择地区后，输入资产名称，再发送文字或文件，内容将保存到资产调研目录并录入知识库。发送「取消」退出。"
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {"template": header_color, "title": {"content": title, "tag": "plain_text"}},
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md", "content": hint}},
+            {"tag": "hr"},
+            {"tag": "action", "actions": [
+                _btn("🇨🇳 全国", "全国"),
+                _btn("山东", "山东"), _btn("广东", "广东"), _btn("蒙西", "蒙西"),
+            ]},
+            {"tag": "action", "actions": [
+                _btn("蒙东", "蒙东"), _btn("山西", "山西"), _btn("江苏", "江苏"),
+                _btn("浙江", "浙江"), _btn("湖南", "湖南"),
+            ]},
+            {"tag": "action", "actions": [
+                _btn("安徽", "安徽"), _btn("湖北", "湖北"), _btn("河南", "河南"),
+                _btn("四川", "四川"), _btn("福建", "福建"),
+            ]},
+            {"tag": "action", "actions": [
+                _btn("🇬🇧 GB", "GB"), _btn("🇦🇺 AU", "AU"), _btn("ERCOT", "ERCOT"),
+                _btn("CAISO", "CAISO"), _btn("PJM", "PJM"),
             ]},
         ],
     }
@@ -379,6 +430,19 @@ def create_app() -> FastAPI:
                 "feishu":            feishu,
                 "owner_open_id":     os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
                 "pg_url":            _mengxi_pg_url,
+                "onedrive_client":   agent.onedrive,
+            },
+        )
+        # New-BESS screener: 06:30 UTC (14:30 Beijing) — after market data typically arrives
+        scheduler.add_job(
+            _screen_new_bess,
+            "cron",
+            hour=6, minute=30,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "onedrive_client": agent.onedrive,
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
             },
         )
 
@@ -403,6 +467,27 @@ def create_app() -> FastAPI:
     @app.get("/hermes/health")
     def health():
         return {"status": "ok"}
+
+    @app.post("/hermes/admin/trigger-report")
+    async def trigger_report(request: Request, background: BackgroundTasks):
+        """Manually trigger a scheduled report. Requires X-Admin-Token header."""
+        admin_token = os.environ.get("HERMES_ADMIN_TOKEN", "")
+        if not admin_token or request.headers.get("X-Admin-Token") != admin_token:
+            return Response(content="Unauthorized", status_code=401)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        report = body.get("report", "mengxi_ranking")
+        if report == "mengxi_ranking":
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            owner_open_id = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+            background.add_task(_send_mengxi_ranking, feishu=feishu,
+                                 owner_open_id=owner_open_id, pg_url=pg_url,
+                                 onedrive_client=agent.onedrive)
+            return {"status": "triggered", "report": report}
+        return {"status": "unknown_report", "report": report}
 
     @app.get("/hermes/inbound/wecom")
     def wecom_verify(echostr: Optional[str] = Query(default=None)):
@@ -686,13 +771,37 @@ def create_app() -> FastAPI:
             return {}
 
         if act == "set_folder":
-            # /save picker — store as pending folder for next upload
+            # /save picker — store as pending folder; -1 = unlimited until user sends text
             folder_choice = value.get("to", "")
             if open_id and folder_choice:
-                _pending_folders[open_id] = folder_choice
+                _pending_folders[open_id] = (folder_choice, -1)
                 short = folder_choice.replace("etrm/bess-platform/data/", "…/")
                 if feishu:
-                    feishu.send_text(open_id=open_id, text=f"📁 下一个文件将存入：{short}\n请现在发送文件。")
+                    feishu.send_text(open_id=open_id, text=f"📁 已设置存档位置：{short}\n请依次发送文件，发送文字消息可取消。")
+            return {}
+
+        if act == "survey_region":
+            survey_mode = value.get("mode", "report")
+            region = value.get("region", "")
+            if not open_id or not region:
+                return {}
+            if survey_mode == "report":
+                folder = f"{_SURVEY_REPORT_BASE}/{region}"
+                _pending_survey[open_id] = (folder, region, "report", True)
+                if feishu:
+                    feishu.send_text(open_id=open_id, text=(
+                        f"📋 调研报告模式已开启 — {region}\n"
+                        f"请发送文字或文件，内容将保存到「调研报告/{region}」并录入知识库。\n"
+                        "发送「取消」退出。"
+                    ))
+            else:  # asset
+                # Store region, wait for asset name as next text message
+                _pending_survey[open_id] = ("", region, "asset_need_name", True)
+                if feishu:
+                    feishu.send_text(open_id=open_id, text=(
+                        f"🔍 资产调研 — {region}\n"
+                        "请输入资产名称（例如：宏海科技光储），我将创建对应目录。"
+                    ))
             return {}
 
         # ── Legacy category menu buttons ─────────────────────────────────────
@@ -916,9 +1025,26 @@ def _handle_file_message(
         if feishu:
             feishu.send_text(open_id=sender_id, text="OneDrive 未配置，无法保存文件。")
         return False
-    # Priority: 1) explicit pending folder, 2) explicit AI classify request,
+    # Priority: 0) survey mode, 1) explicit pending folder, 2) explicit AI classify request,
     #           3) DB auto-route rule, 4) auto-classify all documents, 5) Hermes Uploads
-    folder = _pending_folders.pop(sender_id, None)
+    _survey_file_mode = None
+    if sender_id in _pending_survey:
+        _sv_f, _sv_l, _sv_m, _sv_kb = _pending_survey[sender_id]
+        if _sv_m in ("report", "asset_ready"):
+            _survey_file_mode = (_sv_f, _sv_l, _sv_kb)
+
+    folder = None
+    if _survey_file_mode:
+        folder = _survey_file_mode[0]
+
+    _folder_entry = _pending_folders.get(sender_id)
+    if _folder_entry:
+        folder, _remaining = _folder_entry
+        if _remaining == 1:
+            _pending_folders.pop(sender_id)       # last file in the batch
+        elif _remaining > 1:
+            _pending_folders[sender_id] = (folder, _remaining - 1)
+        # _remaining == -1 → unlimited, keep as-is
     if folder is None and sender_id in _pending_classify:
         hint = _pending_classify.pop(sender_id)
         try:
@@ -959,10 +1085,20 @@ def _handle_file_message(
         feishu.send_text(open_id=sender_id, text=reply)
         return False
 
-    # Send interactive routing card for document files so the user can re-route with one tap.
+    # Show remaining count hint if a multi-file batch is active
+    _remaining_hint = ""
+    _cur_entry = _pending_folders.get(sender_id)
+    if _cur_entry:
+        _, _rem = _cur_entry
+        if _rem > 0:
+            _remaining_hint = f"（还需发送 {_rem} 个文件）"
+        elif _rem == -1:
+            _remaining_hint = "（发送文字消息可取消批量存档）"
+
+    # Send interactive routing card for all uploaded files so the user can re-route with one tap.
     # Fall back to plain text if card send fails.
     _sent_card = False
-    if is_document_file(filename):
+    if True:  # always show card for any uploaded file
         try:
             _pending_reroute[message_id] = {
                 "sender_id": sender_id,
@@ -995,6 +1131,14 @@ def _handle_file_message(
             feishu.send_text(open_id=sender_id, text=kb_reply)
         except Exception as exc:
             logger.error("Auto KB ingest failed: %s", exc)
+
+    # Survey mode KB ingest
+    elif _survey_file_mode and _survey_file_mode[2]:  # kb_ingest flag
+        try:
+            kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
+            feishu.send_text(open_id=sender_id, text=kb_reply)
+        except Exception as exc:
+            logger.error("Survey KB ingest failed: %s", exc)
 
     # Auto digest via file rule
     if matched_rule and matched_rule.get("auto_digest"):
@@ -1165,6 +1309,12 @@ def _handle_message(
     import re as _re
     chat_id = msg.sender_id or ""
 
+    # ── Clear unlimited pending folder on any text message ───────────────────
+    # (unlimited batches set via /save card use count=-1; a new text message ends the batch)
+    _fe = _pending_folders.get(chat_id)
+    if _fe and _fe[1] == -1:
+        _pending_folders.pop(chat_id, None)
+
     # ── LingFeng password update (intercept before agent routing) ────────────
     # Accepts: "lingfeng password: NEW_PW"  /  "/lingfeng_password NEW_PW"
     #          "lingfeng密码: NEW_PW"        /  "lingfeng pw NEW_PW"
@@ -1244,6 +1394,124 @@ def _handle_message(
         except Exception as _e:
             logger.error("Failed to reply lingfeng run ack: %s", _e)
         return True
+    # ── /report command — manually trigger a scheduled report ───────────────
+    # Accepts: "/report mengxi"  /  "/报告 蒙西"  /  "resend mengxi report"  /  "蒙西储能日报"
+    _report_m = _re.match(r'^/?report(?:\s+(mengxi|蒙西|ranking))?$', msg.text.strip(), _re.I)
+    if not _report_m:
+        _report_m = _re.search(r'resend.{0,10}(mengxi|蒙西|ranking).{0,10}report', msg.text.strip(), _re.I)
+    if not _report_m:
+        _report_m = _re.match(r'^蒙西储能日报$', msg.text.strip()) or (msg.text.strip() == "蒙西储能日报")
+    if _report_m:
+        def _send_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("report reply send failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _oid = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+        if not _pg:
+            _send_reply("⚠️ 数据库未配置，无法生成报告。")
+            return True
+        _send_reply("⏳ 正在生成蒙西BESS排名日报，稍候…")
+
+        def _run_mengxi_report():
+            try:
+                _send_mengxi_ranking(feishu=feishu, owner_open_id=_oid, pg_url=_pg,
+                                     onedrive_client=agent.onedrive)
+            except Exception as _e:
+                logger.error("Manual mengxi report failed: %s", _e)
+                _send_reply(f"⚠️ 报告生成失败：{_e}")
+
+        import threading
+        threading.Thread(target=_run_mengxi_report, daemon=True).start()
+        return True
+
+    # ── Survey mode — 调研报告 / 资产调研 ────────────────────────────────────
+    _txt = msg.text.strip()
+
+    # Show region picker cards
+    if _txt in ("调研报告", "市场调研") and msg.source == "feishu" and feishu:
+        try:
+            feishu.send_card(open_id=msg.sender_id, card=_build_survey_card("report"))
+        except Exception as _se:
+            logger.error("survey report card failed: %s", _se)
+        return True
+
+    if _txt in ("资产调研",) and msg.source == "feishu" and feishu:
+        try:
+            feishu.send_card(open_id=msg.sender_id, card=_build_survey_card("asset"))
+        except Exception as _se:
+            logger.error("survey asset card failed: %s", _se)
+        return True
+
+    # Cancel survey mode
+    if _re.match(r'^/?取消$|^/?cancel$', _txt, _re.I) and chat_id in _pending_survey:
+        _pending_survey.pop(chat_id, None)
+        if msg.source == "feishu" and feishu:
+            feishu.send_text(open_id=msg.sender_id, text="✅ 已退出调研记录模式。")
+        return True
+
+    # Handle text when survey mode is active
+    if chat_id in _pending_survey:
+        _sv_folder, _sv_label, _sv_mode, _sv_kb = _pending_survey[chat_id]
+
+        def _survey_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("survey reply failed: %s", _e)
+
+        if _sv_mode == "asset_need_name":
+            # Text is the asset name — set up the folder and advance state
+            asset_name = _txt[:60]  # cap length for folder name safety
+            folder = f"{_SURVEY_ASSET_BASE}/{_sv_label}/{asset_name}"
+            _pending_survey[chat_id] = (folder, f"{_sv_label}/{asset_name}", "asset_ready", True)
+            _survey_reply(
+                f"🔍 资产调研模式已开启 — {_sv_label} / {asset_name}\n"
+                f"请发送文字调研笔记或相关文件，内容将保存到「assets/调研/{_sv_label}/{asset_name}」并录入知识库。\n"
+                "发送「取消」退出。"
+            )
+            return True
+
+        if _sv_mode in ("report", "asset_ready"):
+            # Save text as a markdown note file to OneDrive
+            from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+            _ts = _dt2.now(tz=_tz2(_td2(hours=8))).strftime("%Y%m%d_%H%M%S")
+            _note_filename = f"{_ts}_调研笔记.md"
+            _note_content = f"# 调研笔记 — {_sv_label}\n\n{_txt}\n".encode("utf-8")
+            try:
+                if not agent.onedrive:
+                    raise RuntimeError("OneDrive 未配置")
+                result = agent.onedrive.upload_file(
+                    folder_path=_sv_folder,
+                    filename=_note_filename,
+                    content=_note_content,
+                )
+                _kb_hint = ""
+                if _sv_kb:
+                    try:
+                        _kb_msg = agent.ingest_file_to_kb(_note_filename, _note_content, category="research_report")
+                        _kb_hint = f"\n{_kb_msg}"
+                    except Exception as _kbe:
+                        logger.warning("Survey KB ingest failed: %s", _kbe)
+                _survey_reply(
+                    f"✅ 已保存笔记《{result.get('name')}》到 OneDrive/{_sv_folder.strip('/')}"
+                    f"{_kb_hint}"
+                )
+            except Exception as exc:
+                logger.error("Survey note upload failed: %s", exc)
+                _survey_reply(f"⚠️ 保存失败：{exc}")
+            return True
+
     # ── /save command — show folder picker card for next upload ─────────────
     if _re.match(r'^/?save$', msg.text.strip(), _re.I) and msg.source == "feishu" and feishu:
         try:
@@ -1302,7 +1570,8 @@ def _handle_message(
         action = agent.process(msg, chat_id=chat_id)
         if action.action == "SAVE_NEXT_FILE":
             folder = action.params.get("folder_path", "Hermes Uploads")
-            _pending_folders[msg.sender_id] = folder
+            count  = int(action.params.get("count", 1))
+            _pending_folders[msg.sender_id] = (folder, count)
             reply = action.reply or f"好的，把文件发给我，我帮你存到 OneDrive/{folder.strip('/')}"
         elif action.action == "CLASSIFY_NEXT_FILE":
             hint = action.params.get("hint", "")
@@ -1354,6 +1623,27 @@ def _handle_message(
                     mem.extract_and_save_insights(chat_id, msg.text, reply)
             except Exception as _mem_err:
                 logger.debug("Memory insight extraction failed: %s", _mem_err)
+
+        # Send chart image if GENERATE_CHART produced one
+        _chart_bytes = getattr(agent, "_pending_chart_bytes", None)
+        if _chart_bytes:
+            agent._pending_chart_bytes = None
+            try:
+                if msg.source == "feishu" and feishu:
+                    image_key = feishu.upload_image(_chart_bytes)
+                    feishu.send_image(open_id=msg.sender_id, image_key=image_key)
+                    logger.info("Chart sent to %s (%d KB)", msg.sender_id, len(_chart_bytes) // 1024)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_photo(chat_id=msg.sender_id, photo_bytes=_chart_bytes)
+            except Exception as _ce:
+                logger.error("Chart image send failed: %s", _ce)
+                try:
+                    _err_msg = f"⚠️ 图表已生成但发送失败：{_ce}"
+                    if msg.source == "feishu" and feishu:
+                        feishu.send_text(open_id=msg.sender_id, text=_err_msg)
+                except Exception:
+                    pass
+
         return True
     except Exception as e:
         logger.error("Error handling message: %s", e)
