@@ -20,7 +20,7 @@ import psycopg2
 logger = logging.getLogger(__name__)
 
 
-_BESS_EXCEL_PATH = "bess-platform/data/电站.xlsx"
+_BESS_EXCEL_PATH = "etrm/bess-platform/data/电站.xlsx"
 
 
 def _load_known_plant_names(onedrive_client) -> tuple[set[str], object, bytes]:
