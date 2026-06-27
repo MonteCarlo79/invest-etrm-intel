@@ -4140,12 +4140,74 @@ def _db_coverage_detail(year: int = 2026):
 
 # ── News Sources ──────────────────────────────────────────────────────────────
 with tab_news:
-    from services.hermes.news_screener import (
-        get_sources as _ns_get_sources,
-        add_source as _ns_add_source,
-        set_source_active as _ns_set_active,
-        delete_source as _ns_delete,
-    )
+    import psycopg2 as _ns_pg2
+
+    # Inline CRUD helpers — avoids importing services.hermes (not in this image)
+    def _ns_get_sources(pg_url: str, active_only: bool = True) -> list:
+        conn = _ns_pg2.connect(pg_url, options="-c statement_timeout=10000")
+        try:
+            with conn.cursor() as cur:
+                sql = (
+                    "SELECT id, name, url, source_type, biz_id, region_bucket, "
+                    "category_hint, active, last_scraped_at, consecutive_failures "
+                    "FROM hermes.news_sources"
+                    + (" WHERE active = TRUE" if active_only else "")
+                    + " ORDER BY name"
+                )
+                cur.execute(sql)
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def _ns_add_source(pg_url: str, name: str, url: str, source_type: str = "wechat",
+                       biz_id=None, region_bucket: str = "全国", category_hint: str = "other") -> dict:
+        # Auto-extract biz_id from WeChat article URL if not provided
+        if source_type == "wechat" and not biz_id and "mp.weixin.qq.com/s/" in url:
+            import re as _re, requests as _rq
+            try:
+                _r = _rq.get(url, headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"}, timeout=20)
+                _m = _re.search(r'var\s+biz\s*=\s*"([^"]+)"', _r.text) or _re.search(r'__biz=([A-Za-z0-9=+/]+)', _r.text)
+                if _m:
+                    biz_id = _m.group(1)
+                    url = f"https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz={biz_id}&scene=124"
+            except Exception:
+                pass
+        conn = _ns_pg2.connect(pg_url, options="-c statement_timeout=10000")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO hermes.news_sources (name, url, source_type, biz_id, region_bucket, category_hint)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (name, url) DO UPDATE SET
+                         source_type=EXCLUDED.source_type, biz_id=COALESCE(EXCLUDED.biz_id, hermes.news_sources.biz_id),
+                         region_bucket=EXCLUDED.region_bucket, category_hint=EXCLUDED.category_hint, active=TRUE
+                       RETURNING id, name, url, source_type, biz_id, region_bucket, category_hint, active""",
+                    (name, url, source_type, biz_id, region_bucket, category_hint),
+                )
+                row = cur.fetchone(); cols = [d[0] for d in cur.description]
+            conn.commit()
+            return dict(zip(cols, row))
+        finally:
+            conn.close()
+
+    def _ns_set_active(pg_url: str, source_id: int, active: bool) -> None:
+        conn = _ns_pg2.connect(pg_url, options="-c statement_timeout=10000")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE hermes.news_sources SET active=%s WHERE id=%s", (active, source_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _ns_delete(pg_url: str, source_id: int) -> None:
+        conn = _ns_pg2.connect(pg_url, options="-c statement_timeout=10000")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM hermes.news_sources WHERE id=%s", (source_id,))
+            conn.commit()
+        finally:
+            conn.close()
 
     _ns_pg_url = _os.environ.get("PGURL", "")
     _ns_hermes_url = _os.environ.get("HERMES_URL", "http://localhost:8000")
