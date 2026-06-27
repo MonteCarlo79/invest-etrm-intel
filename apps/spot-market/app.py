@@ -99,6 +99,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_interprov":        "Inter-Provincial Flow",
         "tab_fundamentals":     "Market Fundamentals",
         "tab_agent":            "Strategist",
+        "tab_news":             "📡 News Sources",
         "tab_mgmt":             "Data Management",
         "tab_intraday":         "Intraday Analysis",
         # intraday
@@ -409,6 +410,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_interprov":        "省间现货交易",
         "tab_fundamentals":     "市场基础数据",
         "tab_agent":            "策略分析师",
+        "tab_news":             "📡 新闻来源",
         "tab_mgmt":             "数据管理",
         "tab_intraday":         "日内价格分析",
         # intraday
@@ -1626,10 +1628,10 @@ st.divider()
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_overview, tab_spread, tab_heatmap, tab_intraday, tab_province, tab_dist, tab_geo, \
-tab_interprov, tab_fundamentals, tab_agent, tab_library, tab_mgmt = st.tabs([
+tab_interprov, tab_fundamentals, tab_agent, tab_news, tab_library, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"), _t("tab_intraday"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
-    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), "Library", _t("tab_mgmt"),
+    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_news"), "Library", _t("tab_mgmt"),
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -4135,6 +4137,145 @@ def _db_coverage_detail(year: int = 2026):
     )
     return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
 
+
+# ── News Sources ──────────────────────────────────────────────────────────────
+with tab_news:
+    from services.hermes.news_screener import (
+        get_sources as _ns_get_sources,
+        add_source as _ns_add_source,
+        set_source_active as _ns_set_active,
+        delete_source as _ns_delete,
+    )
+
+    _ns_pg_url = _os.environ.get("PGURL", "")
+    _ns_hermes_url = _os.environ.get("HERMES_URL", "http://localhost:8000")
+
+    st.subheader(_t("tab_news"))
+
+    # ── Header row: Run Now + last run ────────────────────────────────────────
+    _ns_col1, _ns_col2, _ns_col3 = st.columns([1, 1, 3])
+    with _ns_col1:
+        _ns_run = st.button("▶ Run Now", key="ns_run_now", type="primary")
+    with _ns_col2:
+        _ns_refresh = st.button("↻ Refresh", key="ns_refresh")
+
+    if _ns_run:
+        try:
+            import requests as _ns_req
+            _ns_resp = _ns_req.post(
+                f"{_ns_hermes_url}/hermes/news-screener/run",
+                timeout=10,
+            )
+            if _ns_resp.ok:
+                st.success("✅ Screener started — Feishu digest will arrive at completion.")
+            else:
+                st.error(f"Hermes returned {_ns_resp.status_code}: {_ns_resp.text[:200]}")
+        except Exception as _ns_exc:
+            st.error(f"Could not reach Hermes: {_ns_exc}")
+
+    # Last-run timestamp
+    if _ns_pg_url:
+        try:
+            import psycopg2 as _ns_pg
+            _ns_conn = _ns_pg.connect(_ns_pg_url, options="-c statement_timeout=5000")
+            with _ns_conn.cursor() as _ns_cur:
+                _ns_cur.execute(
+                    "SELECT MAX(last_scraped_at) FROM hermes.news_sources"
+                )
+                _ns_last = _ns_cur.fetchone()
+            _ns_conn.close()
+            if _ns_last and _ns_last[0]:
+                _ns_col3.caption(f"Last run: {_ns_last[0].strftime('%Y-%m-%d %H:%M UTC')}")
+        except Exception:
+            pass
+
+    # ── Sources table ─────────────────────────────────────────────────────────
+    if _ns_pg_url:
+        try:
+            _ns_sources = _ns_get_sources(_ns_pg_url, active_only=False)
+        except Exception as _ns_exc:
+            st.error(f"Could not load sources: {_ns_exc}")
+            _ns_sources = []
+
+        if _ns_sources:
+            st.markdown("**Configured sources**")
+            for _ns_src in _ns_sources:
+                _ns_sc1, _ns_sc2, _ns_sc3, _ns_sc4, _ns_sc5, _ns_sc6 = st.columns(
+                    [3, 1.5, 1.5, 2, 1, 0.6]
+                )
+                _ns_sc1.write(_ns_src["name"])
+                _ns_sc2.write(_ns_src.get("source_type", "wechat"))
+                _ns_sc3.write(_ns_src.get("region_bucket") or "—")
+                _ns_sc4.write(_ns_src.get("category_hint") or "other")
+                _ns_active_val = bool(_ns_src.get("active", True))
+                _ns_new_active = _ns_sc5.checkbox(
+                    "Active",
+                    value=_ns_active_val,
+                    key=f"ns_active_{_ns_src['id']}",
+                    label_visibility="collapsed",
+                )
+                if _ns_new_active != _ns_active_val:
+                    _ns_set_active(_ns_pg_url, _ns_src["id"], _ns_new_active)
+                    st.rerun()
+                if _ns_sc6.button("🗑", key=f"ns_del_{_ns_src['id']}"):
+                    _ns_delete(_ns_pg_url, _ns_src["id"])
+                    st.rerun()
+        else:
+            st.info("No news sources configured yet. Add one below.")
+    else:
+        st.warning("PGURL not set — cannot manage sources.")
+        _ns_sources = []
+
+    st.divider()
+
+    # ── Add Source ────────────────────────────────────────────────────────────
+    with st.expander("➕ Add Source", expanded=len(_ns_sources) == 0):
+        _ns_name = st.text_input("Display name", key="ns_name")
+        _ns_type = st.selectbox(
+            "Type",
+            ["wechat", "web", "rss"],
+            key="ns_type",
+        )
+        _ns_url_label = (
+            "WeChat article URL (any mp.weixin.qq.com/s/… to auto-extract __biz)"
+            if _ns_type == "wechat"
+            else "Listing page URL"
+        )
+        _ns_url = st.text_input(_ns_url_label, key="ns_url")
+        _ns_region = st.selectbox(
+            "Region hint",
+            ["全国", "华北", "华东", "华南", "西北", "西南", "东北"],
+            key="ns_region",
+        )
+        _ns_cat = st.selectbox(
+            "Category hint",
+            ["other", "policy", "market_rules", "market_analytics", "technology", "industry_news"],
+            key="ns_cat",
+        )
+        if st.button("Add Source", key="ns_add", type="primary"):
+            if not _ns_name or not _ns_url:
+                st.error("Name and URL are required.")
+            elif not _ns_pg_url:
+                st.error("PGURL not configured.")
+            else:
+                try:
+                    _ns_new = _ns_add_source(
+                        _ns_pg_url,
+                        name=_ns_name,
+                        url=_ns_url,
+                        source_type=_ns_type,
+                        region_bucket=_ns_region,
+                        category_hint=_ns_cat,
+                    )
+                    if _ns_type == "wechat" and _ns_new.get("biz_id"):
+                        st.success(
+                            f"✅ Added **{_ns_name}** (biz_id: `{_ns_new['biz_id']}` auto-extracted)"
+                        )
+                    else:
+                        st.success(f"✅ Added **{_ns_name}**")
+                    st.rerun()
+                except Exception as _ns_exc:
+                    st.error(f"Failed to add source: {_ns_exc}")
 
 # ── Library ───────────────────────────────────────────────────────────────────
 with tab_library:
