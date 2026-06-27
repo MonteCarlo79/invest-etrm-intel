@@ -70,3 +70,23 @@ reports/
 check_canon.py
 check_output.txt
 overrides.json
+
+# Third-party cloned repos (do not commit)
+hermes-agent-main/
+awesome-hermes-agent-main/
+apps/hermes-service/
+
+# Debug artifacts
+debug/
+
+# Runtime / local-only files
+hermes_logs.txt
+planka_td.json
+local_launcher.py
+.superpowers/
+
+# Claude Code temp edit files
+*.tmp.*
+
+# Sensitive tokens
+scripts/onedrive_refresh_token.txt
