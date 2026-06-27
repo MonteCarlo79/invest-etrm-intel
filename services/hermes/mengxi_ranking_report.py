@@ -62,7 +62,8 @@ raw AS (
         SUM(charge_cost)    AS charge_cost,
         SUM(discharge_mwh)  AS discharge_mwh,
         SUM(days)           AS days,
-        SUM(comp_yuan)      AS comp_yuan
+        SUM(comp_yuan)      AS comp_yuan,
+        MAX(max_energy)     AS max_energy
     FROM with_comp
     GROUP BY plant_name
     HAVING MAX(max_energy) > 0
@@ -74,7 +75,8 @@ SELECT
     charge_cost,
     discharge_mwh,
     days::int  AS days,
-    comp_yuan
+    comp_yuan,
+    max_energy
 FROM raw
 """
 
@@ -140,7 +142,12 @@ def _enrich_and_rank(raw_df: pd.DataFrame, plant_list: list[dict]) -> pd.DataFra
     df["owner"] = df["owner"].fillna("未知")
     df["mw"] = df["mw"].fillna(0.0)
 
-    # Filter: must have known MW > 0 to compute meaningful score
+    # For plants missing MW in 电站.xlsx, infer from max observed dispatch energy.
+    # max_energy = MAX(cleared_energy_mwh per 15-min interval); MW ≈ max_energy * 4.
+    mask_no_mw = df["mw"] == 0
+    if mask_no_mw.any() and "max_energy" in df.columns:
+        df.loc[mask_no_mw, "mw"] = (df.loc[mask_no_mw, "max_energy"] * 4).round().clip(lower=1)
+
     df = df[df["mw"] > 0].copy()
     if df.empty:
         return df
@@ -252,7 +259,7 @@ def _generate_pdf(
         if df.empty:
             elems.append(Paragraph("暂无数据（该时段无BESS充放电记录）", note_s))
         else:
-            elems.append(_build_table(df))
+            elems.append(_build_table(df, top_n=len(df)))  # show all plants
         return elems
 
     yesterday_str = report_date.strftime("%Y-%m-%d")
