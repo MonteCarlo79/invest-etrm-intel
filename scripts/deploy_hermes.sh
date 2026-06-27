@@ -40,14 +40,17 @@ TASK_DEF=$(aws ecs describe-task-definition \
   --region "$REGION")
 
 # Extract container defs and inject OneDrive env vars
-NEW_TASK_DEF=$(echo "$TASK_DEF" | python3 -c "
+NEW_TASK_DEF=$(echo "$TASK_DEF" | ${PYTHON:-$(command -v python3 || command -v python || command -v py)} -c "
 import json, sys, os
 
 data = json.load(sys.stdin)
 td = data['taskDefinition']
 
 containers = td['containerDefinitions']
+IMAGE = os.environ.get('IMAGE', '$IMAGE')
 for c in containers:
+    # Always use :latest (never keep a pinned :vN tag — it causes CannotPullContainerError on redeploy)
+    c['image'] = IMAGE
     env = {e['name']: e['value'] for e in c.get('environment', [])}
     # Inject OneDrive vars (values come from env or keep existing)
     env['ONEDRIVE_CLIENT_ID']     = os.environ.get('ONEDRIVE_CLIENT_ID',     env.get('ONEDRIVE_CLIENT_ID', ''))
