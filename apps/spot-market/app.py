@@ -4240,16 +4240,20 @@ with tab_news:
 
     st.subheader(_t("tab_news"))
 
-    # ── Header row: Run Now + last run ────────────────────────────────────────
-    _ns_col1, _ns_col2, _ns_col3 = st.columns([1, 1, 3])
+    # ── Header row: Run Now + Backfill All + Refresh ──────────────────────────
+    _ns_col1, _ns_col2, _ns_col3, _ns_col4 = st.columns([1, 1.5, 1, 2])
     with _ns_col1:
         _ns_run = st.button("▶ Run Now", key="ns_run_now", type="primary")
     with _ns_col2:
+        _ns_backfill_all = st.button("⏮ Backfill All (2025-01-01)", key="ns_backfill_all")
+    with _ns_col3:
         _ns_refresh = st.button("↻ Refresh", key="ns_refresh")
 
     if _ns_run:
         try:
             import requests as _ns_req
+            import urllib3 as _ns_urllib3
+            _ns_urllib3.disable_warnings(_ns_urllib3.exceptions.InsecureRequestWarning)
             _ns_resp = _ns_req.post(
                 f"{_ns_hermes_url}/hermes/news-screener/run",
                 timeout=15,
@@ -4261,6 +4265,28 @@ with tab_news:
                 st.error(f"Hermes returned {_ns_resp.status_code}: {_ns_resp.text[:200]}")
         except Exception as _ns_exc:
             st.error(f"Could not reach Hermes: {_ns_exc}")
+
+    if _ns_backfill_all:
+        try:
+            import requests as _ns_req_bf2
+            import urllib3 as _ns_urllib3_bf2
+            _ns_urllib3_bf2.disable_warnings(_ns_urllib3_bf2.exceptions.InsecureRequestWarning)
+            _ns_bf2_resp = _ns_req_bf2.post(
+                f"{_ns_hermes_url}/hermes/news-screener/backfill",
+                json={"start_date": "2025-01-01"},
+                timeout=15,
+                verify=False,
+            )
+            if _ns_bf2_resp.ok:
+                _ns_bf2_data = _ns_bf2_resp.json()
+                st.success(
+                    f"⏳ Backfill started for {_ns_bf2_data.get('sources', '?')} sources from 2025-01-01 — "
+                    f"Feishu notifications will arrive per-source as they complete."
+                )
+            else:
+                st.error(f"Hermes returned {_ns_bf2_resp.status_code}: {_ns_bf2_resp.text[:200]}")
+        except Exception as _ns_bf2_exc:
+            st.error(f"Could not reach Hermes: {_ns_bf2_exc}")
 
     # Last-run timestamp
     if _ns_pg_url:
@@ -4406,6 +4432,23 @@ with tab_news:
                         )
                     else:
                         st.success(f"✅ Added **{_ns_name}**")
+                    # Auto-trigger backfill for new source from 2025-01-01
+                    try:
+                        import requests as _ns_req_bf
+                        import urllib3 as _ns_urllib3_bf
+                        _ns_urllib3_bf.disable_warnings(_ns_urllib3_bf.exceptions.InsecureRequestWarning)
+                        _ns_bf_resp = _ns_req_bf.post(
+                            f"{_ns_hermes_url}/hermes/news-screener/backfill",
+                            json={"source_id": _ns_new["id"], "start_date": "2025-01-01"},
+                            timeout=10,
+                            verify=False,
+                        )
+                        if _ns_bf_resp.ok:
+                            st.info("⏳ Backfilling articles since 2025-01-01 in background — you'll get a Feishu notification when done.")
+                        else:
+                            st.warning(f"Backfill request failed: {_ns_bf_resp.status_code}")
+                    except Exception as _ns_bf_exc:
+                        st.warning(f"Could not trigger backfill: {_ns_bf_exc}")
                     st.rerun()
                 except Exception as _ns_exc:
                     st.error(f"Failed to add source: {_ns_exc}")

@@ -37,7 +37,7 @@ from services.hermes.outlook_client import OutlookClient
 from services.hermes.scheduler import send_due_reminders, send_morning_briefing, send_email_digest, summarize_emails
 from services.hermes.mengxi_ranking_report import send_daily_ranking as _send_mengxi_ranking
 from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
-from services.hermes.news_screener import screen_news_sources as _screen_news_sources
+from services.hermes.news_screener import screen_news_sources as _screen_news_sources, get_sources as _ns_get_sources, backfill_source as _backfill_source
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
 from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
@@ -517,6 +517,54 @@ def create_app() -> FastAPI:
             owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
         )
         return {"status": "started"}
+
+    @app.post("/hermes/news-screener/backfill")
+    async def backfill_news_screener(request: Request, background: BackgroundTasks):
+        """
+        Backfill news articles from start_date to now.
+        Body (JSON): {"start_date": "2025-01-01", "source_id": 5}  # source_id optional
+        If source_id omitted, backfills all active sources.
+        """
+        from datetime import datetime as _dt
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        start_date_str = body.get("start_date", "2025-01-01")
+        source_id = body.get("source_id")
+        try:
+            start_date = _dt.fromisoformat(start_date_str).replace(tzinfo=__import__("datetime").timezone.utc)
+        except Exception:
+            return Response(content=f"Invalid start_date: {start_date_str}", status_code=400)
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        owner_open_id = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+
+        def _run_backfill():
+            sources = _ns_get_sources(_pg, active_only=False)
+            if source_id:
+                sources = [s for s in sources if s["id"] == source_id]
+            if not sources:
+                logger.warning("Backfill: no sources found (source_id=%s)", source_id)
+                return
+            logger.info("Backfill starting: %d sources from %s", len(sources), start_date_str)
+            for src in sources:
+                try:
+                    _backfill_source(src, start_date, _pg, api_key, feishu, owner_open_id)
+                except Exception as exc:
+                    logger.error("Backfill failed for source %s: %s", src.get("name"), exc)
+            if feishu and owner_open_id:
+                try:
+                    feishu.send_text(owner_open_id, f"✅ 全部来源回填完成（共 {len(sources)} 个来源，起始日期 {start_date_str}）。")
+                except Exception:
+                    pass
+
+        background.add_task(_run_backfill)
+        n_sources = len([s for s in _ns_get_sources(_pg, active_only=False) if not source_id or s["id"] == source_id])
+        return {"status": "started", "sources": n_sources, "start_date": start_date_str}
 
     @app.get("/hermes/inbound/wecom")
     def wecom_verify(echostr: Optional[str] = Query(default=None)):

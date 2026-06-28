@@ -242,6 +242,180 @@ def _fetch_wechat_article(url: str) -> tuple[str, str]:
     return "\n".join(lines), title
 
 
+def _discover_wechat_paginated(source: dict, start_date: datetime, max_pages: int = 30) -> list[dict]:
+    """
+    Paginate Sogou to discover WeChat articles back to start_date.
+    Used for backfill runs; standard discovery uses _discover_wechat_articles.
+    Returns list of {url, title, published_at}, oldest-first within cutoff.
+    """
+    from bs4 import BeautifulSoup
+    from urllib.parse import quote
+    import time as _time
+
+    name = source.get("name", "")
+    if not name:
+        return []
+
+    sogou_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": "https://weixin.sogou.com/",
+    }
+
+    # Ensure start_date is tz-aware
+    if start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=timezone.utc)
+
+    all_articles: list[dict] = []
+    seen_urls: set[str] = set()
+
+    for page in range(1, max_pages + 1):
+        url = (
+            f"https://weixin.sogou.com/weixin"
+            f"?type=2&s_from=input&query={quote(name)}&ie=utf8"
+            f"&_sug_=n&_sug_type_=&page={page}"
+        )
+        try:
+            resp = requests.get(url, headers=sogou_headers, timeout=20)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.content, "html.parser")
+            items = soup.select("ul.news-list li")
+            if not items:
+                logger.info("Sogou backfill: no more results for %s at page %d", name, page)
+                break
+
+            page_articles = []
+            all_before_cutoff = True
+            for li in items:
+                h3 = li.find("h3")
+                if not h3:
+                    continue
+                a = h3.find("a", href=True)
+                if not a:
+                    continue
+                href = a["href"]
+                if href.startswith("/"):
+                    href = "https://weixin.sogou.com" + href
+                if href in seen_urls:
+                    continue
+                seen_urls.add(href)
+
+                title = re.sub(r"<!--.*?-->", "", a.get_text(strip=True)).strip()
+
+                pub_dt = None
+                s2 = li.find("span", class_="s2")
+                if s2:
+                    ts_m = re.search(r"timeConvert\('(\d+)'", str(s2))
+                    if ts_m:
+                        try:
+                            pub_dt = datetime.fromtimestamp(int(ts_m.group(1)), tz=timezone.utc)
+                        except Exception:
+                            pass
+                    if not pub_dt:
+                        pub_dt = _parse_sogou_date(s2.get_text(strip=True))
+
+                if pub_dt and pub_dt >= start_date:
+                    all_before_cutoff = False
+                    page_articles.append({"url": href, "title": title, "published_at": pub_dt})
+                elif pub_dt and pub_dt < start_date:
+                    pass  # older than cutoff, skip but keep scanning
+                else:
+                    # No date — include it (can't tell)
+                    all_before_cutoff = False
+                    page_articles.append({"url": href, "title": title, "published_at": pub_dt})
+
+            all_articles.extend(page_articles)
+            logger.info(
+                "Sogou backfill page %d/%d for %s: %d articles collected so far",
+                page, max_pages, name, len(all_articles),
+            )
+
+            # If every article on this page was before start_date, we've gone far enough
+            if all_before_cutoff and page_articles == []:
+                logger.info("Sogou backfill: all articles on page %d pre-date cutoff, stopping", page)
+                break
+
+            # Polite delay between pages
+            _time.sleep(1.5)
+
+        except Exception as exc:
+            logger.warning("Sogou backfill page %d failed for %s: %s", page, name, exc)
+            break
+
+    logger.info("Sogou backfill discovered %d articles for %s", len(all_articles), name)
+    return all_articles
+
+
+def backfill_source(
+    source: dict,
+    start_date: datetime,
+    pg_url: str,
+    api_key: str,
+    feishu=None,
+    owner_open_id: str = "",
+) -> dict:
+    """
+    Backfill articles for a single source from start_date to now.
+    Returns summary {discovered, ingested, skipped, errors}.
+    """
+    _init_db(pg_url)
+
+    stype = source.get("source_type", "wechat")
+    if stype == "wechat":
+        articles = _discover_wechat_paginated(source, start_date)
+    elif stype == "rss":
+        articles = _discover_rss_articles(source)
+    else:
+        articles = _discover_web_articles(source)
+
+    ingested = skipped = errors = 0
+    for art in articles:
+        url = art.get("url", "")
+        if not url:
+            continue
+        try:
+            if stype == "wechat":
+                body, title = _fetch_wechat_article(url)
+            else:
+                body, title = _fetch_web_article(url)
+            art["body"] = body
+            art["title"] = art.get("title") or title
+
+            ai_result = _score_article(art["title"], body, api_key) if api_key else {
+                "relevance": None, "region_bucket": source.get("region_bucket"),
+                "region_province": None, "category": source.get("category_hint"), "summary": None,
+            }
+
+            _doc_id, is_new = _ingest_article(source, art, ai_result, pg_url, api_key)
+            if is_new:
+                ingested += 1
+            else:
+                skipped += 1
+
+        except Exception as exc:
+            logger.warning("Backfill error for %s: %s", url[:80], exc)
+            errors += 1
+
+    summary = {"discovered": len(articles), "ingested": ingested, "skipped": skipped, "errors": errors}
+    logger.info("Backfill done for %s: %s", source["name"], summary)
+
+    if feishu and owner_open_id and ingested > 0:
+        try:
+            feishu.send_text(
+                owner_open_id,
+                f"✅ 回填完成「{source['name']}」: 发现 {len(articles)} 篇，新增 {ingested} 篇入库，跳过 {skipped} 篇（已存在），错误 {errors} 篇。",
+            )
+        except Exception:
+            pass
+
+    return summary
+
+
 def _discover_wechat_articles(source: dict) -> list[dict]:
     """
     Discover recent articles from a WeChat public account via Sogou search.
