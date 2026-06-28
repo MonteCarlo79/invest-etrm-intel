@@ -63,14 +63,19 @@ def get_conn():
 
 
 def init_knowledge_tables():
-    """Create all knowledge pool staging tables if they do not exist."""
+    """Create all knowledge pool staging tables if they do not exist.
+
+    No-ops silently if the DDL file is absent (e.g. in Docker images that do not
+    copy the db/ directory) — the tables are assumed to already exist in RDS.
+    """
     import pathlib
     ddl_path = (
         pathlib.Path(__file__).resolve().parents[2]
         / "db" / "ddl" / "staging" / "spot_report_knowledge.sql"
     )
     if not ddl_path.exists():
-        raise FileNotFoundError(f"DDL file not found: {ddl_path}")
+        _log.debug("DDL file not found at %s — assuming tables already exist", ddl_path)
+        return
     sql = ddl_path.read_text(encoding="utf-8")
     with get_conn() as conn:
         with conn.cursor() as cur:

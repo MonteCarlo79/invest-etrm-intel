@@ -25,8 +25,6 @@ import io
 import re
 from typing import Optional
 
-import pdfplumber
-
 from .db import get_conn
 
 
@@ -88,6 +86,7 @@ def _describe_image(
 
 def _extract_pages_pdf(file_bytes: bytes) -> list[tuple[int, str]]:
     """Return [(page_no, text), ...] from a PDF."""
+    import pdfplumber
     pages = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
