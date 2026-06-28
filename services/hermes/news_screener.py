@@ -614,11 +614,13 @@ def _build_feishu_card(date_str: str, results: list[dict]) -> dict:
         cat = r.get("category", "")
         region = r.get("region_bucket", "")
         summary = r.get("summary", "")
+        relevance = r.get("relevance")
+        score_str = f"★{relevance}" if relevance is not None else ""
         link = f"[{title}]({url})" if url else title
-        meta = " · ".join(filter(None, [src, cat, region]))
+        meta = " · ".join(filter(None, [src, score_str, cat, region]))
         lines = [f"• {link}", f"  {meta}"]
         if summary:
-            lines.append(f"  {summary[:80]}")
+            lines.append(f"  _{summary[:100]}_")
         return "\n".join(lines)
 
     sections = []
@@ -641,8 +643,11 @@ def _build_feishu_card(date_str: str, results: list[dict]) -> dict:
         sections.append(body)
 
     if tier_low:
-        count = len(tier_low)
-        sections.append(f"📋 **其他更新** (relevance < 6)\n{count} 篇文章已录入知识库")
+        body = f"📋 **其他更新** (relevance < 6) — {len(tier_low)} 篇\n\n"
+        body += "\n\n".join(_article_line(r) for r in tier_low[:10])
+        if len(tier_low) > 10:
+            body += f"\n\n…及另 {len(tier_low) - 10} 篇已录入知识库"
+        sections.append(body)
 
     elements = []
     for s in sections:
