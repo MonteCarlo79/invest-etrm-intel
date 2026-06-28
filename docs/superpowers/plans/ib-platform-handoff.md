@@ -190,19 +190,92 @@ Python: `/c/Users/dipeng.chen/AppData/Local/Programs/Python/Python313/python.exe
 - RDS shared with bess-platform, env var `PGURL`
 - Config: `config/.env` in ib-platform root
 
+### TWS Machine (Yuzhu Chen account)
+TWS is installed on a separate Windows account. When running on that machine:
+- Python: `C:\Users\Yuzhu Chen\AppData\Local\Python\bin\python.exe`
+- No Visual Studio — install packages with `--only-binary=:all:`
+- Run commands: `& "C:\Users\Yuzhu Chen\AppData\Local\Python\bin\python.exe" -m services.broker_service.main`
+
 ---
 
 ## Git State
 
 Branch: `master` (all work directly on master — no feature branches)
 Remote: `git@github.com:MonteCarlo79/ib-platform.git`
-Latest commit: `740fe20` — pushed 2026-06-19.
+Latest commit: `b55af51` — pushed 2026-06-27.
 
 All commits pushed.
 
 ---
 
+### Phase 7 — Strategy Signals + Backtest Engine (complete, 437 tests passing)
+Latest commit: `cc78f9b` — pushed 2026-06-25.
+- `libs/strategies/base.py` — `Signal` dataclass + `BaseStrategy` ABC
+- `libs/strategies/vix_regime.py` — VixRegimeStrategy
+- `libs/backtest/engine.py` — `run_backtest(strategy, bars, vix_df, initial_capital)` → `BacktestResult`
+- `services/broker_service/signal_writer.py` — `write_signal`, `mark_executed`
+- `algo_scheduler.py` — full strategy execution loop wired into FastAPI lifespan
+- `apps/portfolio/tabs/strategies.py` — 3-tab Strategies panel (Config, Signals, Backtest)
+- DB: `db/migrations/004_signals.sql` — `trading.signals` + `trading.strategy_config`
+
+### Phase 8 — Options Execution, Paper Shadow Mode, Reporting (complete, 480 tests passing)
+Latest commit: `b55af51` — pushed 2026-06-27.
+Design spec: `docs/superpowers/specs/2026-06-25-ib-phase8-design.md`
+
+**Options strategy layer:**
+- `libs/pricing/black_scholes.py` — copied from bess-platform (bs_price, b76_price, bs_greeks, etc.)
+- `libs/strategies/options_base.py` — `OptionsStrategy(BaseStrategy)` ABC + `_select_strike` / `_nearest_expiry` helpers
+- `libs/strategies/vix_options.py` — VixOptionsStrategy (contango→puts, backwardation→calls)
+- `libs/strategies/spx_overlay.py` — SpxOverlayStrategy (covered call / protective put)
+- `libs/strategies/short_strangle.py` — ShortStrangleStrategy (returns list of 2 signals)
+- `libs/strategies/base.py` — `Signal` extended with `expiry/strike/right Optional[str/float]`
+- `services/broker/base.py` — `OrderRequest` extended with `expiry/strike/right`
+- `STRATEGY_REGISTRY` in algo_scheduler updated with all 4 strategies
+
+**Paper shadow mode:**
+- `services/broker/paper_broker.py` — `_persist_fill` writes to `trading.paper_fills` if PGURL set
+- `services/broker_service/algo_scheduler.py` — `_run_all_strategies` now selects `mode` column; paper→paper broker; live→live broker; shadow→both
+- `_check_paper_promotions()` job: 09:00 ET daily; computes paper Sharpe+MaxDD; auto-promotes to shadow
+- `_build_order_request(signal, strategy_id)` helper
+- `db/migrations/005_options_signals.sql` — expiry/strike/right on signals; mode on strategy_config; seed 3 paper-mode options strategies
+- `db/migrations/006_paper_fills.sql` — `trading.paper_fills` table
+
+**Performance reporting:**
+- `services/reporting/feishu_client.py` — copied from bess-platform/services/hermes/
+- `services/reporting/daily_report.py` — `send_daily_report(conn)` → Feishu text card (16:30 ET Mon-Fri)
+- `services/reporting/weekly_report.py` — `send_weekly_report(conn)` → Feishu table card (17:00 ET Friday)
+- Both skip silently if `FEISHU_APP_ID/FEISHU_APP_SECRET/FEISHU_REPORT_OPEN_ID` not set
+
+**Order router:**
+- `services/broker_service/order_router.py` — delta_notional_cap check (qty × strike × 100 × 0.5 > cap → reject)
+
+**Portfolio app — Strategies tab now has 4 sub-tabs:**
+- Strategy Config (mode badge 🟡/🟠/🟢 + mode selector + Promote to Live button)
+- Recent Signals
+- Backtest
+- Paper Performance (equity curve, Sharpe/MaxDD/days metrics, threshold status)
+
+**`apps/shared/db.py` additions:**
+- `get_paper_fills(conn, strategy_id, limit)` — from `trading.paper_fills`
+- `upsert_strategy_config` — extended with `mode` param
+- `get_strategy_configs` — now includes `mode` column
+
+**New env vars (all optional):**
+```
+FEISHU_APP_ID          Feishu app ID
+FEISHU_APP_SECRET      Feishu app secret
+FEISHU_REPORT_OPEN_ID  Feishu recipient open_id
+```
+
+**DB migrations to apply:**
+```bash
+psql $PGURL -f db/migrations/005_options_signals.sql
+psql $PGURL -f db/migrations/006_paper_fills.sql
+```
+
+---
+
 ## What To Build Next
 
-### Phase 7 — (not yet designed)
+### Phase 9 — (not yet designed)
 No design spec exists yet. Start with `superpowers:brainstorming`.

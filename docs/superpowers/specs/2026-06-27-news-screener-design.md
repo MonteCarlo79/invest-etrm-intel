@@ -16,7 +16,7 @@ Daily automated screening of energy-sector news from WeChat public accounts and 
 | 飔合科技 | WeChat | 全国 |
 | 兰木达 | WeChat | 全国 |
 | 中关村储能产业技术联盟 (CNESA) | WeChat | 全国 |
-| 南方能源观察 | WeChat | 华南 |
+| 南方能源观察 | WeChat | 全国 |
 | 中国能源观察 | WeChat | 全国 |
 | 储能与电力市场 | WeChat | 全国 |
 | 彭博新能源财经 | WeChat | 全国 |
