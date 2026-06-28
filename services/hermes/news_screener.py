@@ -218,12 +218,34 @@ def _extract_biz_id_from_article(article_url: str) -> Optional[str]:
     return None
 
 
+class SogouCaptchaError(Exception):
+    """Raised when Sogou returns a verification/CAPTCHA page instead of an article."""
+
+
 def _fetch_wechat_article(url: str) -> tuple[str, str]:
-    """Fetch a WeChat article URL. Returns (body_text, title)."""
+    """
+    Fetch a WeChat article URL. Returns (body_text, title).
+    Raises SogouCaptchaError if Sogou serves a verification page instead of the article.
+    """
     from bs4 import BeautifulSoup
 
-    resp = requests.get(url, headers=_WECHAT_HEADERS, timeout=30)
+    # Use a desktop UA for mp.weixin.qq.com, but keep mobile UA for Sogou redirects
+    headers = dict(_WECHAT_HEADERS)
+    resp = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
     resp.raise_for_status()
+
+    # Detect Sogou CAPTCHA / anti-spider page.
+    # If the redirect chain ended back at weixin.sogou.com or antispider, it's not an article.
+    final_url = resp.url
+    if "weixin.sogou.com" in final_url or "antispider" in final_url:
+        raise SogouCaptchaError(f"Sogou served verification page for {url} (final URL: {final_url})")
+
+    # Also detect CAPTCHA by content keywords even if URL looks ok
+    raw_text = resp.text[:2000]
+    if ("请输入验证码" in raw_text or "sogou_verify" in raw_text
+            or ("sogou" in raw_text.lower() and "验证" in raw_text)):
+        raise SogouCaptchaError(f"Sogou CAPTCHA content detected for {url}")
+
     soup = BeautifulSoup(resp.content, "html.parser")
     title_tag = (
         soup.find("h1", id="activity-name")
@@ -374,19 +396,37 @@ def backfill_source(
         articles = _discover_web_articles(source)
 
     ingested = skipped = errors = 0
+    captcha_hits = 0
     for art in articles:
+        import time as _time
         url = art.get("url", "")
         if not url:
             continue
         try:
+            body = ""
+            title = art.get("title", "")
             if stype == "wechat":
-                body, title = _fetch_wechat_article(url)
+                try:
+                    body, fetched_title = _fetch_wechat_article(url)
+                    title = title or fetched_title
+                    captcha_hits = 0  # reset on success
+                except SogouCaptchaError:
+                    captcha_hits += 1
+                    logger.warning(
+                        "Sogou CAPTCHA on article %d/%d for %s — scoring from title only",
+                        articles.index(art) + 1, len(articles), source["name"],
+                    )
+                    # Back off longer after each consecutive CAPTCHA hit
+                    _time.sleep(min(5 * captcha_hits, 30))
+                    body = ""  # score from title only
             else:
-                body, title = _fetch_web_article(url)
-            art["body"] = body
-            art["title"] = art.get("title") or title
+                body, fetched_title = _fetch_web_article(url)
+                title = title or fetched_title
 
-            ai_result = _score_article(art["title"], body, api_key) if api_key else {
+            art["body"] = body
+            art["title"] = title
+
+            ai_result = _score_article(title, body, api_key) if api_key else {
                 "relevance": None, "region_bucket": source.get("region_bucket"),
                 "region_province": None, "category": source.get("category_hint"), "summary": None,
             }
@@ -396,6 +436,9 @@ def backfill_source(
                 ingested += 1
             else:
                 skipped += 1
+
+            # Polite delay between article fetches to avoid Sogou rate limiting
+            _time.sleep(2)
 
         except Exception as exc:
             logger.warning("Backfill error for %s: %s", url[:80], exc)
@@ -894,9 +937,20 @@ def screen_news_sources(
                     if not url:
                         continue
                     try:
-                        body, title = _fetch_wechat_article(url) if stype == "wechat" else _fetch_web_article(url)
+                        title = art.get("title", "")
+                        body = ""
+                        if stype == "wechat":
+                            try:
+                                body, fetched_title = _fetch_wechat_article(url)
+                                title = title or fetched_title
+                            except SogouCaptchaError:
+                                logger.warning("Sogou CAPTCHA for %s — scoring from title only", url[:80])
+                                body = ""
+                        else:
+                            body, fetched_title = _fetch_web_article(url)
+                            title = title or fetched_title
                         art["body"] = body
-                        art["title"] = art.get("title") or title
+                        art["title"] = title
 
                         # 3. AI scoring
                         ai_result = _score_article(art["title"], body, api_key) if api_key else {
