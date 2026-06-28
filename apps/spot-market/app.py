@@ -4252,7 +4252,8 @@ with tab_news:
             import requests as _ns_req
             _ns_resp = _ns_req.post(
                 f"{_ns_hermes_url}/hermes/news-screener/run",
-                timeout=10,
+                timeout=15,
+                verify=False,  # internal ALB call; cert not verifiable from container
             )
             if _ns_resp.ok:
                 st.success("✅ Screener started — Feishu digest will arrive at completion.")
