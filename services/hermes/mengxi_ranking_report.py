@@ -118,6 +118,18 @@ def _read_bess_list_from_onedrive(onedrive_client) -> list[dict]:
     return plants
 
 
+def _read_station_master(pg_url: str) -> list[dict]:
+    """Load plant metadata from marketdata.station_master (owner + MW pre-screened by Claude)."""
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=10000")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT plant_name, mw, owner FROM marketdata.station_master ORDER BY plant_name")
+            return [{"plant_name": r[0], "mw": float(r[1]) if r[1] else 0.0, "owner": r[2] or "未知"}
+                    for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def _query(pg_url: str, start: date, end_excl: date, plant_names: list[str]) -> pd.DataFrame:
     # 10-minute timeout — YTD queries on a 7 GB table need headroom
     conn = psycopg2.connect(pg_url, options="-c statement_timeout=600000")
@@ -347,25 +359,36 @@ def send_daily_ranking(
     """Query rankings for latest-data-date / current month / YTD, generate PDF, send to Feishu."""
     from datetime import datetime, timezone, timedelta
 
-    # ── Load plant list from OneDrive ──────────────────────────────────────────
-    if onedrive_client is None:
-        logger.error("Mengxi ranking report: no OneDrive client — cannot load plant list")
-        if feishu and owner_open_id:
-            feishu.send_text(owner_open_id, "⚠️ 蒙西BESS日报失败：OneDrive未配置，无法加载电站列表。")
-        return
-
+    # ── Load plant metadata: station_master (DB) primary, 电站.xlsx fallback ──
+    # station_master has Claude-screened owner + MW for all known plants.
+    # 电站.xlsx provides any additional plant names not yet in station_master.
     try:
-        plant_list = _read_bess_list_from_onedrive(onedrive_client)
+        sm_list = _read_station_master(pg_url)
+        sm_by_name = {p["plant_name"]: p for p in sm_list}
+        logger.info("Loaded %d plants from station_master", len(sm_list))
     except Exception as exc:
-        logger.error("Mengxi ranking report: failed to load 电站.xlsx: %s", exc)
-        if feishu and owner_open_id:
-            feishu.send_text(owner_open_id, f"⚠️ 蒙西BESS日报失败（无法读取电站.xlsx）：{exc}")
-        return
+        logger.warning("Could not load station_master: %s — falling back to Excel only", exc)
+        sm_by_name = {}
 
+    excel_list: list[dict] = []
+    if onedrive_client:
+        try:
+            excel_list = _read_bess_list_from_onedrive(onedrive_client)
+        except Exception as exc:
+            logger.warning("Could not read 电站.xlsx: %s", exc)
+
+    # Merge: station_master owner/mw takes priority; Excel adds any extra plant names
+    plant_map: dict[str, dict] = {}
+    for p in excel_list:
+        plant_map[p["plant_name"]] = p  # Excel baseline
+    for name, p in sm_by_name.items():
+        plant_map[name] = p  # station_master overwrites with correct owner/mw
+
+    plant_list = list(plant_map.values())
     if not plant_list:
-        logger.error("Mengxi ranking report: 电站.xlsx is empty")
+        logger.error("Mengxi ranking report: no plants found in station_master or 电站.xlsx")
         if feishu and owner_open_id:
-            feishu.send_text(owner_open_id, "⚠️ 蒙西BESS日报失败：电站.xlsx 为空。")
+            feishu.send_text(owner_open_id, "⚠️ 蒙西BESS日报失败：无法加载电站列表。")
         return
 
     plant_names = [p["plant_name"] for p in plant_list]
