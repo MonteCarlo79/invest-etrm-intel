@@ -510,6 +510,14 @@ def run_pipeline(
             _send_hermes_alert(_alert)
             sys.exit(2)
 
+        except Exception as _exc:
+            # Market not found in dropdown (or other unexpected error) — skip and continue
+            _err_msg = str(_exc)
+            logger.warning(f"  {market}: skipped — {_err_msg}")
+            if _use_ops_log and op_id is not None:
+                _ops_log.finish_op(op_id, False, _err_msg)
+            failed_chunks = list(chunks)
+
         market_ok = len(failed_chunks) == 0
         msg = "" if market_ok else f"Failed chunks: {failed_chunks}"
         if failed_chunks:
