@@ -16,7 +16,7 @@ SERVICE = "bess-platform-spot-markets-svc"
 FAMILY = "bess-platform-spot-markets"
 ECR_REPO = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-spot-markets"
 IMAGE_TAG = os.environ.get("IMAGE_TAG", "v34")
-HERMES_URL = os.environ.get("HERMES_URL", "https://pjh-etrm.ai")
+HERMES_URL = os.environ.get("HERMES_URL", "https://bess-platform-alb-1158505371.ap-southeast-1.elb.amazonaws.com")
 
 
 def aws(*args):
