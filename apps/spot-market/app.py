@@ -4450,7 +4450,7 @@ def _render_news_sources_tab():
                             st.warning(f"Backfill request failed: {_ns_bf_resp.status_code}")
                     except Exception as _ns_bf_exc:
                         st.warning(f"Could not trigger backfill: {_ns_bf_exc}")
-                    st.rerun(scope="fragment")
+                    st.rerun()  # full-page rerun to refresh source list after add
                 except Exception as _ns_exc:
                     st.error(f"Failed to add source: {_ns_exc}")
 
