@@ -36,7 +36,7 @@ _WECHAT_HEADERS = {
     "Referer": "https://mp.weixin.qq.com/",
 }
 
-_48H_AGO = lambda: datetime.now(timezone.utc) - timedelta(hours=48)
+_48H_AGO = lambda: datetime.now(timezone.utc) - timedelta(hours=72)  # 72h window to avoid missing articles near boundary
 
 _AI_PROMPT = """\
 You are an energy-sector news analyst focused on China's electricity market and battery energy storage (BESS).
@@ -244,68 +244,171 @@ def _fetch_wechat_article(url: str) -> tuple[str, str]:
 
 def _discover_wechat_articles(source: dict) -> list[dict]:
     """
-    Discover recent articles from a WeChat public account profile page.
+    Discover recent articles from a WeChat public account via Sogou search.
+
+    WeChat profile pages require a logged-in session and block unauthenticated
+    scraping. Sogou indexes all public WeChat accounts and exposes article
+    listings without authentication.
+
     Returns list of {url, title, published_at}.
     """
     from bs4 import BeautifulSoup
+    from urllib.parse import quote
 
+    name = source.get("name", "")
     biz_id = source.get("biz_id")
-    if not biz_id:
-        logger.warning("Source %s has no biz_id — skipping WeChat discovery", source["name"])
+
+    if not name and not biz_id:
+        logger.warning("Source has neither name nor biz_id — skipping WeChat discovery")
         return []
 
-    profile_url = (
-        source.get("url")
-        or f"https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz={biz_id}&scene=124"
+    # Sogou article search: type=2 searches articles by account name, returns recent articles.
+    # type=1 (account search) returns account cards, not articles — use type=2.
+    sogou_url = (
+        f"https://weixin.sogou.com/weixin"
+        f"?type=2&s_from=input&query={quote(name)}&ie=utf8&_sug_=n&_sug_type_="
     )
-    try:
-        resp = requests.get(profile_url, headers=_WECHAT_HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception as exc:
-        logger.warning("WeChat profile fetch failed for %s: %s", source["name"], exc)
-        return []
+    sogou_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": "https://weixin.sogou.com/",
+    }
 
-    soup = BeautifulSoup(resp.content, "html.parser")
-
-    # WeChat profile pages render articles in a JS-embedded JSON blob
-    # Try to extract from __INITIAL_STATE__ or msgList JSON in page source
     articles: list[dict] = []
-    cutoff = _48H_AGO()
 
-    # Pattern 1: msgList in JSON blob
-    m = re.search(r'"msgList"\s*:\s*(\{.*?"list"\s*:\s*\[.*?\]\s*\})', resp.text, re.DOTALL)
-    if m:
-        try:
-            msg_list = json.loads(m.group(1))
-            items = msg_list.get("list", [])
-            for item in items:
-                app_msg = item.get("app_msg_ext_info", {})
-                url = app_msg.get("content_url") or item.get("content_url", "")
-                title = app_msg.get("title", "") or item.get("title", "")
-                create_time = item.get("comm_msg_info", {}).get("datetime", 0)
-                if url:
-                    pub_dt = datetime.fromtimestamp(create_time, tz=timezone.utc) if create_time else None
-                    if pub_dt and pub_dt < cutoff:
-                        continue
-                    articles.append({"url": url, "title": title, "published_at": pub_dt})
-        except (json.JSONDecodeError, KeyError) as exc:
-            logger.debug("msgList parse failed for %s: %s", source["name"], exc)
+    try:
+        resp = requests.get(sogou_url, headers=sogou_headers, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, "html.parser")
 
-    # Pattern 2: <li> items in #msg_list
-    if not articles:
-        for li in soup.select("#msg_list li.album__item, #js_pc_qr_code_img, .weui_media_box"):
-            a = li.find("a", href=True)
+        # Sogou structure:
+        #   <ul class="news-list">
+        #     <li>
+        #       <div class="txt-box">
+        #         <h3><a href="/link?url=...">TITLE</a></h3>
+        #         <span class="s2"><script>document.write(timeConvert('UNIX_TS'))</script></span>
+        #       </div>
+        #     </li>
+        for li in soup.select("ul.news-list li"):
+            h3 = li.find("h3")
+            if not h3:
+                continue
+            a = h3.find("a", href=True)
             if not a:
                 continue
-            href = a["href"]
-            if "mp.weixin.qq.com/s" not in href and "__biz" not in href:
-                continue
-            title_tag = li.find("h4") or li.find("h3") or a
-            title = title_tag.get_text(strip=True) if title_tag else ""
-            articles.append({"url": href, "title": title, "published_at": None})
 
-    logger.info("Discovered %d articles from WeChat source %s", len(articles), source["name"])
-    return articles[:20]  # cap to avoid hammering on first run
+            # Build absolute Sogou redirect URL (will redirect to mp.weixin.qq.com)
+            href = a["href"]
+            if href.startswith("/"):
+                href = "https://weixin.sogou.com" + href
+
+            title = a.get_text(strip=True)
+            # Strip Sogou <em> highlighting artefacts from title
+            title = re.sub(r"<!--.*?-->", "", title).strip()
+
+            # Extract Unix timestamp from: <script>document.write(timeConvert('1234567890'))</script>
+            pub_dt = None
+            s2 = li.find("span", class_="s2")
+            if s2:
+                ts_m = re.search(r"timeConvert\('(\d+)'", str(s2))
+                if ts_m:
+                    try:
+                        pub_dt = datetime.fromtimestamp(int(ts_m.group(1)), tz=timezone.utc)
+                    except Exception:
+                        pass
+                if not pub_dt:
+                    pub_dt = _parse_sogou_date(s2.get_text(strip=True))
+
+            articles.append({"url": href, "title": title, "published_at": pub_dt})
+
+    except Exception as exc:
+        logger.warning("Sogou discovery failed for %s: %s", name, exc)
+
+    # If Sogou returned nothing (rate-limited or blocked), fall back to direct Sogou
+    # article search with the account name as query term
+    if not articles and name:
+        articles = _discover_wechat_via_sogou_article_search(name, sogou_headers)
+
+    logger.info("Discovered %d articles from WeChat source %s (via Sogou)", len(articles), name)
+    return articles[:20]
+
+
+def _parse_sogou_date(text: str) -> Optional[datetime]:
+    """Parse Sogou relative/absolute date strings to UTC datetime."""
+    now = datetime.now(timezone.utc)
+    text = text.strip()
+    try:
+        # "N分钟前"
+        m = re.match(r"(\d+)分钟前", text)
+        if m:
+            return now - timedelta(minutes=int(m.group(1)))
+        # "N小时前"
+        m = re.match(r"(\d+)小时前", text)
+        if m:
+            return now - timedelta(hours=int(m.group(1)))
+        # "N天前"
+        m = re.match(r"(\d+)天前", text)
+        if m:
+            return now - timedelta(days=int(m.group(1)))
+        # "昨天"
+        if "昨天" in text:
+            return now - timedelta(days=1)
+        # "MM月DD日" (same year)
+        m = re.match(r"(\d+)月(\d+)日", text)
+        if m:
+            month, day = int(m.group(1)), int(m.group(2))
+            year = now.year
+            return datetime(year, month, day, 12, 0, tzinfo=timezone.utc)
+        # "YYYY-MM-DD" or "YYYY年MM月DD日"
+        m = re.match(r"(\d{4})[-年](\d{1,2})[-月](\d{1,2})", text)
+        if m:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), 12, 0, tzinfo=timezone.utc)
+    except Exception:
+        pass
+    return None
+
+
+def _discover_wechat_via_sogou_article_search(name: str, headers: dict) -> list[dict]:
+    """
+    Fallback: search Sogou for articles from the named account using
+    the article search endpoint (type=2).
+    """
+    from bs4 import BeautifulSoup
+    from urllib.parse import quote
+
+    url = (
+        f"https://weixin.sogou.com/weixin"
+        f"?type=2&s_from=input&query={quote(name)}&ie=utf8&_sug_=n&_sug_type_="
+    )
+    articles = []
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, "html.parser")
+        for li in soup.select("ul.news-list li, ul.lst_list li"):
+            # Check if this article is from the matching account
+            acct_tag = li.find("a", class_="account") or li.find("p", class_="account")
+            if acct_tag and name not in acct_tag.get_text():
+                continue
+            a = li.find("h3", recursive=True)
+            link = a.find("a") if a else None
+            if not link:
+                continue
+            href = link.get("href", "")
+            if "mp.weixin.qq.com" not in href:
+                continue
+            title = link.get_text(strip=True)
+            date_tag = li.find("span", class_="s2") or li.find("label")
+            pub_dt = _parse_sogou_date(date_tag.get_text(strip=True)) if date_tag else None
+            articles.append({"url": href, "title": title, "published_at": pub_dt})
+    except Exception as exc:
+        logger.debug("Sogou article search fallback failed for %s: %s", name, exc)
+    return articles[:10]
 
 
 def _discover_web_articles(source: dict) -> list[dict]:
