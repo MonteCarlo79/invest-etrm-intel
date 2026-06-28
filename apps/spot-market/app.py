@@ -4139,9 +4139,10 @@ def _db_coverage_detail(year: int = 2026):
 
 
 # ── News Sources ──────────────────────────────────────────────────────────────
-with tab_news:
-    import psycopg2 as _ns_pg2
+import psycopg2 as _ns_pg2  # top-level so it's available inside the fragment
 
+@st.fragment
+def _render_news_sources_tab():
     # Inline CRUD helpers — avoids importing services.hermes (not in this image)
     def _ns_init_db(pg_url: str) -> None:
         """Create hermes schema + news_sources table if they don't exist."""
@@ -4335,17 +4336,17 @@ with tab_news:
                 )
                 if _ns_new_active != _ns_active_val:
                     _ns_set_active(_ns_pg_url, _ns_id, _ns_new_active)
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 if _ns_sc6.button("✏️", key=f"ns_edit_btn_{_ns_id}", help="Edit"):
                     st.session_state["ns_editing"] = (
                         None if st.session_state["ns_editing"] == _ns_id else _ns_id
                     )
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 if _ns_sc7.button("🗑", key=f"ns_del_{_ns_id}"):
                     _ns_delete(_ns_pg_url, _ns_id)
                     if st.session_state.get("ns_editing") == _ns_id:
                         st.session_state["ns_editing"] = None
-                    st.rerun()
+                    st.rerun(scope="fragment")
 
                 # Inline edit form — shown only for the row being edited
                 if st.session_state.get("ns_editing") == _ns_id:
@@ -4378,7 +4379,7 @@ with tab_news:
                             finally:
                                 _ns_econn.close()
                             st.session_state["ns_editing"] = None
-                            st.rerun()
+                            st.rerun(scope="fragment")
         else:
             st.info("No news sources configured yet. Add one below.")
     else:
@@ -4449,9 +4450,12 @@ with tab_news:
                             st.warning(f"Backfill request failed: {_ns_bf_resp.status_code}")
                     except Exception as _ns_bf_exc:
                         st.warning(f"Could not trigger backfill: {_ns_bf_exc}")
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 except Exception as _ns_exc:
                     st.error(f"Failed to add source: {_ns_exc}")
+
+with tab_news:
+    _render_news_sources_tab()
 
 # ── Library ───────────────────────────────────────────────────────────────────
 with tab_library:
