@@ -67,7 +67,6 @@ services/bess_mcp/
 services/data_ingestion/
 services/decision_models/
 services/document_intake/
-services/knowledge_pool/
 services/lingfeng/
 services/loader/
 services/market_fundamentals/
