@@ -4288,9 +4288,14 @@ with tab_news:
 
         if _ns_sources:
             st.markdown("**Configured sources**")
+            _NS_REGIONS = ["全国", "华北", "华东", "华南", "西北", "西南", "东北"]
+            _NS_CATS = ["other", "policy", "market_rules", "market_analytics", "technology", "industry_news"]
+            if "ns_editing" not in st.session_state:
+                st.session_state["ns_editing"] = None
             for _ns_src in _ns_sources:
-                _ns_sc1, _ns_sc2, _ns_sc3, _ns_sc4, _ns_sc5, _ns_sc6 = st.columns(
-                    [3, 1.5, 1.5, 2, 1, 0.6]
+                _ns_id = _ns_src["id"]
+                _ns_sc1, _ns_sc2, _ns_sc3, _ns_sc4, _ns_sc5, _ns_sc6, _ns_sc7 = st.columns(
+                    [3, 1.5, 1.5, 2, 1, 0.6, 0.6]
                 )
                 _ns_sc1.write(_ns_src["name"])
                 _ns_sc2.write(_ns_src.get("source_type", "wechat"))
@@ -4298,17 +4303,55 @@ with tab_news:
                 _ns_sc4.write(_ns_src.get("category_hint") or "other")
                 _ns_active_val = bool(_ns_src.get("active", True))
                 _ns_new_active = _ns_sc5.checkbox(
-                    "Active",
-                    value=_ns_active_val,
-                    key=f"ns_active_{_ns_src['id']}",
-                    label_visibility="collapsed",
+                    "Active", value=_ns_active_val,
+                    key=f"ns_active_{_ns_id}", label_visibility="collapsed",
                 )
                 if _ns_new_active != _ns_active_val:
-                    _ns_set_active(_ns_pg_url, _ns_src["id"], _ns_new_active)
+                    _ns_set_active(_ns_pg_url, _ns_id, _ns_new_active)
                     st.rerun()
-                if _ns_sc6.button("🗑", key=f"ns_del_{_ns_src['id']}"):
-                    _ns_delete(_ns_pg_url, _ns_src["id"])
+                if _ns_sc6.button("✏️", key=f"ns_edit_btn_{_ns_id}", help="Edit"):
+                    st.session_state["ns_editing"] = (
+                        None if st.session_state["ns_editing"] == _ns_id else _ns_id
+                    )
                     st.rerun()
+                if _ns_sc7.button("🗑", key=f"ns_del_{_ns_id}"):
+                    _ns_delete(_ns_pg_url, _ns_id)
+                    if st.session_state.get("ns_editing") == _ns_id:
+                        st.session_state["ns_editing"] = None
+                    st.rerun()
+
+                # Inline edit form — shown only for the row being edited
+                if st.session_state.get("ns_editing") == _ns_id:
+                    with st.container():
+                        _ec1, _ec2, _ec3, _ec4 = st.columns([3, 2, 2, 1])
+                        _ns_e_name = _ec1.text_input(
+                            "Name", value=_ns_src["name"], key=f"ns_ename_{_ns_id}"
+                        )
+                        _ns_e_region = _ec2.selectbox(
+                            "Region", _NS_REGIONS,
+                            index=_NS_REGIONS.index(_ns_src.get("region_bucket") or "全国"),
+                            key=f"ns_eregion_{_ns_id}",
+                        )
+                        _ns_e_cat = _ec3.selectbox(
+                            "Category", _NS_CATS,
+                            index=_NS_CATS.index(_ns_src.get("category_hint") or "other"),
+                            key=f"ns_ecat_{_ns_id}",
+                        )
+                        _ec4.write("")  # vertical spacer
+                        _ec4.write("")
+                        if _ec4.button("Save", key=f"ns_esave_{_ns_id}", type="primary"):
+                            _ns_econn = _ns_pg2.connect(_ns_pg_url, options="-c statement_timeout=10000")
+                            try:
+                                with _ns_econn.cursor() as _ns_ecur:
+                                    _ns_ecur.execute(
+                                        "UPDATE hermes.news_sources SET name=%s, region_bucket=%s, category_hint=%s WHERE id=%s",
+                                        (_ns_e_name, _ns_e_region, _ns_e_cat, _ns_id),
+                                    )
+                                _ns_econn.commit()
+                            finally:
+                                _ns_econn.close()
+                            st.session_state["ns_editing"] = None
+                            st.rerun()
         else:
             st.info("No news sources configured yet. Add one below.")
     else:
