@@ -1,9 +1,126 @@
 # IB Trading Platform — Session Handoff
 
 > **For a new Claude session:** Read this document first, then proceed directly to the next task.
-> Primary working directory: `C:\Users\dipeng.chen\OneDrive\ETRM\ib-platform`
-> GitHub remote: `git@github.com:MonteCarlo79/ib-platform.git` (SSH, key at `~/.ssh/id_ed25519`)
-> Design spec: `C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform\docs\superpowers\specs\2026-06-14-ib-trading-platform-design.md`
+> **Repo:** `git@github.com:MonteCarlo79/ib-platform.git`
+> **Primary working directory (Mac):** `~/projects/ib-platform` (or wherever you cloned it)
+> **Primary working directory (Windows):** `C:\Users\dipeng.chen\OneDrive\ETRM\ib-platform`
+> **Design spec:** `docs/superpowers/specs/2026-06-14-ib-trading-platform-design.md` (inside repo)
+> **Latest commit:** `f1aa03f` — pushed 2026-06-29
+> **Tests:** 502 passing
+
+---
+
+## Mac Setup (first time only)
+
+```bash
+# 1. Clone
+git clone git@github.com:MonteCarlo79/ib-platform.git
+cd ib-platform
+
+# 2. Python venv
+python3.13 -m venv .venv          # brew install python@3.13 if needed
+source .venv/bin/activate
+pip install -r requirements.txt   # no --only-binary needed on Mac
+
+# 3. Env file
+cp config/.env.example config/.env
+# Fill in real values (see "Environment Variables" section below)
+
+# 4. Apply DB migrations (once, against shared RDS)
+export $(grep -v '^#' config/.env | xargs)
+psql $PGURL -f db/migrations/001_news_items.sql
+psql $PGURL -f db/migrations/002_kb_tables.sql
+psql $PGURL -f db/migrations/003_kb_insights_tags.sql
+psql $PGURL -f db/migrations/004_signals.sql
+psql $PGURL -f db/migrations/005_options_signals.sql
+psql $PGURL -f db/migrations/006_paper_fills.sql
+
+# 5. Verify
+python -m pytest tests/ -q        # expect 502 passed
+```
+
+---
+
+## Environment Variables (`config/.env`)
+
+```bash
+# Shared RDS (same instance as bess-platform)
+PGURL=postgresql://...
+
+# Claude (advisor + KB digest)
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Broker mode: paper | ib | alpaca
+BROKER_TYPE=paper          # use paper until TWS is wired
+
+# IB TWS or Gateway (only when BROKER_TYPE=ib)
+IB_HOST=127.0.0.1          # change to TWS machine IP if remote
+IB_PORT=4002               # 4002=Gateway paper, 4001=Gateway live, 7497=TWS paper
+IB_CLIENT_ID=1
+
+# Optional — leave blank to skip
+ALPACA_API_KEY=
+ALPACA_SECRET_KEY=
+ALPACA_BASE_URL=https://paper-api.alpaca.markets
+PAPER_INITIAL_CASH=100000.0
+POLYGON_API_KEY=
+FRED_API_KEY=
+
+# Feishu reporting (daily + weekly reports, auto-promote alerts)
+# Leave blank to skip — all reporting paths fail silently without these
+FEISHU_APP_ID=
+FEISHU_APP_SECRET=
+FEISHU_REPORT_OPEN_ID=
+```
+
+---
+
+## Running Services
+
+```bash
+source .venv/bin/activate
+export $(grep -v '^#' config/.env | xargs)
+
+python -m services.broker_service.main           # FastAPI broker REST API (port 8600)
+python -m services.market_data.ingest            # market data APScheduler
+python -m services.news.ingest                   # news APScheduler (every 15 min)
+python -m services.knowledge.ingest              # KB ingest + digest (Mon-Fri 06:00/06:30 ET)
+python -m services.broker_service.trade_monitor  # trade outcome learning (Mon-Fri 18:00 ET)
+streamlit run apps/portfolio/app.py              # 10-tab portfolio app (port 8501)
+streamlit run apps/markets/app.py                # markets app
+streamlit run apps/news/app.py                   # news app
+```
+
+The `broker_service` lifespan starts the APScheduler automatically. It runs:
+- `run_all_strategies` — Mon-Fri 09:35 ET
+- `paper_promotions` — Mon-Fri 09:00 ET (auto-promote paper→shadow)
+- `daily_report` — Mon-Fri 16:30 ET (Feishu)
+- `weekly_report` — Friday 17:00 ET (Feishu)
+
+---
+
+## TWS / IB Gateway Connection
+
+**Preferred on Mac: IB Gateway** (lighter than full TWS)
+
+1. Download IB Gateway from interactivebrokers.com → install on Mac
+2. Log in with paper account credentials
+3. Configure: Cog → Settings → API → Enable ActiveX and Socket Clients
+   - Socket port: `4002` (paper) or `4001` (live)
+   - Add `127.0.0.1` to trusted IPs
+   - Uncheck "Read-Only API"
+4. In `config/.env`: set `BROKER_TYPE=ib`, `IB_PORT=4002`, `IB_HOST=127.0.0.1`
+
+**Connecting to TWS on the Windows machine remotely:**
+1. In TWS on Windows: Edit → Global Configuration → API → Settings
+   - Enable Socket Clients, port 7497
+   - Trusted IPs: add the Mac's local IP (e.g. `192.168.1.x`)
+2. In `config/.env`: `IB_HOST=<windows-machine-ip>`, `IB_PORT=7497`, `BROKER_TYPE=ib`
+
+**TWS machine note (Yuzhu Chen's Windows account):**
+- Python: `C:\Users\Yuzhu Chen\AppData\Local\Python\bin\python.exe`
+- Use `--only-binary=:all:` for any pip installs on that machine
+- No Visual Studio / compiler available there
 
 ---
 
@@ -11,158 +128,96 @@
 
 ### Phase 1 — Foundation (complete)
 - `services/broker/base.py` — `BaseBroker` ABC, `Position`, `Order`, `OrderRequest`, `AccountSummary` dataclasses
-- `services/broker/ib_broker.py` — IBBroker (ib_insync, TWS port 7497)
+- `services/broker/ib_broker.py` — IBBroker (ib_insync)
 - `services/broker/alpaca_broker.py` — AlpacaBroker (REST)
-- `services/broker/paper_broker.py` — PaperBroker (simulated fills from bars_1h)
-- `services/broker/broker_factory.py` — `get_broker(type)` factory
-- `services/broker_service/main.py` — FastAPI app (8 REST endpoints)
-- `services/broker_service/order_router.py` — pre-trade risk checks (7 hard blocks)
-- `services/broker_service/algo_scheduler.py` — APScheduler strategy loop
+- `services/broker/paper_broker.py` — PaperBroker (in-memory fills, `_persist_fill` to `trading.paper_fills`)
+- `services/broker/broker_factory.py` — `get_broker()` reads `BROKER_TYPE` env var
+- `services/broker_service/main.py` — FastAPI (8 REST endpoints + APScheduler lifespan)
+- `services/broker_service/order_router.py` — 4 pre-trade risk checks (daily loss, position size, duplicate guard, delta notional cap)
+- `services/broker_service/algo_scheduler.py` — full strategy execution loop + paper/shadow/live mode + auto-promote + reporting jobs
 - `services/broker_service/data_writer.py` — syncs positions/fills/bars → RDS
-- `db/schema.sql` — full `trading.*` schema (accounts, positions, trades, orders, bars, risk, KB, signals, VIX, news, agent_memory)
+- `db/schema.sql` — full `trading.*` schema
 
-### Phase 2 — Analytics Libs (complete, 67 tests passing at phase end)
-All under `libs/` and tested in `tests/libs/`:
+### Phase 2 — Analytics Libs (complete)
 
 | Module | Key exports |
 |---|---|
 | `libs/pricing/kirk_margrabe.py` | `kirk_spread_call`, `margrabe_exchange` |
-| `libs/pricing/vol_surface.py` | `VolSurface(F, slices)` — `.get_vol(K, T)`, `.vol_grid(strikes, expiries)` |
-| `libs/pricing/pnl_explain.py` | `explain_pnl` → `PnlExplain` (Δ/Γ/Vega/Θ attribution) |
-| `libs/fixed_income/bonds.py` | `bond_price`, `ytm`, `macaulay_duration`, `modified_duration`, `dv01`, `convexity` |
-| `libs/fixed_income/yield_curve.py` | `NelsonSiegelCurve.fit(tenors, rates)` → `.rate(t)`, `.discount_factor(t)`; `bootstrap_curve` |
+| `libs/pricing/vol_surface.py` | `VolSurface` |
+| `libs/pricing/pnl_explain.py` | `explain_pnl` → `PnlExplain` |
+| `libs/pricing/black_scholes.py` | `bs_price`, `b76_price`, `bs_greeks`, `b76_greeks`, `implied_vol` |
+| `libs/fixed_income/bonds.py` | `bond_price`, `ytm`, `duration`, `dv01`, `convexity` |
+| `libs/fixed_income/yield_curve.py` | `NelsonSiegelCurve`, `bootstrap_curve` |
 | `libs/fixed_income/swaps.py` | `irs_npv`, `par_rate`, `swap_dv01` |
-| `libs/fixed_income/caps_floors.py` | `caplet_black`, `cap_black`, `floor_black` |
-| `libs/fx/forwards.py` | `fx_forward(spot, r_domestic, r_foreign, T)`, `forward_points(spot, r_domestic, r_foreign, T)`, `cross_rate` |
-| `libs/fx/vol_surface_fx.py` | `FXVolSmile`, `build_fx_smile`, `delta_to_strike` |
-| `libs/signals/vix.py` | `VixTermStructure`, `vix_regime`, `contango_pct`, `roll_yield_annualised`, `implied_vol_premium` |
+| `libs/fixed_income/caps_floors.py` | `cap_black`, `floor_black` |
+| `libs/fx/forwards.py` | `fx_forward`, `forward_points`, `cross_rate` |
+| `libs/signals/vix.py` | `VixTermStructure`, `vix_regime`, `contango_pct` |
 
-### Phase 6 — Advisor App (complete, 394 tests passing)
-Latest commit: `740fe20` — pushed 2026-06-19.
-
-**`expert_memory.py` additions (Channel 1):**
-- `tags TEXT[]` added to Haiku JSON schema; `_write_insight` extended to 6-column INSERT including `tags`
-- `inject_memory(conn, tags, top_k=5) -> list[dict]` — `WHERE active=TRUE AND tags && %s::text[]`
-- `extract_insights(conn, session_text, api_key) -> int` — session notes → Haiku → KB; prompt framed with "Extract durable trading insights from this session note."
-
-**`services/knowledge/daily_briefing.py`:**
-- `generate_daily_briefing(conn, api_key) -> dict[str, str]` — 5 sections (macro/rates/vol/equity/fx) via Haiku; writes to `trading.kb_briefings`; per-section error isolation + `conn.rollback()` on upsert failure
-
-**`apps/shared/db.py` additions:**
-- `get_kb_insights(conn, tags, limit=10)` — DataFrame from `kb_insights WHERE tags && %s::text[]`
-- `get_kb_briefing(conn, date)` — DataFrame from `kb_briefings WHERE briefing_date = %s`
-
-**Portfolio app (`apps/portfolio/`) — now 9 tabs:**
-- `advisor_pretrade.py` — symbol + strategy selectbox, `inject_memory` KB panel, recent news, Sonnet streaming chat (session state reset on symbol/strategy change)
-- `advisor_daily.py` — loads today's briefing or generates on demand; "Extract Insights from Session Notes" panel via `extract_insights`
-
-**`services/broker_service/trade_monitor.py`:**
-- APScheduler service; Mon–Fri 18:00 ET `CronTrigger`; `_get_recent_trade_groups` + `_is_already_processed` dedup; calls `extract_from_trade_outcome`; run: `python -m services.broker_service.trade_monitor`
-
-**DB:** `db/migrations/003_kb_insights_tags.sql` — `tags TEXT[] NOT NULL DEFAULT '{}'` + GIN index (run once: `psql $PGURL -f db/migrations/003_kb_insights_tags.sql`)
-
-### Phase 5 — Knowledge Base Pipeline (complete, 372 tests passing)
-Latest commit: `226624f` — pushed 2026-06-19.
-
-**Knowledge ingestion service (`services/knowledge/`):**
-- `config.py` — `FRED_SERIES` (11 series), `RSS_FEEDS` (3 feeds), `INSIGHT_TYPES`, `TRADE_OUTCOME_MIN_PNL=50.0`, `DIGEST_STALE_DAYS=30`
-- `base.py` — `BaseConnector` ABC, `upsert_doc(conn, doc) -> bool` (ON CONFLICT url, returns True if inserted/updated), `_parse_feedparser_date`
-- `connectors/fred.py` — FRED API (11 series); returns `[]` if `FRED_API_KEY` missing; content=`json.dumps({"observations": [...]})`
-- `connectors/fed_speeches.py` — Fed speeches + press_monetary RSS feeds; `doc_type="speech"/"minutes"`
-- `connectors/treasury.py` — Treasury yield curve CSV; synthetic URL `treasury://yield-curve/{date}` for dedup
-- `connectors/bis.py` — BIS quarterly-review + working-papers RSS; `doc_type="research_paper"`
-- `connectors/news_rss.py` — 3 RSS feeds from `config.RSS_FEEDS` (NOT imported from `services/news/sources.py`); `doc_type="news_article"`
-- `expert_memory.py` — `digest_kb_docs(conn, api_key, batch_size=20)` (Channel 2); `extract_from_trade_outcome(...)` (Channel 5); both use `claude-haiku-4-5-20251001`
-- `ingest.py` — `BlockingScheduler` + 2 `CronTrigger` jobs: `ingest_docs` Mon–Fri 06:00 ET, `digest_docs` Mon–Fri 06:30 ET; `build_scheduler()` for testability
-
-**DB:** `db/migrations/002_kb_tables.sql` — `trading.kb_docs`, `trading.kb_insights`, `trading.kb_briefings` (run once: `psql $PGURL -f db/migrations/002_kb_tables.sql`)
-
-**Phase 6 design notes (non-blocking):** FRED series use static URL → only digested once per series (consider date-versioned URLs or re-digest logic); `_fetch_undigested` has no `ORDER BY`; `ANTHROPIC_API_KEY` missing causes silent Anthropic client error in `job_digest_docs`.
-
-### Phase 4 — Market Data Pipeline + News Service (complete, 337 tests passing)
-Latest commit: `24f0e49` — pushed 2026-06-18.
-
-**Market data service (`services/market_data/`):**
-- `yfinance_feed.py` — `fetch_bars_1d`, `fetch_bars_1h`, `fetch_vix_term_structure`, `fetch_fx_rates`
-- `polygon_feed.py` — same signatures; raises `SkipSource` if `POLYGON_API_KEY` unset; ingest falls back to yfinance
-- `ingest.py` — APScheduler service (`python -m services.market_data.ingest`); 4 jobs: EOD bars (Mon–Fri 16:10 ET), intraday bars (hourly 09:30–16:00 ET), VIX (09:35 ET), FX rates (every 4h)
-
-**News service (`services/news/`):**
-- `sources.py` — `RSS_FEEDS` (Reuters, CNBC, FT) + `fetch_polygon_news` (returns `[]` if key unset)
-- `ingest.py` — APScheduler service (`python -m services.news.ingest`); every 15 min 06:00–22:00 ET; SHA-256 url_hash dedup; calls `scorer.score_pending` after each batch
-- `scorer.py` — Claude Haiku (`claude-haiku-4-5-20251001`), batch ≤20, 48h stale → 0.0 without API call, markdown-fence stripping, score clamped [0.0, 1.0]
-
-**News app (`apps/news/`):**
-- `app.py` — 4-tab Streamlit app (no `account_id`, news is account-agnostic)
-- `tabs/top_stories.py` — sidebar relevance slider, `st.expander` per item, sentiment badges
-- `tabs/by_symbol.py` — selectbox from `WATCHLIST` + positions, plotly scatter news timeline
-- `tabs/full_feed.py` — keyword search + source multiselect, full dataframe
-- `tabs/digest.py` — Claude Sonnet (`claude-sonnet-4-6`) daily briefing, cached in `trading.agent_memory`
-
-**DB:** `db/migrations/001_news_items.sql` (run once: `psql $PGURL -f db/migrations/001_news_items.sql`)
-
-**`apps/shared/db.py` additions:** `get_news_items(conn, min_relevance, symbols, limit)`, `get_news_by_symbol(conn, symbol, limit)`
-
-**`requirements.txt` additions:** `feedparser==6.0.11`, `anthropic==0.34.2`
-
-### Phase 3 — Apps + Risk Libs (complete, 290 tests passing)
-Latest commit: `b331752` — pushed 2026-06-18.
-
-**Risk libs (`libs/risk/`):**
+### Phase 3 — Risk Libs + Portfolio/Markets Apps (complete)
 
 | Module | Key exports |
 |---|---|
-| `libs/risk/greeks.py` | `PortfolioGreeks` dataclass, `aggregate_greeks(positions)` |
-| `libs/risk/var.py` | `historical_var`, `parametric_var`, `cvar`, `component_var`, `var_backtest` (Kupiec LR test) |
-| `libs/risk/performance.py` | `roace`, `sharpe`, `sortino`, `calmar` (CAGR), `max_drawdown`, `drawdown_analysis`, `win_stats`, `return_on_risk`, `capital_efficiency`, `attribution` |
-| `libs/risk/scenarios.py` | `spot_shock`, `vol_shock` (absolute Δσ), `spot_vol_matrix` |
-| `libs/risk/cashflow.py` | `daily_cashflow_statement`, `cumulative_cashflow`, `margin_utilisation` |
+| `libs/risk/greeks.py` | `aggregate_greeks` |
+| `libs/risk/var.py` | `historical_var`, `parametric_var`, `cvar`, `var_backtest` |
+| `libs/risk/performance.py` | `sharpe`, `sortino`, `calmar`, `max_drawdown`, `win_stats` |
+| `libs/risk/scenarios.py` | `spot_shock`, `vol_shock`, `spot_vol_matrix` |
+| `libs/risk/cashflow.py` | `daily_cashflow_statement`, `margin_utilisation` |
 
-**Simulation lib:**
-- `libs/simulation/options_scenarios.py` — `options_scenario_matrix(positions, spot_range, vol_range)` — delta-gamma-vega 2D grid, absolute vol shocks
+**Portfolio app** (`apps/portfolio/`) — 10 tabs:
+positions, pnl, risk, options_book, fixed_income, performance, cashflow, pre_trade, daily_briefing, strategies
 
-**Market data connector:**
-- `services/market_data/forexfactory.py` — `fetch_calendar(include_next_week=True)` — ForexFactory JSON feed
+**Markets app** (`apps/markets/`) — 7 tabs:
+charts, vol_surface, options_cockpit, yield_curves, fx, macro, vix
 
-**Shared DB layer:**
-- `apps/shared/db.py` — 13 cursor-based query functions (`get_positions`, `get_trades`, `get_strategy_pnl`, `get_capital_summary`, `get_cashflows`, `get_portfolio_risk`, `get_bars_1d`, `get_bars_1h`, `get_options_chain`, `get_yield_curve`, `get_fx_rates`, `get_vix_term_structure`, `get_vol_surface`); all return `pd.DataFrame`, mockable
+### Phase 4 — Market Data Pipeline + News Service (complete)
+- `services/market_data/` — yfinance + Polygon feeds; 4 APScheduler jobs (EOD bars, intraday, VIX, FX)
+- `services/news/` — RSS + Polygon news; 15-min ingest; Haiku scorer
+- `apps/news/` — 4-tab news app
 
-**Portfolio app (`apps/portfolio/`)** — 7 tabs:
-- `positions.py` — metrics + pie by asset class
-- `pnl.py` — YTD/MTD/all-time stacked bar by strategy
-- `risk.py` — Greeks metrics, VaR/CVaR, spot-vol heatmap
-- `options_book.py` — chain per expiry + 3D VolSurface
-- `fixed_income.py` — FI positions + NS yield curve fit
-- `performance.py` — Sharpe/Sortino/Calmar (fractional returns), ROACE, drawdown
-- `cashflow.py` — daily statement, YTD cumulative, margin gauge
+### Phase 5 — Knowledge Base Pipeline (complete)
+- `services/knowledge/` — FRED, Fed speeches, Treasury, BIS, RSS connectors
+- `expert_memory.py` — `digest_kb_docs` (Channel 2), `extract_from_trade_outcome` (Channel 5)
+- `db/migrations/002_kb_tables.sql` — `trading.kb_docs`, `trading.kb_insights`, `trading.kb_briefings`
 
-**Markets app (`apps/markets/`)** — 7 tabs:
-- `charts.py` — candlestick + MA20/MA50 + Bollinger + RSI(14)
-- `vol_surface.py` — 3D surface / term structure / skew sub-tabs
-- `options_cockpit.py` — Black-76/BS pricing via importlib (bess-platform); kwargs: `sigma=`, `flag="c"/"p"`
-- `yield_curves.py` — NS fit + 3 historical overlays
-- `fx.py` — spot table + forward/fwd-points for 5 tenors
-- `macro.py` — ForexFactory calendar (colour-coded) + USD curve + FX panels
-- `vix.py` — regime badge, M1-M8 bar, contango% history, IVP gauge
+### Phase 6 — Advisor App (complete)
+- `expert_memory.py` additions — `inject_memory`, `extract_insights`, tags support
+- `services/knowledge/daily_briefing.py` — 5-section macro briefing via Haiku
+- Portfolio app gains Pre-Trade tab + Daily Briefing tab
+- `services/broker_service/trade_monitor.py` — Mon-Fri 18:00 ET trade outcome → KB loop
+- `db/migrations/003_kb_insights_tags.sql` — GIN index on tags
+
+### Phase 7 — Strategy Signals + Backtest Engine (complete)
+- `libs/strategies/base.py` — `Signal` dataclass (with expiry/strike/right) + `BaseStrategy` ABC
+- `libs/strategies/vix_regime.py` — VixRegimeStrategy
+- `libs/backtest/engine.py` — `run_backtest` → `BacktestResult`
+- `services/broker_service/signal_writer.py` — `write_signal`, `mark_executed`
+- Portfolio app: Strategies tab (Config / Signals / Backtest / Paper Performance)
+- `db/migrations/004_signals.sql` — `trading.signals` + `trading.strategy_config`
+
+### Phase 8 — Options Execution, Paper Shadow Mode, Reporting (complete)
+- `libs/strategies/options_base.py` — `OptionsStrategy` ABC + `_select_strike` / `_nearest_expiry`
+- `libs/strategies/vix_options.py` — VixOptionsStrategy
+- `libs/strategies/spx_overlay.py` — SpxOverlayStrategy
+- `libs/strategies/short_strangle.py` — ShortStrangleStrategy (returns list of 2 signals)
+- `services/broker/paper_broker.py` — `_persist_fill` → `trading.paper_fills`
+- `services/broker_service/order_router.py` — delta_notional_cap check added
+- `services/broker_service/algo_scheduler.py` — mode-aware execution (paper/shadow/live); auto-promote job; reporting jobs
+- `services/reporting/` — `feishu_client.py`, `daily_report.py`, `weekly_report.py`
+- `apps/shared/db.py` — `get_paper_fills`, `upsert_strategy_config` (with mode)
+- `db/migrations/005_options_signals.sql` — expiry/strike/right on signals; mode on strategy_config; 3 paper-mode options strategies seeded
+- `db/migrations/006_paper_fills.sql` — `trading.paper_fills` table
+
+### Phase 9A — Options Chain Ingestion + EOD P&L (complete)
+- `services/options_chain/fetcher.py` — `fetch_chain(symbol)` → DataFrame (yfinance, bs_greeks)
+- `services/options_chain/ingest.py` — APScheduler: ingest_chains_open (09:25 ET), ingest_chains_close (16:05 ET)
+- `services/broker_service/pnl_calculator.py` — `compute_daily_pnl(conn)` → upserts to `trading.strategy_pnl`
+- `services/broker_service/algo_scheduler.py` — `compute_pnl` job at 16:15 ET; date-filtered `_fetch_options_chain`
+- `services/broker_service/trade_monitor.py` — reads real P&L from `strategy_pnl`, falls back to raw estimate
+- `db/migrations/007_strategy_pnl.sql` — `trading.strategy_pnl` table
 
 ---
 
-## Key Technical Notes (carried forward from Phase 2/3)
-
-### bess-platform import pattern (for options_cockpit.py)
-```python
-import importlib.util, os, sys
-_BESS = "C:/Users/dipeng.chen/OneDrive/ETRM/bess-platform"
-abs_path = os.path.join(_BESS, "libs/options/black_scholes.py")
-spec = importlib.util.spec_from_file_location("_bess_black_scholes", abs_path)
-mod = importlib.util.module_from_spec(spec)
-sys.modules["_bess_black_scholes"] = mod
-spec.loader.exec_module(mod)
-b76_price = mod.b76_price  # signature: b76_price(F, K, T, r, sigma, flag="c")
-bs_price  = mod.bs_price   # signature: bs_price(S, K, T, r, sigma, q=0.0, flag="c")
-bs_greeks = mod.bs_greeks  # signature: bs_greeks(S, K, T, r, sigma, q=0.0, flag="c")
-# NOTE: use sigma= not vol=, flag="c"/"p" not option_type="call"/"put"
-```
+## Key Technical Patterns
 
 ### Tab render pattern
 Each tab: single `render(conn, ...)` function. Streamlit imported inside `render()` only (never at module level). `app.py` wraps `connect()` in `@st.cache_resource`.
@@ -170,31 +225,23 @@ Each tab: single `render(conn, ...)` function. Streamlit imported inside `render
 ### DB query pattern
 All `apps/shared/db.py` functions use `conn.cursor()` context manager (NOT `pd.read_sql`) → mockable in tests.
 
-### var.py z-score
-`math.erfinv` does not exist in Python 3.13 — uses `scipy.special.erfinv` instead.
+### Strategy execution modes
+`trading.strategy_config.mode` controls routing in `algo_scheduler._run_all_strategies`:
+- `paper` → fills paper broker only (no live execution)
+- `live` → live broker only (no paper fills)
+- `shadow` → both (paper fills recorded AND live orders submitted)
 
-### vol_shock convention
-`vol_shock` and `options_scenario_matrix` use **absolute** vol shocks (e.g. 0.02 = 2 vol points), NOT relative.
+Auto-promote job runs at 09:00 ET: if paper strategy meets Sharpe + MaxDD thresholds after `paper_validation_days` → promotes to `shadow` + Feishu alert.
+
+### Options chain context
+`_run_all_strategies` detects `OptionsStrategy` instances and injects `vix_chain` / `spy_chain` into context from `trading.options_chain`. Equity strategies ignore extra context keys.
 
 ### Running tests
 ```bash
-cd C:/Users/dipeng.chen/OneDrive/ETRM/ib-platform
-/c/Users/dipeng.chen/AppData/Local/Programs/Python/Python313/python.exe -m pytest tests/ -q
+cd ~/projects/ib-platform
+source .venv/bin/activate
+python -m pytest tests/ -q    # 502 passed
 ```
-Python: `/c/Users/dipeng.chen/AppData/Local/Programs/Python/Python313/python.exe`
-
-### Environment
-- Windows 11, bash shell via Git for Windows
-- Primary working directory: `C:\Users\dipeng.chen\OneDrive\ETRM\ib-platform`
-- Additional directory: `C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform` (shared infrastructure)
-- RDS shared with bess-platform, env var `PGURL`
-- Config: `config/.env` in ib-platform root
-
-### TWS Machine (Yuzhu Chen account)
-TWS is installed on a separate Windows account. When running on that machine:
-- Python: `C:\Users\Yuzhu Chen\AppData\Local\Python\bin\python.exe`
-- No Visual Studio — install packages with `--only-binary=:all:`
-- Run commands: `& "C:\Users\Yuzhu Chen\AppData\Local\Python\bin\python.exe" -m services.broker_service.main`
 
 ---
 
@@ -202,80 +249,18 @@ TWS is installed on a separate Windows account. When running on that machine:
 
 Branch: `master` (all work directly on master — no feature branches)
 Remote: `git@github.com:MonteCarlo79/ib-platform.git`
-Latest commit: `b55af51` — pushed 2026-06-27.
+Latest commit: `f1aa03f` — pushed 2026-06-29
 
-All commits pushed.
-
----
-
-### Phase 7 — Strategy Signals + Backtest Engine (complete, 437 tests passing)
-Latest commit: `cc78f9b` — pushed 2026-06-25.
-- `libs/strategies/base.py` — `Signal` dataclass + `BaseStrategy` ABC
-- `libs/strategies/vix_regime.py` — VixRegimeStrategy
-- `libs/backtest/engine.py` — `run_backtest(strategy, bars, vix_df, initial_capital)` → `BacktestResult`
-- `services/broker_service/signal_writer.py` — `write_signal`, `mark_executed`
-- `algo_scheduler.py` — full strategy execution loop wired into FastAPI lifespan
-- `apps/portfolio/tabs/strategies.py` — 3-tab Strategies panel (Config, Signals, Backtest)
-- DB: `db/migrations/004_signals.sql` — `trading.signals` + `trading.strategy_config`
-
-### Phase 8 — Options Execution, Paper Shadow Mode, Reporting (complete, 480 tests passing)
-Latest commit: `b55af51` — pushed 2026-06-27.
-Design spec: `docs/superpowers/specs/2026-06-25-ib-phase8-design.md`
-
-**Options strategy layer:**
-- `libs/pricing/black_scholes.py` — copied from bess-platform (bs_price, b76_price, bs_greeks, etc.)
-- `libs/strategies/options_base.py` — `OptionsStrategy(BaseStrategy)` ABC + `_select_strike` / `_nearest_expiry` helpers
-- `libs/strategies/vix_options.py` — VixOptionsStrategy (contango→puts, backwardation→calls)
-- `libs/strategies/spx_overlay.py` — SpxOverlayStrategy (covered call / protective put)
-- `libs/strategies/short_strangle.py` — ShortStrangleStrategy (returns list of 2 signals)
-- `libs/strategies/base.py` — `Signal` extended with `expiry/strike/right Optional[str/float]`
-- `services/broker/base.py` — `OrderRequest` extended with `expiry/strike/right`
-- `STRATEGY_REGISTRY` in algo_scheduler updated with all 4 strategies
-
-**Paper shadow mode:**
-- `services/broker/paper_broker.py` — `_persist_fill` writes to `trading.paper_fills` if PGURL set
-- `services/broker_service/algo_scheduler.py` — `_run_all_strategies` now selects `mode` column; paper→paper broker; live→live broker; shadow→both
-- `_check_paper_promotions()` job: 09:00 ET daily; computes paper Sharpe+MaxDD; auto-promotes to shadow
-- `_build_order_request(signal, strategy_id)` helper
-- `db/migrations/005_options_signals.sql` — expiry/strike/right on signals; mode on strategy_config; seed 3 paper-mode options strategies
-- `db/migrations/006_paper_fills.sql` — `trading.paper_fills` table
-
-**Performance reporting:**
-- `services/reporting/feishu_client.py` — copied from bess-platform/services/hermes/
-- `services/reporting/daily_report.py` — `send_daily_report(conn)` → Feishu text card (16:30 ET Mon-Fri)
-- `services/reporting/weekly_report.py` — `send_weekly_report(conn)` → Feishu table card (17:00 ET Friday)
-- Both skip silently if `FEISHU_APP_ID/FEISHU_APP_SECRET/FEISHU_REPORT_OPEN_ID` not set
-
-**Order router:**
-- `services/broker_service/order_router.py` — delta_notional_cap check (qty × strike × 100 × 0.5 > cap → reject)
-
-**Portfolio app — Strategies tab now has 4 sub-tabs:**
-- Strategy Config (mode badge 🟡/🟠/🟢 + mode selector + Promote to Live button)
-- Recent Signals
-- Backtest
-- Paper Performance (equity curve, Sharpe/MaxDD/days metrics, threshold status)
-
-**`apps/shared/db.py` additions:**
-- `get_paper_fills(conn, strategy_id, limit)` — from `trading.paper_fills`
-- `upsert_strategy_config` — extended with `mode` param
-- `get_strategy_configs` — now includes `mode` column
-
-**New env vars (all optional):**
-```
-FEISHU_APP_ID          Feishu app ID
-FEISHU_APP_SECRET      Feishu app secret
-FEISHU_REPORT_OPEN_ID  Feishu recipient open_id
-```
-
-**DB migrations to apply:**
-```bash
-psql $PGURL -f db/migrations/005_options_signals.sql
-psql $PGURL -f db/migrations/006_paper_fills.sql
-```
+All commits pushed. No in-progress work.
 
 ---
 
 ## What To Build Next
 
-### Phase 9 — (not yet designed)
+### Phase 9B — (not yet designed)
 No design spec exists yet. Start with `superpowers:brainstorming`.
+
+Potential directions:
+- Portfolio-level Greeks aggregation service (populate `trading.portfolio_risk` from live positions)
+- Alert service — Feishu/Telegram push on signal generated, order filled, risk limit breached, paper strategy promoted
+- Options backtest — extend backtest engine to simulate options fills using historical IV from `trading.options_chain`
