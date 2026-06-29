@@ -886,11 +886,59 @@ def load_pca_hourly(_eng_key, province: str, start: str, end: str) -> pd.DataFra
     return pivot
 
 
+@st.cache_data(ttl=3600)
+def load_pca_fund_hourly(_eng_key, province: str, start: str, end: str) -> pd.DataFrame:
+    """Return mean hourly profile (hour 0–23) of fundamentals variables for one province."""
+    sql = sql_text("""
+        SELECT EXTRACT(hour FROM datetime)::int AS hour,
+               AVG(load_mw)            AS load_mw,
+               AVG(renewable_total_mw) AS renewable_total_mw,
+               AVG(bidding_space_mw)   AS bidding_space_mw,
+               AVG(wind_mw)            AS wind_mw,
+               AVG(solar_mw)           AS solar_mw
+        FROM marketdata.spot_fundamentals_hourly
+        WHERE province = :p
+          AND datetime::date BETWEEN :s AND :e
+          AND load_mw IS NOT NULL
+        GROUP BY hour
+        ORDER BY hour
+    """)
+    try:
+        return pd.read_sql(sql, _eng(), params={"p": province, "s": start, "e": end})
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def load_pca_fund_daily(_eng_key, province: str, start: str, end: str) -> pd.DataFrame:
+    """Return daily aggregates of fundamentals variables for PC score correlation."""
+    sql = sql_text("""
+        SELECT datetime::date AS day,
+               AVG(load_mw)                     AS load_mw,
+               AVG(renewable_total_mw)           AS renewable_total_mw,
+               AVG(COALESCE(bidding_space_mw,0)) AS bidding_space_mw,
+               AVG(COALESCE(wind_mw, 0))         AS wind_mw,
+               AVG(COALESCE(solar_mw, 0))        AS solar_mw,
+               MAX(COALESCE(solar_mw, 0))        AS solar_peak_mw
+        FROM marketdata.spot_fundamentals_hourly
+        WHERE province = :p
+          AND datetime::date BETWEEN :s AND :e
+          AND load_mw IS NOT NULL
+        GROUP BY day
+        ORDER BY day
+    """)
+    try:
+        return pd.read_sql(sql, _eng(), params={"p": province, "s": start, "e": end})
+    except Exception:
+        return pd.DataFrame()
+
+
 def compute_pca(price_matrix: pd.DataFrame, n_pcs: int = 4) -> dict:
     """
     PCA on a (days × 24) price matrix using covariance matrix eigendecomposition.
     Loadings are normalised to sum=24 (mean=1.0) — same convention as reference model.
-    Returns dict with keys: loadings, eigenvalues, variance_explained, mean_profile, n_days.
+    Returns dict with keys: loadings, eigenvalues, variance_explained, mean_profile,
+                            n_days, scores (n_days × n_pcs, raw projection), dates.
     """
     X = price_matrix.values.astype(float)
     mean_profile = X.mean(axis=0)          # shape (24,)
@@ -908,8 +956,9 @@ def compute_pca(price_matrix: pd.DataFrame, n_pcs: int = 4) -> dict:
     total_var = eig_vals.sum()
     variance_explained = (eig_vals / total_var * 100) if total_var > 0 else eig_vals * 0
 
+    n_keep = min(n_pcs, eig_vecs.shape[1])
     loadings = []
-    for i in range(min(n_pcs, eig_vecs.shape[1])):
+    for i in range(n_keep):
         vec = eig_vecs[:, i].copy()
         s = vec.sum()
         if abs(s) > 1e-10:
@@ -918,12 +967,17 @@ def compute_pca(price_matrix: pd.DataFrame, n_pcs: int = 4) -> dict:
             vec = vec / (np.abs(vec).sum() + 1e-10) * 24.0
         loadings.append(vec)
 
+    # Daily PC scores: project mean-centred price vectors onto raw eigenvectors
+    scores = X_centered @ eig_vecs[:, :n_keep]  # shape (n_days, n_keep)
+
     return {
         "loadings": loadings,              # list of n_pcs arrays, each shape (24,)
         "eigenvalues": eig_vals,
         "variance_explained": variance_explained,
         "mean_profile": mean_profile,
         "n_days": len(X),
+        "scores": scores,                  # ndarray (n_days, n_pcs)
+        "dates": list(price_matrix.index), # trading dates aligned with scores
     }
 
 
@@ -1720,6 +1774,148 @@ with tab_pca:
                             )
                             st.plotly_chart(fig_pc, use_container_width=True,
                                             key=f"pca_pc{pc_idx+1}_{prov}")
+
+                # ── PC Interpretation: intraday shape & daily score correlations ──
+                st.divider()
+                st.markdown("#### PC Interpretation — Intraday Correlations with Market Variables")
+                st.caption(
+                    "**Shape correlation** (left): Pearson r between each PC's hourly loading pattern "
+                    "and the mean hourly profile of each variable.  "
+                    "**Score correlation** (right): Pearson r between each day's PC score "
+                    "and the daily average of each variable.  "
+                    "Strong |r| ≥ 0.5 shown in bold."
+                )
+
+                _fund_hour = load_pca_fund_hourly(_ENG_KEY, prov, sel_start, sel_end)
+                _fund_daily = load_pca_fund_daily(_ENG_KEY, prov, sel_start, sel_end)
+
+                _var_display = {
+                    "Bidding Space": "bidding_space_mw",
+                    "Solar":         "solar_mw",
+                    "Wind":          "wind_mw",
+                    "Load":          "load_mw",
+                    "Renewable":     "renewable_total_mw",
+                }
+                _n_interp = min(4, len(loadings))
+
+                _corr_interp_ok = (
+                    not _fund_hour.empty
+                    and len(_fund_hour) == 24
+                    and not _fund_daily.empty
+                )
+
+                if not _corr_interp_ok:
+                    st.info("Fundamentals data not available for this province/period — correlation analysis skipped.")
+                else:
+                    _fund_hour_idx = _fund_hour.set_index("hour")
+                    _fund_daily["day"] = pd.to_datetime(_fund_daily["day"]).dt.date
+
+                    # ── Shape correlation (loading shape vs mean hourly variable) ──
+                    _shape_rows = []
+                    for _pci in range(_n_interp):
+                        _loading_raw = res["loadings"][_pci]  # always sum=24 for shape corr
+                        _row = {}
+                        for _vlabel, _vcol in _var_display.items():
+                            if _vcol in _fund_hour_idx.columns:
+                                _vvec = _fund_hour_idx[_vcol].values.astype(float)
+                                if not np.isnan(_vvec).all() and _vvec.std() > 1e-10:
+                                    _row[_vlabel] = float(np.corrcoef(_loading_raw, _vvec)[0, 1])
+                        _shape_rows.append(_row)
+                    _shape_df = pd.DataFrame(
+                        _shape_rows,
+                        index=[f"PC{i+1} ({res['variance_explained'][i]:.1f}%)" for i in range(_n_interp)],
+                    )
+
+                    # ── Score correlation (daily PC score vs daily variable avg) ──
+                    _scores_arr = res.get("scores")  # (n_days, n_pcs)
+                    _dates_arr  = res.get("dates", [])
+                    _score_rows = []
+                    if _scores_arr is not None and len(_dates_arr) > 0:
+                        _score_df_idx = pd.DataFrame(
+                            {f"PC{i+1}": _scores_arr[:, i] for i in range(_n_interp)},
+                            index=pd.to_datetime(_dates_arr).date,
+                        )
+                        _merged = _score_df_idx.join(
+                            _fund_daily.set_index("day")[list(_var_display.values())],
+                            how="inner",
+                        )
+                        for _pci in range(_n_interp):
+                            _sc_col = f"PC{_pci+1}"
+                            _row = {}
+                            for _vlabel, _vcol in _var_display.items():
+                                if _vcol in _merged.columns:
+                                    _s = _merged[_sc_col].values.astype(float)
+                                    _v = _merged[_vcol].values.astype(float)
+                                    _valid = ~(np.isnan(_s) | np.isnan(_v))
+                                    if _valid.sum() >= 10 and _v[_valid].std() > 1e-10:
+                                        _row[_vlabel] = float(np.corrcoef(_s[_valid], _v[_valid])[0, 1])
+                            _score_rows.append(_row)
+                    _score_df = pd.DataFrame(
+                        _score_rows,
+                        index=[f"PC{i+1} ({res['variance_explained'][i]:.1f}%)" for i in range(len(_score_rows))],
+                    ) if _score_rows else pd.DataFrame()
+
+                    # ── Heatmap helper ──────────────────────────────────────────
+                    def _corr_heatmap(df: pd.DataFrame, title: str, key_sfx: str):
+                        if df.empty:
+                            st.info(f"{title}: no data.")
+                            return
+                        _z    = df.values.tolist()
+                        _text = [[f"{v:.2f}" if not np.isnan(v) else "" for v in row] for row in df.values]
+                        _fig  = go.Figure(go.Heatmap(
+                            z=_z,
+                            x=list(df.columns),
+                            y=list(df.index),
+                            text=_text,
+                            texttemplate="%{text}",
+                            textfont=dict(size=12),
+                            colorscale=[
+                                [0.0, "#2166ac"], [0.35, "#92c5de"],
+                                [0.5, "#f7f7f7"],
+                                [0.65, "#f4a582"], [1.0, "#d6604d"],
+                            ],
+                            zmid=0, zmin=-1, zmax=1,
+                            colorbar=dict(title="r", thickness=12, len=0.8),
+                        ))
+                        _fig.update_layout(
+                            title=title,
+                            height=160 + _n_interp * 40,
+                            margin=dict(t=40, b=20, l=160, r=40),
+                            yaxis=dict(autorange="reversed"),
+                        )
+                        st.plotly_chart(_fig, use_container_width=True, key=f"pca_corr_{key_sfx}_{prov}")
+
+                    _ic1, _ic2 = st.columns(2)
+                    with _ic1:
+                        _corr_heatmap(_shape_df, "Shape Correlation (loading ↔ hourly mean)", "shape")
+                    with _ic2:
+                        _corr_heatmap(_score_df, "Score Correlation (daily score ↔ daily avg)", "score")
+
+                    # ── Per-PC interpretation summary ──────────────────────────
+                    st.markdown("**Interpretation summary**")
+                    _interp_cols = st.columns(_n_interp)
+                    for _pci in range(_n_interp):
+                        with _interp_cols[_pci]:
+                            _pct_v = f"{res['variance_explained'][_pci]:.1f}%"
+                            # Pick top shape and score driver
+                            _shape_r = _shape_df.iloc[_pci] if not _shape_df.empty else pd.Series(dtype=float)
+                            _score_r = _score_df.iloc[_pci] if not _score_df.empty and _pci < len(_score_df) else pd.Series(dtype=float)
+                            _shape_best = _shape_r.abs().idxmax() if not _shape_r.empty else None
+                            _score_best = _score_r.abs().idxmax() if not _score_r.empty else None
+                            _shape_val  = _shape_r[_shape_best] if _shape_best else float("nan")
+                            _score_val  = _score_r[_score_best] if _score_best else float("nan")
+                            _sign_s = "↑" if _shape_val > 0 else "↓"
+                            _sign_c = "↑" if _score_val > 0 else "↓"
+                            st.metric(f"PC{_pci+1}", _pct_v)
+                            if _shape_best and abs(_shape_val) >= 0.3:
+                                st.caption(f"Shape: {_sign_s} {_shape_best} (r={_shape_val:.2f})")
+                            else:
+                                st.caption("Shape: no strong driver")
+                            if _score_best and abs(_score_val) >= 0.3:
+                                st.caption(f"Days: {_sign_c} {_score_best} (r={_score_val:.2f})")
+                            else:
+                                st.caption("Days: no strong driver")
+
         else:
             # ── Multi-province comparison: one chart per PC ────────────────
             n_show = min(n_pcs, min(len(r["loadings"]) for r in pca_results.values()))
