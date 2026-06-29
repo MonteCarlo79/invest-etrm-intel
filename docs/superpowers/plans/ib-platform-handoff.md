@@ -5,7 +5,7 @@
 > **Primary working directory (Mac):** `~/projects/ib-platform` (or wherever you cloned it)
 > **Primary working directory (Windows):** `C:\Users\dipeng.chen\OneDrive\ETRM\ib-platform`
 > **Design spec:** `docs/superpowers/specs/2026-06-14-ib-trading-platform-design.md` (inside repo)
-> **Latest commit:** `f1aa03f` — pushed 2026-06-29
+> **Latest commit:** `9598ae7` — pushed 2026-06-29
 > **Tests:** 502 passing
 
 ---

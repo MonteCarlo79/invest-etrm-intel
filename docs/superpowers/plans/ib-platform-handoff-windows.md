@@ -3,7 +3,7 @@
 > **For a new Claude session on this Windows machine:** Read this document first, then proceed.
 > **Repo on disk:** `C:\Users\dipeng.chen\OneDrive\ETRM\ib-platform`
 > **GitHub remote:** `git@github.com:MonteCarlo79/ib-platform.git` (SSH key at `~/.ssh/id_ed25519`)
-> **Latest commit:** `f1aa03f` — pushed 2026-06-29
+> **Latest commit:** `9598ae7` — pushed 2026-06-29
 > **Tests:** 502 passing
 
 ---
