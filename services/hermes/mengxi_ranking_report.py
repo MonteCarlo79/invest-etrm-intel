@@ -193,6 +193,101 @@ def _apply_comp(df: pd.DataFrame, first_seen_map: dict[str, date], report_date: 
     return df
 
 
+# ── Nodal PF value computation ────────────────────────────────────────────────
+
+_NODAL_PRICES_SQL = """
+SELECT plant_name, datetime, cleared_price
+FROM marketdata.md_id_cleared_energy
+WHERE data_date >= %(start)s
+  AND data_date <  %(end_excl)s
+  AND plant_name = ANY(%(plant_names)s)
+ORDER BY plant_name, datetime
+"""
+
+
+def _query_nodal_prices(
+    pg_url: str, plant_names: list[str], start: date, end_excl: date
+) -> pd.DataFrame:
+    """Fetch 15-min cleared prices for the given plants and date window."""
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=600000")
+    try:
+        return pd.read_sql_query(
+            _NODAL_PRICES_SQL,
+            conn,
+            params={"start": start, "end_excl": end_excl, "plant_names": plant_names},
+        )
+    finally:
+        conn.close()
+
+
+def _compute_nodal_pf_ranks(
+    prices_df: pd.DataFrame,
+    rte: float = 0.85,
+) -> dict[str, dict]:
+    """
+    Run perfect-foresight MILP for each plant in prices_df (both 2h and 4h durations).
+    Returns {plant_name: {"score_2h", "score_4h", "rank_2h", "rank_4h", "n_days"}}.
+
+    score_2h / score_4h = CNY / MWh_installed / day (normalised per MW, per duration).
+    Parallelised across plants with ThreadPoolExecutor.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices
+
+    if prices_df.empty:
+        return {}
+
+    def _compute_plant(plant_name: str, group: pd.DataFrame) -> tuple[str, float, float, int]:
+        prices_s = group.set_index("datetime")["cleared_price"].sort_index()
+        n_days = prices_s.index.normalize().nunique()
+        try:
+            _, profit_2h = compute_dispatch_from_15min_prices(
+                prices_s, power_mw=1.0, duration_h=2.0, roundtrip_eff=rte
+            )
+            _, profit_4h = compute_dispatch_from_15min_prices(
+                prices_s, power_mw=1.0, duration_h=4.0, roundtrip_eff=rte
+            )
+            days = max(len(profit_2h), 1)
+            score_2h = float(profit_2h.sum()) / (2.0 * days)
+            score_4h = float(profit_4h.sum()) / (4.0 * days)
+        except Exception as exc:
+            logger.warning("Nodal PF compute failed for %s: %s", plant_name, exc)
+            return plant_name, float("nan"), float("nan"), n_days
+        return plant_name, score_2h, score_4h, n_days
+
+    plant_groups = [(name, grp) for name, grp in prices_df.groupby("plant_name")]
+    raw_scores: dict[str, tuple[float, float, int]] = {}
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {
+            executor.submit(_compute_plant, name, grp): name
+            for name, grp in plant_groups
+        }
+        for future in as_completed(futures):
+            name, s2h, s4h, nd = future.result()
+            if not (pd.isna(s2h) or pd.isna(s4h)):
+                raw_scores[name] = (s2h, s4h, nd)
+
+    if not raw_scores:
+        return {}
+
+    sorted_2h = sorted(raw_scores, key=lambda p: raw_scores[p][0], reverse=True)
+    sorted_4h = sorted(raw_scores, key=lambda p: raw_scores[p][1], reverse=True)
+    rank_2h = {p: i + 1 for i, p in enumerate(sorted_2h)}
+    rank_4h = {p: i + 1 for i, p in enumerate(sorted_4h)}
+
+    return {
+        p: {
+            "score_2h": raw_scores[p][0],
+            "score_4h": raw_scores[p][1],
+            "n_days":   raw_scores[p][2],
+            "rank_2h":  rank_2h[p],
+            "rank_4h":  rank_4h[p],
+        }
+        for p in raw_scores
+    }
+
+
 def _enrich_and_rank(raw_df: pd.DataFrame, plant_list: list[dict]) -> pd.DataFrame:
     """Merge DB result with plant metadata and compute rank."""
     if raw_df.empty:
