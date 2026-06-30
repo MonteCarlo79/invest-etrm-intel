@@ -92,10 +92,14 @@ CREATE TABLE reports.nodal_pf_monthly (
 
 Plants are independent. Each plant requires 2 calls to `compute_dispatch_from_15min_prices`. PuLP/CBC creates its own `LpProblem` per call — parallel execution with `ThreadPoolExecutor` is safe.
 
-**Performance estimate (one month, ~100 plants):**
-- 100 plants × 30 days × 2 durations = 6,000 MILP problems
-- With 8 workers: ~60–90 seconds total
-- Runs once a month, not time-critical
+**Performance estimate:**
+
+| Job | Plants | Days | MILP problems | Est. time (8 workers) |
+|---|---|---|---|---|
+| Daily PDF (yesterday inline) | ~100 | 1 | ~200 | ~5–10s |
+| Monthly job (full calendar month) | ~100 | 30 | ~6,000 | ~60–90s |
+
+Daily inline computation is fast enough to not materially delay PDF generation. Monthly job runs at 01:00 UTC on the 5th, not time-critical.
 
 ---
 
@@ -103,15 +107,14 @@ Plants are independent. Each plant requires 2 calls to `compute_dispatch_from_15
 
 ### 5.1 Data source
 
-The daily PDF reads nodal ranks from `reports.nodal_pf_monthly` for the most recent available month. No MILP runs during daily PDF generation — ranks are pre-computed.
+The daily PDF computes nodal ranks **inline for yesterday only** — ~100 plants × 1 day × 2 durations ≈ 200 MILP problems, ~5–10 seconds. This is fast enough to run during PDF generation.
 
-```sql
-SELECT plant_name, rank_2h, rank_4h
-FROM reports.nodal_pf_monthly
-WHERE month = (SELECT MAX(month) FROM reports.nodal_pf_monthly)
-```
+Steps:
+1. Query yesterday's 15-min cleared prices for all plants in the ranking (same plant list already fetched)
+2. Run `compute_dispatch_from_15min_prices` per plant, parallelised with `ThreadPoolExecutor`
+3. Rank plants by `pf_score` for 2h and 4h durations
 
-If the table is empty (not yet computed), nodal rank columns show `—`.
+If yesterday's price query fails or returns empty, nodal rank columns show `—`.
 
 ### 5.2 Table columns
 
@@ -141,9 +144,7 @@ Colour applied to the nodal rank cell only, not the entire row.
 
 ### 6.1 When it appears
 
-The monthly nodal ranking page is appended to the daily PDF **only on the 5th of each month** (when the monthly job runs) or whenever `reports.nodal_pf_monthly` has been updated for the current month. On other days, the page is omitted.
-
-Actually — simpler: always append the page using the latest available month from `reports.nodal_pf_monthly`. It stays static until recomputed on the next 5th.
+Always appended to the daily PDF using the latest available month from `reports.nodal_pf_monthly`. The content stays static between the 5th of each month (when the monthly job refreshes it). If the table is empty, the page is omitted.
 
 ### 6.2 Table structure
 
@@ -175,14 +176,14 @@ All nodes in `reports.nodal_pf_monthly` for the latest month, sorted by `rank_2h
 
 | Function | Change |
 |---|---|
-| `_query_nodal_ranks(pg_url)` | New — reads latest month's ranks from `reports.nodal_pf_monthly` |
-| `_query_nodal_prices_for_month(pg_url, start, end_excl)` | New — fetches all plant 15-min prices for a calendar month |
-| `_compute_nodal_pf_for_plants(prices_df, rte)` | New — runs MILP for all plants (parallelised), returns score dicts |
-| `compute_and_store_nodal_pf_monthly(pg_url)` | New — orchestrates monthly computation and upserts to DB |
-| `_enrich_and_rank(raw_df, plant_list, nodal_ranks)` | Updated — accepts `nodal_ranks` dict, adds two rank columns |
+| `_query_nodal_prices(pg_url, plant_names, start, end_excl)` | New — fetches 15-min cleared prices for a set of plants and date range |
+| `_compute_nodal_pf_ranks(prices_df, rte)` | New — runs MILP for all plants in parallel (both durations), returns `{plant_name: (rank_2h, rank_4h)}` |
+| `_query_nodal_monthly_df(pg_url)` | New — reads latest month's full ranking from `reports.nodal_pf_monthly` |
+| `compute_and_store_nodal_pf_monthly(pg_url)` | New — monthly job: computes full calendar month PF values, upserts to DB |
+| `_enrich_and_rank(raw_df, plant_list, nodal_ranks)` | Updated — accepts `nodal_ranks` dict, adds `nodal_rank_2h` and `nodal_rank_4h` columns |
 | `_build_table(df)` | Updated — renders two extra columns with cell-level colour coding |
 | `_generate_pdf(...)` | Updated — accepts `nodal_monthly_df`; appends monthly nodal ranking page; updates footer |
-| `send_daily_ranking(...)` | Updated — reads nodal ranks from DB; passes to PDF generator |
+| `send_daily_ranking(...)` | Updated — computes yesterday's nodal ranks inline; reads monthly table from DB; passes both to PDF generator |
 
 ### `services/hermes/app.py`
 
@@ -199,7 +200,19 @@ All nodes in `reports.nodal_pf_monthly` for the latest month, sorted by `rank_2h
 
 ---
 
-## 8. Error Handling
+## 8. Summary of Two Compute Paths
+
+| | Daily PDF (inline) | Monthly job |
+|---|---|---|
+| Window | Yesterday (1 day) | Previous full calendar month |
+| Trigger | 23:00 UTC daily | 5th of month, 01:00 UTC |
+| Problems | ~200 | ~6,000 |
+| Output | `nodal_rank_2h/4h` columns in ranking tables | `reports.nodal_pf_monthly` → monthly page in PDF |
+| If missing | Columns show `—` | Monthly page omitted |
+
+---
+
+## 9. Error Handling
 
 - If `_query_nodal_ranks` fails or table is empty: nodal rank columns show `—`; monthly page omitted
 - If MILP solver returns non-Optimal for a plant-day: that day excluded from the sum
