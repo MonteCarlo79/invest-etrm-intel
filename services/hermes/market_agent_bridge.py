@@ -51,7 +51,11 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "")
     if market == "spot":
         return _run_spot_query(question=question, api_key=api_key)
 
-    return f"Unknown market '{market}'. Available: gb, au, ercot, caiso, pjm, ph, po, bess-map, spot"
+    if market == "internet":
+        from services.hermes.internet_agent import run_internet_query
+        return run_internet_query(question=question, api_key=api_key)
+
+    return f"Unknown market '{market}'. Available: gb, au, ercot, caiso, pjm, ph, po, bess-map, spot, internet"
 
 
 def _run_spot_query(question: str, api_key: str) -> str:

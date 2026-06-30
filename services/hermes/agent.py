@@ -44,7 +44,11 @@ CAPABILITY AREAS — understand which domain the user is working in:
 
 📊 Trading Management
   Inner Mongolia BESS assets, Mengxi trading P&L, dispatch schedules.
-  Answer from KB context or use MARKET_AGENT(bess-map) for financial metrics.
+  Answer from KB context or use MARKET_AGENT(bess-map) for financial metrics and installed capacity.
+
+🌐 Internet Research
+  Search the web, read URLs, search GitHub, get YouTube info, read RSS feeds, search Bilibili.
+  Use MARKET_AGENT(internet) for any web/internet research request.
 
 🔢 Quant Models
   BESS IRR/NPV calculations → MARKET_AGENT(bess-map) with get_irr_estimate.
@@ -182,7 +186,8 @@ Rules:
 - When user says "X 已完成", "已完成 X", "X done", "X finished", "X completed" — where X is a task name or partial description — use DONE action with X as the title.
 - When user says "mark X as done/complete/finished" or "将X标为完成", use DONE.
 - When user asks about market data, prices, revenues, BESS economics, or a specific market, use MARKET_AGENT.
-- For MARKET_AGENT: gb=GB/Great Britain market, au=Australia NEM, ercot=Texas, caiso=California, pjm=PJM, ph=Philippines, po=Portugal, bess-map=China provinces (广东/山东/蒙西/蒙东/山西/江苏/浙江/湖南/etc.) for BESS economics/revenues/capacity, spot=China spot market prices. NEVER use market='mengxi' — 蒙西 questions go to bess-map.
+- For MARKET_AGENT: gb=GB/Great Britain market, au=Australia NEM, ercot=Texas, caiso=California, pjm=PJM, ph=Philippines, po=Portugal, bess-map=China provinces (广东/山东/蒙西/蒙东/山西/江苏/浙江/湖南/etc.) for BESS economics/revenues/capacity, spot=China spot market prices, internet=web search/URL reading/GitHub/YouTube/RSS/Bilibili. NEVER use market='mengxi' — 蒙西 questions go to bess-map.
+- When user asks to "search the web", "look up a URL", "read this link", "search GitHub", "find on YouTube/Bilibili/B站", "check RSS", or research any topic online, use MARKET_AGENT(internet). IMPORTANT: "搜索" (search) in Chinese is an explicit internet search request — use MARKET_AGENT(internet) whenever "搜索" appears in the message, especially combined with "最新" (latest) or "网上". This takes PRIORITY over all other routing rules (bess-map, spot, etc.).
 - For GENERATE_CHART: use market=spot for ANY Chinese province spot price chart (现货价格/实时价格/日前价格/RT price/DA price/spot price — regardless of which province 陕西/山东/广东/蒙西/etc.). Use market=bess-map only for BESS economics charts (BESS revenues, capture rates, IRR, capacity). For international markets use the corresponding market code.
 - If the message is exactly "蒙西储能日报", use REPLY with text "正在生成日报…" — the app handles this as a report trigger, do NOT use MARKET_AGENT.
 - If the market is ambiguous and you cannot infer it from context, use CLARIFY.
@@ -192,6 +197,7 @@ Rules:
 - When user says "meeting prep", "会议准备", "prepare me for a meeting about X", "briefing for X", use REPLY with KB context structured as: Background | Key Data Points | Talking Points | Questions to Prepare.
 - When user says "structuring", "term sheet", "market entry", "project financing", "条款", use REPLY drawing from KB context with: Market Context | Key Economics | Risk Factors | Recommendation.
 - When user says "Inner Mongolia", "内蒙古", "Mengxi", "蒙西" for operational data (P&L, dispatch), use MARKET_AGENT(bess-map) or REPLY with KB context if no specific data question.
+- When user asks about "装机容量", "installed capacity", "total MW", "total GW", "总容量", "总装机", "蒙西储能容量", use MARKET_AGENT(bess-map) — the bess-map agent has get_mengxi_capacity.
 - When user asks what you can do in a certain area (e.g. "what can you do for X?"), use REPLY and describe the relevant capabilities from the CAPABILITY AREAS section above, with concrete examples.
 - Always match the user's language in the reply field. If the user writes in Chinese (Simplified), reply in Chinese (Simplified). If in English, reply in English.
 - Always respond with valid JSON only. No markdown fences, no extra text."""
@@ -364,9 +370,23 @@ class HermesAgent:
             logger.debug("KB retrieval skipped: %s", exc)
         return ""
 
+    # Keywords that unambiguously mean "search the internet"
+    _INTERNET_PREFIXES = ("搜索", "帮我搜", "上网搜", "网上搜", "google", "search for", "web search")
+
     def process(self, msg: InboundMessage, chat_id: str = "") -> Action:
         import re
         from datetime import datetime, timezone, timedelta
+
+        # Fast-path: explicit internet search keywords → bypass LLM routing
+        _text_lower = msg.text.strip().lower()
+        for _kw in self._INTERNET_PREFIXES:
+            if _text_lower.startswith(_kw) or f" {_kw}" in _text_lower:
+                logger.info("Internet fast-path triggered by keyword '%s'", _kw)
+                return Action(
+                    action="MARKET_AGENT",
+                    params={"market": "internet", "question": msg.text},
+                    reply="",
+                )
 
         # Current Beijing time injected so the model always knows the date
         _bj = datetime.now(tz=timezone(timedelta(hours=8)))

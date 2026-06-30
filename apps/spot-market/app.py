@@ -4242,12 +4242,16 @@ def _render_news_sources_tab():
     st.subheader(_t("tab_news"))
 
     # ── Header row: Run Now + Backfill All + Refresh ──────────────────────────
-    _ns_col1, _ns_col2, _ns_col3, _ns_col4 = st.columns([1, 1.5, 1, 2])
+    _ns_col1, _ns_col2, _ns_col3, _ns_col4, _ns_col5 = st.columns([1, 1.5, 1, 1, 1])
     with _ns_col1:
         _ns_run = st.button("▶ Run Now", key="ns_run_now", type="primary")
     with _ns_col2:
         _ns_backfill_all = st.button("⏮ Backfill All (2025-01-01)", key="ns_backfill_all")
     with _ns_col3:
+        _ns_daily_report = st.button("📄 Daily Report", key="ns_daily_report", help="Generate today's market PDF report and send via Feishu")
+    with _ns_col4:
+        _ns_monthly_report = st.button("📊 Monthly Report", key="ns_monthly_report", help="Generate last month's market PDF report and send via Feishu")
+    with _ns_col5:
         _ns_refresh = st.button("↻ Refresh", key="ns_refresh")
 
     if _ns_run:
@@ -4288,6 +4292,39 @@ def _render_news_sources_tab():
                 st.error(f"Hermes returned {_ns_bf2_resp.status_code}: {_ns_bf2_resp.text[:200]}")
         except Exception as _ns_bf2_exc:
             st.error(f"Could not reach Hermes: {_ns_bf2_exc}")
+
+    if _ns_daily_report:
+        try:
+            import requests as _ns_req_dr
+            import urllib3 as _ns_urllib3_dr
+            _ns_urllib3_dr.disable_warnings(_ns_urllib3_dr.exceptions.InsecureRequestWarning)
+            _ns_dr_resp = _ns_req_dr.post(
+                f"{_ns_hermes_url}/hermes/reports/daily",
+                timeout=15, verify=False,
+            )
+            if _ns_dr_resp.ok:
+                st.success("⏳ Daily market report generating — PDF will arrive on Feishu shortly (1-2 min).")
+            else:
+                st.error(f"Hermes returned {_ns_dr_resp.status_code}: {_ns_dr_resp.text[:200]}")
+        except Exception as _ns_dr_exc:
+            st.error(f"Could not reach Hermes: {_ns_dr_exc}")
+
+    if _ns_monthly_report:
+        try:
+            import requests as _ns_req_mr
+            import urllib3 as _ns_urllib3_mr
+            _ns_urllib3_mr.disable_warnings(_ns_urllib3_mr.exceptions.InsecureRequestWarning)
+            _ns_mr_resp = _ns_req_mr.post(
+                f"{_ns_hermes_url}/hermes/reports/monthly",
+                json={},
+                timeout=15, verify=False,
+            )
+            if _ns_mr_resp.ok:
+                st.success("⏳ Monthly market report generating — PDF will arrive on Feishu shortly (2-3 min).")
+            else:
+                st.error(f"Hermes returned {_ns_mr_resp.status_code}: {_ns_mr_resp.text[:200]}")
+        except Exception as _ns_mr_exc:
+            st.error(f"Could not reach Hermes: {_ns_mr_exc}")
 
     # Last-run timestamp
     if _ns_pg_url:
@@ -4453,6 +4490,110 @@ def _render_news_sources_tab():
                     st.rerun()  # full-page rerun to refresh source list after add
                 except Exception as _ns_exc:
                     st.error(f"Failed to add source: {_ns_exc}")
+
+    st.divider()
+
+    # ── Recent Ingested Articles ───────────────────────────────────────────────
+    with st.expander("📋 Recent Ingested Articles", expanded=False):
+        if _ns_pg_url:
+            try:
+                _ns_art_conn = _ns_pg2.connect(_ns_pg_url, options="-c statement_timeout=10000")
+                with _ns_art_conn.cursor() as _ns_art_cur:
+                    _ns_art_cur.execute("""
+                        SELECT title, source_name, relevance_score, ai_summary, published_at,
+                               ingest_status
+                        FROM staging.spot_knowledge_docs
+                        WHERE source_name IS NOT NULL
+                        ORDER BY created_at DESC
+                        LIMIT 40
+                    """)
+                    _ns_art_cols = [d[0] for d in _ns_art_cur.description]
+                    _ns_articles = [dict(zip(_ns_art_cols, r)) for r in _ns_art_cur.fetchall()]
+                _ns_art_conn.close()
+
+                if _ns_articles:
+                    import pandas as _ns_pd
+                    _ns_art_df = _ns_pd.DataFrame(_ns_articles)
+                    _ns_art_df["title"] = _ns_art_df["title"].str[:80]
+                    _ns_art_df["ai_summary"] = _ns_art_df["ai_summary"].fillna("").str[:100]
+                    _ns_art_df["published_at"] = _ns_art_df["published_at"].apply(
+                        lambda x: x.strftime("%Y-%m-%d") if x else "—"
+                    )
+                    _ns_art_df["relevance_score"] = _ns_art_df["relevance_score"].fillna("—")
+                    _ns_art_df.rename(columns={
+                        "title": "Title", "source_name": "Source",
+                        "relevance_score": "Score", "ai_summary": "Summary",
+                        "published_at": "Published", "ingest_status": "Status",
+                    }, inplace=True)
+                    st.dataframe(
+                        _ns_art_df[["Published", "Source", "Score", "Title", "Summary", "Status"]],
+                        use_container_width=True, hide_index=True,
+                    )
+                else:
+                    st.info("No articles ingested yet.")
+            except Exception as _ns_art_exc:
+                if "column" in str(_ns_art_exc).lower() and "does not exist" in str(_ns_art_exc).lower():
+                    st.info("Extra metadata columns not yet present — run the screener once to create them.")
+                else:
+                    st.error(f"Could not load articles: {_ns_art_exc}")
+        else:
+            st.warning("PGURL not set.")
+
+    st.divider()
+
+    # ── Suggested Sources ─────────────────────────────────────────────────────
+    _NS_SUGGESTED = [
+        {"name": "国家能源局",      "url": "https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzA5ODM3NjYxMQ==&scene=124", "region": "全国",  "cat": "policy"},
+        {"name": "中电联发布",      "url": "https://weixin.sogou.com/weixin?type=2&query=中电联发布",  "region": "全国",  "cat": "industry_news"},
+        {"name": "中国储能网",      "url": "https://weixin.sogou.com/weixin?type=2&query=中国储能网",  "region": "全国",  "cat": "technology"},
+        {"name": "北极星储能网",    "url": "https://weixin.sogou.com/weixin?type=2&query=北极星储能网", "region": "全国",  "cat": "industry_news"},
+        {"name": "能源新媒",        "url": "https://weixin.sogou.com/weixin?type=2&query=能源新媒",    "region": "全国",  "cat": "industry_news"},
+        {"name": "国网能源研究院",  "url": "https://weixin.sogou.com/weixin?type=2&query=国网能源研究院", "region": "全国", "cat": "market_analytics"},
+        {"name": "华北电力交易中心","url": "https://weixin.sogou.com/weixin?type=2&query=华北电力交易中心", "region": "华北", "cat": "market_rules"},
+        {"name": "电力决策与舆情研究","url": "https://weixin.sogou.com/weixin?type=2&query=电力决策与舆情研究", "region": "全国", "cat": "market_analytics"},
+    ]
+    # Filter out sources already in the configured list
+    _ns_existing_names = {s["name"] for s in (_ns_sources if _ns_pg_url else [])}
+    _ns_new_suggestions = [s for s in _NS_SUGGESTED if s["name"] not in _ns_existing_names]
+
+    with st.expander(f"💡 Suggested Sources ({len(_ns_new_suggestions)} not yet added)", expanded=False):
+        if not _ns_pg_url:
+            st.warning("PGURL not set — cannot add sources.")
+        elif not _ns_new_suggestions:
+            st.success("All suggested sources are already configured.")
+        else:
+            st.caption("Click Quick Add to add a source and trigger backfill since 2025-01-01.")
+            for _ns_sug in _ns_new_suggestions:
+                _ns_sug_c1, _ns_sug_c2, _ns_sug_c3, _ns_sug_c4 = st.columns([2.5, 1.5, 1.5, 1])
+                _ns_sug_c1.write(_ns_sug["name"])
+                _ns_sug_c2.write(_ns_sug["region"])
+                _ns_sug_c3.write(_ns_sug["cat"])
+                if _ns_sug_c4.button("Quick Add", key=f"ns_qadd_{_ns_sug['name']}"):
+                    try:
+                        _ns_sug_added = _ns_add_source(
+                            _ns_pg_url,
+                            name=_ns_sug["name"],
+                            url=_ns_sug["url"],
+                            source_type="wechat",
+                            region_bucket=_ns_sug["region"],
+                            category_hint=_ns_sug["cat"],
+                        )
+                        st.success(f"✅ Added {_ns_sug['name']}")
+                        try:
+                            import requests as _ns_req_sug
+                            import urllib3 as _ns_urllib3_sug
+                            _ns_urllib3_sug.disable_warnings(_ns_urllib3_sug.exceptions.InsecureRequestWarning)
+                            _ns_req_sug.post(
+                                f"{_ns_hermes_url}/hermes/news-screener/backfill",
+                                json={"source_id": _ns_sug_added["id"], "start_date": "2025-01-01"},
+                                timeout=10, verify=False,
+                            )
+                            st.info("⏳ Backfill started — Feishu notification when done.")
+                        except Exception:
+                            pass
+                        st.rerun(scope="fragment")
+                    except Exception as _ns_sug_exc:
+                        st.error(f"Failed: {_ns_sug_exc}")
 
 with tab_news:
     _render_news_sources_tab()

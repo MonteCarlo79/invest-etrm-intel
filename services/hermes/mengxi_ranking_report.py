@@ -13,6 +13,24 @@ import logging
 from datetime import date, timedelta
 from typing import Optional
 
+# ── Capacity compensation rates ───────────────────────────────────────────────
+# Assets with zero compensation (no 350元/MWh eligibility)
+_ZERO_COMP_PLANTS: frozenset[str] = frozenset([
+    "大航都林储能电站",
+    "大航额日和图储能电站",
+])
+
+# Assets with explicit 280元/MWh compensation
+_280_COMP_PLANTS: frozenset[str] = frozenset([
+    "荣鑫地房子储能电站",
+])
+
+# Assets joining the market after this date (and before 2027-01-01) get 280元/MWh
+_NEW_ASSET_COMP_CUTOFF = date(2026, 6, 27)
+_NEW_ASSET_COMP_END    = date(2027, 1, 1)
+_DEFAULT_COMP_RATE     = 350.0
+_NEW_COMP_RATE         = 280.0
+
 import pandas as pd
 import psycopg2
 
@@ -43,18 +61,6 @@ WITH raw_data AS (
       AND e.plant_name = ANY(%(plant_names)s)
     GROUP BY e.plant_name, date_trunc('month', e.datetime)::date
 ),
-with_comp AS (
-    SELECT
-        plant_name,
-        discharge_rev,
-        charge_cost,
-        discharge_mwh,
-        days,
-        max_energy,
-        min_energy,
-        350.0 * discharge_mwh AS comp_yuan
-    FROM raw_data
-),
 raw AS (
     SELECT
         plant_name,
@@ -62,9 +68,8 @@ raw AS (
         SUM(charge_cost)    AS charge_cost,
         SUM(discharge_mwh)  AS discharge_mwh,
         SUM(days)           AS days,
-        SUM(comp_yuan)      AS comp_yuan,
         MAX(max_energy)     AS max_energy
-    FROM with_comp
+    FROM raw_data
     GROUP BY plant_name
     HAVING MAX(max_energy) > 0
        AND MIN(min_energy) < 0
@@ -75,7 +80,6 @@ SELECT
     charge_cost,
     discharge_mwh,
     days::int  AS days,
-    comp_yuan,
     max_energy
 FROM raw
 """
@@ -144,6 +148,51 @@ def _query(pg_url: str, start: date, end_excl: date, plant_names: list[str]) -> 
     return df
 
 
+def _query_first_seen(pg_url: str, plant_names: list[str]) -> dict[str, date]:
+    """Return {plant_name: first_data_date} for each plant."""
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=60000")
+    try:
+        df = pd.read_sql_query(
+            "SELECT plant_name, MIN(data_date)::date AS first_seen "
+            "FROM marketdata.md_id_cleared_energy "
+            "WHERE plant_name = ANY(%(names)s) "
+            "GROUP BY plant_name",
+            conn,
+            params={"names": plant_names},
+        )
+    finally:
+        conn.close()
+    return {row["plant_name"]: row["first_seen"] for _, row in df.iterrows()}
+
+
+def _resolve_comp_rate(plant_name: str, first_seen: Optional[date], report_date: date) -> float:
+    """Return the capacity compensation rate (元/MWh) for a plant."""
+    if plant_name in _ZERO_COMP_PLANTS:
+        return 0.0
+    if plant_name in _280_COMP_PLANTS:
+        return _NEW_COMP_RATE
+    if (
+        first_seen is not None
+        and first_seen > _NEW_ASSET_COMP_CUTOFF
+        and report_date < _NEW_ASSET_COMP_END
+    ):
+        return _NEW_COMP_RATE
+    return _DEFAULT_COMP_RATE
+
+
+def _apply_comp(df: pd.DataFrame, first_seen_map: dict[str, date], report_date: date) -> pd.DataFrame:
+    """Add comp_yuan column to a raw query result DataFrame."""
+    if df.empty:
+        df["comp_yuan"] = 0.0
+        return df
+    rates = df["plant_name"].map(
+        lambda name: _resolve_comp_rate(name, first_seen_map.get(name), report_date)
+    )
+    df = df.copy()
+    df["comp_yuan"] = rates * df["discharge_mwh"]
+    return df
+
+
 def _enrich_and_rank(raw_df: pd.DataFrame, plant_list: list[dict]) -> pd.DataFrame:
     """Merge DB result with plant metadata and compute rank."""
     if raw_df.empty:
@@ -181,11 +230,22 @@ def _enrich_and_rank(raw_df: pd.DataFrame, plant_list: list[dict]) -> pd.DataFra
 
 # ── PDF generation ────────────────────────────────────────────────────────────
 
+def _cap_str(df: pd.DataFrame) -> str:
+    """Return ' / X.XX GW / X.XX GWh' capacity string from a ranked df, or ''."""
+    if df.empty or "mw" not in df.columns:
+        return ""
+    mw = float(df["mw"].sum())
+    if mw <= 0:
+        return ""
+    return f" / {mw/1000:.2f} GW / {mw*4/1000:.2f} GWh"
+
+
 def _generate_pdf(
     yesterday_df: pd.DataFrame,
     month_df: pd.DataFrame,
     ytd_df: pd.DataFrame,
     report_date: date,
+    total_mw: float = 0.0,
 ) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -283,27 +343,33 @@ def _generate_pdf(
     n_m = len(month_df)
     n_y2 = len(ytd_df)
 
+    capacity_str = ""
+    if total_mw > 0:
+        total_gw  = total_mw / 1000
+        total_gwh = total_mw * 4 / 1000
+        capacity_str = f"　　合计装机 {total_gw:.2f} GW / {total_gwh:.2f} GWh"
+
     story = [
         Paragraph("蒙西BESS市场排名日报", title_s),
-        Paragraph(f"报告日期：{yesterday_str}　　共收录 {max(n_y, n_m, n_y2)} 个BESS项目", sub_s),
+        Paragraph(f"报告日期：{yesterday_str}　　共收录 {max(n_y, n_m, n_y2)} 个BESS项目{capacity_str}", sub_s),
         Paragraph("▲ 绿色行 = 远景能源（Envision Energy）旗下资产", legend_s),
         HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#aaaaaa")),
     ]
 
     story += _section(
-        f"📅 {latest_label}排名　共 {n_y} 个 BESS",
+        f"📅 {latest_label}排名　共 {n_y} 个 BESS{_cap_str(yesterday_df)}",
         yesterday_df,
     )
 
     story += [PageBreak()]
     story += _section(
-        f"📆 本月排名（{month_start} ～ {yesterday_str}）　共 {n_m} 个 BESS",
+        f"📆 本月排名（{month_start} ～ {yesterday_str}）　共 {n_m} 个 BESS{_cap_str(month_df)}",
         month_df,
     )
 
     story += [PageBreak()]
     story += _section(
-        f"📊 年度排名（{ytd_start} ～ {yesterday_str}）　共 {n_y2} 个 BESS",
+        f"📊 年度排名（{ytd_start} ～ {yesterday_str}）　共 {n_y2} 个 BESS{_cap_str(ytd_df)}",
         ytd_df,
     )
 
@@ -316,15 +382,12 @@ def _generate_pdf(
             note_s,
         ),
         Paragraph(
-            "容量补偿标准：350元/MWh，适用于全部BESS项目。",
+            "容量补偿标准：350元/MWh（一般项目）；280元/MWh（荣鑫地房子储能电站及2026年6月27日后入市项目）；"
+            "0元/MWh（大航都林储能电站、大航额日和图储能电站）。",
             note_s,
         ),
         Paragraph(
             "价格说明：放电收入采用15分钟节点内日出清电价；充电成本采用同节点小时均价。",
-            note_s,
-        ),
-        Paragraph(
-            "资产列表来源：OneDrive data/电站.xlsx。",
             note_s,
         ),
     ]
@@ -336,18 +399,37 @@ def _generate_pdf(
 # ── Orchestration ─────────────────────────────────────────────────────────────
 
 def _latest_data_date(pg_url: str) -> Optional[date]:
-    """Return the latest date with cleared_energy data, or None if table is empty."""
-    # MAX(data_date) — leading index key → index-only backward scan, milliseconds.
-    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT MAX(data_date) FROM marketdata.md_id_cleared_energy"
-            )
-            row = cur.fetchone()
-            return row[0] if row and row[0] else None
-    finally:
-        conn.close()
+    """Return the latest date with cleared_energy data, or None if table is empty.
+
+    Queries both md_id_cleared_energy (intraday) and md_da_cleared_energy (day-ahead)
+    and returns the most recent date across either table. This guards against the case
+    where the intraday market is suspended but day-ahead data continues to arrive.
+    """
+    import time as _time
+    last_exc: Exception = RuntimeError("no attempts made")
+    for attempt in range(3):
+        if attempt:
+            _time.sleep(10)
+        try:
+            conn = psycopg2.connect(pg_url, options="-c statement_timeout=120000")
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT GREATEST(
+                            (SELECT MAX(data_date) FROM marketdata.md_id_cleared_energy),
+                            (SELECT MAX(data_date) FROM marketdata.md_da_cleared_energy)
+                        )
+                        """
+                    )
+                    row = cur.fetchone()
+                    return row[0] if row and row[0] else None
+            finally:
+                conn.close()
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("_latest_data_date attempt %d failed: %s", attempt + 1, exc)
+    raise last_exc
 
 
 def send_daily_ranking(
@@ -355,8 +437,11 @@ def send_daily_ranking(
     owner_open_id: str,
     pg_url: str,
     onedrive_client=None,
+    wecom_webhook_url: Optional[str] = None,
+    wecom_client=None,
+    wecom_direct_uid: Optional[str] = None,
 ) -> None:
-    """Query rankings for latest-data-date / current month / YTD, generate PDF, send to Feishu."""
+    """Query rankings for latest-data-date / current month / YTD, generate PDF, send to Feishu and/or WeCom."""
     from datetime import datetime, timezone, timedelta
 
     # ── Load plant metadata: station_master (DB) primary, 电站.xlsx fallback ──
@@ -426,30 +511,62 @@ def send_daily_ranking(
             feishu.send_text(owner_open_id, f"⚠️ 蒙西BESS日报失败（DB查询错误）：{exc}")
         return
 
+    # ── Resolve per-plant compensation rates ──────────────────────────────────
+    try:
+        first_seen_map = _query_first_seen(pg_url, plant_names)
+    except Exception as exc:
+        logger.warning("Could not query first_seen dates: %s — defaulting all to 350", exc)
+        first_seen_map = {}
+
+    yesterday_raw = _apply_comp(yesterday_raw, first_seen_map, yesterday)
+    month_raw     = _apply_comp(month_raw,     first_seen_map, yesterday)
+    ytd_raw       = _apply_comp(ytd_raw,       first_seen_map, yesterday)
+
     # ── Enrich with owner/mw and compute rank ─────────────────────────────────
     yesterday_df = _enrich_and_rank(yesterday_raw, plant_list)
     month_df     = _enrich_and_rank(month_raw,     plant_list)
     ytd_df       = _enrich_and_rank(ytd_raw,       plant_list)
 
     # ── Generate PDF ───────────────────────────────────────────────────────────
+    total_mw = float(ytd_df["mw"].sum()) if not ytd_df.empty else 0.0
     try:
-        pdf_bytes = _generate_pdf(yesterday_df, month_df, ytd_df, yesterday)
+        pdf_bytes = _generate_pdf(yesterday_df, month_df, ytd_df, yesterday, total_mw=total_mw)
     except Exception as exc:
         logger.error("Mengxi ranking report PDF error: %s", exc, exc_info=True)
         if feishu and owner_open_id:
             feishu.send_text(owner_open_id, f"⚠️ 蒙西BESS日报失败（PDF生成错误）：{exc}")
         return
 
-    if not feishu or not owner_open_id:
-        logger.warning("Mengxi ranking report: no Feishu target, skipping send")
-        return
+    filename = f"蒙西BESS排名日报_{yesterday.strftime('%Y%m%d')}.pdf"
 
     # ── Send via Feishu ────────────────────────────────────────────────────────
-    filename = f"蒙西BESS排名日报_{yesterday.strftime('%Y%m%d')}.pdf"
-    try:
-        file_key = feishu.upload_file(pdf_bytes, filename, file_type="pdf")
-        feishu.send_file(owner_open_id, file_key)
-        logger.info("Mengxi ranking report sent: %s (%d bytes)", filename, len(pdf_bytes))
-    except Exception as exc:
-        logger.error("Mengxi ranking report Feishu send failed: %s", exc, exc_info=True)
-        feishu.send_text(owner_open_id, f"⚠️ 蒙西BESS日报PDF发送失败：{exc}")
+    if feishu and owner_open_id:
+        try:
+            file_key = feishu.upload_file(pdf_bytes, filename, file_type="pdf")
+            feishu.send_file(owner_open_id, file_key)
+            logger.info("Mengxi ranking report sent via Feishu: %s (%d bytes)", filename, len(pdf_bytes))
+        except Exception as exc:
+            logger.error("Mengxi ranking report Feishu send failed: %s", exc, exc_info=True)
+            try:
+                feishu.send_text(owner_open_id, f"⚠️ 蒙西BESS日报PDF发送失败：{exc}")
+            except Exception:
+                pass
+    else:
+        logger.warning("Mengxi ranking report: no Feishu target configured, skipping Feishu send")
+
+    # ── Send via WeCom webhook (group bot) ────────────────────────────────────
+    if wecom_webhook_url:
+        from services.hermes.wecom_client import send_pdf_via_wecom_webhook
+        try:
+            send_pdf_via_wecom_webhook(wecom_webhook_url, pdf_bytes, filename)
+            logger.info("Mengxi ranking report sent via WeCom webhook: %s", filename)
+        except Exception as exc:
+            logger.error("Mengxi ranking report WeCom webhook send failed: %s", exc, exc_info=True)
+
+    # ── Send directly to triggering WeCom user (corp app API) ─────────────────
+    if wecom_client and wecom_direct_uid:
+        try:
+            wecom_client.send_file(wecom_direct_uid, pdf_bytes, filename)
+            logger.info("Mengxi ranking report sent directly to WeCom user: %s", wecom_direct_uid)
+        except Exception as exc:
+            logger.error("Mengxi ranking report WeCom direct send failed: %s", exc, exc_info=True)

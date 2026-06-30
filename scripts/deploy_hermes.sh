@@ -56,6 +56,9 @@ for c in containers:
     env['ONEDRIVE_CLIENT_ID']     = os.environ.get('ONEDRIVE_CLIENT_ID',     env.get('ONEDRIVE_CLIENT_ID', ''))
     env['ONEDRIVE_CLIENT_SECRET'] = os.environ.get('ONEDRIVE_CLIENT_SECRET', env.get('ONEDRIVE_CLIENT_SECRET', ''))
     env['ONEDRIVE_REFRESH_TOKEN'] = os.environ.get('ONEDRIVE_REFRESH_TOKEN', env.get('ONEDRIVE_REFRESH_TOKEN', ''))
+    # WeCom group webhook for daily ranking report (optional)
+    if os.environ.get('WECOM_RANKING_WEBHOOK_URL'):
+        env['WECOM_RANKING_WEBHOOK_URL'] = os.environ['WECOM_RANKING_WEBHOOK_URL']
     # Remove legacy WeChat var
     env.pop('WECHAT_OWNER_ID', None)
     c['environment'] = [{'name': k, 'value': v} for k, v in env.items()]

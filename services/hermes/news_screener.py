@@ -46,15 +46,27 @@ Article title: {title}
 Article excerpt (first 800 chars):
 {excerpt}
 
-Rate this article's relevance to: China power markets, energy storage, BESS operations, electricity policy, market rules, nodal prices, dispatch, or related topics.
+Rate this article's relevance to China's power sector and energy storage industry.
+
+SCORING GUIDE (be generous — err toward higher scores when in doubt):
+  9–10 : Directly about BESS dispatch/operations, electricity spot prices, power market trading rules, capacity market, or major national energy policy with direct market impact
+  7–8  : China energy storage industry news, power market reforms, grid operations, renewable energy integration, provincial/regional electricity pricing, EV battery/storage technology with grid applications
+  5–6  : General China electricity / energy industry news, power company announcements, energy transition, coal/gas power, transmission infrastructure, energy regulatory updates
+  3–4  : Tangential — manufacturing news, EV batteries without grid angle, general business in energy sector, international energy with some China reference
+  1–2  : Barely relevant — other industries, broad technology news with minor energy mention
+  0    : Completely unrelated
+
+IMPORTANT: If the article excerpt is empty or very short (title-only scoring), be GENEROUS based on the title alone:
+  - A title clearly about 储能 (energy storage), 电力市场 (power market), 新能源 (new energy), 调频 (frequency regulation), 峰谷 (peak-valley pricing), 碳市场 (carbon market), or similar key terms should score at least 6–7.
+  - Official sources (国家能源局, 中电联, 电力报, 能源局) should score at least 5 even for general articles.
 
 Respond ONLY with valid JSON (no markdown, no code block):
 {{
-  "relevance": <0-10 integer, where 10=highly relevant to China power/BESS>,
+  "relevance": <0-10 integer>,
   "region_bucket": "<华北|华东|华南|西北|西南|东北|全国>",
   "region_province": "<province name in Chinese or null>",
   "category": "<policy|market_rules|market_analytics|technology|industry_news|other>",
-  "summary": "<1-2 sentence Chinese summary of the article>"
+  "summary": "<1-2 sentence Chinese summary; if body is empty, describe the likely topic based on title>"
 }}
 """
 
@@ -709,6 +721,40 @@ def _discover_rss_articles(source: dict) -> list[dict]:
 
 # ── AI scoring ────────────────────────────────────────────────────────────────
 
+def _synthesize_digest(articles: list[dict], api_key: str) -> str:
+    """
+    Generate a 3-5 sentence executive summary synthesising the key themes
+    from today's high/mid-relevance articles. Returns plain Chinese text.
+    Called only when there are ≥2 articles scoring ≥6.
+    """
+    import anthropic
+
+    lines = []
+    for a in articles[:12]:  # cap at 12 to keep prompt short
+        title = a.get("title", "")[:80]
+        summary = a.get("summary") or ""
+        score = a.get("relevance", "?")
+        lines.append(f"- [{score}] {title}" + (f"：{summary[:80]}" if summary else ""))
+
+    prompt = (
+        "以下是今日中国电力市场相关新闻标题及摘要（括号内为相关度评分）：\n\n"
+        + "\n".join(lines)
+        + "\n\n请用3-5句话，以中文撰写今日电力行业要点综述，重点提炼政策动态、市场价格走势、储能行业重要事件。"
+        "语言简洁专业，适合能源从业者阅读。只输出综述正文，不要加标题或前言。"
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text.strip()
+    except Exception as exc:
+        logger.warning("Digest synthesis failed: %s", exc)
+        return ""
+
+
 def _score_article(title: str, body: str, api_key: str) -> dict:
     """
     Call Claude Haiku to score relevance and extract metadata.
@@ -811,12 +857,28 @@ def _ingest_article(
 
 # ── Feishu digest ─────────────────────────────────────────────────────────────
 
-def _build_feishu_card(date_str: str, results: list[dict]) -> dict:
+def _build_feishu_card(date_str: str, results: list[dict], api_key: str = "") -> dict:
     """
     Build a Feishu interactive card for the daily digest.
-    results: list of {title, url, source_name, relevance, category, region_bucket, summary}
+    results: list of {title, url, source_name, relevance, category, region_bucket, summary, published_at, is_new}
+
+    Shows articles published in the last 24h (by published_at), regardless of whether they were
+    already in the KB. This prevents "今日无新内容" after a backfill has pre-ingested today's articles.
+    Falls back to is_new=True for articles with no published_at date.
+
+    If api_key is provided and there are ≥2 high/mid-relevance articles, prepends an AI-synthesised
+    executive summary at the top of the card.
     """
-    new_articles = [r for r in results if r["is_new"]]
+    cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    def _is_today(r: dict) -> bool:
+        pub = r.get("published_at")
+        if pub is None:
+            return r.get("is_new", False)  # no date: only include if new to KB
+        return pub >= cutoff_24h
+
+    new_articles = [r for r in results if _is_today(r)]
+    ingested_count = sum(1 for r in new_articles if r.get("is_new"))
     total = len(new_articles)
     source_count = len({r["source_name"] for r in new_articles})
 
@@ -842,12 +904,20 @@ def _build_feishu_card(date_str: str, results: list[dict]) -> dict:
 
     sections = []
 
+    new_label = f" · {ingested_count} 篇新入库" if ingested_count < total else ""
     header_text = (
         f"📰 今日能源资讯 — {date_str}\n"
-        f"{total} 篇新文章 · 来自 {source_count} 个来源"
+        f"{total} 篇文章 · 来自 {source_count} 个来源{new_label}"
         if total > 0
         else f"📰 今日能源资讯 — {date_str}\n今日无新内容"
     )
+
+    # AI executive summary — only when there are meaningful articles to synthesise
+    notable = [r for r in (tier_high + tier_mid) if r.get("relevance") is not None]
+    if api_key and len(notable) >= 2:
+        synthesis = _synthesize_digest(notable, api_key)
+        if synthesis:
+            sections.append(f"**📝 今日要点**\n\n{synthesis}")
 
     if tier_high:
         body = "🔥 **重点关注** (relevance ≥ 8)\n\n"
@@ -970,6 +1040,7 @@ def screen_news_sources(
                             "category": ai_result.get("category"),
                             "region_bucket": ai_result.get("region_bucket") or source.get("region_bucket"),
                             "summary": ai_result.get("summary"),
+                            "published_at": art.get("published_at"),
                             "is_new": is_new,
                         })
                         if is_new:
@@ -1025,7 +1096,7 @@ def screen_news_sources(
     # 6. Send Feishu digest
     if feishu and owner_open_id:
         try:
-            card = _build_feishu_card(date_str, all_results)
+            card = _build_feishu_card(date_str, all_results, api_key)
             feishu.send_card(owner_open_id, card)
             logger.info("Feishu digest sent for %s", date_str)
         except Exception as exc:

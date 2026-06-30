@@ -142,6 +142,35 @@ def _build_cashflows(
     return cfs
 
 
+def _load_mengxi_capacity(engine) -> dict:
+    """Return total installed capacity and per-owner breakdown from marketdata.station_master."""
+    sql = sql_text("""
+        SELECT plant_name, mw, owner
+        FROM marketdata.station_master
+        ORDER BY owner, plant_name
+    """)
+    try:
+        df = pd.read_sql(sql, engine)
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+    total_mw = float(df["mw"].sum())
+    by_owner = (
+        df.groupby("owner")
+        .agg(plant_count=("plant_name", "count"), total_mw=("mw", "sum"))
+        .reset_index()
+        .sort_values("total_mw", ascending=False)
+    )
+    return {
+        "total_mw": round(total_mw, 0),
+        "total_gw": round(total_mw / 1000, 3),
+        "total_gwh_4h": round(total_mw * 4 / 1000, 3),
+        "plant_count": len(df),
+        "by_owner": by_owner.to_dict(orient="records"),
+    }
+
+
 _TOOLS = [
     {
         "name": "get_bess_economics",
@@ -167,6 +196,15 @@ _TOOLS = [
                 "date":       {"type": "string", "description": "YYYY-MM-DD"},
             },
             "required": ["province", "duration_h", "date"],
+        },
+    },
+    {
+        "name": "get_mengxi_capacity",
+        "description": "Total installed BESS capacity in Mengxi (Inner Mongolia West) market. Returns total MW, GW, GWh (assuming 4h duration), plant count, and breakdown by owner (业主).",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
     {
@@ -215,6 +253,7 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
         "1. Province screening → call get_bess_economics\n"
         "2. Dispatch quality → call get_dispatch_detail\n"
         "3. Financial case → call get_irr_estimate (IRR < 8% = marginal, < 0% = rejected)\n"
+        "4. Mengxi installed capacity / plant list / 装机容量 → call get_mengxi_capacity\n"
     )
 
     def dispatch(name: str, inp: dict) -> str:
@@ -233,6 +272,11 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
             elif name == "get_dispatch_detail":
                 df = _load_dispatch_day(engine, inp["province"], float(inp.get("duration_h", 4.0)), inp["date"])
                 return df.head(24).to_json(orient="records", default_handler=str) if not df.empty else "No dispatch data."
+
+            elif name == "get_mengxi_capacity":
+                result = _load_mengxi_capacity(engine)
+                import json as _json
+                return _json.dumps(result, ensure_ascii=False, default=str) if result else "No capacity data found."
 
             elif name == "get_irr_estimate":
                 econ = _load_avg_economics(engine, inp["province"], float(inp.get("duration_h", 4.0)))
