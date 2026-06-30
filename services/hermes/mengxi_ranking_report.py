@@ -388,7 +388,7 @@ def _generate_pdf(
     )
 
     def _ps(name, size, **kw):
-        return ParagraphStyle(name, fontName=F, fontSize=size, **kw)
+        return ParagraphStyle(f"{name}_{id(buf)}", fontName=F, fontSize=size, **kw)
 
     title_s  = _ps("t",    16, alignment=1, spaceAfter=4)
     sub_s    = _ps("sub",   8, alignment=1, textColor=colors.grey, spaceAfter=2)
