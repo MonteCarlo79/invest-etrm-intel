@@ -358,6 +358,7 @@ def _generate_pdf(
     ytd_df: pd.DataFrame,
     report_date: date,
     total_mw: float = 0.0,
+    nodal_monthly_df: Optional[pd.DataFrame] = None,
 ) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -369,7 +370,6 @@ def _generate_pdf(
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
-    # CID font — bundled in reportlab, no external files needed
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     F = "STSong-Light"
 
@@ -377,6 +377,8 @@ def _generate_pdf(
     ENVISION_FG   = colors.white
     HEADER_BG     = colors.HexColor("#1f3b63")
     ALT_ROW       = colors.HexColor("#f0f4fa")
+    GREEN_TEXT    = colors.HexColor("#1a7a1a")
+    RED_TEXT      = colors.HexColor("#b30000")
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -395,11 +397,19 @@ def _generate_pdf(
                    textColor=colors.HexColor("#1f3b63"))
     note_s   = _ps("n",     7, textColor=colors.grey, spaceAfter=4)
 
-    COL_HDR = ["排名", "项目名称", "业主", "MW", "总收益(万元)", "收益/MWh/天", "天数"]
-    COL_W   = [11*mm, 58*mm, 34*mm, 13*mm, 27*mm, 27*mm, 13*mm]
+    # 9 columns — narrowed name/owner to make room for two nodal rank cols
+    # Total: 11+46+28+13+20+20+13+15+15 = 181mm (A4 printable = 186mm)
+    COL_HDR = ["排名", "项目名称", "业主", "MW", "总收益(万元)", "收益/MWh/天", "天数",
+               "2h节点排名", "4h节点排名"]
+    COL_W   = [11*mm, 46*mm, 28*mm, 13*mm, 20*mm, 20*mm, 13*mm, 15*mm, 15*mm]
 
-    def _build_table(df: pd.DataFrame, top_n: int = 30):
-        sub = df.head(top_n).reset_index(drop=True)
+    def _nodal_cell(val) -> str:
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return "—"
+        return f"#{int(val)}"
+
+    def _build_table(df: pd.DataFrame):
+        sub = df.reset_index(drop=True)
         rows = [COL_HDR]
         for _, r in sub.iterrows():
             rows.append([
@@ -410,29 +420,47 @@ def _generate_pdf(
                 f"{r['profit_wan']:.0f}",
                 f"{r['score']:.0f}",
                 str(r["days"]),
+                _nodal_cell(r.get("nodal_rank_2h")),
+                _nodal_cell(r.get("nodal_rank_4h")),
             ])
 
         cmds = [
-            ("FONTNAME",   (0, 0), (-1, -1), F),
-            ("FONTSIZE",   (0, 0), (-1, -1), 7.5),
-            ("BACKGROUND", (0, 0), (-1,  0), HEADER_BG),
-            ("TEXTCOLOR",  (0, 0), (-1,  0), colors.white),
-            ("FONTSIZE",   (0, 0), (-1,  0), 8),
-            ("ALIGN",      (0, 0), (-1, -1), "CENTER"),
-            ("ALIGN",      (1, 1), (2, -1), "LEFT"),
-            ("GRID",       (0, 0), (-1, -1), 0.25, colors.lightgrey),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("FONTNAME",      (0, 0), (-1, -1), F),
+            ("FONTSIZE",      (0, 0), (-1, -1), 7),
+            ("BACKGROUND",    (0, 0), (-1,  0), HEADER_BG),
+            ("TEXTCOLOR",     (0, 0), (-1,  0), colors.white),
+            ("FONTSIZE",      (0, 0), (-1,  0), 7.5),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("ALIGN",         (1, 1), (2, -1),  "LEFT"),
+            ("GRID",          (0, 0), (-1, -1), 0.25, colors.lightgrey),
+            ("TOPPADDING",    (0, 0), (-1, -1), 2),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]
         for i in range(1, len(rows)):
+            actual_rank_str = rows[i][0]
+            actual_rank = int(actual_rank_str) if actual_rank_str.isdigit() else None
+            is_envision = "远景" in rows[i][2]
             if i % 2 == 0:
                 cmds.append(("BACKGROUND", (0, i), (-1, i), ALT_ROW))
-            if "远景" in rows[i][2]:  # owner column
+            if is_envision:
                 cmds += [
                     ("BACKGROUND", (0, i), (-1, i), ENVISION_BG),
                     ("TEXTCOLOR",  (0, i), (-1, i), ENVISION_FG),
                     ("FONTNAME",   (0, i), (-1, i), F),
                 ]
+            # Nodal rank colour coding (non-Envision rows only)
+            if not is_envision and actual_rank is not None:
+                for col_idx in (7, 8):
+                    cell_val = rows[i][col_idx]
+                    if cell_val != "—":
+                        try:
+                            nodal_rank = int(cell_val.lstrip("#"))
+                            if nodal_rank > actual_rank:
+                                cmds.append(("TEXTCOLOR", (col_idx, i), (col_idx, i), GREEN_TEXT))
+                            elif nodal_rank < actual_rank:
+                                cmds.append(("TEXTCOLOR", (col_idx, i), (col_idx, i), RED_TEXT))
+                        except ValueError:
+                            pass
 
         t = Table(rows, colWidths=COL_W, repeatRows=1)
         t.setStyle(TableStyle(cmds))
@@ -443,7 +471,60 @@ def _generate_pdf(
         if df.empty:
             elems.append(Paragraph("暂无数据（该时段无BESS充放电记录）", note_s))
         else:
-            elems.append(_build_table(df, top_n=len(df)))  # show all plants
+            elems.append(_build_table(df))
+        return elems
+
+    def _section_nodal_monthly(ndf: pd.DataFrame) -> list:
+        month_val = ndf["month"].iloc[0]
+        if hasattr(month_val, "strftime"):
+            month_str = month_val.strftime("%Y年%m月")
+        else:
+            month_str = str(month_val)[:7]
+
+        elems = [
+            Paragraph(f"蒙西BESS节点价值月度排名（{month_str}）", h2_s),
+            Paragraph(
+                "基于完美预见MILP套利模型　|　往返效率85%　|　每月5日更新",
+                note_s,
+            ),
+        ]
+
+        N_HDR = ["节点排名(2h)", "节点排名(4h)", "节点名称", "2h收益/MWh/天", "4h收益/MWh/天", "交易天数"]
+        N_W   = [22*mm, 22*mm, 70*mm, 28*mm, 28*mm, 18*mm]
+        n_rows = [N_HDR]
+        for _, r in ndf.iterrows():
+            n_rows.append([
+                f"#{int(r['rank_2h'])}",
+                f"#{int(r['rank_4h'])}",
+                str(r["plant_name"]),
+                f"{r['pf_score_2h']:.1f}",
+                f"{r['pf_score_4h']:.1f}",
+                str(int(r["n_days"])),
+            ])
+
+        n_cmds = [
+            ("FONTNAME",      (0, 0), (-1, -1), F),
+            ("FONTSIZE",      (0, 0), (-1, -1), 7),
+            ("BACKGROUND",    (0, 0), (-1,  0), HEADER_BG),
+            ("TEXTCOLOR",     (0, 0), (-1,  0), colors.white),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("ALIGN",         (2, 1), (2, -1),  "LEFT"),
+            ("GRID",          (0, 0), (-1, -1), 0.25, colors.lightgrey),
+            ("TOPPADDING",    (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        for i in range(1, len(n_rows)):
+            if i % 2 == 0:
+                n_cmds.append(("BACKGROUND", (0, i), (-1, i), ALT_ROW))
+
+        nt = Table(n_rows, colWidths=N_W, repeatRows=1)
+        nt.setStyle(TableStyle(n_cmds))
+        elems.append(nt)
+        elems.append(Paragraph(
+            "节点价值：完美预见MILP套利收益 ÷ (装机容量MWh × 天数)，单位CNY/MWh/天。"
+            "2h = 0.5C电池；4h = 0.25C电池。数据来源：蒙西集中式现货市场出清数据。",
+            note_s,
+        ))
         return elems
 
     yesterday_str = report_date.strftime("%Y-%m-%d")
@@ -451,8 +532,8 @@ def _generate_pdf(
     ytd_start     = report_date.replace(month=1, day=1).strftime("%Y-%m-%d")
     latest_label  = f"最新（{yesterday_str}）"
 
-    n_y = len(yesterday_df)
-    n_m = len(month_df)
+    n_y  = len(yesterday_df)
+    n_m  = len(month_df)
     n_y2 = len(ytd_df)
 
     capacity_str = ""
@@ -485,6 +566,11 @@ def _generate_pdf(
         ytd_df,
     )
 
+    # Monthly nodal ranking page (static, refreshed on 5th of each month)
+    if nodal_monthly_df is not None and not nodal_monthly_df.empty:
+        story += [PageBreak()]
+        story += _section_nodal_monthly(nodal_monthly_df)
+
     story += [
         Spacer(1, 4*mm),
         HRFlowable(width="100%", thickness=0.3, color=colors.lightgrey),
@@ -500,6 +586,11 @@ def _generate_pdf(
         ),
         Paragraph(
             "价格说明：放电收入采用15分钟节点内日出清电价；充电成本采用同节点小时均价。",
+            note_s,
+        ),
+        Paragraph(
+            "节点排名：2h/4h节点排名基于完美预见MILP套利，往返效率85%。"
+            "绿色 = 实际排名优于节点排名（超越地理优势）；红色 = 低于节点排名（未充分利用地理优势）。",
             note_s,
         ),
     ]
