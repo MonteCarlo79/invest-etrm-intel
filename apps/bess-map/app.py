@@ -277,6 +277,14 @@ _T: dict[str, dict[str, str]] = {
         "demand_fr_bess_cap":      "BESS Installed (万kW)",
         "demand_compare_title":    "③ Combined: Arbitrage vs Frequency Response vs Existing BESS",
         "demand_compare_caption":  "Recommended BESS = max(Arbitrage sizing, FR requirement). Gap = Recommended − Existing BESS installed.",
+        # system operation fee
+        "tab_sysopfee":            "System Op Fee 系统运行费",
+        "sysopfee_title":          "Provincial Grid System Operation Fee (系统运行费)",
+        "sysopfee_caption":        "Monthly 系统运行费 (yuan/kWh) per province. Higher fee = greater grid balancing cost, a proxy for flexibility demand.",
+        "sysopfee_heatmap_title":  "System Operation Fee Heatmap (¥/kWh)",
+        "sysopfee_line_title":     "Monthly Trend by Province (¥/kWh)",
+        "sysopfee_no_data":        "No system operation fee data in database. Upload 各省市电网系统运行费用_YYYYMM.xlsx via Hermes to populate.",
+        "sysopfee_province":       "Filter provinces",
         "demand_arb_p50":          "Arbitrage p50 (MW)",
         "demand_arb_p90":          "Arbitrage p90 (MW)",
         "demand_recommended":      "Recommended BESS (MW)",
@@ -481,6 +489,14 @@ _T: dict[str, dict[str, str]] = {
         "demand_no_fund":          "市场基础数据不可用 — 无法计算调频需求。",
         "demand_no_hourly":        "该省份/时段无小时基础数据。",
         "demand_source_note":      "⚠️ 调频容量需求来源于各省/区域调频辅助服务市场实施细则及GB/T 45905.6-2025国家标准。公式：调频需求 = 最高负荷×比例 + 新能源装机×比例 + 兜底容量。[已确认]=来自官方文件；[估算]=参考区域规则或国家基准值。注：强制配储比例（配储比例）已由136号文废除，本处不适用。",
+        # system operation fee
+        "tab_sysopfee":            "系统运行费",
+        "sysopfee_title":          "各省电网系统运行费",
+        "sysopfee_caption":        "各省市月度系统运行费（元/kWh）。费用越高代表电网调节成本越大，是储能灵活性需求的重要参考指标。",
+        "sysopfee_heatmap_title":  "系统运行费热力图（元/kWh）",
+        "sysopfee_line_title":     "各省月度趋势（元/kWh）",
+        "sysopfee_no_data":        "数据库中暂无系统运行费数据。请通过Hermes上传 各省市电网系统运行费用_YYYYMM.xlsx 文件以导入数据。",
+        "sysopfee_province":       "筛选省份",
     },
 }
 
@@ -1457,9 +1473,9 @@ focused exclusively on China's provincial electricity spot markets.
 """
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_ranking, tab_geo, tab_pca, tab_demand, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
+tab_ranking, tab_geo, tab_pca, tab_demand, tab_sysopfee, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
     _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_demand"),
-    _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
+    _t("tab_sysopfee"), _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
 ])
 
 _ENG_KEY = "bess_map"   # hashable cache-bust token (stable)
@@ -1625,6 +1641,11 @@ with tab_pca:
 
     all_provs_pca = load_province_list(_ENG_KEY)
 
+    if "pca_province_single" not in st.session_state and all_provs_pca:
+        st.session_state["pca_province_single"] = all_provs_pca[0]
+    if "pca_provinces_multi" not in st.session_state and all_provs_pca:
+        st.session_state["pca_provinces_multi"] = all_provs_pca[:3] if len(all_provs_pca) >= 3 else all_provs_pca
+
     pca_col_left, pca_col_right = st.columns([1, 3])
     with pca_col_left:
         compare_mode = st.checkbox(_t("pca_compare"), value=False, key="pca_compare")
@@ -1632,14 +1653,12 @@ with tab_pca:
             pca_provinces = st.multiselect(
                 _t("pca_province"),
                 options=all_provs_pca,
-                default=all_provs_pca[:3] if len(all_provs_pca) >= 3 else all_provs_pca,
                 key="pca_provinces_multi",
             )
         else:
             pca_prov_single = st.selectbox(
                 _t("pca_province"),
                 options=all_provs_pca,
-                index=0,
                 key="pca_province_single",
             )
             pca_provinces = [pca_prov_single] if pca_prov_single else []
@@ -2250,14 +2269,6 @@ with tab_demand:
                     y=_cmp_df[_t("demand_bess_installed")].tolist(),
                     marker_color="#4CAF50",
                 ))
-                fig_cmp.add_trace(go.Scatter(
-                    name=_t("demand_recommended"),
-                    x=_cmp_df.index.tolist(),
-                    y=_cmp_df[_t("demand_recommended")].tolist(),
-                    mode="markers",
-                    marker=dict(symbol="diamond", size=10, color="#E45756",
-                                line=dict(color="white", width=1)),
-                ))
                 fig_cmp.update_layout(
                     title=_t("demand_compare_title"),
                     barmode="group",
@@ -2269,7 +2280,126 @@ with tab_demand:
                 st.plotly_chart(fig_cmp, use_container_width=True, key="demand_cmp_bar")
                 st.dataframe(_cmp_df, use_container_width=True)
 
-# ── Tab 5: Dispatch & Economics ───────────────────────────────────────────────
+# ── Tab 5: System Operation Fee ───────────────────────────────────────────────
+
+@st.cache_data(ttl=1800)
+def load_sysopfee(_eng_key) -> "pd.DataFrame":
+    """Load all province_sysopfee_monthly data."""
+    try:
+        sql = sql_text("""
+            SELECT province, year_month, fee_yuan_kwh
+            FROM province_sysopfee_monthly
+            ORDER BY year_month, province
+        """)
+        df = pd.read_sql(sql, _eng())
+        df["year_month"] = pd.to_datetime(df["year_month"])
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["province", "year_month", "fee_yuan_kwh"])
+
+
+with tab_sysopfee:
+    st.subheader(_t("sysopfee_title"))
+    st.caption(_t("sysopfee_caption"))
+
+    _sof_df = load_sysopfee(_ENG_KEY)
+
+    if _sof_df.empty:
+        st.info(_t("sysopfee_no_data"))
+    else:
+        _all_provs_sof = sorted(_sof_df["province"].unique().tolist())
+
+        # Province filter with persistent session state
+        if "sysopfee_provinces" not in st.session_state:
+            st.session_state["sysopfee_provinces"] = _all_provs_sof
+
+        _sof_provs = st.multiselect(
+            _t("sysopfee_province"),
+            options=_all_provs_sof,
+            key="sysopfee_provinces",
+        )
+
+        if not _sof_provs:
+            st.info("Select at least one province.")
+        else:
+            _sof_filtered = _sof_df[_sof_df["province"].isin(_sof_provs)].copy()
+            _sof_filtered["ym_str"] = _sof_filtered["year_month"].dt.strftime("%Y-%m")
+
+            # ── Heatmap ──────────────────────────────────────────────────────
+            _sof_pivot = (
+                _sof_filtered
+                .pivot_table(index="province", columns="ym_str", values="fee_yuan_kwh", aggfunc="mean")
+                .reindex(columns=sorted(_sof_filtered["ym_str"].unique()))
+            )
+            # Sort provinces by mean fee descending
+            _sof_pivot = _sof_pivot.loc[
+                _sof_pivot.mean(axis=1).sort_values(ascending=False).index
+            ]
+
+            _z = _sof_pivot.values.tolist()
+            _z_text = [
+                [f"{v:.4f}" if v is not None and not (v != v) else "" for v in row]
+                for row in _z
+            ]
+
+            fig_sof_heat = go.Figure(go.Heatmap(
+                z=_z,
+                x=_sof_pivot.columns.tolist(),
+                y=_sof_pivot.index.tolist(),
+                text=_z_text,
+                texttemplate="%{text}",
+                colorscale="RdYlGn_r",
+                zmid=float(pd.DataFrame(_z).stack().median()),
+                colorbar=dict(title="¥/kWh", thickness=14),
+                hovertemplate="%{y}  %{x}<br>%{z:.4f} ¥/kWh<extra></extra>",
+            ))
+            fig_sof_heat.update_layout(
+                title=_t("sysopfee_heatmap_title"),
+                xaxis=dict(title="Month", tickangle=-45),
+                yaxis=dict(title="Province", autorange="reversed"),
+                height=max(320, 22 * len(_sof_provs) + 100),
+                margin=dict(t=50, b=80, l=120, r=20),
+            )
+            st.plotly_chart(fig_sof_heat, use_container_width=True, key="sof_heatmap")
+
+            # ── Line chart ───────────────────────────────────────────────────
+            fig_sof_line = go.Figure()
+            for prov in _sof_pivot.index:
+                prov_data = _sof_filtered[_sof_filtered["province"] == prov].sort_values("year_month")
+                fig_sof_line.add_trace(go.Scatter(
+                    name=prov,
+                    x=prov_data["year_month"].tolist(),
+                    y=prov_data["fee_yuan_kwh"].tolist(),
+                    mode="lines+markers",
+                    marker=dict(size=5),
+                ))
+            fig_sof_line.update_layout(
+                title=_t("sysopfee_line_title"),
+                xaxis_title="Month",
+                yaxis_title="¥/kWh",
+                height=380,
+                margin=dict(t=40, b=60, l=60, r=10),
+                legend=dict(orientation="h", y=-0.3),
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_sof_line, use_container_width=True, key="sof_line")
+
+            # ── Summary table ────────────────────────────────────────────────
+            _sof_tbl = (
+                _sof_filtered
+                .pivot_table(index="province", columns="ym_str", values="fee_yuan_kwh", aggfunc="mean")
+                .reindex(columns=sorted(_sof_filtered["ym_str"].unique()))
+                .round(4)
+                .loc[_sof_pivot.index]  # same sort order as heatmap
+            )
+            _sof_tbl.columns.name = None
+            _sof_tbl.index.name = "Province"
+            st.dataframe(
+                _sof_tbl.style.background_gradient(cmap="RdYlGn_r", axis=None),
+                use_container_width=True,
+            )
+
+# ── Tab 6: Dispatch & Economics ───────────────────────────────────────────────
 with tab_dispatch:
     all_provs = load_province_list(_ENG_KEY)
     col_dp, col_dd, col_dr = st.columns([2, 1, 3])

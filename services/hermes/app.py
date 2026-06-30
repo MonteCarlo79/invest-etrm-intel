@@ -43,6 +43,8 @@ from services.hermes.market_report import send_daily_report as _send_daily_repor
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
 from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
+from services.hermes.sysopfee_etl import upsert_sysopfee, is_sysopfee_file
+from services.hermes.sysopfee_screener import screen_sysopfee as _screen_sysopfee
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -502,6 +504,19 @@ def create_app() -> FastAPI:
             },
         )
 
+        # System operation fee screener: 1st of each month, 11:00 UTC (19:00 Beijing)
+        scheduler.add_job(
+            _screen_sysopfee,
+            "cron",
+            day=1, hour=11, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
@@ -569,6 +584,21 @@ def create_app() -> FastAPI:
             return Response(content="DB not configured", status_code=503)
         background.add_task(
             _screen_capacity,
+            pg_url=_pg,
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            feishu=feishu,
+            owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+        )
+        return {"status": "started"}
+
+    @app.post("/hermes/sysopfee/scan")
+    async def run_sysopfee_scan(background: BackgroundTasks):
+        """Trigger a manual system operation fee scan. Returns immediately; runs in background."""
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        background.add_task(
+            _screen_sysopfee,
             pg_url=_pg,
             api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             feishu=feishu,
@@ -1346,6 +1376,26 @@ def _handle_file_message(
             logger.error("Capacity ETL failed: %s", exc, exc_info=True)
             feishu.send_text(open_id=sender_id, text=f"⚠️ 装机数据入库失败：{exc}")
 
+    # Auto ETL: upsert system operation fee data into province_sysopfee_monthly
+    if is_sysopfee_file(filename):
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = upsert_sysopfee(file_bytes, filename, pg_url, api_key)
+            if result["upserted"] > 0:
+                etl_msg = (
+                    f"📊 系统运行费数据已入库\n"
+                    f"更新 {result['upserted']} 条省月数据\n"
+                    f"bess-map 系统运行费Tab已自动更新。"
+                )
+            else:
+                errs = "; ".join(result["errors"][:2])
+                etl_msg = f"⚠️ 系统运行费入库失败：{errs or '无数据提取'}"
+            feishu.send_text(open_id=sender_id, text=etl_msg)
+        except Exception as exc:
+            logger.error("SysOpFee ETL failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 系统运行费入库失败：{exc}")
+
     # Spot market PDF: trigger ingestion pipeline
     if is_spot_pdf(filename) and resource_type == "file":
         try:
@@ -1452,6 +1502,25 @@ def _handle_telegram_file(
             telegram.send_text(chat_id, etl_msg)
         except Exception as exc:
             logger.error("Capacity ETL (Telegram) failed: %s", exc, exc_info=True)
+
+    # Auto ETL: upsert system operation fee data (Telegram)
+    if is_sysopfee_file(filename):
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = upsert_sysopfee(file_bytes, filename, pg_url, api_key)
+            if result["upserted"] > 0:
+                etl_msg = (
+                    f"📊 系统运行费数据已入库\n"
+                    f"更新 {result['upserted']} 条省月数据\n"
+                    f"bess-map 系统运行费Tab已自动更新。"
+                )
+            else:
+                errs = "; ".join(result["errors"][:2])
+                etl_msg = f"⚠️ 系统运行费入库失败：{errs or '无数据提取'}"
+            telegram.send_text(chat_id, etl_msg)
+        except Exception as exc:
+            logger.error("SysOpFee ETL (Telegram) failed: %s", exc, exc_info=True)
 
     # Spot market PDF ingest
     if is_spot_pdf(filename):
@@ -1638,6 +1707,41 @@ def _handle_message(
         _threading.Thread(target=_run_capacity, daemon=True).start()
         return True
 
+    # ── /sysopfee command — manually trigger system operation fee screener ──
+    if _re.match(r'^/?(?:sysopfee|系统运行费|运行费|sysopfee.scan)$', msg.text.strip(), _re.I):
+        def _sof_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("sysopfee reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            _sof_reply("⚠️ 数据库未配置，无法运行系统运行费扫描。")
+            return True
+        _sof_reply("⏳ 正在扫描各省系统运行费数据，稍候…")
+
+        def _run_sysopfee():
+            try:
+                _screen_sysopfee(
+                    pg_url=_pg,
+                    api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+                    feishu=feishu,
+                    owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", msg.sender_id),
+                )
+            except Exception as _e:
+                logger.error("Manual sysopfee screener failed: %s", _e)
+                _sof_reply(f"⚠️ 系统运行费扫描失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_sysopfee, daemon=True).start()
+        return True
+
     # ── /report command — manually trigger a scheduled report ───────────────
     # Accepts: "/report mengxi"  /  "/报告 蒙西"  /  "resend mengxi report"  /  "蒙西储能日报"
     _report_m = _re.match(r'^/?report(?:\s+(mengxi|蒙西|ranking))?$', msg.text.strip(), _re.I)
@@ -1679,6 +1783,58 @@ def _handle_message(
 
         import threading
         threading.Thread(target=_run_mengxi_report, daemon=True).start()
+        return True
+
+    # ── Market report commands ─────────────────────────────────────────────────
+    # Accepts: "/dailyreport"  "/日报"  "电力日报"  "market daily report"
+    #          "/monthlyreport"  "/月报"  "电力月报"  "market monthly report"
+    _txt_s = msg.text.strip()
+    _is_daily_report = bool(
+        _re.match(r'^/?(?:daily[-_]?report|电力日报|市场日报|power\s*daily)$', _txt_s, _re.I)
+    )
+    _is_monthly_report = bool(
+        _re.match(r'^/?(?:monthly[-_]?report|电力月报|市场月报|power\s*monthly)$', _txt_s, _re.I)
+    )
+    if _is_daily_report or _is_monthly_report:
+        def _mr_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("market report reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _oid = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+        if not _pg:
+            _mr_reply("⚠️ 数据库未配置，无法生成报告。")
+            return True
+
+        if _is_daily_report:
+            _mr_reply("⏳ 正在生成电力市场日报 PDF，稍候约1-2分钟…")
+            def _run_daily():
+                try:
+                    _send_daily_report(pg_url=_pg, api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+                                       feishu=feishu, owner_open_id=_oid)
+                except Exception as _e:
+                    logger.error("Manual daily report failed: %s", _e)
+                    _mr_reply(f"⚠️ 日报生成失败：{_e}")
+            import threading
+            threading.Thread(target=_run_daily, daemon=True).start()
+        else:
+            _mr_reply("⏳ 正在生成电力市场月报 PDF，稍候约2-3分钟…")
+            def _run_monthly():
+                try:
+                    _send_monthly_report(pg_url=_pg, api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+                                         feishu=feishu, owner_open_id=_oid)
+                except Exception as _e:
+                    logger.error("Manual monthly report failed: %s", _e)
+                    _mr_reply(f"⚠️ 月报生成失败：{_e}")
+            import threading
+            threading.Thread(target=_run_monthly, daemon=True).start()
         return True
 
     # ── Survey mode — 调研报告 / 资产调研 ────────────────────────────────────
