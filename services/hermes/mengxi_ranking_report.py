@@ -287,8 +287,12 @@ def _compute_nodal_pf_ranks(
     }
 
 
-def _enrich_and_rank(raw_df: pd.DataFrame, plant_list: list[dict]) -> pd.DataFrame:
-    """Merge DB result with plant metadata and compute rank."""
+def _enrich_and_rank(
+    raw_df: pd.DataFrame,
+    plant_list: list[dict],
+    nodal_ranks: Optional[dict[str, dict]] = None,
+) -> pd.DataFrame:
+    """Merge DB result with plant metadata, compute rank, and attach nodal PF ranks."""
     if raw_df.empty:
         return raw_df
 
@@ -319,7 +323,21 @@ def _enrich_and_rank(raw_df: pd.DataFrame, plant_list: list[dict]) -> pd.DataFra
     df["mw"] = df["mw"].astype(int)
     df["profit_wan"] = df["profit_wan"].round(1)
     df["score"] = df["score"].round(4)
-    return df[["rank", "plant_name", "owner", "mw", "profit_wan", "score", "days"]]
+
+    # Attach nodal PF ranks
+    if nodal_ranks:
+        df["nodal_rank_2h"] = df["plant_name"].map(
+            lambda n: nodal_ranks[n]["rank_2h"] if n in nodal_ranks else None
+        )
+        df["nodal_rank_4h"] = df["plant_name"].map(
+            lambda n: nodal_ranks[n]["rank_4h"] if n in nodal_ranks else None
+        )
+    else:
+        df["nodal_rank_2h"] = None
+        df["nodal_rank_4h"] = None
+
+    return df[["rank", "plant_name", "owner", "mw", "profit_wan", "score", "days",
+               "nodal_rank_2h", "nodal_rank_4h"]]
 
 
 # ── PDF generation ────────────────────────────────────────────────────────────
