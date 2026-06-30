@@ -270,11 +270,20 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
             "sections": [],
         }
 
-    # Cap articles: daily 50 highest-relevance, monthly 100
-    # Keeps prompt within safe token limits and avoids truncated JSON responses
-    max_arts = 50 if report_type == "daily" else 100
+    # Cap articles to keep prompt within token budget:
+    #   daily:   50 articles, 8000 chars — output fits in 5000 tokens
+    #   monthly: 60 articles, 10000 chars — more depth per item needs 8000 token output budget
+    if report_type == "daily":
+        max_arts  = 50
+        max_chars = 8000
+        max_out   = 6000
+    else:
+        max_arts  = 60
+        max_chars = 10000
+        max_out   = 8000
+
     articles_for_prompt = articles[:max_arts]
-    articles_text = _format_articles_for_prompt(articles_for_prompt)
+    articles_text = _format_articles_for_prompt(articles_for_prompt, max_chars=max_chars)
 
     if report_type == "daily":
         prompt = _DAILY_PROMPT.format(articles_text=articles_text)
@@ -285,7 +294,7 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
     try:
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=6000,
+            max_tokens=max_out,
             system=(
                 "You are a JSON-only output assistant. "
                 "You MUST respond with a single valid JSON object and nothing else. "
@@ -320,7 +329,7 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
             "sections": [],
         }
     except Exception as exc:
-        logger.warning("Report content generation failed: %s", exc)
+        logger.error("Report content generation failed: %s", exc, exc_info=True)
         return {
             "executive_summary": f"报告生成失败（{exc}）。请检查API密钥和网络连接。",
             "sections": [],
