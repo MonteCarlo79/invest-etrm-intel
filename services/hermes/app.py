@@ -35,7 +35,10 @@ from services.hermes.telegram_client import TelegramClient
 from services.hermes.onedrive_client import OneDriveClient
 from services.hermes.outlook_client import OutlookClient
 from services.hermes.scheduler import send_due_reminders, send_morning_briefing, send_email_digest, summarize_emails
-from services.hermes.mengxi_ranking_report import send_daily_ranking as _send_mengxi_ranking
+from services.hermes.mengxi_ranking_report import (
+    send_daily_ranking as _send_mengxi_ranking,
+    compute_and_store_nodal_pf_monthly as _compute_nodal_pf_monthly,
+)
 from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
 from services.hermes.news_screener import screen_news_sources as _screen_news_sources, get_sources as _ns_get_sources, backfill_source as _backfill_source
 from services.hermes.capacity_screener import screen_installed_capacity as _screen_capacity
@@ -438,6 +441,13 @@ def create_app() -> FastAPI:
                 "onedrive_client":     agent.onedrive,
                 "wecom_webhook_url":   os.environ.get("WECOM_RANKING_WEBHOOK_URL") or None,
             },
+        )
+        # Nodal PF monthly ranking: 5th of each month at 01:00 UTC (09:00 Beijing)
+        scheduler.add_job(
+            _compute_nodal_pf_monthly,
+            "cron",
+            day=5, hour=1, minute=0,
+            kwargs={"pg_url": _mengxi_pg_url},
         )
         # New-BESS screener: 06:30 UTC (14:30 Beijing) — after market data typically arrives
         scheduler.add_job(
