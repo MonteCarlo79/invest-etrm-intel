@@ -77,18 +77,20 @@ def _query_articles(
     try:
         with conn.cursor() as cur:
             if to_dt:
-                # Monthly: calendar month window by created_at
+                # Monthly: filter by published_at for the calendar month (faster if indexed).
+                # Fallback: include NULL published_at rows via created_at window.
                 cur.execute(
                     """
                     SELECT title, source_name, relevance_score, ai_summary,
                            published_at, region_bucket, category
                     FROM staging.spot_knowledge_docs
-                    WHERE created_at >= %s AND created_at < %s
+                    WHERE (published_at >= %s AND published_at < %s)
+                       OR (published_at IS NULL AND created_at >= %s AND created_at < %s)
                     ORDER BY COALESCE(relevance_score, 0) DESC,
                              COALESCE(published_at, created_at) DESC
                     LIMIT 120
                     """,
-                    (from_dt, to_dt),
+                    (from_dt, to_dt, from_dt, to_dt),
                 )
             elif pub_from_dt is not None:
                 # Daily: published_at as primary filter; created_at fallback for NULL pub_at
@@ -701,8 +703,8 @@ def send_monthly_report(
     logger.info("Generating monthly market report for %s", period_str)
 
     try:
-        # Monthly query spans a full calendar month — needs a longer timeout (60s)
-        articles = _query_articles(pg_url, from_dt, to_dt, stmt_timeout_ms=60000)
+        # Monthly query spans a full calendar month — needs a longer timeout (120s)
+        articles = _query_articles(pg_url, from_dt, to_dt, stmt_timeout_ms=120000)
         logger.info("Monthly report: %d articles found for %s", len(articles), period_str)
 
         report = _generate_monthly_content(articles, api_key, period_str)
