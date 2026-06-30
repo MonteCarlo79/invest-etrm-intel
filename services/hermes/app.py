@@ -48,6 +48,8 @@ from services.hermes.market_classifier import classify_to_market_fundamentals, i
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
 from services.hermes.sysopfee_etl import upsert_sysopfee, is_sysopfee_file
 from services.hermes.sysopfee_screener import screen_sysopfee as _screen_sysopfee
+from services.hermes.daili_etl import upsert_daili_file as _upsert_daili_file, is_daili_file
+from services.hermes.daili_screener import screen_daili as _screen_daili
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -527,6 +529,18 @@ def create_app() -> FastAPI:
             },
         )
 
+        # 代理购电 screener: 5th of each month, 10:00 UTC (18:00 Beijing)
+        scheduler.add_job(
+            _screen_daili,
+            "cron",
+            day=5, hour=10, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
@@ -611,6 +625,20 @@ def create_app() -> FastAPI:
             _screen_sysopfee,
             pg_url=_pg,
             api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            feishu=feishu,
+            owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+        )
+        return {"status": "started"}
+
+    @app.post("/hermes/daili/scan")
+    async def run_daili_scan(background: BackgroundTasks):
+        """Trigger a manual 代理购电 scan. Returns immediately; runs in background."""
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        background.add_task(
+            _screen_daili,
+            pg_url=_pg,
             feishu=feishu,
             owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
         )
@@ -1406,6 +1434,31 @@ def _handle_file_message(
             logger.error("SysOpFee ETL failed: %s", exc, exc_info=True)
             feishu.send_text(open_id=sender_id, text=f"⚠️ 系统运行费入库失败：{exc}")
 
+    # Auto ETL: upsert 代理购电 system op fee into province_sysopfee_monthly
+    if is_daili_file(filename):
+        try:
+            _saved_path = _pending_folders.get(sender_id, (None, None))[0]
+            if _saved_path:
+                _daili_fp = os.path.join(_saved_path, filename)
+            else:
+                import tempfile as _tmp
+                _tf = _tmp.NamedTemporaryFile(delete=False, suffix=".xlsx")
+                _tf.write(file_bytes); _tf.close()
+                _daili_fp = _tf.name
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            result = _upsert_daili_file(_daili_fp, pg_url)
+            if result["upserted"] > 0:
+                feishu.send_text(open_id=sender_id, text=(
+                    f"📋 代理购电数据已入库\n"
+                    f"更新 {result['upserted']} 条省月数据\n"
+                    f"bess-map 系统运行费Tab已自动更新。"
+                ))
+            else:
+                feishu.send_text(open_id=sender_id, text="⚠️ 代理购电入库：未提取到有效数据（可能已是最新或格式不符）")
+        except Exception as exc:
+            logger.error("Daili ETL failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 代理购电入库失败：{exc}")
+
     # Spot market PDF: trigger ingestion pipeline
     if is_spot_pdf(filename) and resource_type == "file":
         try:
@@ -1531,6 +1584,24 @@ def _handle_telegram_file(
             telegram.send_text(chat_id, etl_msg)
         except Exception as exc:
             logger.error("SysOpFee ETL (Telegram) failed: %s", exc, exc_info=True)
+
+    # Auto ETL: upsert 代理购电 system op fee (Telegram)
+    if is_daili_file(filename):
+        try:
+            import tempfile as _tmp
+            _tf = _tmp.NamedTemporaryFile(delete=False, suffix=".xlsx")
+            _tf.write(file_bytes); _tf.close()
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            result = _upsert_daili_file(_tf.name, pg_url)
+            if result["upserted"] > 0:
+                telegram.send_text(chat_id, (
+                    f"📋 代理购电数据已入库\n"
+                    f"更新 {result['upserted']} 条省月数据"
+                ))
+            else:
+                telegram.send_text(chat_id, "⚠️ 代理购电入库：未提取到有效数据")
+        except Exception as exc:
+            logger.error("Daili ETL (Telegram) failed: %s", exc, exc_info=True)
 
     # Spot market PDF ingest
     if is_spot_pdf(filename):
@@ -1750,6 +1821,40 @@ def _handle_message(
 
         import threading as _threading
         _threading.Thread(target=_run_sysopfee, daemon=True).start()
+        return True
+
+    # ── /daili command — manually trigger 代理购电 screener ─────────────────
+    if _re.match(r'^/?(?:daili|代理购电|购电信息|daili.scan)$', msg.text.strip(), _re.I):
+        def _dai_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("daili reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            _dai_reply("⚠️ 数据库未配置，无法运行代理购电扫描。")
+            return True
+        _dai_reply("⏳ 正在扫描各省代理购电价格信息，稍候…")
+
+        def _run_daili():
+            try:
+                _screen_daili(
+                    pg_url=_pg,
+                    feishu=feishu,
+                    owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", msg.sender_id),
+                )
+            except Exception as _e:
+                logger.error("Manual daili screener failed: %s", _e)
+                _dai_reply(f"⚠️ 代理购电扫描失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_daili, daemon=True).start()
         return True
 
     # ── /report command — manually trigger a scheduled report ───────────────

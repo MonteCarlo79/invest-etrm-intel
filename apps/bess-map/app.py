@@ -2384,20 +2384,6 @@ with tab_sysopfee:
             )
             st.plotly_chart(fig_sof_line, use_container_width=True, key="sof_line")
 
-            # ── Summary table ────────────────────────────────────────────────
-            _sof_tbl = (
-                _sof_filtered
-                .pivot_table(index="province", columns="ym_str", values="fee_yuan_kwh", aggfunc="mean")
-                .reindex(columns=sorted(_sof_filtered["ym_str"].unique()))
-                .round(4)
-                .loc[_sof_pivot.index]  # same sort order as heatmap
-            )
-            _sof_tbl.columns.name = None
-            _sof_tbl.index.name = "Province"
-            st.dataframe(
-                _sof_tbl.style.background_gradient(cmap="RdYlGn_r", axis=None),
-                use_container_width=True,
-            )
 
 # ── Tab 6: Dispatch & Economics ───────────────────────────────────────────────
 with tab_dispatch:
