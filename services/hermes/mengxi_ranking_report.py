@@ -844,15 +844,36 @@ def send_daily_ranking(
     month_raw     = _apply_comp(month_raw,     first_seen_map, yesterday)
     ytd_raw       = _apply_comp(ytd_raw,       first_seen_map, yesterday)
 
+    # ── Compute yesterday's nodal PF ranks (inline MILP, ~10s for ~100 plants) ──
+    nodal_ranks_yesterday: dict[str, dict] = {}
+    try:
+        nodal_prices_df = _query_nodal_prices(pg_url, plant_names, yesterday, end_excl)
+        if not nodal_prices_df.empty:
+            nodal_ranks_yesterday = _compute_nodal_pf_ranks(nodal_prices_df)
+            logger.info("Nodal PF ranks computed for %d plants", len(nodal_ranks_yesterday))
+    except Exception as exc:
+        logger.warning("Nodal PF inline compute failed: %s — nodal ranks will be blank", exc)
+
+    # ── Read monthly nodal ranking page (pre-computed on 5th of each month) ───
+    nodal_monthly_df = pd.DataFrame()
+    try:
+        nodal_monthly_df = _query_nodal_monthly_df(pg_url)
+    except Exception as exc:
+        logger.warning("Could not read nodal_pf_monthly: %s — monthly page omitted", exc)
+
     # ── Enrich with owner/mw and compute rank ─────────────────────────────────
-    yesterday_df = _enrich_and_rank(yesterday_raw, plant_list)
-    month_df     = _enrich_and_rank(month_raw,     plant_list)
-    ytd_df       = _enrich_and_rank(ytd_raw,       plant_list)
+    yesterday_df = _enrich_and_rank(yesterday_raw, plant_list, nodal_ranks=nodal_ranks_yesterday)
+    month_df     = _enrich_and_rank(month_raw,     plant_list, nodal_ranks=nodal_ranks_yesterday)
+    ytd_df       = _enrich_and_rank(ytd_raw,       plant_list, nodal_ranks=nodal_ranks_yesterday)
 
     # ── Generate PDF ───────────────────────────────────────────────────────────
     total_mw = float(ytd_df["mw"].sum()) if not ytd_df.empty else 0.0
     try:
-        pdf_bytes = _generate_pdf(yesterday_df, month_df, ytd_df, yesterday, total_mw=total_mw)
+        pdf_bytes = _generate_pdf(
+            yesterday_df, month_df, ytd_df, yesterday,
+            total_mw=total_mw,
+            nodal_monthly_df=nodal_monthly_df if not nodal_monthly_df.empty else None,
+        )
     except Exception as exc:
         logger.error("Mengxi ranking report PDF error: %s", exc, exc_info=True)
         if feishu and owner_open_id:
