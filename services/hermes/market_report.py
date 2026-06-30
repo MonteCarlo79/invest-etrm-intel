@@ -57,6 +57,7 @@ def _query_articles(
     from_dt: datetime,
     to_dt: Optional[datetime] = None,
     pub_from_dt: Optional[datetime] = None,
+    stmt_timeout_ms: int = 15000,
 ) -> list[dict]:
     """
     Query staging.spot_knowledge_docs for articles in the given window.
@@ -72,7 +73,7 @@ def _query_articles(
 
     Returns list of dicts sorted by relevance_score DESC, published_at DESC.
     """
-    conn = psycopg2.connect(pg_url, options="-c statement_timeout=15000")
+    conn = psycopg2.connect(pg_url, options=f"-c statement_timeout={stmt_timeout_ms}")
     try:
         with conn.cursor() as cur:
             if to_dt:
@@ -539,7 +540,8 @@ def send_monthly_report(
     logger.info("Generating monthly market report for %s", period_str)
 
     try:
-        articles = _query_articles(pg_url, from_dt, to_dt)
+        # Monthly query spans a full calendar month — needs a longer timeout (60s)
+        articles = _query_articles(pg_url, from_dt, to_dt, stmt_timeout_ms=60000)
         logger.info("Monthly report: %d articles found for %s", len(articles), period_str)
 
         report = _generate_report_content(articles, api_key, "monthly", period_str)
