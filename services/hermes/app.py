@@ -50,6 +50,8 @@ from services.hermes.sysopfee_etl import upsert_sysopfee, is_sysopfee_file
 from services.hermes.sysopfee_screener import screen_sysopfee as _screen_sysopfee
 from services.hermes.daili_etl import upsert_daili_file as _upsert_daili_file, is_daili_file
 from services.hermes.daili_screener import screen_daili as _screen_daili
+from services.hermes.capcomp_screener import screen_capcomp as _screen_capcomp
+from services.hermes.capcomp_etl import resolve_conflict as _resolve_conflict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -541,6 +543,19 @@ def create_app() -> FastAPI:
             },
         )
 
+        # 容量补偿+调频 screener: 5th of each month, 11:30 UTC (19:30 Beijing) — after daili
+        scheduler.add_job(
+            _screen_capcomp,
+            "cron",
+            day=5, hour=11, minute=30,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
@@ -643,6 +658,46 @@ def create_app() -> FastAPI:
             owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
         )
         return {"status": "started"}
+
+    @app.post("/hermes/capcomp/scan")
+    async def run_capcomp_scan(background: BackgroundTasks):
+        """Trigger a manual 容量补偿+调频 internet search. Returns immediately; runs in background."""
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _api_key:
+            return Response(content="API key not configured", status_code=503)
+        background.add_task(
+            _screen_capcomp,
+            pg_url=_pg,
+            api_key=_api_key,
+            feishu=feishu,
+            owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+        )
+        return {"status": "started"}
+
+    @app.post("/hermes/capcomp/resolve")
+    async def resolve_capcomp_conflict(request: Request):
+        """
+        Resolve a data conflict in province_cap_comp or province_fr_market.
+        Body (JSON): {"table": "province_cap_comp", "row_id_keep": 1, "row_id_drop": 2}
+        """
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        try:
+            body = await request.json()
+            table = body.get("table", "")
+            row_id_keep = int(body.get("row_id_keep", 0))
+            row_id_drop = int(body.get("row_id_drop", 0))
+        except Exception as _e:
+            return Response(content=f"Invalid request body: {_e}", status_code=400)
+        result = _resolve_conflict(table, row_id_keep, row_id_drop, _pg)
+        if result["ok"]:
+            return {"status": "resolved", "table": table,
+                    "kept": row_id_keep, "dropped": row_id_drop}
+        return Response(content=result.get("error", "unknown error"), status_code=500)
 
     @app.post("/hermes/news-screener/backfill")
     async def backfill_news_screener(request: Request, background: BackgroundTasks):
@@ -1855,6 +1910,43 @@ def _handle_message(
 
         import threading as _threading
         _threading.Thread(target=_run_daili, daemon=True).start()
+        return True
+
+    # ── /capcomp command — manually trigger 容量补偿+调频 screener ──────────
+    if _re.match(r'^/?(?:capcomp|容量补偿|调频市场|cap.comp)$', msg.text.strip(), _re.I):
+        def _cap_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("capcomp reply send failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _pg:
+            _cap_reply("⚠️ 数据库未配置，无法运行容量补偿扫描。")
+            return True
+        if not _api_key:
+            _cap_reply("⚠️ API密钥未配置，无法运行容量补偿扫描。")
+            return True
+        _cap_reply("⏳ 正在搜索各省容量补偿和调频市场数据（约10-15分钟），稍候…")
+
+        def _run_capcomp():
+            try:
+                _screen_capcomp(
+                    pg_url=_pg,
+                    api_key=_api_key,
+                    feishu=feishu,
+                    owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", msg.sender_id),
+                )
+            except Exception as _e:
+                logger.error("Manual capcomp screener failed: %s", _e)
+                _cap_reply(f"⚠️ 容量补偿扫描失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_capcomp, daemon=True).start()
         return True
 
     # ── /report command — manually trigger a scheduled report ───────────────

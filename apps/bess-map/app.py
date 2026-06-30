@@ -285,6 +285,26 @@ _T: dict[str, dict[str, str]] = {
         "sysopfee_line_title":     "Monthly Trend by Province (¥/kWh)",
         "sysopfee_no_data":        "No system operation fee data in database. Upload 各省市电网系统运行费用_YYYYMM.xlsx via Hermes to populate.",
         "sysopfee_province":       "Filter provinces",
+        # capacity compensation + FR market
+        "tab_aux":                 "Cap Comp + FR Market",
+        "aux_title":               "Capacity Compensation & Frequency Regulation Market",
+        "aux_caption":             "Per-province 容量补偿标准 and 调频市场 policy data (latest confirmed values)",
+        "aux_cap_section":         "Capacity Compensation (容量补偿)",
+        "aux_fr_section":          "Frequency Regulation Market (调频市场)",
+        "aux_conflict_section":    "⚠️ Data Conflicts — please review",
+        "aux_province_filter":     "Filter provinces",
+        "aux_year_filter":         "Effective year",
+        "aux_refresh_btn":         "🔄 Refresh data (internet search)",
+        "aux_refresh_started":     "Background search started. Data will update in ~10-15 minutes.",
+        "aux_no_data":             "No data yet. Click 'Refresh data' to start an internet search.",
+        "aux_confirm_btn":         "✅ Use this value",
+        "aux_cap_rate":            "Cap Comp (¥/kW)",
+        "aux_peak_hours":          "Peak Duration (h)",
+        "aux_fr_price":            "FR Price (¥/kW·h)",
+        "aux_fr_pool":             "FR Pool (亿¥/yr)",
+        "aux_source":              "Source",
+        "aux_eff_date":            "Effective date",
+        "aux_status":              "Status",
         "demand_arb_p50":          "Arbitrage p50 (MW)",
         "demand_arb_p90":          "Arbitrage p90 (MW)",
         "demand_recommended":      "Recommended BESS (MW)",
@@ -497,6 +517,26 @@ _T: dict[str, dict[str, str]] = {
         "sysopfee_line_title":     "各省月度趋势（元/kWh）",
         "sysopfee_no_data":        "数据库中暂无系统运行费数据。请通过Hermes上传 各省市电网系统运行费用_YYYYMM.xlsx 文件以导入数据。",
         "sysopfee_province":       "筛选省份",
+        # capacity compensation + FR market
+        "tab_aux":                 "容量补偿+辅助服务",
+        "aux_title":               "储能容量补偿 & 调频辅助服务市场",
+        "aux_caption":             "各省储能容量补偿标准（元/kW）及调频市场数据（最新已确认值）",
+        "aux_cap_section":         "储能容量补偿（容量补偿）",
+        "aux_fr_section":          "调频辅助服务市场",
+        "aux_conflict_section":    "⚠️ 数据冲突 — 请核实",
+        "aux_province_filter":     "筛选省份",
+        "aux_year_filter":         "生效年份",
+        "aux_refresh_btn":         "🔄 刷新数据（联网搜索）",
+        "aux_refresh_started":     "后台搜索已启动，数据将在约10-15分钟内更新。",
+        "aux_no_data":             "暂无数据。点击「刷新数据」以启动联网搜索。",
+        "aux_confirm_btn":         "✅ 使用此值",
+        "aux_cap_rate":            "容量补偿（元/kW）",
+        "aux_peak_hours":          "峰值时段（小时）",
+        "aux_fr_price":            "调频价格（元/kW·h）",
+        "aux_fr_pool":             "调频资金池（亿元/年）",
+        "aux_source":              "来源",
+        "aux_eff_date":            "生效日期",
+        "aux_status":              "状态",
     },
 }
 
@@ -1473,12 +1513,71 @@ focused exclusively on China's provincial electricity spot markets.
 """
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_ranking, tab_geo, tab_pca, tab_demand, tab_sysopfee, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
+tab_ranking, tab_geo, tab_pca, tab_demand, tab_sysopfee, tab_aux, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
     _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_demand"),
-    _t("tab_sysopfee"), _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
+    _t("tab_sysopfee"), _t("tab_aux"), _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
 ])
 
 _ENG_KEY = "bess_map"   # hashable cache-bust token (stable)
+
+# ── Session state init for aux tab ────────────────────────────────────────────
+if "aux_provinces" not in st.session_state:
+    st.session_state["aux_provinces"] = []
+if "aux_year" not in st.session_state:
+    st.session_state["aux_year"] = dt.datetime.now().year
+
+
+@st.cache_data(ttl=1800)
+def load_cap_comp(_eng_key):
+    """Load province_cap_comp rows (confirmed + conflict) from DB."""
+    import pandas as _pd
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return _pd.DataFrame()
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, province, effective_date, cap_comp_yuan_kw,
+                       peak_duration_hours, source, status
+                FROM marketdata.province_cap_comp
+                WHERE status IN ('confirmed', 'conflict')
+                ORDER BY province, effective_date DESC
+            """)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        conn.close()
+        return _pd.DataFrame(rows, columns=cols) if rows else _pd.DataFrame(columns=cols)
+    except Exception as _e:
+        return _pd.DataFrame()
+
+
+@st.cache_data(ttl=1800)
+def load_fr_market(_eng_key):
+    """Load province_fr_market rows (confirmed + conflict) from DB."""
+    import pandas as _pd
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return _pd.DataFrame()
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, province, effective_date, fr_price_yuan_kw_h,
+                       fr_pool_billion_yuan, source, status
+                FROM marketdata.province_fr_market
+                WHERE status IN ('confirmed', 'conflict')
+                ORDER BY province, effective_date DESC
+            """)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        conn.close()
+        return _pd.DataFrame(rows, columns=cols) if rows else _pd.DataFrame(columns=cols)
+    except Exception as _e:
+        return _pd.DataFrame()
+
 
 # ── Tab 1: Province Ranking ───────────────────────────────────────────────────
 with tab_ranking:
@@ -2385,7 +2484,195 @@ with tab_sysopfee:
             st.plotly_chart(fig_sof_line, use_container_width=True, key="sof_line")
 
 
-# ── Tab 6: Dispatch & Economics ───────────────────────────────────────────────
+# ── Tab 6: Capacity Compensation + FR Market ──────────────────────────────────
+with tab_aux:
+    import requests as _requests
+
+    st.subheader(_t("aux_title"))
+    st.caption(_t("aux_caption"))
+
+    # Refresh button
+    _hermes_url = os.environ.get("HERMES_URL", "")
+    if st.button(_t("aux_refresh_btn"), key="aux_refresh"):
+        if not _hermes_url:
+            st.warning("HERMES_URL not configured in environment.")
+        else:
+            try:
+                _resp = _requests.post(_hermes_url.rstrip("/") + "/hermes/capcomp/scan", timeout=5)
+                if _resp.status_code == 200:
+                    st.success(_t("aux_refresh_started"))
+                else:
+                    st.warning(f"Hermes returned {_resp.status_code}: {_resp.text[:100]}")
+            except Exception as _re:
+                st.warning(f"Could not reach Hermes: {_re}")
+
+    # Load data
+    _cc_df = load_cap_comp(_ENG_KEY)
+    _fr_df = load_fr_market(_ENG_KEY)
+
+    # Province + year filters
+    _aux_all_provs = sorted(set(
+        list(_cc_df["province"].unique() if not _cc_df.empty else []) +
+        list(_fr_df["province"].unique() if not _fr_df.empty else [])
+    ))
+    if _aux_all_provs and not st.session_state["aux_provinces"]:
+        st.session_state["aux_provinces"] = _aux_all_provs
+
+    _aux_years = sorted(set(
+        list(_cc_df["effective_date"].apply(lambda d: d.year).unique() if not _cc_df.empty else []) +
+        list(_fr_df["effective_date"].apply(lambda d: d.year).unique() if not _fr_df.empty else [])
+    ), reverse=True) or [dt.datetime.now().year]
+
+    _aux_col1, _aux_col2 = st.columns([3, 1])
+    with _aux_col1:
+        _aux_sel_provs = st.multiselect(
+            _t("aux_province_filter"),
+            options=_aux_all_provs,
+            key="aux_provinces",
+        )
+    with _aux_col2:
+        _aux_sel_year = st.selectbox(
+            _t("aux_year_filter"),
+            options=_aux_years,
+            key="aux_year",
+        )
+
+    if _cc_df.empty and _fr_df.empty:
+        st.info(_t("aux_no_data"))
+    else:
+        import pandas as _pd
+
+        def _filter_latest(df, provs, year, value_col):
+            """Keep latest confirmed row per province for the selected year."""
+            if df.empty:
+                return df
+            _d = df.copy()
+            if not _d.empty and "effective_date" in _d.columns:
+                _d["_year"] = _d["effective_date"].apply(lambda x: x.year if hasattr(x, "year") else 0)
+                _d = _d[_d["_year"] == year]
+            if provs:
+                _d = _d[_d["province"].isin(provs)]
+            # Latest per province (already ordered DESC, drop_duplicates keeps first)
+            _confirmed = _d[_d["status"] == "confirmed"].drop_duplicates(subset=["province"], keep="first")
+            _conflict = _d[_d["status"] == "conflict"]
+            return _pd.concat([_confirmed, _conflict], ignore_index=True) if not _conflict.empty else _confirmed
+
+        def _style_conflicts(df):
+            """Highlight conflict rows in orange."""
+            def _row_style(row):
+                if row.get("status") == "conflict":
+                    return ["background-color: #fff3cd"] * len(row)
+                return [""] * len(row)
+            return df.style.apply(_row_style, axis=1)
+
+        # ── Section 1: 容量补偿 ──────────────────────────────────────────────
+        st.markdown(f"### {_t('aux_cap_section')}")
+        _cc_filt = _filter_latest(_cc_df, _aux_sel_provs, _aux_sel_year, "cap_comp_yuan_kw")
+        if _cc_filt.empty:
+            st.info(_t("aux_no_data"))
+        else:
+            _cc_disp = _cc_filt[["province", "cap_comp_yuan_kw", "peak_duration_hours",
+                                   "effective_date", "source", "status"]].copy()
+            _cc_disp = _cc_disp.rename(columns={
+                "province":            _t("rank_col_province"),
+                "cap_comp_yuan_kw":    _t("aux_cap_rate"),
+                "peak_duration_hours": _t("aux_peak_hours"),
+                "effective_date":      _t("aux_eff_date"),
+                "source":              _t("aux_source"),
+                "status":              _t("aux_status"),
+            })
+            st.dataframe(_style_conflicts(_cc_disp), use_container_width=True, hide_index=True)
+
+        # ── Section 2: 调频市场 ──────────────────────────────────────────────
+        st.markdown(f"### {_t('aux_fr_section')}")
+        _fr_filt = _filter_latest(_fr_df, _aux_sel_provs, _aux_sel_year, "fr_price_yuan_kw_h")
+        if _fr_filt.empty:
+            st.info(_t("aux_no_data"))
+        else:
+            _fr_disp = _fr_filt[["province", "fr_price_yuan_kw_h", "fr_pool_billion_yuan",
+                                   "effective_date", "source", "status"]].copy()
+            _fr_disp = _fr_disp.rename(columns={
+                "province":             _t("rank_col_province"),
+                "fr_price_yuan_kw_h":   _t("aux_fr_price"),
+                "fr_pool_billion_yuan": _t("aux_fr_pool"),
+                "effective_date":       _t("aux_eff_date"),
+                "source":               _t("aux_source"),
+                "status":               _t("aux_status"),
+            })
+            st.dataframe(_style_conflicts(_fr_disp), use_container_width=True, hide_index=True)
+
+        # ── Conflict resolution ──────────────────────────────────────────────
+        _cc_conflicts = _cc_df[_cc_df["status"] == "conflict"] if not _cc_df.empty else _pd.DataFrame()
+        _fr_conflicts = _fr_df[_fr_df["status"] == "conflict"] if not _fr_df.empty else _pd.DataFrame()
+        _n_conflicts = len(_cc_conflicts) + len(_fr_conflicts)
+
+        if _n_conflicts > 0:
+            with st.expander(f"{_t('aux_conflict_section')} ({_n_conflicts} items)"):
+                if not _hermes_url:
+                    st.warning("HERMES_URL not configured — cannot resolve conflicts from UI.")
+
+                def _resolve_btn(table, row_keep, row_drop, label):
+                    btn_key = f"resolve_{table}_{row_keep}_{row_drop}"
+                    if st.button(f"{_t('aux_confirm_btn')} — {label}", key=btn_key):
+                        if _hermes_url:
+                            try:
+                                _r = _requests.post(
+                                    _hermes_url.rstrip("/") + "/hermes/capcomp/resolve",
+                                    json={"table": table, "row_id_keep": row_keep, "row_id_drop": row_drop},
+                                    timeout=5,
+                                )
+                                if _r.status_code == 200:
+                                    st.success(f"Resolved: kept row {row_keep}")
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error: {_r.text[:100]}")
+                            except Exception as _re:
+                                st.error(f"Request failed: {_re}")
+                        else:
+                            st.warning("HERMES_URL not configured.")
+
+                # Group cap_comp conflicts by (province, effective_date)
+                if not _cc_conflicts.empty:
+                    st.markdown("**容量补偿 conflicts:**")
+                    for (prov, eff_dt), grp in _cc_conflicts.groupby(["province", "effective_date"]):
+                        st.markdown(f"*{prov} — {eff_dt}*")
+                        _grp_rows = grp.reset_index(drop=True)
+                        _cols = st.columns(len(_grp_rows))
+                        for i, (_, row) in enumerate(_grp_rows.iterrows()):
+                            with _cols[i]:
+                                st.write(f"**{row.get('cap_comp_yuan_kw')} ¥/kW**")
+                                st.caption(str(row.get("source", ""))[:80])
+                                # resolve against all other rows in group
+                                for _, other_row in _grp_rows.iterrows():
+                                    if other_row["id"] != row["id"]:
+                                        _resolve_btn(
+                                            "province_cap_comp",
+                                            int(row["id"]), int(other_row["id"]),
+                                            f"{row.get('cap_comp_yuan_kw')} ¥/kW",
+                                        )
+
+                # Group fr_market conflicts by (province, effective_date)
+                if not _fr_conflicts.empty:
+                    st.markdown("**调频市场 conflicts:**")
+                    for (prov, eff_dt), grp in _fr_conflicts.groupby(["province", "effective_date"]):
+                        st.markdown(f"*{prov} — {eff_dt}*")
+                        _grp_rows = grp.reset_index(drop=True)
+                        _cols = st.columns(len(_grp_rows))
+                        for i, (_, row) in enumerate(_grp_rows.iterrows()):
+                            with _cols[i]:
+                                st.write(f"**{row.get('fr_price_yuan_kw_h')} ¥/kW·h**")
+                                st.caption(str(row.get("source", ""))[:80])
+                                for _, other_row in _grp_rows.iterrows():
+                                    if other_row["id"] != row["id"]:
+                                        _resolve_btn(
+                                            "province_fr_market",
+                                            int(row["id"]), int(other_row["id"]),
+                                            f"{row.get('fr_price_yuan_kw_h')} ¥/kW·h",
+                                        )
+
+
+# ── Tab 7: Dispatch & Economics ──────────────────────────────────────────────
 with tab_dispatch:
     all_provs = load_province_list(_ENG_KEY)
     col_dp, col_dd, col_dr = st.columns([2, 1, 3])
