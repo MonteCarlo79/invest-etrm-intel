@@ -15,7 +15,6 @@ Entry points:
 """
 from __future__ import annotations
 
-import glob
 import io
 import json
 import logging
@@ -29,44 +28,23 @@ import psycopg2
 logger = logging.getLogger(__name__)
 
 # ── CJK font registration ─────────────────────────────────────────────────────
+# Use ReportLab's built-in STSong-Light CIDFont — always available, no external
+# font files needed. This is the same approach used in mengxi_ranking_report.py.
 
-_FONT_REGULAR = "Helvetica"
-_FONT_BOLD    = "Helvetica-Bold"
+_FONT_REGULAR = "STSong-Light"
+_FONT_BOLD    = "STSong-Light"  # CID fonts have no bold variant; use same font
 
 def _register_cjk_fonts() -> None:
     global _FONT_REGULAR, _FONT_BOLD
     try:
         from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-
-        def _find(pattern: str) -> list[str]:
-            return glob.glob(pattern, recursive=True)
-
-        # Prefer Simplified-Chinese variants
-        reg_candidates = (
-            _find("/usr/share/fonts/**/*CJKsc*Regular*.otf")
-            or _find("/usr/share/fonts/**/*CJKsc*Regular*.ttf")
-            or _find("/usr/share/fonts/**/*CJK*Regular*.otf")
-            or _find("/usr/share/fonts/**/*CJK*Regular*.ttf")
-        )
-        bold_candidates = (
-            _find("/usr/share/fonts/**/*CJKsc*Bold*.otf")
-            or _find("/usr/share/fonts/**/*CJK*Bold*.otf")
-            or _find("/usr/share/fonts/**/*CJKsc*Bold*.ttf")
-            or _find("/usr/share/fonts/**/*CJK*Bold*.ttf")
-        )
-
-        if reg_candidates:
-            pdfmetrics.registerFont(TTFont("NotoSans", reg_candidates[0]))
-            _FONT_REGULAR = "NotoSans"
-            logger.info("CJK font registered: %s", reg_candidates[0])
-        if bold_candidates:
-            pdfmetrics.registerFont(TTFont("NotoSansBold", bold_candidates[0]))
-            _FONT_BOLD = "NotoSansBold"
-        elif _FONT_REGULAR != "Helvetica":
-            _FONT_BOLD = _FONT_REGULAR  # use regular as bold fallback
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        logger.info("CJK font registered: STSong-Light (built-in CIDFont)")
     except Exception as exc:
-        logger.warning("CJK font init failed — PDFs will lack Chinese rendering: %s", exc)
+        logger.warning("STSong-Light registration failed, falling back to Helvetica: %s", exc)
+        _FONT_REGULAR = "Helvetica"
+        _FONT_BOLD    = "Helvetica-Bold"
 
 
 _register_cjk_fonts()
@@ -74,13 +52,23 @@ _register_cjk_fonts()
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _query_articles(pg_url: str, from_dt: datetime, to_dt: Optional[datetime] = None) -> list[dict]:
+def _query_articles(
+    pg_url: str,
+    from_dt: datetime,
+    to_dt: Optional[datetime] = None,
+    pub_from_dt: Optional[datetime] = None,
+) -> list[dict]:
     """
     Query staging.spot_knowledge_docs for articles in the given window.
 
-    Uses created_at as the primary filter so recently ingested articles are
-    always included, regardless of their original published_at date (which may
-    be weeks/months old for backfilled content).
+    For daily reports (pub_from_dt provided):
+      Primary filter: published_at >= pub_from_dt  (catches recently published articles)
+      Fallback:       published_at IS NULL AND created_at >= from_dt
+      This prevents backfilled old articles (pub March, ingested today) from
+      contaminating today's daily report.
+
+    For monthly reports (to_dt provided):
+      Filters by created_at range (calendar month window).
 
     Returns list of dicts sorted by relevance_score DESC, published_at DESC.
     """
@@ -88,6 +76,7 @@ def _query_articles(pg_url: str, from_dt: datetime, to_dt: Optional[datetime] = 
     try:
         with conn.cursor() as cur:
             if to_dt:
+                # Monthly: calendar month window by created_at
                 cur.execute(
                     """
                     SELECT title, source_name, relevance_score, ai_summary,
@@ -100,7 +89,23 @@ def _query_articles(pg_url: str, from_dt: datetime, to_dt: Optional[datetime] = 
                     """,
                     (from_dt, to_dt),
                 )
+            elif pub_from_dt is not None:
+                # Daily: published_at as primary filter; created_at fallback for NULL pub_at
+                cur.execute(
+                    """
+                    SELECT title, source_name, relevance_score, ai_summary,
+                           published_at, region_bucket, category
+                    FROM staging.spot_knowledge_docs
+                    WHERE (published_at >= %s)
+                       OR (published_at IS NULL AND created_at >= %s)
+                    ORDER BY COALESCE(relevance_score, 0) DESC,
+                             COALESCE(published_at, created_at) DESC
+                    LIMIT 120
+                    """,
+                    (pub_from_dt, from_dt),
+                )
             else:
+                # Legacy fallback: created_at only
                 cur.execute(
                     """
                     SELECT title, source_name, relevance_score, ai_summary,
@@ -278,19 +283,20 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
 
     client = anthropic.Anthropic(api_key=api_key)
     try:
-        # Use assistant prefill "{" to force Claude to start the JSON object
-        # directly — eliminates preamble text and guarantees the response is
-        # pure JSON that starts with `{`.
         msg = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=6000,
-            messages=[
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": "{"},
-            ],
+            system=(
+                "You are a JSON-only output assistant. "
+                "You MUST respond with a single valid JSON object and nothing else. "
+                "Do NOT include markdown fences, explanations, or any text outside the JSON. "
+                "Start your response with { and end with }. "
+                "All string values must use standard ASCII double-quotes. "
+                "Do not include newline characters inside string values — use a space instead."
+            ),
+            messages=[{"role": "user", "content": prompt}],
         )
-        # Prepend the prefill character back so we have a complete JSON object
-        raw = "{" + msg.content[0].text
+        raw = msg.content[0].text.strip()
 
         # Strip trailing markdown fence if the model added one after the JSON
         raw = re.sub(r"\n?```\s*$", "", raw).strip()
@@ -436,19 +442,25 @@ def send_daily_report(
     """
     now_utc = datetime.now(timezone.utc)
     beijing_now = now_utc + timedelta(hours=8)
-    # 30h window: catches yesterday's screener (06:00 UTC) + same-day articles
+    # published_at window: 3 days (catches yesterday + today articles by publication date)
+    pub_from_dt = now_utc - timedelta(days=3)
+    # created_at fallback window: 30h (catches articles with NULL published_at)
     from_dt = now_utc - timedelta(hours=30)
     period_str = beijing_now.strftime("%Y年%m月%d日")
 
     logger.info("Generating daily market report for %s", period_str)
     try:
-        articles = _query_articles(pg_url, from_dt)
-        logger.info("Daily report: %d articles found in 30h window", len(articles))
+        articles = _query_articles(pg_url, from_dt, pub_from_dt=pub_from_dt)
+        logger.info("Daily report: %d articles found (pub>=3d OR created>=30h)", len(articles))
         # Fallback: if very few articles found (screener not yet run today),
-        # extend to 72h to include the last 2-3 screener runs
+        # extend windows to 7 days / 72h
         if len(articles) < 5:
-            articles = _query_articles(pg_url, now_utc - timedelta(hours=72))
-            logger.info("Daily report: extended to 72h window, %d articles found", len(articles))
+            articles = _query_articles(
+                pg_url,
+                now_utc - timedelta(hours=72),
+                pub_from_dt=now_utc - timedelta(days=7),
+            )
+            logger.info("Daily report: extended to 7d/72h window, %d articles found", len(articles))
 
         report = _generate_report_content(articles, api_key, "daily", period_str)
         pdf_bytes = _build_pdf(report, "daily", period_str)

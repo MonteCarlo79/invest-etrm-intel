@@ -211,11 +211,16 @@ def _query_nodal_prices(
     """Fetch 15-min cleared prices for the given plants and date window."""
     conn = psycopg2.connect(pg_url, options="-c statement_timeout=600000")
     try:
-        return pd.read_sql_query(
+        df = pd.read_sql_query(
             _NODAL_PRICES_SQL,
             conn,
             params={"start": start, "end_excl": end_excl, "plant_names": plant_names},
         )
+        # psycopg2 returns NUMERIC columns as Python Decimal objects; cast to float64
+        # so numpy operations inside the MILP engine work correctly.
+        if "cleared_price" in df.columns:
+            df["cleared_price"] = df["cleared_price"].astype(float)
+        return df
     finally:
         conn.close()
 
