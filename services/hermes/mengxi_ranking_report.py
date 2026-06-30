@@ -599,6 +599,125 @@ def _generate_pdf(
     return buf.getvalue()
 
 
+# ── Monthly nodal PF job ──────────────────────────────────────────────────────
+
+def _previous_calendar_month(today: date) -> tuple[date, date]:
+    """Return (month_start, month_end_excl) for the calendar month before today."""
+    if today.month == 1:
+        start = date(today.year - 1, 12, 1)
+        end_excl = date(today.year, 1, 1)
+    else:
+        start = date(today.year, today.month - 1, 1)
+        end_excl = date(today.year, today.month, 1)
+    return start, end_excl
+
+
+def _query_nodal_monthly_df(pg_url: str) -> pd.DataFrame:
+    """Read the latest available month from reports.nodal_pf_monthly.
+    Returns empty DataFrame if the table does not exist or has no rows.
+    """
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT month, plant_name, pf_score_2h, pf_score_4h, rank_2h, rank_4h, n_days
+            FROM reports.nodal_pf_monthly
+            WHERE month = (SELECT MAX(month) FROM reports.nodal_pf_monthly)
+            ORDER BY rank_2h
+            """,
+            conn,
+        )
+    except Exception as exc:
+        logger.warning("Could not read reports.nodal_pf_monthly: %s", exc)
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
+def compute_and_store_nodal_pf_monthly(pg_url: str) -> None:
+    """
+    Compute perfect-foresight BESS values for all Mengxi nodes for the previous
+    calendar month and upsert results into reports.nodal_pf_monthly.
+
+    Called by Hermes APScheduler on the 5th of each month at 01:00 UTC.
+    """
+    today = date.today()
+    month_start, month_end_excl = _previous_calendar_month(today)
+    logger.info("Nodal PF monthly: computing for %s → %s", month_start, month_end_excl)
+
+    # ── Discover all plants with data in that month ───────────────────────────
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT plant_name FROM marketdata.md_id_cleared_energy "
+                "WHERE data_date >= %s AND data_date < %s",
+                (month_start, month_end_excl),
+            )
+            plant_names = [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    if not plant_names:
+        logger.warning("Nodal PF monthly: no plants found for %s", month_start)
+        return
+
+    logger.info("Nodal PF monthly: %d plants found", len(plant_names))
+
+    # ── Fetch prices and run MILP ─────────────────────────────────────────────
+    prices_df = _query_nodal_prices(pg_url, plant_names, month_start, month_end_excl)
+    pf = _compute_nodal_pf_ranks(prices_df)
+
+    if not pf:
+        logger.warning("Nodal PF monthly: no results for %s", month_start)
+        return
+
+    # ── Ensure table exists and upsert rows ───────────────────────────────────
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS reports.nodal_pf_monthly (
+                    month          DATE        NOT NULL,
+                    plant_name     TEXT        NOT NULL,
+                    pf_score_2h    FLOAT,
+                    pf_score_4h    FLOAT,
+                    rank_2h        INTEGER,
+                    rank_4h        INTEGER,
+                    n_days         INTEGER,
+                    computed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (month, plant_name)
+                )
+            """)
+            conn.commit()
+
+            for plant_name, vals in pf.items():
+                cur.execute("""
+                    INSERT INTO reports.nodal_pf_monthly
+                        (month, plant_name, pf_score_2h, pf_score_4h, rank_2h, rank_4h, n_days, computed_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+                    ON CONFLICT (month, plant_name) DO UPDATE SET
+                        pf_score_2h = EXCLUDED.pf_score_2h,
+                        pf_score_4h = EXCLUDED.pf_score_4h,
+                        rank_2h     = EXCLUDED.rank_2h,
+                        rank_4h     = EXCLUDED.rank_4h,
+                        n_days      = EXCLUDED.n_days,
+                        computed_at = now()
+                """, (
+                    month_start,
+                    plant_name,
+                    vals["score_2h"],
+                    vals["score_4h"],
+                    vals["rank_2h"],
+                    vals["rank_4h"],
+                    vals["n_days"],
+                ))
+            conn.commit()
+        logger.info("Nodal PF monthly: upserted %d rows for %s", len(pf), month_start)
+    finally:
+        conn.close()
+
+
 # ── Orchestration ─────────────────────────────────────────────────────────────
 
 def _latest_data_date(pg_url: str) -> Optional[date]:

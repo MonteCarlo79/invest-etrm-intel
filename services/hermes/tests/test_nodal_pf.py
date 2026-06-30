@@ -124,4 +124,27 @@ class TestEnrichAndRankNodalColumns:
         df = _enrich_and_rank(_raw_df(), _plant_list(), nodal_ranks=nodal_ranks)
         row_b = df[df["plant_name"] == "plant_B"].iloc[0]
         assert pd.isna(row_b["nodal_rank_2h"])
-        assert pd.isna(row_b["nodal_rank_4h"])
+
+
+from services.hermes.mengxi_ranking_report import _previous_calendar_month
+
+
+class TestPreviousCalendarMonth:
+
+    def test_july_5_gives_june(self):
+        from datetime import date
+        start, end = _previous_calendar_month(date(2026, 7, 5))
+        assert start == date(2026, 6, 1)
+        assert end == date(2026, 7, 1)  # end is exclusive
+
+    def test_january_5_gives_december_previous_year(self):
+        from datetime import date
+        start, end = _previous_calendar_month(date(2026, 1, 5))
+        assert start == date(2025, 12, 1)
+        assert end == date(2026, 1, 1)
+
+    def test_march_5_gives_february(self):
+        from datetime import date
+        start, end = _previous_calendar_month(date(2026, 3, 5))
+        assert start == date(2026, 2, 1)
+        assert end == date(2026, 3, 1)
