@@ -172,60 +172,40 @@ _DAILY_PROMPT = """\
 """
 
 _MONTHLY_PROMPT = """\
-你是一位中国电力市场资深分析师。请根据以下本月收集的新闻资讯和研究报告，撰写一份全面的月度市场报告。
+你是中国电力市场资深分析师，为投资者和行业从业者撰写月度政策研究报告。
 
-本月资讯（按相关度排序，共{n_articles}篇）：
+本报告定位：专家深度分析，不是新闻摘要。每个议题需有政策背景、关键内容解读、市场影响分析、储能/BESS投资启示，体现专业判断。
+
+{period}收集的市场资讯（共{n_articles}篇，按相关度排序）：
 {articles_text}
 
-请以JSON格式输出，结构如下（仅输出JSON，不要加代码块或注释）：
+请从中识别本月最重要的4-6个议题，每个议题进行深度分析。按三类组织：
+- 市场快讯：重要市场事件、政策发布、规则变化
+- 市场洞察：行业数据趋势、市场结构深度分析
+- 政策追踪：具体政策落地、影响测算、投资逻辑
+
+请以JSON格式输出（仅输出JSON，不要加代码块，不要有任何JSON之外的文字）：
 {{
-  "executive_summary": "3-5句话的本月市场总体回顾，涵盖政策、价格、储能等核心主题",
-  "sections": [
+  "executive_summary": "2-3句话总结本月最重要的1-2个核心主题及其对储能行业的影响",
+  "highlights": [
+    {{"category": "市场快讯", "title": "议题标题", "teaser": "一句话说明为何重要"}},
+    {{"category": "市场洞察", "title": "议题标题", "teaser": "一句话说明核心发现"}}
+  ],
+  "articles": [
     {{
-      "title": "市场资讯",
-      "items": [
-        {{
-          "title": "事件/政策名称",
-          "content": "详细分析，3-6句话，含背景、内容要点、市场影响",
-          "source": "来源",
-          "date": "日期"
-        }}
-      ]
-    }},
-    {{
-      "title": "市场动态",
-      "items": [
-        {{
-          "title": "动态标题",
-          "content": "数据分析和趋势判断，3-5句话",
-          "source": "来源",
-          "date": "日期"
-        }}
-      ]
-    }},
-    {{
-      "title": "储能与新能源行业",
-      "items": [...]
-    }},
-    {{
-      "title": "重点追踪",
-      "items": [
-        {{
-          "title": "持续关注事项",
-          "content": "说明该事项的背景及未来关注要点"
-        }}
-      ]
+      "category": "市场快讯",
+      "title": "议题完整标题",
+      "body": "正文分析，200-350字。段落间用[P]分隔。内容包括：背景与政策来源、核心内容要点、市场影响分析、对储能BESS行业的具体影响或投资启示。使用专业但易懂的语言，可引用具体数字。"
     }}
   ]
 }}
 
 要求：
-- 月报应比日报更深入，每个item的content不少于100字
-- "市场资讯"聚焦重大政策和监管变化（3-5项）
-- "市场动态"聚焦价格、容量、交易量等数据趋势（2-4项）
-- "储能与新能源行业"聚焦行业发展和重要项目（2-4项）
-- "重点追踪"列出2-3个持续关注的长期议题
-- 只输出有内容的章节
+- highlights与articles一一对应，顺序相同
+- 每篇article的body必须200字以上，体现分析深度
+- 优先选择与储能、电力现货、容量电价、新能源政策直接相关的议题
+- body中用[P]表示段落分隔（不要用换行符）
+- category必须是：市场快讯、市场洞察、政策追踪 三者之一
 """
 
 
@@ -258,73 +238,71 @@ def _format_articles_for_prompt(articles: list[dict], max_chars: int = 12000) ->
     return "\n\n".join(lines)
 
 
+def _call_claude_json(api_key: str, prompt: str, max_tokens: int) -> dict | None:
+    """
+    Call Claude Sonnet with a JSON-only system prompt.
+    Returns parsed dict, or None if all parse attempts fail.
+    """
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        system=(
+            "You are a JSON-only output assistant. "
+            "Respond with a single valid JSON object and nothing else. "
+            "No markdown fences, no explanations, no text outside the JSON. "
+            "Start with { and end with }. "
+            "Use standard ASCII double-quotes for all string values. "
+            "Never include literal newline characters inside string values — use [P] as paragraph separator instead."
+        ),
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = msg.content[0].text.strip()
+    raw = re.sub(r"\n?```(?:json)?\s*$", "", raw).strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw).strip()
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("JSON parse failed (%s), trying regex extract. raw[:300]=%s", e, raw[:300])
+
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    logger.warning("All JSON parse attempts failed. raw[:500]=%s", raw[:500])
+    return None
+
+
 def _generate_report_content(articles: list[dict], api_key: str, report_type: str, period_str: str) -> dict:
     """
     Call Claude Sonnet to generate structured report content.
-    Returns parsed dict with executive_summary and sections.
+    Returns parsed dict. Daily uses sections[]; monthly uses articles[].
     """
-    import anthropic
-
     if not articles:
         return {
             "executive_summary": f"{period_str}暂无相关新闻资讯录入知识库。",
             "sections": [],
+            "articles": [],
         }
 
-    # Cap articles to keep prompt within token budget:
-    #   daily:   50 articles, 8000 chars — output fits in 5000 tokens
-    #   monthly: 60 articles, 10000 chars — more depth per item needs 8000 token output budget
-    if report_type == "daily":
-        max_arts  = 50
-        max_chars = 8000
-        max_out   = 6000
-    else:
-        max_arts  = 60
-        max_chars = 10000
-        max_out   = 8000
+    # Daily: 50 articles, 8000 chars input, 6000 tokens output
+    max_arts  = 50
+    max_chars = 8000
+    max_out   = 6000
 
     articles_for_prompt = articles[:max_arts]
     articles_text = _format_articles_for_prompt(articles_for_prompt, max_chars=max_chars)
+    prompt = _DAILY_PROMPT.format(articles_text=articles_text)
 
-    if report_type == "daily":
-        prompt = _DAILY_PROMPT.format(articles_text=articles_text)
-    else:
-        prompt = _MONTHLY_PROMPT.format(n_articles=len(articles_for_prompt), articles_text=articles_text)
-
-    client = anthropic.Anthropic(api_key=api_key)
     try:
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=max_out,
-            system=(
-                "You are a JSON-only output assistant. "
-                "You MUST respond with a single valid JSON object and nothing else. "
-                "Do NOT include markdown fences, explanations, or any text outside the JSON. "
-                "Start your response with { and end with }. "
-                "All string values must use standard ASCII double-quotes. "
-                "Do not include newline characters inside string values — use a space instead."
-            ),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = msg.content[0].text.strip()
-
-        # Strip trailing markdown fence if the model added one after the JSON
-        raw = re.sub(r"\n?```\s*$", "", raw).strip()
-
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as first_err:
-            logger.warning("First JSON parse failed (%s), trying regex extract", first_err)
-
-        # Fallback: extract the outermost {...} block
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
-
-        logger.warning("All JSON parse attempts failed — raw starts: %s", raw[:200])
+        result = _call_claude_json(api_key, prompt, max_out)
+        if result:
+            return result
         return {
             "executive_summary": "报告结构化内容生成失败，请稍后重试。",
             "sections": [],
@@ -332,8 +310,48 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
     except Exception as exc:
         logger.error("Report content generation failed: %s", exc, exc_info=True)
         return {
-            "executive_summary": f"报告生成失败（{exc}）。请检查API密钥和网络连接。",
+            "executive_summary": f"报告生成失败（{exc}）。",
             "sections": [],
+        }
+
+
+def _generate_monthly_content(articles: list[dict], api_key: str, period_str: str) -> dict:
+    """
+    Generate monthly expert-analyst report content using a simplified JSON structure.
+    Returns dict with executive_summary, highlights[], articles[].
+    """
+    if not articles:
+        return {
+            "executive_summary": f"{period_str}暂无相关新闻资讯录入知识库。",
+            "highlights": [],
+            "articles": [],
+        }
+
+    # Use top 30 highest-relevance articles — enough context, keeps prompt lean
+    articles_for_prompt = articles[:30]
+    articles_text = _format_articles_for_prompt(articles_for_prompt, max_chars=6000)
+    prompt = _MONTHLY_PROMPT.format(
+        period=period_str,
+        n_articles=len(articles_for_prompt),
+        articles_text=articles_text,
+    )
+
+    try:
+        result = _call_claude_json(api_key, prompt, max_tokens=6000)
+        if result and result.get("articles"):
+            return result
+        logger.warning("Monthly content generation returned empty or unparseable result")
+        return {
+            "executive_summary": "月报内容生成失败，请稍后重试。",
+            "highlights": [],
+            "articles": [],
+        }
+    except Exception as exc:
+        logger.error("Monthly content generation failed: %s", exc, exc_info=True)
+        return {
+            "executive_summary": f"月报生成失败（{exc}）。",
+            "highlights": [],
+            "articles": [],
         }
 
 
@@ -426,6 +444,147 @@ def _build_pdf(report: dict, report_type: str, period_str: str) -> bytes:
         story.append(Spacer(1, 0.4 * cm))
 
     # Footer note
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=RULE))
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    story.append(Paragraph(
+        f"本报告由AI自动生成 · {generated_at} · 数据来源：知识库新闻资讯",
+        meta_text,
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def _build_monthly_pdf(report: dict, period_str: str) -> bytes:
+    """
+    Render monthly expert-analyst report to PDF.
+    Template: cover → 月度看点 TOC → per-article pages (category label + title + body).
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
+    )
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=2.5 * cm, rightMargin=2.5 * cm,
+        topMargin=2.5 * cm, bottomMargin=2.5 * cm,
+    )
+
+    NAVY   = colors.HexColor("#1a3a5c")
+    STEEL  = colors.HexColor("#2d6a9f")
+    TEAL   = colors.HexColor("#1a7a6e")
+    RULE   = colors.HexColor("#b0c8e0")
+    MUTED  = colors.HexColor("#777777")
+    ORANGE = colors.HexColor("#c47a2a")
+
+    # Category → colour mapping
+    _CAT_COLOR = {
+        "市场快讯": STEEL,
+        "市场洞察": TEAL,
+        "政策追踪": ORANGE,
+    }
+
+    cover_title  = ParagraphStyle("m_cover_title",  fontName=_FONT_BOLD,    fontSize=28, leading=36, alignment=1, textColor=NAVY,  spaceAfter=8)
+    cover_sub    = ParagraphStyle("m_cover_sub",     fontName=_FONT_REGULAR, fontSize=14, leading=20, alignment=1, textColor=STEEL, spaceAfter=6)
+    cover_org    = ParagraphStyle("m_cover_org",     fontName=_FONT_REGULAR, fontSize=10, leading=14, alignment=1, textColor=MUTED)
+    summary_txt  = ParagraphStyle("m_summary_txt",   fontName=_FONT_REGULAR, fontSize=10, leading=16, spaceAfter=6, leftIndent=8, rightIndent=8)
+    toc_header   = ParagraphStyle("m_toc_header",    fontName=_FONT_BOLD,    fontSize=16, leading=22, textColor=NAVY, spaceBefore=0, spaceAfter=12)
+    cat_label    = ParagraphStyle("m_cat_label",     fontName=_FONT_REGULAR, fontSize=10, leading=14, textColor=STEEL, spaceAfter=2)
+    toc_title    = ParagraphStyle("m_toc_title",     fontName=_FONT_BOLD,    fontSize=11, leading=16, textColor=NAVY,  spaceAfter=2)
+    toc_teaser   = ParagraphStyle("m_toc_teaser",    fontName=_FONT_REGULAR, fontSize=9,  leading=13, textColor=MUTED, spaceAfter=10, leftIndent=8)
+    art_cat      = ParagraphStyle("m_art_cat",       fontName=_FONT_REGULAR, fontSize=10, leading=14, textColor=STEEL, spaceAfter=6)
+    art_title    = ParagraphStyle("m_art_title",     fontName=_FONT_BOLD,    fontSize=15, leading=22, textColor=NAVY,  alignment=1, spaceAfter=14)
+    body_text    = ParagraphStyle("m_body_text",     fontName=_FONT_REGULAR, fontSize=10, leading=17, spaceAfter=8, firstLineIndent=20)
+    meta_text    = ParagraphStyle("m_meta_text",     fontName=_FONT_REGULAR, fontSize=8,  leading=11, textColor=MUTED, spaceAfter=3)
+
+    story = []
+
+    # ── Cover page ────────────────────────────────────────────────────────────
+    story.append(Spacer(1, 4 * cm))
+    story.append(Paragraph("中国电力市场政策研究报告", cover_title))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph(_esc(period_str), cover_sub))
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(Paragraph("电力市场体系政策研究团队", cover_org))
+    story.append(Spacer(1, 2 * cm))
+    story.append(HRFlowable(width="100%", thickness=2, color=NAVY))
+    story.append(Spacer(1, 0.8 * cm))
+
+    if report.get("executive_summary"):
+        story.append(Paragraph("摘要", ParagraphStyle("m_abs_hdr", fontName=_FONT_BOLD, fontSize=11,
+                                                       leading=16, textColor=NAVY, spaceAfter=6, alignment=1)))
+        story.append(Paragraph(_esc(report["executive_summary"]), summary_txt))
+
+    story.append(PageBreak())
+
+    # ── 月度看点 (TOC) page ───────────────────────────────────────────────────
+    story.append(Paragraph("月度看点：", toc_header))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=RULE))
+    story.append(Spacer(1, 0.3 * cm))
+
+    # Group highlights by category for display
+    highlights = report.get("highlights") or []
+    articles   = report.get("articles") or []
+    # If highlights missing, derive from articles
+    if not highlights and articles:
+        highlights = [{"category": a.get("category", ""), "title": a.get("title", ""), "teaser": ""}
+                      for a in articles]
+
+    current_cat = None
+    for h in highlights:
+        cat = h.get("category", "")
+        if cat != current_cat:
+            current_cat = cat
+            cat_color = _CAT_COLOR.get(cat, STEEL)
+            cat_style = ParagraphStyle(f"toc_cat_{cat}", fontName=_FONT_BOLD, fontSize=11,
+                                        leading=16, textColor=cat_color, spaceBefore=12, spaceAfter=4)
+            story.append(Paragraph(_esc(f"{cat}："), cat_style))
+            story.append(HRFlowable(width="100%", thickness=0.5, color=RULE))
+
+        story.append(Paragraph(_esc(h.get("title", "")), toc_title))
+        if h.get("teaser"):
+            story.append(Paragraph(_esc(h["teaser"]), toc_teaser))
+
+    story.append(PageBreak())
+
+    # ── Per-article pages ─────────────────────────────────────────────────────
+    for art in articles:
+        cat = art.get("category", "")
+        title = art.get("title", "")
+        body = art.get("body", "")
+        if not title or not body:
+            continue
+
+        cat_color = _CAT_COLOR.get(cat, STEEL)
+        # Category label (italic style — use muted colour matching category)
+        art_cat_dyn = ParagraphStyle(f"art_cat_{cat}", fontName=_FONT_REGULAR, fontSize=10,
+                                      leading=14, textColor=cat_color, spaceAfter=4)
+        story.append(Paragraph(_esc(f"{cat}："), art_cat_dyn))
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph(_esc(title), art_title))
+        story.append(HRFlowable(width="80%", thickness=1, color=cat_color))
+        story.append(Spacer(1, 0.4 * cm))
+
+        # Body: split on [P] separator into paragraphs
+        paragraphs = [p.strip() for p in body.split("[P]") if p.strip()]
+        if not paragraphs:
+            paragraphs = [body]
+        for para in paragraphs:
+            story.append(Paragraph(_esc(para), body_text))
+
+        story.append(PageBreak())
+
+    # ── Footer on last page ───────────────────────────────────────────────────
+    # Remove trailing PageBreak if present
+    if story and isinstance(story[-1], PageBreak):
+        story.pop()
+
     story.append(Spacer(1, 0.5 * cm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=RULE))
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -544,13 +703,20 @@ def send_monthly_report(
         articles = _query_articles(pg_url, from_dt, to_dt, stmt_timeout_ms=60000)
         logger.info("Monthly report: %d articles found for %s", len(articles), period_str)
 
-        report = _generate_report_content(articles, api_key, "monthly", period_str)
-        pdf_bytes = _build_pdf(report, "monthly", period_str)
+        report = _generate_monthly_content(articles, api_key, period_str)
+        n_articles_in_report = len(report.get("articles") or [])
+        logger.info("Monthly report: generated %d analytical articles", n_articles_in_report)
+
+        pdf_bytes = _build_monthly_pdf(report, period_str)
 
         filename = f"电力市场月报_{year}{month:02d}.pdf"
         file_key = feishu.upload_file(pdf_bytes, filename, file_type="pdf")
 
-        n_articles = len(articles)
+        # Card summary: executive summary + article list
+        art_list = "\n".join(
+            f"**{a.get('category', '')}** · {a.get('title', '')}"
+            for a in (report.get("articles") or [])
+        )
         feishu.send_card(
             owner_open_id,
             {
@@ -562,7 +728,9 @@ def send_monthly_report(
                 "elements": [
                     {"tag": "markdown", "content": report.get("executive_summary", "")},
                     {"tag": "hr"},
-                    {"tag": "markdown", "content": f"本月共收录 **{n_articles}** 篇资讯 · PDF月报见下方"},
+                    {"tag": "markdown", "content": art_list or ""},
+                    {"tag": "hr"},
+                    {"tag": "markdown", "content": f"共 **{n_articles_in_report}** 篇深度分析 · PDF月报见下方"},
                 ],
             },
         )
