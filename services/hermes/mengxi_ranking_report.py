@@ -247,9 +247,8 @@ def _compute_nodal_pf_ranks(
             _, profit_4h = compute_dispatch_from_15min_prices(
                 prices_s, power_mw=1.0, duration_h=4.0, roundtrip_eff=rte
             )
-            days = max(len(profit_2h), 1)
-            score_2h = float(profit_2h.sum()) / (2.0 * days)
-            score_4h = float(profit_4h.sum()) / (4.0 * days)
+            score_2h = float(profit_2h.sum()) / (2.0 * max(n_days, 1))
+            score_4h = float(profit_4h.sum()) / (4.0 * max(n_days, 1))
         except Exception as exc:
             logger.warning("Nodal PF compute failed for %s: %s", plant_name, exc)
             return plant_name, float("nan"), float("nan"), n_days

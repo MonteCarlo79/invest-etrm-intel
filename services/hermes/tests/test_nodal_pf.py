@@ -49,7 +49,7 @@ class TestComputeNodalPfRanks:
         df_low["cleared_price"] = 100.0
         df_high = _make_prices("plant_high", n_days=1, seed=2)
         df_high["cleared_price"] = np.where(
-            df_high.index < 48, 10.0, 500.0  # large spread
+            df_high["datetime"].dt.hour < 12, 10.0, 500.0  # morning low, afternoon high
         )
         df = pd.concat([df_low, df_high], ignore_index=True)
         result = _compute_nodal_pf_ranks(df)
