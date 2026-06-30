@@ -38,6 +38,8 @@ from services.hermes.scheduler import send_due_reminders, send_morning_briefing,
 from services.hermes.mengxi_ranking_report import send_daily_ranking as _send_mengxi_ranking
 from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
 from services.hermes.news_screener import screen_news_sources as _screen_news_sources, get_sources as _ns_get_sources, backfill_source as _backfill_source
+from services.hermes.capacity_screener import screen_installed_capacity as _screen_capacity
+from services.hermes.market_report import send_daily_report as _send_daily_report, send_monthly_report as _send_monthly_report
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
 from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
@@ -428,10 +430,11 @@ def create_app() -> FastAPI:
             "cron",
             hour=23, minute=0,
             kwargs={
-                "feishu":            feishu,
-                "owner_open_id":     os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
-                "pg_url":            _mengxi_pg_url,
-                "onedrive_client":   agent.onedrive,
+                "feishu":              feishu,
+                "owner_open_id":       os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+                "pg_url":              _mengxi_pg_url,
+                "onedrive_client":     agent.onedrive,
+                "wecom_webhook_url":   os.environ.get("WECOM_RANKING_WEBHOOK_URL") or None,
             },
         )
         # New-BESS screener: 06:30 UTC (14:30 Beijing) — after market data typically arrives
@@ -452,6 +455,45 @@ def create_app() -> FastAPI:
             _screen_news_sources,
             "cron",
             hour=6, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
+        # Daily market PDF report: 07:00 UTC (15:00 Beijing) — 60 min after screener
+        scheduler.add_job(
+            _send_daily_report,
+            "cron",
+            hour=7, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
+        # Monthly market PDF report: 1st of each month, 09:00 UTC (17:00 Beijing)
+        scheduler.add_job(
+            _send_monthly_report,
+            "cron",
+            day=1, hour=9, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
+        # Installed capacity screener: 1st of each month, 10:00 UTC (18:00 Beijing)
+        scheduler.add_job(
+            _screen_capacity,
+            "cron",
+            day=1, hour=10, minute=0,
             kwargs={
                 "pg_url":          _mengxi_pg_url,
                 "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
@@ -499,7 +541,8 @@ def create_app() -> FastAPI:
             owner_open_id = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
             background.add_task(_send_mengxi_ranking, feishu=feishu,
                                  owner_open_id=owner_open_id, pg_url=pg_url,
-                                 onedrive_client=agent.onedrive)
+                                 onedrive_client=agent.onedrive,
+                                 wecom_webhook_url=os.environ.get("WECOM_RANKING_WEBHOOK_URL") or None)
             return {"status": "triggered", "report": report}
         return {"status": "unknown_report", "report": report}
 
@@ -511,6 +554,21 @@ def create_app() -> FastAPI:
             return Response(content="DB not configured", status_code=503)
         background.add_task(
             _screen_news_sources,
+            pg_url=_pg,
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            feishu=feishu,
+            owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+        )
+        return {"status": "started"}
+
+    @app.post("/hermes/capacity/scan")
+    async def run_capacity_scan(background: BackgroundTasks):
+        """Trigger a manual installed-capacity scan. Returns immediately; runs in background."""
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        background.add_task(
+            _screen_capacity,
             pg_url=_pg,
             api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             feishu=feishu,
@@ -565,6 +623,45 @@ def create_app() -> FastAPI:
         background.add_task(_run_backfill)
         n_sources = len([s for s in _ns_get_sources(_pg, active_only=False) if not source_id or s["id"] == source_id])
         return {"status": "started", "sources": n_sources, "start_date": start_date_str}
+
+    @app.post("/hermes/reports/daily")
+    async def trigger_daily_report(background: BackgroundTasks):
+        """Manually trigger daily market PDF report generation and Feishu delivery."""
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        background.add_task(
+            _send_daily_report,
+            pg_url=_pg,
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            feishu=feishu,
+            owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+        )
+        return {"status": "started", "report": "daily"}
+
+    @app.post("/hermes/reports/monthly")
+    async def trigger_monthly_report(request: Request, background: BackgroundTasks):
+        """
+        Manually trigger monthly market PDF report.
+        Optional body: {"year": 2026, "month": 5}  — defaults to previous month.
+        """
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        background.add_task(
+            _send_monthly_report,
+            pg_url=_pg,
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            feishu=feishu,
+            owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            year=body.get("year"),
+            month=body.get("month"),
+        )
+        return {"status": "started", "report": "monthly", "year": body.get("year"), "month": body.get("month")}
 
     @app.get("/hermes/inbound/wecom")
     def wecom_verify(echostr: Optional[str] = Query(default=None)):
@@ -1506,6 +1603,41 @@ def _handle_message(
         _threading.Thread(target=_run_news, daemon=True).start()
         return True
 
+    # ── /capacity command — manually trigger installed capacity screener ────
+    if _re.match(r'^/?(?:capacity|装机|装机容量|capacity.scan)$', msg.text.strip(), _re.I):
+        def _cap_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("capacity reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            _cap_reply("⚠️ 数据库未配置，无法运行装机容量扫描。")
+            return True
+        _cap_reply("⏳ 正在扫描各省储能装机容量，稍候…")
+
+        def _run_capacity():
+            try:
+                _screen_capacity(
+                    pg_url=_pg,
+                    api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+                    feishu=feishu,
+                    owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", msg.sender_id),
+                )
+            except Exception as _e:
+                logger.error("Manual capacity screener failed: %s", _e)
+                _cap_reply(f"⚠️ 装机容量扫描失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_capacity, daemon=True).start()
+        return True
+
     # ── /report command — manually trigger a scheduled report ───────────────
     # Accepts: "/report mengxi"  /  "/报告 蒙西"  /  "resend mengxi report"  /  "蒙西储能日报"
     _report_m = _re.match(r'^/?report(?:\s+(mengxi|蒙西|ranking))?$', msg.text.strip(), _re.I)
@@ -1532,10 +1664,15 @@ def _handle_message(
             return True
         _send_reply("⏳ 正在生成蒙西BESS排名日报，稍候…")
 
+        _wecom_uid = msg.sender_id if msg.source == "wecom" else None
         def _run_mengxi_report():
             try:
                 _send_mengxi_ranking(feishu=feishu, owner_open_id=_oid, pg_url=_pg,
-                                     onedrive_client=agent.onedrive)
+                                     onedrive_client=agent.onedrive,
+                                     wecom_webhook_url=os.environ.get("WECOM_RANKING_WEBHOOK_URL") or None,
+                                     wecom_client=wecom if _wecom_uid else None,
+                                     wecom_direct_uid=_wecom_uid)
+                _send_reply("✅ 蒙西BESS排名日报已生成并发送")
             except Exception as _e:
                 logger.error("Manual mengxi report failed: %s", _e)
                 _send_reply(f"⚠️ 报告生成失败：{_e}")

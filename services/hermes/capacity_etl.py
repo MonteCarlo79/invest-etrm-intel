@@ -242,6 +242,66 @@ def upsert_capacity(
     }
 
 
+def upsert_capacity_rows(
+    rows: list[dict],
+    pg_url: str,
+    source_name: str,
+    year_month: date,
+) -> dict:
+    """Upsert pre-extracted capacity rows (no LLM step).
+
+    Each row: {"province": str, "bess_mw": float|None, "hydro_mw": float|None,
+               "wind_mw": float|None, "solar_mw": float|None,
+               "thermal_mw": float|None, "nuclear_mw": float|None, "total_mw": float|None}
+    Returns {"upserted": int, "provinces": list[str], "year_month": str, "errors": list[str]}
+    """
+    errors: list[str] = []
+    upserted: list[str] = []
+
+    conn = psycopg2.connect(pg_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_ENSURE_TABLE_SQL)
+            for row in rows:
+                province_raw = str(row.get("province", "")).strip()
+                if not province_raw:
+                    continue
+                if any(kw in province_raw.lower() for kw in _SKIP_KEYWORDS):
+                    continue
+                province = _normalise_province(province_raw)
+
+                def _mw(key: str) -> Optional[float]:
+                    v = row.get(key)
+                    if v is None or v == "":
+                        return None
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        return None
+
+                try:
+                    cur.execute(_UPSERT_SQL, (
+                        province, year_month,
+                        _mw("wind_mw"), _mw("solar_mw"), _mw("thermal_mw"),
+                        _mw("hydro_mw"), _mw("nuclear_mw"), _mw("bess_mw"),
+                        _mw("total_mw"), source_name,
+                    ))
+                    upserted.append(province)
+                except Exception as exc:
+                    errors.append(f"{province}: {exc}")
+                    logger.error("Capacity row upsert failed for %s: %s", province, exc)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "upserted": len(upserted),
+        "provinces": upserted,
+        "year_month": str(year_month),
+        "errors": errors,
+    }
+
+
 def is_capacity_file(filename: str) -> bool:
     """Return True if filename looks like a 各省储能/装机 capacity file."""
     name_lower = filename.lower()
