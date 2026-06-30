@@ -60,10 +60,10 @@ class TestComputeNodalPfRanks:
         result = _compute_nodal_pf_ranks(df)
         assert result["plant_A"]["n_days"] == 3
 
-    def test_4h_score_higher_than_2h_for_wide_spread(self):
+    def test_scores_non_negative_with_bimodal_prices(self):
+        # Bimodal prices (low morning, high afternoon) — both 2h and 4h PF scores must be >= 0
         df = _make_prices("plant_A", n_days=1, seed=5)
         df["cleared_price"] = np.where(df.index % 96 < 48, 10.0, 600.0)
         result = _compute_nodal_pf_ranks(df)
-        # just verify both scores are non-negative
         assert result["plant_A"]["score_2h"] >= 0
         assert result["plant_A"]["score_4h"] >= 0
