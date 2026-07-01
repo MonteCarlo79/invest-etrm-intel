@@ -242,6 +242,32 @@ def _format_articles_for_prompt(articles: list[dict], max_chars: int = 12000) ->
     return "\n\n".join(lines)
 
 
+def _fix_json_newlines(s: str) -> str:
+    """
+    Replace literal newline/tab characters INSIDE JSON string values with spaces.
+    Iterates character by character tracking string context — handles escapes correctly.
+    Structural whitespace between tokens is preserved.
+    """
+    result = []
+    in_string = False
+    escape_next = False
+    for ch in s:
+        if escape_next:
+            result.append(ch)
+            escape_next = False
+        elif in_string and ch == '\\':
+            result.append(ch)
+            escape_next = True
+        elif ch == '"':
+            in_string = not in_string
+            result.append(ch)
+        elif in_string and ch in ('\n', '\r', '\t'):
+            result.append(' ')  # replace bare newlines/tabs inside strings with space
+        else:
+            result.append(ch)
+    return ''.join(result)
+
+
 def _call_claude_json(api_key: str, prompt: str, max_tokens: int) -> dict | None:
     """
     Call Claude Sonnet with a JSON-only system prompt.
@@ -266,12 +292,16 @@ def _call_claude_json(api_key: str, prompt: str, max_tokens: int) -> dict | None
     raw = re.sub(r"\n?```(?:json)?\s*$", "", raw).strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw).strip()
 
+    # Fix literal newlines/tabs inside string values (Claude ignores the [P] instruction)
+    fixed = _fix_json_newlines(raw)
+
     try:
-        return json.loads(raw)
+        return json.loads(fixed)
     except json.JSONDecodeError as e:
         logger.warning("JSON parse failed (%s), trying regex extract. raw[:300]=%s", e, raw[:300])
 
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    # Fallback: extract outermost {...} from the fixed string
+    m = re.search(r"\{.*\}", fixed, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(0))
