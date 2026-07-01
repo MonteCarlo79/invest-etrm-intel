@@ -388,6 +388,11 @@ def _parse_tables_from_page(
             # change-% values instead of prices.
             while tail and not tail[0]:
                 tail = tail[1:]
+            # Skip leading percentage cells — 2026 DA tables put the change%
+            # column BEFORE the price column (e.g. "-17.00%, 0.343, -14.10%,
+            # 0.000, ...") whereas the parser expects price first.
+            while tail and tail[0] and ("%" in tail[0] or "％" in tail[0]):
+                tail = tail[1:]
             avg, mx, mn = _pick_triplet_from_tail(tail)
 
             row_dict: dict = {"province_cn": prov_cn}
@@ -437,9 +442,15 @@ def parse_pdf(
             text = page.extract_text() or ""
             page_date = _infer_page_date(text, year)
 
-            # ── Mode reset at each new date ──────────────────────────────────
+            # ── Track date changes (do NOT reset mode here) ──────────────────
+            # Mode is controlled solely by section headers (_detect_section_mode
+            # below).  Resetting on date change caused problems for multi-day
+            # combined reports where footnote pages contain the next date's
+            # number BEFORE the section-header page for that date arrives —
+            # e.g. page 64 (footnote) has "06月29日" text which triggered a
+            # mode=None reset, then page 65 (DA data, no section header) was
+            # skipped because both section-mode and table-mode were None.
             if page_date is not None and page_date != last_date:
-                mode = None
                 last_date = page_date
 
             # ── Update mode from page-level section headers ──────────────────
