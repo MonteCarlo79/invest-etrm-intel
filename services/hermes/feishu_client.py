@@ -23,38 +23,59 @@ class FeishuClient:
 
     # ── Token ─────────────────────────────────────────────────────────────────
 
+    def _fetch_fresh_token(self) -> str:
+        """Unconditionally fetch a new tenant_access_token from Feishu."""
+        resp = requests.post(
+            f"{_API}/auth/v3/tenant_access_token/internal",
+            json={"app_id": self.app_id, "app_secret": self.app_secret},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code", 0) != 0:
+            raise RuntimeError(f"Feishu token error: {data}")
+        self._token = data["tenant_access_token"]
+        self._token_expires_at = time.time() + _TOKEN_TTL
+        logger.info("Feishu token refreshed (expires in %ds)", _TOKEN_TTL)
+        return self._token
+
     def _get_token(self) -> str:
         with self._lock:
             if self._token and time.time() < self._token_expires_at:
                 return self._token
-            resp = requests.post(
-                f"{_API}/auth/v3/tenant_access_token/internal",
-                json={"app_id": self.app_id, "app_secret": self.app_secret},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("code", 0) != 0:
-                raise RuntimeError(f"Feishu token error: {data}")
-            self._token = data["tenant_access_token"]
-            self._token_expires_at = time.time() + _TOKEN_TTL
-            return self._token
+            return self._fetch_fresh_token()
+
+    def _invalidate_token(self) -> None:
+        """Force token expiry so the next call triggers a refresh."""
+        with self._lock:
+            self._token = None
+            self._token_expires_at = 0.0
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._get_token()}"}
 
+    def _request_with_token_retry(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Make an HTTP request; if 99991663 (invalid token), refresh once and retry."""
+        resp = requests.request(method, url, headers=self._headers(), **kwargs)
+        if resp.ok:
+            return resp
+        try:
+            code = resp.json().get("code", 0)
+        except Exception:
+            code = 0
+        if code == 99991663:
+            logger.warning("Feishu token invalid (99991663), force-refreshing and retrying")
+            self._invalidate_token()
+            resp = requests.request(method, url, headers=self._headers(), **kwargs)
+        return resp
+
     # ── Messaging ─────────────────────────────────────────────────────────────
 
     def send_text(self, open_id: str, text: str) -> None:
-        resp = requests.post(
-            f"{_API}/im/v1/messages",
-            headers=self._headers(),
+        resp = self._request_with_token_retry(
+            "POST", f"{_API}/im/v1/messages",
             params={"receive_id_type": "open_id"},
-            json={
-                "receive_id": open_id,
-                "msg_type": "text",
-                "content": json.dumps({"text": text}),
-            },
+            json={"receive_id": open_id, "msg_type": "text", "content": json.dumps({"text": text})},
             timeout=10,
         )
         if not resp.ok:
@@ -66,15 +87,10 @@ class FeishuClient:
 
     def send_card(self, open_id: str, card: dict) -> None:
         """Send a Feishu interactive card (msg_type=interactive)."""
-        resp = requests.post(
-            f"{_API}/im/v1/messages",
-            headers=self._headers(),
+        resp = self._request_with_token_retry(
+            "POST", f"{_API}/im/v1/messages",
             params={"receive_id_type": "open_id"},
-            json={
-                "receive_id": open_id,
-                "msg_type": "interactive",
-                "content": json.dumps(card),
-            },
+            json={"receive_id": open_id, "msg_type": "interactive", "content": json.dumps(card)},
             timeout=10,
         )
         if not resp.ok:
@@ -86,16 +102,10 @@ class FeishuClient:
 
     def upload_file(self, file_bytes: bytes, filename: str, file_type: str = "pdf") -> str:
         """Upload a file to Feishu and return file_key."""
-        resp = requests.post(
-            f"{_API}/im/v1/files",
-            headers=self._headers(),
-            data={
-                "file_type": file_type,
-                "file_name": filename,
-            },
-            files={
-                "file": (filename, file_bytes, "application/octet-stream"),
-            },
+        resp = self._request_with_token_retry(
+            "POST", f"{_API}/im/v1/files",
+            data={"file_type": file_type, "file_name": filename},
+            files={"file": (filename, file_bytes, "application/octet-stream")},
             timeout=60,
         )
         resp.raise_for_status()
@@ -106,15 +116,10 @@ class FeishuClient:
 
     def send_file(self, open_id: str, file_key: str) -> None:
         """Send a file message via file_key obtained from upload_file()."""
-        resp = requests.post(
-            f"{_API}/im/v1/messages",
-            headers=self._headers(),
+        resp = self._request_with_token_retry(
+            "POST", f"{_API}/im/v1/messages",
             params={"receive_id_type": "open_id"},
-            json={
-                "receive_id": open_id,
-                "msg_type":   "file",
-                "content":    json.dumps({"file_key": file_key}),
-            },
+            json={"receive_id": open_id, "msg_type": "file", "content": json.dumps({"file_key": file_key})},
             timeout=15,
         )
         if not resp.ok:
@@ -126,9 +131,8 @@ class FeishuClient:
 
     def upload_image(self, image_bytes: bytes) -> str:
         """Upload a PNG/JPEG image to Feishu and return image_key."""
-        resp = requests.post(
-            f"{_API}/im/v1/images",
-            headers=self._headers(),
+        resp = self._request_with_token_retry(
+            "POST", f"{_API}/im/v1/images",
             data={"image_type": "message"},
             files={"image": ("chart.png", image_bytes, "image/png")},
             timeout=60,
@@ -141,15 +145,10 @@ class FeishuClient:
 
     def send_image(self, open_id: str, image_key: str) -> None:
         """Send an image message using an image_key from upload_image()."""
-        resp = requests.post(
-            f"{_API}/im/v1/messages",
-            headers=self._headers(),
+        resp = self._request_with_token_retry(
+            "POST", f"{_API}/im/v1/messages",
             params={"receive_id_type": "open_id"},
-            json={
-                "receive_id": open_id,
-                "msg_type":   "image",
-                "content":    json.dumps({"image_key": image_key}),
-            },
+            json={"receive_id": open_id, "msg_type": "image", "content": json.dumps({"image_key": image_key})},
             timeout=15,
         )
         if not resp.ok:
@@ -161,9 +160,8 @@ class FeishuClient:
 
     def download_resource(self, message_id: str, file_key: str, resource_type: str = "file") -> bytes:
         """Download a file or image attachment from a Feishu message."""
-        resp = requests.get(
-            f"{_API}/im/v1/messages/{message_id}/resources/{file_key}",
-            headers=self._headers(),
+        resp = self._request_with_token_retry(
+            "GET", f"{_API}/im/v1/messages/{message_id}/resources/{file_key}",
             params={"type": resource_type},
             timeout=60,
         )
