@@ -448,11 +448,21 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
             # Normalize: tool_use may return articles as a JSON-encoded string
             val = result.get("articles")
             if isinstance(val, str):
-                logger.warning("Monthly: 'articles' came back as string (%d chars), parsing JSON", len(val))
+                logger.warning("Monthly: 'articles' came back as string (%d chars), parsing JSON. preview: %s",
+                               len(val), val[:200])
                 try:
-                    result["articles"] = json.loads(val)
-                except json.JSONDecodeError:
-                    result["articles"] = []
+                    fixed_val = _fix_json_newlines(val)
+                    result["articles"] = json.loads(fixed_val)
+                except json.JSONDecodeError as parse_err:
+                    logger.warning("Monthly: articles string parse failed (%s), trying regex extract", parse_err)
+                    m = re.search(r"\[.*\]", _fix_json_newlines(val), re.DOTALL)
+                    if m:
+                        try:
+                            result["articles"] = json.loads(m.group(0))
+                        except json.JSONDecodeError:
+                            pass
+                    if not result.get("articles"):
+                        result["articles"] = []
             # Ensure articles items are dicts
             result["articles"] = [a for a in (result.get("articles") or []) if isinstance(a, dict)]
             n_arts = len(result.get("articles") or [])
