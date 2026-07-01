@@ -188,10 +188,10 @@ _MONTHLY_PROMPT = """\
 - 政策追踪：具体政策落地、影响测算、投资逻辑
 
 要求：
-- 输出4-6篇articles，每篇包含category、title、body三个字段
 - executive_summary：2-3句话总结本月1-2个核心主题及其对储能行业的影响
+- 输出5篇文章（article_1 至 article_5），每篇分别填写category、title、body字段
 - category必须是：市场快讯、市场洞察、政策追踪 三者之一
-- 每篇body必须200字以上，体现分析深度，包括：政策背景、核心内容、市场影响、储能/BESS投资启示
+- 每篇body必须200字以上，包括：政策背景、核心内容、市场影响、储能/BESS投资启示
 - body中用[P]表示段落分隔（不要用换行符）
 - 【重要】只引用资讯中明确出现的数字和数据，不要自行推算或编造价格、利润率、IRR等具体数值
 """
@@ -290,39 +290,43 @@ _DAILY_TOOL = {
     },
 }
 
-_MONTHLY_TOOL = {
-    "name": "submit_monthly_report",
-    "description": "Submit structured monthly power market analytical report",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "executive_summary": {
-                "type": "string",
-                "description": "3-5句月度市场总结",
-            },
-            "articles": {
-                "type": "array",
-                "description": "4-6篇深度分析文章，每篇含完整分析正文",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "enum": ["市场快讯", "市场洞察", "政策追踪"],
-                        },
-                        "title": {"type": "string", "description": "文章标题"},
-                        "body": {
-                            "type": "string",
-                            "description": "400-600字深度分析正文。用[P]分隔段落。",
-                        },
-                    },
-                    "required": ["category", "title", "body"],
-                },
-            },
+def _build_monthly_tool(n: int = 5) -> dict:
+    """
+    Build a flat monthly report tool schema with n numbered article slots.
+    Flat schema avoids nested objects/arrays — Claude always stringifies those,
+    causing JSON-in-JSON parse failures. Flat string fields are always safe.
+    """
+    props: dict = {
+        "executive_summary": {
+            "type": "string",
+            "description": "3-5句月度市场总结，概括核心主题及对储能投资的影响",
         },
-        "required": ["executive_summary", "articles"],
-    },
-}
+    }
+    required = ["executive_summary"]
+    for i in range(1, n + 1):
+        props[f"article_{i}_category"] = {
+            "type": "string",
+            "enum": ["市场快讯", "市场洞察", "政策追踪"],
+            "description": f"第{i}篇文章分类",
+        }
+        props[f"article_{i}_title"] = {
+            "type": "string",
+            "description": f"第{i}篇文章标题",
+        }
+        props[f"article_{i}_body"] = {
+            "type": "string",
+            "description": f"第{i}篇文章正文，300-500字深度分析，含政策背景、核心要点、储能投资启示",
+        }
+        if i == 1:
+            required += [f"article_{i}_category", f"article_{i}_title", f"article_{i}_body"]
+    return {
+        "name": "submit_monthly_report",
+        "description": "Submit structured monthly power market analytical report with flat fields",
+        "input_schema": {"type": "object", "properties": props, "required": required},
+    }
+
+
+_MONTHLY_TOOL = _build_monthly_tool(5)
 
 
 def _call_claude_tool(api_key: str, prompt: str, tool: dict, max_tokens: int) -> dict | None:
@@ -445,26 +449,15 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
     try:
         result = _call_claude_tool(api_key, prompt, _MONTHLY_TOOL, max_tokens=6000)
         if result is not None:
-            # Normalize: tool_use may return articles as a JSON-encoded string
-            val = result.get("articles")
-            if isinstance(val, str):
-                logger.warning("Monthly: 'articles' came back as string (%d chars), parsing JSON. preview: %s",
-                               len(val), val[:200])
-                try:
-                    fixed_val = _fix_json_newlines(val)
-                    result["articles"] = json.loads(fixed_val)
-                except json.JSONDecodeError as parse_err:
-                    logger.warning("Monthly: articles string parse failed (%s), trying regex extract", parse_err)
-                    m = re.search(r"\[.*\]", _fix_json_newlines(val), re.DOTALL)
-                    if m:
-                        try:
-                            result["articles"] = json.loads(m.group(0))
-                        except json.JSONDecodeError:
-                            pass
-                    if not result.get("articles"):
-                        result["articles"] = []
-            # Ensure articles items are dicts
-            result["articles"] = [a for a in (result.get("articles") or []) if isinstance(a, dict)]
+            # Reassemble flat article_N_* fields into articles list
+            articles = []
+            for i in range(1, 6):
+                cat   = result.get(f"article_{i}_category", "").strip()
+                title = result.get(f"article_{i}_title", "").strip()
+                body  = result.get(f"article_{i}_body", "").strip()
+                if title and body:
+                    articles.append({"category": cat, "title": title, "body": body})
+            result["articles"] = articles
             n_arts = len(result.get("articles") or [])
             logger.info("Monthly report: generated %d analytical articles", n_arts)
             if not n_arts:
