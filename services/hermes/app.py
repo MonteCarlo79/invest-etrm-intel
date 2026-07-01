@@ -50,8 +50,22 @@ from services.hermes.sysopfee_etl import upsert_sysopfee, is_sysopfee_file
 from services.hermes.sysopfee_screener import screen_sysopfee as _screen_sysopfee
 from services.hermes.daili_etl import upsert_daili_file as _upsert_daili_file, is_daili_file
 from services.hermes.daili_screener import screen_daili as _screen_daili
-from services.hermes.capcomp_screener import screen_capcomp as _screen_capcomp
+from services.hermes.capcomp_screener import screen_capcomp as _screen_capcomp, get_scan_status as _get_capcomp_status
 from services.hermes.capcomp_etl import resolve_conflict as _resolve_conflict
+from services.hermes.capcomp_manual_etl import (
+    extract_capcomp_from_text as _capcomp_from_text,
+    extract_capcomp_from_file as _capcomp_from_file,
+    extract_capcomp_from_url as _capcomp_from_url,
+    is_capcomp_file,
+    format_result_message as _capcomp_fmt,
+)
+from services.hermes.capacity_manual_etl import (
+    extract_capacity_from_text as _capacity_from_text,
+    extract_capacity_from_file as _capacity_from_file,
+    extract_capacity_from_url as _capacity_from_url,
+    is_capacity_file_extended,
+    format_result_message as _capacity_fmt,
+)
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -677,6 +691,11 @@ def create_app() -> FastAPI:
         )
         return {"status": "started"}
 
+    @app.get("/hermes/capcomp/status")
+    async def capcomp_scan_status():
+        """Return current capcomp scan progress."""
+        return _get_capcomp_status()
+
     @app.post("/hermes/capcomp/resolve")
     async def resolve_capcomp_conflict(request: Request):
         """
@@ -1067,6 +1086,67 @@ def create_app() -> FastAPI:
             background.add_task(_reroute)
             return {}
 
+        if act == "send_wecom_monthly":
+            yr  = value.get("year")
+            mon = value.get("month")
+            logger.info("send_wecom_monthly: yr=%r mon=%r open_id=%r", yr, mon, open_id)
+            # Fallback: if year/month missing (old card with integer values), use most recent cache
+            if not yr or not mon:
+                from services.hermes.market_report import _monthly_pdf_cache
+                if _monthly_pdf_cache:
+                    yr, mon = max(_monthly_pdf_cache.keys())
+                    logger.info("send_wecom_monthly: falling back to most recent cache (%s-%s)", yr, mon)
+                else:
+                    if open_id and feishu:
+                        feishu.send_text(open_id=open_id, text="⚠️ 无缓存月报，请先生成月报再发送。")
+                    return {}
+            _wecom_urls = [
+                w.strip()
+                for w in os.environ.get("WECOM_MONTHLY_REPORT_WEBHOOKS", "").split(",")
+                if w.strip()
+            ]
+            if not _wecom_urls:
+                if open_id and feishu:
+                    feishu.send_text(open_id=open_id, text="⚠️ 未配置企微Webhook，无法发送。")
+                return {}
+            if open_id and feishu:
+                feishu.send_text(open_id=open_id, text=f"⏳ 正在发送{yr}年{mon}月月报到企微群…")
+            def _do_wecom_send():
+                try:
+                    from services.hermes.market_report import send_monthly_report_to_wecom
+                    send_monthly_report_to_wecom(int(yr), int(mon), _wecom_urls)
+                    if open_id and feishu:
+                        feishu.send_text(open_id=open_id,
+                                         text=f"✅ {yr}年{mon}月月报已发送到 {len(_wecom_urls)} 个企微群。")
+                except Exception as exc:
+                    logger.error("WeCom monthly report send failed: %s", exc)
+                    if open_id and feishu:
+                        feishu.send_text(open_id=open_id, text=f"⚠️ 企微发送失败：{exc}")
+            background.add_task(_do_wecom_send)
+            return {}
+
+        if act == "set_llm":
+            provider = value.get("provider", "auto")
+            _pg_sl = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            _labels = {"auto": "🔄 自动 (Auto)", "claude": "🤖 Claude", "azure": "☁️ Azure GPT-4o", "deepseek": "🐋 DeepSeek"}
+            if _pg_sl and open_id and feishu:
+                try:
+                    import psycopg2 as _pg2_sl
+                    _conn_sl = _pg2_sl.connect(_pg_sl, options="-c statement_timeout=3000")
+                    with _conn_sl.cursor() as _cur_sl:
+                        _cur_sl.execute(
+                            "INSERT INTO hermes_settings (key, value, updated_at) VALUES (%s, %s, NOW()) "
+                            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                            ("report_llm", provider),
+                        )
+                    _conn_sl.commit()
+                    _conn_sl.close()
+                    feishu.send_text(open_id=open_id, text=f"✅ 报告模型已切换为：{_labels.get(provider, provider)}")
+                except Exception as exc:
+                    logger.error("set_llm DB write failed: %s", exc)
+                    feishu.send_text(open_id=open_id, text=f"⚠️ 切换失败：{exc}")
+            return {}
+
         if act == "set_folder":
             # /save picker — store as pending folder; -1 = unlimited until user sends text
             folder_choice = value.get("to", "")
@@ -1447,6 +1527,7 @@ def _handle_file_message(
 
     # Auto ETL: upsert capacity data into province_installed_monthly
     _should_etl = (matched_rule and matched_rule.get("auto_etl")) or is_capacity_file(filename)
+    _should_etl_ext = (not _should_etl) and is_capacity_file_extended(filename)
     if _should_etl:
         try:
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
@@ -1467,6 +1548,16 @@ def _handle_file_message(
             feishu.send_text(open_id=sender_id, text=etl_msg)
         except Exception as exc:
             logger.error("Capacity ETL failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 装机数据入库失败：{exc}")
+    elif _should_etl_ext:
+        # PDF/TXT capacity files — use manual ETL path
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = _capacity_from_file(filename, file_bytes, api_key, pg_url)
+            feishu.send_text(open_id=sender_id, text=_capacity_fmt(result))
+        except Exception as exc:
+            logger.error("Capacity manual ETL failed: %s", exc, exc_info=True)
             feishu.send_text(open_id=sender_id, text=f"⚠️ 装机数据入库失败：{exc}")
 
     # Auto ETL: upsert system operation fee data into province_sysopfee_monthly
@@ -1513,6 +1604,17 @@ def _handle_file_message(
         except Exception as exc:
             logger.error("Daili ETL failed: %s", exc, exc_info=True)
             feishu.send_text(open_id=sender_id, text=f"⚠️ 代理购电入库失败：{exc}")
+
+    # Auto ETL: upsert cap comp / FR market data from cap-comp-related files
+    if is_capcomp_file(filename):
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = _capcomp_from_file(filename, file_bytes, api_key, pg_url)
+            feishu.send_text(open_id=sender_id, text=_capcomp_fmt(result))
+        except Exception as exc:
+            logger.error("CapComp file ETL failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 容量补偿/调频数据入库失败：{exc}")
 
     # Spot market PDF: trigger ingestion pipeline
     if is_spot_pdf(filename) and resource_type == "file":
@@ -1602,6 +1704,7 @@ def _handle_telegram_file(
 
     # Auto ETL: upsert capacity data
     _should_etl_tg = (matched_rule and matched_rule.get("auto_etl")) or is_capacity_file(filename)
+    _should_etl_tg_ext = (not _should_etl_tg) and is_capacity_file_extended(filename)
     if _should_etl_tg:
         try:
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
@@ -1620,6 +1723,14 @@ def _handle_telegram_file(
             telegram.send_text(chat_id, etl_msg)
         except Exception as exc:
             logger.error("Capacity ETL (Telegram) failed: %s", exc, exc_info=True)
+    elif _should_etl_tg_ext:
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = _capacity_from_file(filename, file_bytes, api_key, pg_url)
+            telegram.send_text(chat_id, _capacity_fmt(result))
+        except Exception as exc:
+            logger.error("Capacity manual ETL (Telegram) failed: %s", exc, exc_info=True)
 
     # Auto ETL: upsert system operation fee data (Telegram)
     if is_sysopfee_file(filename):
@@ -1657,6 +1768,17 @@ def _handle_telegram_file(
                 telegram.send_text(chat_id, "⚠️ 代理购电入库：未提取到有效数据")
         except Exception as exc:
             logger.error("Daili ETL (Telegram) failed: %s", exc, exc_info=True)
+
+    # Auto ETL: upsert cap comp / FR market data (Telegram)
+    if is_capcomp_file(filename):
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = _capcomp_from_file(filename, file_bytes, api_key, pg_url)
+            telegram.send_text(chat_id, _capcomp_fmt(result))
+        except Exception as exc:
+            logger.error("CapComp file ETL (Telegram) failed: %s", exc, exc_info=True)
+            telegram.send_text(chat_id, f"⚠️ 容量补偿/调频数据入库失败：{exc}")
 
     # Spot market PDF ingest
     if is_spot_pdf(filename):
@@ -1949,6 +2071,88 @@ def _handle_message(
         _threading.Thread(target=_run_capcomp, daemon=True).start()
         return True
 
+    # ── /capcomp-add — manual cap comp / FR data entry (text or URL) ────────
+    # Usage: /capcomp-add 广东 容量补偿 165元/kW 净负荷6小时
+    #        /capcomp-add https://example.com/policy.pdf
+    _cadd_m = _re.match(r'^/?capcomp[-_](?:add|update|手动|更新|录入)\s+(.*)', msg.text.strip(), _re.I | _re.DOTALL)
+    if _cadd_m:
+        _payload = _cadd_m.group(1).strip()
+
+        def _cadd_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("capcomp-add reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _pg or not _api_key:
+            _cadd_reply("⚠️ 数据库或API密钥未配置。")
+            return True
+
+        _cadd_reply("⏳ 正在提取容量补偿/调频数据，请稍候…")
+
+        def _run_cadd():
+            try:
+                # Detect if payload is a URL
+                if _re.match(r'https?://', _payload):
+                    res = _capcomp_from_url(_payload, _api_key, _pg)
+                else:
+                    res = _capcomp_from_text(_payload, _api_key, _pg)
+                _cadd_reply(_capcomp_fmt(res))
+            except Exception as _e:
+                logger.error("capcomp-add failed: %s", _e)
+                _cadd_reply(f"⚠️ 入库失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_cadd, daemon=True).start()
+        return True
+
+    # ── /capacity-add — manual province capacity data entry (text or URL) ───
+    # Usage: /capacity-add 广东 2026-05 储能2000MW 风电5000MW 光伏8000MW
+    #        /capacity-add https://example.com/installed_capacity_202605.pdf
+    _capadd_m = _re.match(
+        r'^/?(?:capacity[-_](?:add|update|手动|更新|录入)|装机[-_]?(?:录入|手动|更新))\s+(.*)',
+        msg.text.strip(), _re.I | _re.DOTALL,
+    )
+    if _capadd_m:
+        _payload = _capadd_m.group(1).strip()
+
+        def _capadd_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("capacity-add reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _pg or not _api_key:
+            _capadd_reply("⚠️ 数据库或API密钥未配置。")
+            return True
+
+        _capadd_reply("⏳ 正在提取装机容量数据，请稍候…")
+
+        def _run_capadd():
+            try:
+                if _re.match(r'https?://', _payload):
+                    res = _capacity_from_url(_payload, _api_key, _pg)
+                else:
+                    res = _capacity_from_text(_payload, _api_key, _pg)
+                _capadd_reply(_capacity_fmt(res))
+            except Exception as _e:
+                logger.error("capacity-add failed: %s", _e)
+                _capadd_reply(f"⚠️ 入库失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_capadd, daemon=True).start()
+        return True
+
     # ── /report command — manually trigger a scheduled report ───────────────
     # Accepts: "/report mengxi"  /  "/报告 蒙西"  /  "resend mengxi report"  /  "蒙西储能日报"
     _report_m = _re.match(r'^/?report(?:\s+(mengxi|蒙西|ranking))?$', msg.text.strip(), _re.I)
@@ -1990,6 +2194,44 @@ def _handle_message(
 
         import threading
         threading.Thread(target=_run_mengxi_report, daemon=True).start()
+        return True
+
+    # ── LLM provider selection ─────────────────────────────────────────────────
+    # /setllm  → shows a card with provider choices
+    if _re.match(r'^/?setllm$', msg.text.strip(), _re.I) and msg.source == "feishu" and feishu:
+        def _btn_llm(label: str, provider: str) -> dict:
+            return {"tag": "button", "text": {"tag": "plain_text", "content": label},
+                    "type": "default",
+                    "value": {"act": "set_llm", "provider": provider}}
+        _pg_llm = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _cur_provider = "auto"
+        if _pg_llm:
+            try:
+                import psycopg2 as _pg2_llm
+                _conn_llm = _pg2_llm.connect(_pg_llm, options="-c statement_timeout=3000")
+                with _conn_llm.cursor() as _cur_llm:
+                    _cur_llm.execute("SELECT value FROM hermes_settings WHERE key = 'report_llm'")
+                    _row_llm = _cur_llm.fetchone()
+                    _cur_provider = (_row_llm[0] or "auto") if _row_llm else "auto"
+                _conn_llm.close()
+            except Exception:
+                pass
+        _provider_labels = {"auto": "🔄 自动 (Auto)", "claude": "🤖 Claude", "azure": "☁️ Azure GPT-4o", "deepseek": "🐋 DeepSeek"}
+        _cur_label = _provider_labels.get(_cur_provider, _cur_provider)
+        feishu.send_card(open_id=msg.sender_id, card={
+            "config": {"wide_screen_mode": True},
+            "header": {"title": {"tag": "plain_text", "content": "🧠 选择报告生成模型"}, "template": "blue"},
+            "elements": [
+                {"tag": "markdown", "content": f"当前设置：**{_cur_label}**\n\n自动模式依次尝试：Claude → Azure GPT-4o → DeepSeek"},
+                {"tag": "hr"},
+                {"tag": "action", "actions": [
+                    _btn_llm("🔄 自动 (Auto)", "auto"),
+                    _btn_llm("🤖 Claude", "claude"),
+                    _btn_llm("☁️ Azure GPT-4o", "azure"),
+                    _btn_llm("🐋 DeepSeek", "deepseek"),
+                ]},
+            ],
+        })
         return True
 
     # ── Market report commands ─────────────────────────────────────────────────
@@ -2042,6 +2284,33 @@ def _handle_message(
                     _mr_reply(f"⚠️ 月报生成失败：{_e}")
             import threading
             threading.Thread(target=_run_monthly, daemon=True).start()
+        return True
+
+    # ── /sendwecom — send cached monthly report to WeCom webhooks ─────────────
+    if _re.match(r'^/?sendwecom$', msg.text.strip(), _re.I) and msg.source == "feishu" and feishu:
+        def _do_sendwecom():
+            from services.hermes.market_report import _monthly_pdf_cache, send_monthly_report_to_wecom
+            if not _monthly_pdf_cache:
+                feishu.send_text(open_id=msg.sender_id, text="⚠️ 无缓存月报，请先生成月报（发送「电力月报」）。")
+                return
+            yr, mon = max(_monthly_pdf_cache.keys())
+            _wecom_urls_sw = [
+                w.strip()
+                for w in os.environ.get("WECOM_MONTHLY_REPORT_WEBHOOKS", "").split(",")
+                if w.strip()
+            ]
+            if not _wecom_urls_sw:
+                feishu.send_text(open_id=msg.sender_id, text="⚠️ 未配置企微Webhook。")
+                return
+            feishu.send_text(open_id=msg.sender_id, text=f"⏳ 正在发送{yr}年{mon}月月报到企微群…")
+            try:
+                send_monthly_report_to_wecom(yr, mon, _wecom_urls_sw)
+                feishu.send_text(open_id=msg.sender_id, text=f"✅ {yr}年{mon}月月报已发送到 {len(_wecom_urls_sw)} 个企微群。")
+            except Exception as _e:
+                logger.error("sendwecom failed: %s", _e)
+                feishu.send_text(open_id=msg.sender_id, text=f"⚠️ 企微发送失败：{_e}")
+        import threading
+        threading.Thread(target=_do_sendwecom, daemon=True).start()
         return True
 
     # ── Survey mode — 调研报告 / 资产调研 ────────────────────────────────────

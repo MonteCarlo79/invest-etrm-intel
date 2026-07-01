@@ -651,7 +651,7 @@ def compute_and_store_nodal_pf_monthly(pg_url: str) -> None:
     logger.info("Nodal PF monthly: computing for %s → %s", month_start, month_end_excl)
 
     # ── Discover all plants with data in that month ───────────────────────────
-    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=120000")
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -669,8 +669,19 @@ def compute_and_store_nodal_pf_monthly(pg_url: str) -> None:
 
     logger.info("Nodal PF monthly: %d plants found", len(plant_names))
 
-    # ── Fetch prices and run MILP ─────────────────────────────────────────────
-    prices_df = _query_nodal_prices(pg_url, plant_names, month_start, month_end_excl)
+    # ── Fetch prices in batches of 50 to avoid huge single queries ────────────
+    BATCH = 50
+    batches = [plant_names[i:i + BATCH] for i in range(0, len(plant_names), BATCH)]
+    price_chunks: list[pd.DataFrame] = []
+    for idx, batch in enumerate(batches):
+        logger.info("Nodal PF monthly: fetching batch %d/%d (%d plants)",
+                    idx + 1, len(batches), len(batch))
+        chunk = _query_nodal_prices(pg_url, batch, month_start, month_end_excl)
+        price_chunks.append(chunk)
+    prices_df = pd.concat(price_chunks, ignore_index=True) if price_chunks else pd.DataFrame()
+    logger.info("Nodal PF monthly: total price rows fetched: %d", len(prices_df))
+
+    # ── Run MILP ─────────────────────────────────────────────────────────────
     pf = _compute_nodal_pf_ranks(prices_df)
 
     if not pf:
