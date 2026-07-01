@@ -466,7 +466,18 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
     try:
         result = _call_claude_tool(api_key, prompt, _MONTHLY_TOOL, max_tokens=6000)
         if result is not None:
-            if not result.get("articles"):
+            # Normalize: tool_use may return array fields as JSON-encoded strings
+            for field in ("articles", "highlights"):
+                val = result.get(field)
+                if isinstance(val, str):
+                    logger.warning("Monthly: field '%s' came back as string, parsing JSON", field)
+                    try:
+                        result[field] = json.loads(val)
+                    except json.JSONDecodeError:
+                        result[field] = []
+            n_arts = len(result.get("articles") or [])
+            logger.info("Monthly report: generated %d analytical articles", n_arts)
+            if not n_arts:
                 logger.warning("Monthly: Claude returned no articles. result keys: %s", list(result.keys()))
             return result
         logger.warning("Monthly: _call_claude_tool returned None")
@@ -840,9 +851,6 @@ def send_monthly_report(
         logger.info("Monthly report: %d articles found for %s", len(articles), period_str)
 
         report = _generate_monthly_content(articles, api_key, period_str)
-        n_articles_in_report = len(report.get("articles") or [])
-        logger.info("Monthly report: generated %d analytical articles", n_articles_in_report)
-
         pdf_bytes = _build_monthly_pdf(report, period_str)
 
         filename = f"电力市场月报_{year}{month:02d}.pdf"
