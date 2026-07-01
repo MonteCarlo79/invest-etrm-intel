@@ -268,11 +268,114 @@ def _fix_json_newlines(s: str) -> str:
     return ''.join(result)
 
 
+_DAILY_TOOL = {
+    "name": "submit_daily_report",
+    "description": "Submit structured daily power market report content",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "executive_summary": {
+                "type": "string",
+                "description": "3-5句综合摘要，概括当日市场要点",
+            },
+            "sections": {
+                "type": "array",
+                "description": "各市场板块分析，3-6个板块",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "content": {"type": "string"},
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "summary": {"type": "string"},
+                                },
+                                "required": ["title", "summary"],
+                            },
+                        },
+                    },
+                    "required": ["title", "content"],
+                },
+            },
+        },
+        "required": ["executive_summary", "sections"],
+    },
+}
+
+_MONTHLY_TOOL = {
+    "name": "submit_monthly_report",
+    "description": "Submit structured monthly power market analytical report",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "executive_summary": {
+                "type": "string",
+                "description": "3-5句月度市场总结",
+            },
+            "highlights": {
+                "type": "array",
+                "description": "3-5个月度要点",
+                "items": {"type": "string"},
+            },
+            "articles": {
+                "type": "array",
+                "description": "4-6篇深度分析文章",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "enum": ["市场快讯", "市场洞察", "政策追踪"],
+                        },
+                        "title": {"type": "string"},
+                        "body": {
+                            "type": "string",
+                            "description": "400-600字深度分析。用[P]分隔段落。",
+                        },
+                    },
+                    "required": ["category", "title", "body"],
+                },
+            },
+        },
+        "required": ["executive_summary", "highlights", "articles"],
+    },
+}
+
+
+def _call_claude_tool(api_key: str, prompt: str, tool: dict, max_tokens: int) -> dict | None:
+    """
+    Call Claude using tool_use with a forced tool call — guarantees schema-valid JSON output.
+    Returns the tool input dict, or None on failure.
+    """
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=max_tokens,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": tool["name"]},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        for block in msg.content:
+            if block.type == "tool_use" and block.name == tool["name"]:
+                logger.info("Tool call succeeded, input keys: %s", list(block.input.keys()))
+                return block.input
+        logger.warning("No tool_use block in response. content types: %s",
+                       [b.type for b in msg.content])
+        return None
+    except Exception as exc:
+        logger.error("_call_claude_tool failed: %s", exc, exc_info=True)
+        return None
+
+
+# Keep for reference — no longer called but left in case needed
 def _call_claude_json(api_key: str, prompt: str, max_tokens: int) -> dict | None:
-    """
-    Call Claude Sonnet with a JSON-only system prompt.
-    Returns parsed dict, or None if all parse attempts fail.
-    """
+    """Deprecated: use _call_claude_tool instead."""
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     msg = client.messages.create(
@@ -281,35 +384,16 @@ def _call_claude_json(api_key: str, prompt: str, max_tokens: int) -> dict | None
         system=(
             "You are a JSON-only output assistant. "
             "Respond with a single valid JSON object and nothing else. "
-            "No markdown fences, no explanations, no text outside the JSON. "
-            "Start with { and end with }. "
-            "Use standard ASCII double-quotes for all string values. "
-            "Never include literal newline characters inside string values — use [P] as paragraph separator instead."
         ),
         messages=[{"role": "user", "content": prompt}],
     )
     raw = msg.content[0].text.strip()
-    raw = re.sub(r"\n?```(?:json)?\s*$", "", raw).strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw).strip()
-
-    # Fix literal newlines/tabs inside string values (Claude ignores the [P] instruction)
     fixed = _fix_json_newlines(raw)
-
     try:
         return json.loads(fixed)
     except json.JSONDecodeError as e:
-        logger.warning("JSON parse failed (%s), trying regex extract. raw[:300]=%s", e, raw[:300])
-
-    # Fallback: extract outermost {...} from the fixed string
-    m = re.search(r"\{.*\}", fixed, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            pass
-
-    logger.warning("All JSON parse attempts failed. raw[:500]=%s", raw[:500])
-    return None
+        logger.warning("JSON parse failed (%s)", e)
+        return None
 
 
 def _generate_report_content(articles: list[dict], api_key: str, report_type: str, period_str: str) -> dict:
@@ -331,11 +415,10 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
 
     articles_for_prompt = articles[:max_arts]
     articles_text = _format_articles_for_prompt(articles_for_prompt, max_chars=max_chars)
-    articles_text_safe = articles_text.replace("{", "{{").replace("}", "}}")
-    prompt = _DAILY_PROMPT.format(articles_text=articles_text_safe)
+    prompt = _DAILY_PROMPT.format(articles_text=articles_text.replace("{", "{{").replace("}", "}}"))
 
     try:
-        result = _call_claude_json(api_key, prompt, max_out)
+        result = _call_claude_tool(api_key, prompt, _DAILY_TOOL, max_out)
         if result:
             return result
         return {
@@ -365,13 +448,11 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
     # Use top 30 highest-relevance articles — enough context, keeps prompt lean
     articles_for_prompt = articles[:30]
     articles_text = _format_articles_for_prompt(articles_for_prompt, max_chars=6000)
-    # Escape any { } in articles_text so .format() doesn't misinterpret them
-    articles_text_safe = articles_text.replace("{", "{{").replace("}", "}}")
     try:
         prompt = _MONTHLY_PROMPT.format(
             period=period_str,
             n_articles=len(articles_for_prompt),
-            articles_text=articles_text_safe,
+            articles_text=articles_text.replace("{", "{{").replace("}", "}}"),
         )
     except Exception as fmt_exc:
         logger.error("Monthly prompt format failed: %s", fmt_exc, exc_info=True)
@@ -381,15 +462,14 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
             "articles": [],
         }
 
-    logger.info("Monthly prompt built, %d articles, calling Claude...", len(articles_for_prompt))
+    logger.info("Monthly prompt built, %d articles, calling Claude (tool_use)...", len(articles_for_prompt))
     try:
-        result = _call_claude_json(api_key, prompt, max_tokens=6000)
+        result = _call_claude_tool(api_key, prompt, _MONTHLY_TOOL, max_tokens=6000)
         if result is not None:
-            # Accept result even if articles list is empty — PDF will at least have cover+summary
             if not result.get("articles"):
-                logger.warning("Monthly: Claude returned JSON with no articles. result keys: %s", list(result.keys()))
+                logger.warning("Monthly: Claude returned no articles. result keys: %s", list(result.keys()))
             return result
-        logger.warning("Monthly: _call_claude_json returned None (all JSON parse attempts failed)")
+        logger.warning("Monthly: _call_claude_tool returned None")
         return {
             "executive_summary": "月报内容生成失败，请稍后重试。",
             "highlights": [],
