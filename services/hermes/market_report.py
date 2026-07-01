@@ -702,6 +702,8 @@ def _build_monthly_pdf(report: dict, period_str: str) -> bytes:
 
     # ── Per-article pages ─────────────────────────────────────────────────────
     for art in articles:
+        if not isinstance(art, dict):
+            continue
         cat = art.get("category", "")
         title = art.get("title", "")
         body = art.get("body", "")
@@ -857,9 +859,11 @@ def send_monthly_report(
         file_key = feishu.upload_file(pdf_bytes, filename, file_type="pdf")
 
         # Card summary: executive summary + article list
+        report_articles = [a for a in (report.get("articles") or []) if isinstance(a, dict)]
+        n_articles_in_report = len(report_articles)
         art_list = "\n".join(
             f"**{a.get('category', '')}** · {a.get('title', '')}"
-            for a in (report.get("articles") or [])
+            for a in report_articles
         )
         feishu.send_card(
             owner_open_id,
