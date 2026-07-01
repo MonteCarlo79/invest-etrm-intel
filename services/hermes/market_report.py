@@ -301,7 +301,8 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
 
     articles_for_prompt = articles[:max_arts]
     articles_text = _format_articles_for_prompt(articles_for_prompt, max_chars=max_chars)
-    prompt = _DAILY_PROMPT.format(articles_text=articles_text)
+    articles_text_safe = articles_text.replace("{", "{{").replace("}", "}}")
+    prompt = _DAILY_PROMPT.format(articles_text=articles_text_safe)
 
     try:
         result = _call_claude_json(api_key, prompt, max_out)
@@ -334,17 +335,31 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
     # Use top 30 highest-relevance articles — enough context, keeps prompt lean
     articles_for_prompt = articles[:30]
     articles_text = _format_articles_for_prompt(articles_for_prompt, max_chars=6000)
-    prompt = _MONTHLY_PROMPT.format(
-        period=period_str,
-        n_articles=len(articles_for_prompt),
-        articles_text=articles_text,
-    )
+    # Escape any { } in articles_text so .format() doesn't misinterpret them
+    articles_text_safe = articles_text.replace("{", "{{").replace("}", "}}")
+    try:
+        prompt = _MONTHLY_PROMPT.format(
+            period=period_str,
+            n_articles=len(articles_for_prompt),
+            articles_text=articles_text_safe,
+        )
+    except Exception as fmt_exc:
+        logger.error("Monthly prompt format failed: %s", fmt_exc, exc_info=True)
+        return {
+            "executive_summary": f"月报模板格式化失败（{fmt_exc}）。",
+            "highlights": [],
+            "articles": [],
+        }
 
+    logger.info("Monthly prompt built, %d articles, calling Claude...", len(articles_for_prompt))
     try:
         result = _call_claude_json(api_key, prompt, max_tokens=6000)
-        if result and result.get("articles"):
+        if result is not None:
+            # Accept result even if articles list is empty — PDF will at least have cover+summary
+            if not result.get("articles"):
+                logger.warning("Monthly: Claude returned JSON with no articles. result keys: %s", list(result.keys()))
             return result
-        logger.warning("Monthly content generation returned empty or unparseable result")
+        logger.warning("Monthly: _call_claude_json returned None (all JSON parse attempts failed)")
         return {
             "executive_summary": "月报内容生成失败，请稍后重试。",
             "highlights": [],
