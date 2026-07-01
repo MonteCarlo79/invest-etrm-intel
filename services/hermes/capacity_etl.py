@@ -303,8 +303,11 @@ def upsert_capacity_rows(
 
 
 def is_capacity_file(filename: str) -> bool:
-    """Return True if filename looks like a 各省储能/装机 capacity file."""
+    """Return True if filename looks like a 各省储能/装机 capacity Excel file."""
     name_lower = filename.lower()
+    # Must be an Excel file — PDFs/Word docs with "装机" in name should not trigger ETL
+    if not (name_lower.endswith(".xlsx") or name_lower.endswith(".xls")):
+        return False
     keywords = ["储能装机", "装机容量", "installed_cap", "installed_capacity",
                 "各省装机", "province_cap", "capacity_scan"]
     return any(kw in name_lower for kw in keywords)

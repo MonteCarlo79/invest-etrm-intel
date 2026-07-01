@@ -238,6 +238,7 @@ _MONTHLY_PROMPT = """\
 - 每篇body必须200字以上，包括：政策背景、核心内容、市场影响、储能/BESS投资启示
 - body中用[P]表示段落分隔（不要用换行符）
 - 【重要】只引用资讯中明确出现的数字和数据，不要自行推算或编造价格、利润率、IRR等具体数值
+- 【重要】不要将重庆EPC报价用作全国市场价格锚点或代表性基准。重庆是直辖市，山地地形导致施工成本偏高，其EPC单价不代表全国平均水平。如需引用EPC价格，请优先参考平原省份项目（如河北、山东、宁夏），或明确注明重庆的地理溢价属性
 """
 
 
@@ -373,31 +374,168 @@ def _build_monthly_tool(n: int = 5) -> dict:
 _MONTHLY_TOOL = _build_monthly_tool(5)
 
 
+def _is_credit_error(exc: Exception) -> bool:
+    """Return True if the exception is an API credit/quota exhaustion error."""
+    msg = str(exc).lower()
+    return "credit balance" in msg or "insufficient_quota" in msg or "quota" in msg
+
+
 def _call_claude_tool(api_key: str, prompt: str, tool: dict, max_tokens: int) -> dict | None:
     """
     Call Claude using tool_use with a forced tool call — guarantees schema-valid JSON output.
     Returns the tool input dict, or None on failure.
+    Raises exception on credit errors so the caller can fall back to another provider.
     """
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
-    try:
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=max_tokens,
-            tools=[tool],
-            tool_choice={"type": "tool", "name": tool["name"]},
-            messages=[{"role": "user", "content": prompt}],
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        tools=[tool],
+        tool_choice={"type": "tool", "name": tool["name"]},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    for block in msg.content:
+        if block.type == "tool_use" and block.name == tool["name"]:
+            logger.info("Tool call succeeded (Claude), input keys: %s", list(block.input.keys()))
+            return block.input
+    logger.warning("No tool_use block in Claude response. content types: %s",
+                   [b.type for b in msg.content])
+    return None
+
+
+def _anthropic_tool_to_openai(tool: dict) -> dict:
+    """Convert Anthropic tool schema to OpenAI function calling format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool["input_schema"],
+        },
+    }
+
+
+def _call_openai_tool(
+    prompt: str,
+    tool: dict,
+    max_tokens: int,
+    *,
+    api_key: str,
+    base_url: str | None = None,
+    model: str,
+) -> dict | None:
+    """
+    Call an OpenAI-compatible API (Azure or DeepSeek) with function calling.
+    Returns the function arguments dict, or None on failure.
+    Raises on credit/quota errors so caller can fall back.
+    """
+    from openai import AzureOpenAI, OpenAI
+    if base_url:
+        client = OpenAI(api_key=api_key, base_url=base_url)
+    else:
+        client = AzureOpenAI(
+            api_key=api_key,
+            azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT", ""),
+            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2025-01-01-preview"),
         )
-        for block in msg.content:
-            if block.type == "tool_use" and block.name == tool["name"]:
-                logger.info("Tool call succeeded, input keys: %s", list(block.input.keys()))
-                return block.input
-        logger.warning("No tool_use block in response. content types: %s",
-                       [b.type for b in msg.content])
-        return None
+    oai_tool = _anthropic_tool_to_openai(tool)
+    resp = client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        tools=[oai_tool],
+        tool_choice={"type": "function", "function": {"name": tool["name"]}},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    choice = resp.choices[0]
+    tc = choice.message.tool_calls
+    if tc:
+        args = tc[0].function.arguments
+        result = json.loads(args) if isinstance(args, str) else args
+        logger.info("Tool call succeeded (%s), keys: %s", model, list(result.keys()))
+        return result
+    logger.warning("No tool_call in %s response. finish_reason: %s", model, choice.finish_reason)
+    return None
+
+
+def _call_llm_tool(
+    api_key: str,
+    prompt: str,
+    tool: dict,
+    max_tokens: int,
+    provider: str = "auto",
+) -> dict | None:
+    """
+    Call an LLM with tool/function calling.
+
+    provider values:
+      "auto"     — try Claude → Azure GPT-4o → DeepSeek (falls back on credit errors)
+      "claude"   — Anthropic Claude only
+      "azure"    — Azure GPT-4o only
+      "deepseek" — DeepSeek only
+    """
+    azure_key       = os.environ.get("AZURE_OPENAI_API_KEY", "")
+    azure_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+    deepseek_key    = os.environ.get("DEEPSEEK_API_KEY", "")
+    deepseek_model  = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+    if provider == "claude":
+        return _call_claude_tool(api_key, prompt, tool, max_tokens)
+
+    if provider == "azure":
+        return _call_openai_tool(
+            prompt, tool, max_tokens,
+            api_key=azure_key, base_url=None, model=azure_deployment,
+        )
+
+    if provider == "deepseek":
+        return _call_openai_tool(
+            prompt, tool, max_tokens,
+            api_key=deepseek_key,
+            base_url="https://api.deepseek.com",
+            model=deepseek_model,
+        )
+
+    # "auto" — cascade with fallback on credit/quota errors
+    # 1. Anthropic Claude
+    try:
+        return _call_claude_tool(api_key, prompt, tool, max_tokens)
     except Exception as exc:
-        logger.error("_call_claude_tool failed: %s", exc, exc_info=True)
-        return None
+        if _is_credit_error(exc):
+            logger.warning("Claude credit exhausted, falling back to Azure GPT-4o: %s", exc)
+        else:
+            logger.error("_call_claude_tool failed: %s", exc, exc_info=True)
+
+    # 2. Azure GPT-4o
+    if azure_key:
+        try:
+            return _call_openai_tool(
+                prompt, tool, max_tokens,
+                api_key=azure_key, base_url=None, model=azure_deployment,
+            )
+        except Exception as exc:
+            if _is_credit_error(exc):
+                logger.warning("Azure GPT-4o quota exhausted, falling back to DeepSeek: %s", exc)
+            else:
+                logger.error("Azure GPT-4o tool call failed: %s", exc, exc_info=True)
+    else:
+        logger.warning("AZURE_OPENAI_API_KEY not set, skipping Azure fallback")
+
+    # 3. DeepSeek
+    if deepseek_key:
+        try:
+            return _call_openai_tool(
+                prompt, tool, max_tokens,
+                api_key=deepseek_key,
+                base_url="https://api.deepseek.com",
+                model=deepseek_model,
+            )
+        except Exception as exc:
+            logger.error("DeepSeek tool call failed: %s", exc, exc_info=True)
+    else:
+        logger.warning("DEEPSEEK_API_KEY not set, skipping DeepSeek fallback")
+
+    return None
 
 
 # Keep for reference — no longer called but left in case needed
@@ -423,7 +561,7 @@ def _call_claude_json(api_key: str, prompt: str, max_tokens: int) -> dict | None
         return None
 
 
-def _generate_report_content(articles: list[dict], api_key: str, report_type: str, period_str: str) -> dict:
+def _generate_report_content(articles: list[dict], api_key: str, report_type: str, period_str: str, provider: str = "auto") -> dict:
     """
     Call Claude Sonnet to generate structured report content.
     Returns parsed dict. Daily uses sections[]; monthly uses articles[].
@@ -445,7 +583,7 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
     prompt = _DAILY_PROMPT.format(articles_text=articles_text.replace("{", "{{").replace("}", "}}"))
 
     try:
-        result = _call_claude_tool(api_key, prompt, _DAILY_TOOL, max_out)
+        result = _call_llm_tool(api_key, prompt, _DAILY_TOOL, max_out, provider=provider)
         if result:
             return result
         return {
@@ -460,7 +598,7 @@ def _generate_report_content(articles: list[dict], api_key: str, report_type: st
         }
 
 
-def _generate_monthly_content(articles: list[dict], api_key: str, period_str: str) -> dict:
+def _generate_monthly_content(articles: list[dict], api_key: str, period_str: str, provider: str = "auto") -> dict:
     """
     Generate monthly expert-analyst report content using a simplified JSON structure.
     Returns dict with executive_summary, highlights[], articles[].
@@ -489,9 +627,9 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
             "articles": [],
         }
 
-    logger.info("Monthly prompt built, %d articles, calling Claude (tool_use)...", len(articles_for_prompt))
+    logger.info("Monthly prompt built, %d articles, calling LLM (tool_use)...", len(articles_for_prompt))
     try:
-        result = _call_claude_tool(api_key, prompt, _MONTHLY_TOOL, max_tokens=6000)
+        result = _call_llm_tool(api_key, prompt, _MONTHLY_TOOL, max_tokens=6000, provider=provider)
         if result is not None:
             # Reassemble flat article_N_* fields into articles list
             articles = []
@@ -781,7 +919,85 @@ def _build_monthly_pdf(report: dict, period_str: str) -> bytes:
     return buf.getvalue()
 
 
+# ── WeCom webhook helpers ─────────────────────────────────────────────────────
+
+# In-memory cache: (year, month) → (pdf_bytes, filename, report_dict)
+# Holds the last generated monthly report so the Feishu card button can send it to WeCom.
+_monthly_pdf_cache: dict = {}
+
+
+def _wecom_upload_file(webhook_url: str, pdf_bytes: bytes, filename: str) -> str:
+    """Upload a file to WeCom webhook media endpoint. Returns media_id."""
+    import requests as _req
+    upload_url = webhook_url.replace("/webhook/send", "/webhook/upload_media") + "&type=file"
+    resp = _req.post(
+        upload_url,
+        files={"media": (filename, pdf_bytes, "application/pdf")},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errcode", 0) != 0:
+        raise RuntimeError(f"WeCom upload_media error: {data}")
+    return data["media_id"]
+
+
+def send_monthly_report_to_wecom(year: int, month: int, webhook_urls: list[str]) -> None:
+    """
+    Send the cached monthly report to WeCom webhooks.
+    Sends a markdown summary first, then the PDF file to each webhook.
+    """
+    import requests as _req
+    key = (year, month)
+    cached = _monthly_pdf_cache.get(key)
+    if not cached:
+        raise RuntimeError(f"No cached monthly report for {year}-{month:02d}. "
+                           "Generate the report first.")
+    pdf_bytes, filename, report = cached
+
+    report_articles = [a for a in (report.get("articles") or []) if isinstance(a, dict)]
+    art_lines = "\n".join(
+        f"**{a.get('category', '')}** · {a.get('title', '')}"
+        for a in report_articles
+    )
+    summary_text = (
+        f"## 📊 电力市场月报 — {year}年{month}月\n\n"
+        f"{report.get('executive_summary', '')}\n\n"
+        f"---\n{art_lines}\n\n"
+        f"---\n共 **{len(report_articles)}** 篇深度分析，详见附件PDF"
+    )
+
+    for url in webhook_urls:
+        try:
+            # 1. Send markdown summary
+            _req.post(url, json={"msgtype": "markdown", "markdown": {"content": summary_text}}, timeout=15)
+            # 2. Upload PDF and send file message
+            media_id = _wecom_upload_file(url, pdf_bytes, filename)
+            _req.post(url, json={"msgtype": "file", "file": {"media_id": media_id}}, timeout=15)
+            logger.info("Monthly report sent to WeCom webhook (...%s): %s", url[-12:], filename)
+        except Exception as exc:
+            logger.error("WeCom send failed for webhook ...%s: %s", url[-12:], exc)
+            raise
+
+
 # ── Entry points ──────────────────────────────────────────────────────────────
+
+def _get_report_llm_provider(pg_url: str) -> str:
+    """Read the report LLM provider setting from DB. Returns 'auto' if not set."""
+    try:
+        import psycopg2 as _pg2
+        conn = _pg2.connect(pg_url, options="-c statement_timeout=3000")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM hermes_settings WHERE key = 'report_llm'")
+                row = cur.fetchone()
+                return (row[0] or "auto") if row else "auto"
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("Could not read report_llm setting: %s", exc)
+        return "auto"
+
 
 def send_daily_report(
     pg_url: str,
@@ -800,8 +1016,9 @@ def send_daily_report(
     # created_at fallback window: 30h (catches articles with NULL published_at)
     from_dt = now_utc - timedelta(hours=30)
     period_str = beijing_now.strftime("%Y年%m月%d日")
+    provider = _get_report_llm_provider(pg_url)
 
-    logger.info("Generating daily market report for %s", period_str)
+    logger.info("Generating daily market report for %s (provider=%s)", period_str, provider)
     try:
         articles = _query_articles(pg_url, from_dt, pub_from_dt=pub_from_dt)
         logger.info("Daily report: %d articles found (pub>=3d OR created>=30h)", len(articles))
@@ -815,7 +1032,7 @@ def send_daily_report(
             )
             logger.info("Daily report: extended to 7d/72h window, %d articles found", len(articles))
 
-        report = _generate_report_content(articles, api_key, "daily", period_str)
+        report = _generate_report_content(articles, api_key, "daily", period_str, provider=provider)
         pdf_bytes = _build_pdf(report, "daily", period_str)
 
         filename = f"电力市场日报_{beijing_now.strftime('%Y%m%d')}.pdf"
@@ -880,26 +1097,50 @@ def send_monthly_report(
         to_dt = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(hours=8)
 
     period_str = f"{year}年{month}月"
-    logger.info("Generating monthly market report for %s", period_str)
+    provider = _get_report_llm_provider(pg_url)
+    logger.info("Generating monthly market report for %s (provider=%s)", period_str, provider)
 
     try:
         # Monthly query spans a full calendar month — needs a longer timeout (120s)
         articles = _query_articles(pg_url, from_dt, to_dt, stmt_timeout_ms=120000)
         logger.info("Monthly report: %d articles found for %s", len(articles), period_str)
 
-        report = _generate_monthly_content(articles, api_key, period_str)
+        report = _generate_monthly_content(articles, api_key, period_str, provider=provider)
         pdf_bytes = _build_monthly_pdf(report, period_str)
 
         filename = f"电力市场月报_{year}{month:02d}.pdf"
+
+        # Cache PDF for on-demand WeCom send
+        _monthly_pdf_cache[(year, month)] = (pdf_bytes, filename, report)
+
         file_key = feishu.upload_file(pdf_bytes, filename, file_type="pdf")
 
-        # Card summary: executive summary + article list
+        # Card summary: executive summary + article list + optional WeCom button
         report_articles = [a for a in (report.get("articles") or []) if isinstance(a, dict)]
         n_articles_in_report = len(report_articles)
         art_list = "\n".join(
             f"**{a.get('category', '')}** · {a.get('title', '')}"
             for a in report_articles
         )
+        _wecom_webhooks = [
+            w.strip() for w in os.environ.get("WECOM_MONTHLY_REPORT_WEBHOOKS", "").split(",")
+            if w.strip()
+        ]
+        card_elements = [
+            {"tag": "markdown", "content": report.get("executive_summary", "")},
+            {"tag": "hr"},
+            {"tag": "markdown", "content": art_list or ""},
+            {"tag": "hr"},
+            {"tag": "markdown", "content": f"共 **{n_articles_in_report}** 篇深度分析 · PDF月报见下方"},
+        ]
+        if _wecom_webhooks:
+            card_elements.append({"tag": "hr"})
+            card_elements.append({"tag": "action", "actions": [
+                {"tag": "button",
+                 "text": {"tag": "plain_text", "content": "📤 发送到企微群"},
+                 "type": "primary",
+                 "value": {"act": "send_wecom_monthly", "year": str(year), "month": str(month)}},
+            ]})
         feishu.send_card(
             owner_open_id,
             {
@@ -908,13 +1149,7 @@ def send_monthly_report(
                     "title": {"tag": "plain_text", "content": f"📊 电力市场月报 — {period_str}"},
                     "template": "green",
                 },
-                "elements": [
-                    {"tag": "markdown", "content": report.get("executive_summary", "")},
-                    {"tag": "hr"},
-                    {"tag": "markdown", "content": art_list or ""},
-                    {"tag": "hr"},
-                    {"tag": "markdown", "content": f"共 **{n_articles_in_report}** 篇深度分析 · PDF月报见下方"},
-                ],
+                "elements": card_elements,
             },
         )
         feishu.send_file(owner_open_id, file_key)

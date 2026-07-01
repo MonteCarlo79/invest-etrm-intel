@@ -272,7 +272,9 @@ def upsert_sysopfee(
 
 
 def is_sysopfee_file(filename: str) -> bool:
-    """Return True if filename looks like a 系统运行费 file."""
+    """Return True if filename looks like a 系统运行费 Excel file."""
     name = filename.lower()
+    if not (name.endswith(".xlsx") or name.endswith(".xls")):
+        return False
     keywords = ["系统运行费", "sysopfee", "system_op_fee", "运行费用", "system_operation"]
     return any(kw in name for kw in keywords)

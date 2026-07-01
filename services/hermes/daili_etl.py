@@ -306,6 +306,8 @@ def backfill_daili_dir(root_dir: str, pg_url: str) -> dict:
 def is_daili_file(filename: str) -> bool:
     """Return True if filename looks like a 代理购电 annual summary Excel."""
     name = filename
+    if not (name.lower().endswith(".xlsx") or name.lower().endswith(".xls")):
+        return False
     # Positive keywords
     pos = ["代理购电", "购电价格", "购电月度", "购电信息", "代理采购", "daili"]
     # Negative keywords (avoid sysopfee standalone files, comparison files)

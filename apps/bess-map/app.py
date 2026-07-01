@@ -295,8 +295,10 @@ _T: dict[str, dict[str, str]] = {
         "aux_province_filter":     "Filter provinces",
         "aux_year_filter":         "Effective year",
         "aux_refresh_btn":         "🔄 Refresh data (internet search)",
-        "aux_refresh_started":     "Background search started. Data will update in ~10-15 minutes.",
+        "aux_refresh_started":     "Background search started. Data will update as provinces are scanned.",
         "aux_no_data":             "No data yet. Click 'Refresh data' to start an internet search.",
+        "aux_scanning":            "Scanning provinces… {done}/{total} done · Current: {province}",
+        "aux_scan_results":        "Found: {cap} cap comp · {fr} FR market",
         "aux_confirm_btn":         "✅ Use this value",
         "aux_cap_rate":            "Cap Comp (¥/kW)",
         "aux_peak_hours":          "Peak Duration (h)",
@@ -527,8 +529,10 @@ _T: dict[str, dict[str, str]] = {
         "aux_province_filter":     "筛选省份",
         "aux_year_filter":         "生效年份",
         "aux_refresh_btn":         "🔄 刷新数据（联网搜索）",
-        "aux_refresh_started":     "后台搜索已启动，数据将在约10-15分钟内更新。",
+        "aux_refresh_started":     "后台搜索已启动，数据将随省份扫描逐步更新。",
         "aux_no_data":             "暂无数据。点击「刷新数据」以启动联网搜索。",
+        "aux_scanning":            "正在扫描… {done}/{total} 已完成 · 当前：{province}",
+        "aux_scan_results":        "已找到：{cap} 条容量补偿 · {fr} 条调频数据",
         "aux_confirm_btn":         "✅ 使用此值",
         "aux_cap_rate":            "容量补偿（元/kW）",
         "aux_peak_hours":          "峰值时段（小时）",
@@ -2536,20 +2540,52 @@ with tab_aux:
     st.subheader(_t("aux_title"))
     st.caption(_t("aux_caption"))
 
-    # Refresh button
+    # Refresh button + live scan progress
     _hermes_url = os.environ.get("HERMES_URL", "")
-    if st.button(_t("aux_refresh_btn"), key="aux_refresh"):
-        if not _hermes_url:
-            st.warning("HERMES_URL not configured in environment.")
-        else:
-            try:
-                _resp = _requests.post(_hermes_url.rstrip("/") + "/hermes/capcomp/scan", timeout=5)
-                if _resp.status_code == 200:
-                    st.success(_t("aux_refresh_started"))
-                else:
-                    st.warning(f"Hermes returned {_resp.status_code}: {_resp.text[:100]}")
-            except Exception as _re:
-                st.warning(f"Could not reach Hermes: {_re}")
+
+    # Poll scan status (lightweight GET, no DB)
+    _scan_st: dict = {}
+    if _hermes_url:
+        try:
+            _sr = _requests.get(_hermes_url.rstrip("/") + "/hermes/capcomp/status", timeout=3)
+            if _sr.status_code == 200:
+                _scan_st = _sr.json()
+        except Exception:
+            pass
+
+    _scan_running = bool(_scan_st.get("running"))
+
+    _btn_col, _status_col = st.columns([2, 5])
+    with _btn_col:
+        if st.button(_t("aux_refresh_btn"), key="aux_refresh", disabled=_scan_running):
+            if not _hermes_url:
+                st.warning("HERMES_URL not configured in environment.")
+            else:
+                try:
+                    _resp = _requests.post(_hermes_url.rstrip("/") + "/hermes/capcomp/scan", timeout=5)
+                    if _resp.status_code == 200:
+                        st.success(_t("aux_refresh_started"))
+                        st.rerun()
+                    else:
+                        st.warning(f"Hermes returned {_resp.status_code}: {_resp.text[:100]}")
+                except Exception as _re:
+                    st.warning(f"Could not reach Hermes: {_re}")
+
+    if _scan_running:
+        _done = int(_scan_st.get("provinces_done", 0))
+        _total = int(_scan_st.get("provinces_total", len([])) or 32)
+        _prov = _scan_st.get("current_province", "…")
+        _cap_n = int(_scan_st.get("cap_comp_found", 0))
+        _fr_n = int(_scan_st.get("fr_found", 0))
+        with _status_col:
+            st.progress(_done / _total if _total else 0,
+                        text=_t("aux_scanning").format(done=_done, total=_total, province=_prov))
+            st.caption(_t("aux_scan_results").format(cap=_cap_n, fr=_fr_n))
+        # Auto-refresh every 8 seconds while scan is running
+        import time as _time
+        _time.sleep(8)
+        st.cache_data.clear()
+        st.rerun()
 
     # Load data
     _cc_df = load_cap_comp(_ENG_KEY)
