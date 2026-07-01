@@ -187,29 +187,13 @@ _MONTHLY_PROMPT = """\
 - 市场洞察：行业数据趋势、市场结构深度分析
 - 政策追踪：具体政策落地、影响测算、投资逻辑
 
-请以JSON格式输出（仅输出JSON，不要加代码块，不要有任何JSON之外的文字）：
-{{
-  "executive_summary": "2-3句话总结本月最重要的1-2个核心主题及其对储能行业的影响",
-  "highlights": [
-    {{"category": "市场快讯", "title": "议题标题", "teaser": "一句话说明为何重要"}},
-    {{"category": "市场洞察", "title": "议题标题", "teaser": "一句话说明核心发现"}}
-  ],
-  "articles": [
-    {{
-      "category": "市场快讯",
-      "title": "议题完整标题",
-      "body": "正文分析，200-350字。段落间用[P]分隔。内容包括：背景与政策来源、核心内容要点、市场影响分析、对储能BESS行业的具体影响或投资启示。使用专业但易懂的语言，可引用具体数字。"
-    }}
-  ]
-}}
-
 要求：
-- highlights与articles一一对应，顺序相同
-- 每篇article的body必须200字以上，体现分析深度
-- 优先选择与储能、电力现货、容量电价、新能源政策直接相关的议题
-- body中用[P]表示段落分隔（不要用换行符）
+- 输出4-6篇articles，每篇包含category、title、body三个字段
+- executive_summary：2-3句话总结本月1-2个核心主题及其对储能行业的影响
 - category必须是：市场快讯、市场洞察、政策追踪 三者之一
-- 【重要】只引用资讯中明确出现的数字和数据，不要自行推算或编造价格、利润率、IRR等具体数值。若数据不足，用定性描述代替定量。
+- 每篇body必须200字以上，体现分析深度，包括：政策背景、核心内容、市场影响、储能/BESS投资启示
+- body中用[P]表示段落分隔（不要用换行符）
+- 【重要】只引用资讯中明确出现的数字和数据，不要自行推算或编造价格、利润率、IRR等具体数值
 """
 
 
@@ -316,14 +300,9 @@ _MONTHLY_TOOL = {
                 "type": "string",
                 "description": "3-5句月度市场总结",
             },
-            "highlights": {
-                "type": "array",
-                "description": "3-5个月度要点",
-                "items": {"type": "string"},
-            },
             "articles": {
                 "type": "array",
-                "description": "4-6篇深度分析文章",
+                "description": "4-6篇深度分析文章，每篇含完整分析正文",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -331,17 +310,17 @@ _MONTHLY_TOOL = {
                             "type": "string",
                             "enum": ["市场快讯", "市场洞察", "政策追踪"],
                         },
-                        "title": {"type": "string"},
+                        "title": {"type": "string", "description": "文章标题"},
                         "body": {
                             "type": "string",
-                            "description": "400-600字深度分析。用[P]分隔段落。",
+                            "description": "400-600字深度分析正文。用[P]分隔段落。",
                         },
                     },
                     "required": ["category", "title", "body"],
                 },
             },
         },
-        "required": ["executive_summary", "highlights", "articles"],
+        "required": ["executive_summary", "articles"],
     },
 }
 
@@ -466,15 +445,16 @@ def _generate_monthly_content(articles: list[dict], api_key: str, period_str: st
     try:
         result = _call_claude_tool(api_key, prompt, _MONTHLY_TOOL, max_tokens=6000)
         if result is not None:
-            # Normalize: tool_use may return array fields as JSON-encoded strings
-            for field in ("articles", "highlights"):
-                val = result.get(field)
-                if isinstance(val, str):
-                    logger.warning("Monthly: field '%s' came back as string, parsing JSON", field)
-                    try:
-                        result[field] = json.loads(val)
-                    except json.JSONDecodeError:
-                        result[field] = []
+            # Normalize: tool_use may return articles as a JSON-encoded string
+            val = result.get("articles")
+            if isinstance(val, str):
+                logger.warning("Monthly: 'articles' came back as string (%d chars), parsing JSON", len(val))
+                try:
+                    result["articles"] = json.loads(val)
+                except json.JSONDecodeError:
+                    result["articles"] = []
+            # Ensure articles items are dicts
+            result["articles"] = [a for a in (result.get("articles") or []) if isinstance(a, dict)]
             n_arts = len(result.get("articles") or [])
             logger.info("Monthly report: generated %d analytical articles", n_arts)
             if not n_arts:
@@ -661,13 +641,14 @@ def _build_monthly_pdf(report: dict, period_str: str) -> bytes:
                                                        leading=16, textColor=NAVY, spaceAfter=6, alignment=1)))
         story.append(Paragraph(_esc(report["executive_summary"]), summary_txt))
 
-    raw_highlights = report.get("highlights") or []
-    if raw_highlights:
+    # Derive cover bullets from articles (no separate highlights field)
+    articles_for_toc = report.get("articles") or []
+    if articles_for_toc:
         bullet_style = ParagraphStyle("m_bullet", fontName=_FONT_REGULAR, fontSize=9.5,
                                       leading=15, textColor=MUTED, leftIndent=12, spaceAfter=3)
         story.append(Spacer(1, 0.4 * cm))
-        for hl in raw_highlights:
-            story.append(Paragraph(f"• {_esc(str(hl))}", bullet_style))
+        for art in articles_for_toc[:6]:
+            story.append(Paragraph(f"• {_esc(art.get('title', ''))}", bullet_style))
 
     story.append(PageBreak())
 
