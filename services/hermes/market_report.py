@@ -28,21 +28,65 @@ import psycopg2
 logger = logging.getLogger(__name__)
 
 # ── CJK font registration ─────────────────────────────────────────────────────
-# Use ReportLab's built-in STSong-Light CIDFont — always available, no external
-# font files needed. This is the same approach used in mengxi_ranking_report.py.
+# Priority:
+#   1. WQY Micro Hei (fonts-wqy-microhei) — free 微软雅黑 clone; clear decimals
+#   2. Noto Sans CJK (fonts-noto-cjk)     — fallback TTF/TTC
+#   3. STSong-Light (ReportLab built-in)  — last resort; poor decimal rendering
 
 _FONT_REGULAR = "STSong-Light"
-_FONT_BOLD    = "STSong-Light"  # CID fonts have no bold variant; use same font
+_FONT_BOLD    = "STSong-Light"
 
 def _register_cjk_fonts() -> None:
     global _FONT_REGULAR, _FONT_BOLD
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    # 1. WQY Micro Hei
+    _WQY_PATHS = [
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/wqy/wqy-microhei.ttc",
+    ]
+    for p in _WQY_PATHS:
+        if os.path.exists(p):
+            try:
+                pdfmetrics.registerFont(TTFont("WQYMicroHei", p, subfontIndex=0))
+                _FONT_REGULAR = "WQYMicroHei"
+                _FONT_BOLD    = "WQYMicroHei"
+                logger.info("CJK font registered: WQY Micro Hei (%s)", p)
+                return
+            except Exception as exc:
+                logger.warning("WQY Micro Hei load failed (%s): %s", p, exc)
+
+    # 2. Noto Sans CJK
+    import glob as _glob
+    _NOTO_PATTERNS = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/*.ttf",
+    ]
+    for pat in _NOTO_PATTERNS:
+        files = _glob.glob(pat) if "*" in pat else ([pat] if os.path.exists(pat) else [])
+        for f in files:
+            try:
+                kw = {"subfontIndex": 0} if f.endswith(".ttc") else {}
+                pdfmetrics.registerFont(TTFont("NotoSansCJK", f, **kw))
+                _FONT_REGULAR = "NotoSansCJK"
+                _FONT_BOLD    = "NotoSansCJK"
+                logger.info("CJK font registered: Noto Sans CJK (%s)", f)
+                return
+            except Exception as exc:
+                logger.warning("Noto Sans CJK load failed (%s): %s", f, exc)
+
+    # 3. STSong-Light fallback
     try:
-        from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.cidfonts import UnicodeCIDFont
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
-        logger.info("CJK font registered: STSong-Light (built-in CIDFont)")
+        _FONT_REGULAR = "STSong-Light"
+        _FONT_BOLD    = "STSong-Light"
+        logger.info("CJK font registered: STSong-Light (built-in CIDFont fallback)")
     except Exception as exc:
-        logger.warning("STSong-Light registration failed, falling back to Helvetica: %s", exc)
+        logger.warning("STSong-Light registration failed: %s", exc)
         _FONT_REGULAR = "Helvetica"
         _FONT_BOLD    = "Helvetica-Bold"
 
@@ -644,14 +688,21 @@ def _build_monthly_pdf(report: dict, period_str: str) -> bytes:
                                                        leading=16, textColor=NAVY, spaceAfter=6, alignment=1)))
         story.append(Paragraph(_esc(report["executive_summary"]), summary_txt))
 
-    # Derive cover bullets from articles (no separate highlights field)
+    # Derive cover bullets from articles — use ListFlowable so bullet char
+    # renders with Helvetica (avoids CJK font glyph mapping issues for •)
     articles_for_toc = report.get("articles") or []
     if articles_for_toc:
+        from reportlab.platypus import ListFlowable, ListItem
         bullet_style = ParagraphStyle("m_bullet", fontName=_FONT_REGULAR, fontSize=9.5,
-                                      leading=15, textColor=MUTED, leftIndent=12, spaceAfter=3)
+                                      leading=15, textColor=MUTED, spaceAfter=2)
         story.append(Spacer(1, 0.4 * cm))
-        for art in articles_for_toc[:6]:
-            story.append(Paragraph(f"• {_esc(art.get('title', ''))}", bullet_style))
+        story.append(ListFlowable(
+            [ListItem(Paragraph(_esc(art.get("title", "")), bullet_style),
+                      bulletFontName="Helvetica", bulletFontSize=10, bulletColor=MUTED,
+                      leftIndent=18, bulletIndent=6)
+             for art in articles_for_toc[:6]],
+            bulletType="bullet", bulletFontName="Helvetica",
+        ))
 
     story.append(PageBreak())
 
