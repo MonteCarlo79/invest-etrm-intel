@@ -2500,12 +2500,16 @@ with tab_sysopfee:
                     marker=dict(size=5),
                 ))
             _cutoff_dt = dt.datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            _cutoff_str = _cutoff_dt.strftime("%Y-%m-%d")
             fig_sof_line.add_vline(
-                x=_cutoff_dt.strftime("%Y-%m-%d"),
+                x=_cutoff_str,
                 line=dict(color="gray", width=1.5, dash="dash"),
-                annotation_text="Forecast →",
-                annotation_position="top right",
-                annotation_font=dict(size=11, color="gray"),
+            )
+            fig_sof_line.add_annotation(
+                x=_cutoff_str, xref="x", yref="paper",
+                y=1.02, xanchor="left", yanchor="bottom", showarrow=False,
+                text="Forecast →",
+                font=dict(size=11, color="gray"),
             )
             fig_sof_line.update_layout(
                 title=_t("sysopfee_line_title"),
