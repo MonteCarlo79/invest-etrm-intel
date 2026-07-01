@@ -2459,21 +2459,22 @@ with tab_sysopfee:
             # first forecast column index (>= current month)
             _fcast_idx = next((i for i, c in enumerate(_cols) if c >= _today_ym), None)
             _heat_shapes, _heat_annots = [], []
-            if _fcast_idx is not None and _fcast_idx > 0:
-                _divider_x = _fcast_idx - 0.5
+            if _fcast_idx is not None and 0 < _fcast_idx < len(_cols):
+                # Use paper coords (0–1) to avoid corrupting the categorical x-axis
+                _frac = _fcast_idx / len(_cols)
                 _heat_shapes.append(dict(
-                    type="line", xref="x", yref="paper",
-                    x0=_divider_x, x1=_divider_x, y0=0, y1=1,
+                    type="line", xref="paper", yref="paper",
+                    x0=_frac, x1=_frac, y0=0, y1=1,
                     line=dict(color="white", width=2, dash="dash"),
                 ))
-                _n_rows = len(_sof_pivot.index)
                 _heat_annots += [
-                    dict(xref="x", yref="paper", x=_fcast_idx - (_fcast_idx * 0.5 + 0.25),
-                         y=1.04, text="◀ Actual", showarrow=False,
+                    dict(xref="paper", yref="paper",
+                         x=_frac / 2, y=1.04,
+                         text="◀ Actual", showarrow=False,
                          font=dict(size=11, color="#444"), xanchor="center"),
-                    dict(xref="x", yref="paper",
-                         x=_fcast_idx + (len(_cols) - _fcast_idx) * 0.5 - 0.5,
-                         y=1.04, text="Forecast ▶", showarrow=False,
+                    dict(xref="paper", yref="paper",
+                         x=_frac + (1 - _frac) / 2, y=1.04,
+                         text="Forecast ▶", showarrow=False,
                          font=dict(size=11, color="#888", style="italic"), xanchor="center"),
                 ]
 
