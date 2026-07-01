@@ -2501,7 +2501,7 @@ with tab_sysopfee:
                 ))
             _cutoff_dt = dt.datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             fig_sof_line.add_vline(
-                x=_cutoff_dt.timestamp() * 1000,
+                x=_cutoff_dt.strftime("%Y-%m-%d"),
                 line=dict(color="gray", width=1.5, dash="dash"),
                 annotation_text="Forecast →",
                 annotation_position="top right",
