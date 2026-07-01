@@ -2452,12 +2452,39 @@ with tab_sysopfee:
                 colorbar=dict(title="¥/kWh", thickness=14),
                 hovertemplate="%{y}  %{x}<br>%{z:.4f} ¥/kWh<extra></extra>",
             ))
+
+            # ── Actual / Forecast divider ─────────────────────────────────────
+            _today_ym = dt.datetime.now().strftime("%Y-%m")
+            _cols = _sof_pivot.columns.tolist()
+            # first forecast column index (>= current month)
+            _fcast_idx = next((i for i, c in enumerate(_cols) if c >= _today_ym), None)
+            _heat_shapes, _heat_annots = [], []
+            if _fcast_idx is not None and _fcast_idx > 0:
+                _divider_x = _fcast_idx - 0.5
+                _heat_shapes.append(dict(
+                    type="line", xref="x", yref="paper",
+                    x0=_divider_x, x1=_divider_x, y0=0, y1=1,
+                    line=dict(color="white", width=2, dash="dash"),
+                ))
+                _n_rows = len(_sof_pivot.index)
+                _heat_annots += [
+                    dict(xref="x", yref="paper", x=_fcast_idx - (_fcast_idx * 0.5 + 0.25),
+                         y=1.04, text="◀ Actual", showarrow=False,
+                         font=dict(size=11, color="#444"), xanchor="center"),
+                    dict(xref="x", yref="paper",
+                         x=_fcast_idx + (len(_cols) - _fcast_idx) * 0.5 - 0.5,
+                         y=1.04, text="Forecast ▶", showarrow=False,
+                         font=dict(size=11, color="#888", style="italic"), xanchor="center"),
+                ]
+
             fig_sof_heat.update_layout(
                 title=_t("sysopfee_heatmap_title"),
                 xaxis=dict(title="Month", tickangle=-45),
                 yaxis=dict(title="Province", autorange="reversed"),
                 height=max(320, 22 * len(_sof_provs) + 100),
-                margin=dict(t=50, b=80, l=120, r=20),
+                margin=dict(t=60, b=80, l=120, r=20),
+                shapes=_heat_shapes,
+                annotations=_heat_annots,
             )
             st.plotly_chart(fig_sof_heat, use_container_width=True, key="sof_heatmap")
 
@@ -2472,6 +2499,14 @@ with tab_sysopfee:
                     mode="lines+markers",
                     marker=dict(size=5),
                 ))
+            _cutoff_dt = dt.datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            fig_sof_line.add_vline(
+                x=_cutoff_dt.timestamp() * 1000,
+                line=dict(color="gray", width=1.5, dash="dash"),
+                annotation_text="Forecast →",
+                annotation_position="top right",
+                annotation_font=dict(size=11, color="gray"),
+            )
             fig_sof_line.update_layout(
                 title=_t("sysopfee_line_title"),
                 xaxis_title="Month",
