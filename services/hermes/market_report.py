@@ -650,6 +650,14 @@ def _build_monthly_pdf(report: dict, period_str: str) -> bytes:
                                                        leading=16, textColor=NAVY, spaceAfter=6, alignment=1)))
         story.append(Paragraph(_esc(report["executive_summary"]), summary_txt))
 
+    raw_highlights = report.get("highlights") or []
+    if raw_highlights:
+        bullet_style = ParagraphStyle("m_bullet", fontName=_FONT_REGULAR, fontSize=9.5,
+                                      leading=15, textColor=MUTED, leftIndent=12, spaceAfter=3)
+        story.append(Spacer(1, 0.4 * cm))
+        for hl in raw_highlights:
+            story.append(Paragraph(f"• {_esc(str(hl))}", bullet_style))
+
     story.append(PageBreak())
 
     # ── 月度看点 (TOC) page ───────────────────────────────────────────────────
@@ -660,10 +668,9 @@ def _build_monthly_pdf(report: dict, period_str: str) -> bytes:
     # Group highlights by category for display
     highlights = report.get("highlights") or []
     articles   = report.get("articles") or []
-    # If highlights missing, derive from articles
-    if not highlights and articles:
-        highlights = [{"category": a.get("category", ""), "title": a.get("title", ""), "teaser": ""}
-                      for a in articles]
+    # Always derive TOC entries from articles (handles string highlights from tool_use too)
+    highlights = [{"category": a.get("category", ""), "title": a.get("title", ""), "teaser": ""}
+                  for a in articles if isinstance(a, dict)]
 
     current_cat = None
     for h in highlights:
