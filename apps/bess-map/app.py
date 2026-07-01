@@ -2441,22 +2441,27 @@ with tab_sysopfee:
                 for row in _z
             ]
 
+            _cols = _sof_pivot.columns.tolist()
+
             fig_sof_heat = go.Figure(go.Heatmap(
                 z=_z,
-                x=_sof_pivot.columns.tolist(),
+                x=_cols,
                 y=_sof_pivot.index.tolist(),
                 text=_z_text,
                 texttemplate="%{text}",
+                textfont=dict(size=10),
                 colorscale="RdYlGn_r",
                 zmid=float(pd.DataFrame(_z).stack().median()),
                 colorbar=dict(title="¥/kWh", thickness=14),
                 hovertemplate="%{y}  %{x}<br>%{z:.4f} ¥/kWh<extra></extra>",
             ))
 
+            # ── Default view: 2025-01 onward (scrollable to older data) ──────
+            _idx_2025 = next((i for i, c in enumerate(_cols) if c >= "2025-01"), 0)
+            _x_range = [_idx_2025 - 0.5, len(_cols) - 0.5]
+
             # ── Actual / Forecast divider ─────────────────────────────────────
             _today_ym = dt.datetime.now().strftime("%Y-%m")
-            _cols = _sof_pivot.columns.tolist()
-            # first forecast column index (>= current month)
             _fcast_idx = next((i for i, c in enumerate(_cols) if c >= _today_ym), None)
             _heat_shapes, _heat_annots = [], []
             if _fcast_idx is not None and 0 < _fcast_idx < len(_cols):
@@ -2480,7 +2485,7 @@ with tab_sysopfee:
 
             fig_sof_heat.update_layout(
                 title=_t("sysopfee_heatmap_title"),
-                xaxis=dict(title="Month", tickangle=-45),
+                xaxis=dict(title="Month", tickangle=-45, range=_x_range),
                 yaxis=dict(title="Province", autorange="reversed"),
                 height=max(320, 22 * len(_sof_provs) + 100),
                 margin=dict(t=60, b=80, l=120, r=20),
