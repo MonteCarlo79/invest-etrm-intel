@@ -261,7 +261,7 @@ _T: dict[str, dict[str, str]] = {
         "demand_caption":          "Two complementary sizing methods: (1) spot-market arbitrage from intraday bidding-space swing; (2) frequency-response reserve from provincial rules on installed renewable capacity.",
         "demand_province":         "Province",
         "demand_arb_title":        "① Arbitrage Sizing — Intraday Bidding Space",
-        "demand_arb_caption":      "Bidding space = Total Load − Renewable generation − Must-run generation. Max BESS power for arbitrage = (daily max − min) ÷ 2.",
+        "demand_arb_caption":      "Bidding space = Total Load − Renewable generation − Must-run generation. Max BESS power for arbitrage = (daily max − min) ÷ 2. Note: for major hydro-export provinces (云南, 四川, 贵州), bidding space includes inter-provincial DC export flows and can exceed provincial consumption.",
         "demand_profile_title":    "Mean Intraday Bidding Space Profile (MW)",
         "demand_swing_title":      "Daily BESS Arbitrage Sizing (MW)",
         "demand_swing_y":          "Max BESS power (MW)",
@@ -487,7 +487,7 @@ _T: dict[str, dict[str, str]] = {
         "demand_caption":          "两种互补的容量估算方法：①日内竞价空间波动的现货套利需求；②各省对装机可再生能源的调频储备规定。",
         "demand_province":         "省份",
         "demand_arb_title":        "① 套利容量 — 日内竞价空间",
-        "demand_arb_caption":      "竞价空间 = 总负荷 − 可再生能源出力 − 必开机组出力。套利最大储能功率 = （日内最大值 − 最小值）÷ 2。",
+        "demand_arb_caption":      "竞价空间 = 总负荷 − 可再生能源出力 − 必开机组出力。套利最大储能功率 = （日内最大值 − 最小值）÷ 2。注：对于云南、四川、贵州等水电外送大省，竞价空间含跨省直流外送电量，可能高于省内负荷。",
         "demand_profile_title":    "日均竞价空间曲线（MW）",
         "demand_swing_title":      "每日储能套利容量（MW）",
         "demand_swing_y":          "最大储能功率（MW）",
@@ -894,7 +894,7 @@ def load_scraping_progress(_eng_key) -> pd.DataFrame:
                    COUNT(DISTINCT datetime::date) AS days_present,
                    MAX(datetime::date)             AS latest_date
             FROM marketdata.spot_fundamentals_hourly
-            WHERE bidding_space_mw IS NOT NULL
+            WHERE bidding_space_mw > 0
               AND datetime::date >= '2025-12-01'
             GROUP BY province, month_start
         )
@@ -1137,9 +1137,8 @@ def load_demand_hourly(_eng_key, provinces: tuple, start: str, end: str) -> pd.D
         FROM marketdata.spot_fundamentals_hourly
         WHERE province = ANY(:provs)
           AND datetime::date BETWEEN :s AND :e
-          AND bidding_space_mw IS NOT NULL
+          AND bidding_space_mw > 0
         GROUP BY province, datetime::date
-        HAVING MAX(bidding_space_mw) > 0
         ORDER BY province, date
     """)
     df = pd.read_sql(sql, _eng(), params={"provs": list(provinces), "s": start, "e": end})
@@ -1163,7 +1162,7 @@ def load_demand_intraday_profile(_eng_key, province: str, start: str, end: str) 
         FROM marketdata.spot_fundamentals_hourly
         WHERE province = :p
           AND datetime::date BETWEEN :s AND :e
-          AND bidding_space_mw IS NOT NULL
+          AND bidding_space_mw > 0
           AND load_mw > 0
         GROUP BY hour
         ORDER BY hour
