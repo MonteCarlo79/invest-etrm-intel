@@ -307,6 +307,12 @@ _T: dict[str, dict[str, str]] = {
         "aux_source":              "Source",
         "aux_eff_date":            "Effective date",
         "aux_status":              "Status",
+        "aux_bess_section":        "BESS Installed Capacity (储能装机)",
+        "aux_bess_mw":             "BESS (MW)",
+        "aux_bess_total":          "Total Capacity (MW)",
+        "aux_year_month":          "Data Month",
+        "aux_bess_source":         "Source",
+        "aux_fr_history_note":     "All historical records per province",
         "demand_arb_p50":          "Arbitrage p50 (MW)",
         "demand_arb_p90":          "Arbitrage p90 (MW)",
         "demand_recommended":      "Recommended BESS (MW)",
@@ -541,6 +547,12 @@ _T: dict[str, dict[str, str]] = {
         "aux_source":              "来源",
         "aux_eff_date":            "生效日期",
         "aux_status":              "状态",
+        "aux_bess_section":        "储能装机容量",
+        "aux_bess_mw":             "储能装机（MW）",
+        "aux_bess_total":          "合计装机（MW）",
+        "aux_year_month":          "数据月份",
+        "aux_bess_source":         "数据来源",
+        "aux_fr_history_note":     "各省全部历史记录",
     },
 }
 
@@ -1582,6 +1594,32 @@ def load_fr_market(_eng_key):
         return _pd.DataFrame()
 
 
+@st.cache_data(ttl=1800)
+def load_installed_capacity(_eng_key):
+    """Load province_installed_monthly — all rows with bess_mw, ordered by province + month DESC."""
+    import pandas as _pd
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return _pd.DataFrame()
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT province, year_month, wind_mw, solar_mw, thermal_mw,
+                       hydro_mw, nuclear_mw, bess_mw, total_mw, source_file
+                FROM marketdata.province_installed_monthly
+                WHERE bess_mw IS NOT NULL
+                ORDER BY province, year_month DESC
+            """)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        conn.close()
+        return _pd.DataFrame(rows, columns=cols) if rows else _pd.DataFrame(columns=cols)
+    except Exception:
+        return _pd.DataFrame()
+
+
 # ── Tab 1: Province Ranking ───────────────────────────────────────────────────
 with tab_ranking:
     st.subheader(_t("rank_title"))
@@ -2589,11 +2627,13 @@ with tab_aux:
     # Load data
     _cc_df = load_cap_comp(_ENG_KEY)
     _fr_df = load_fr_market(_ENG_KEY)
+    _inst_df = load_installed_capacity(_ENG_KEY)
 
-    # Province + year filters
+    # Province filter (union of all three tables)
     _aux_all_provs = sorted(set(
         list(_cc_df["province"].unique() if not _cc_df.empty else []) +
-        list(_fr_df["province"].unique() if not _fr_df.empty else [])
+        list(_fr_df["province"].unique() if not _fr_df.empty else []) +
+        list(_inst_df["province"].unique() if not _inst_df.empty else [])
     ))
     if _aux_all_provs and not st.session_state["aux_provinces"]:
         st.session_state["aux_provinces"] = _aux_all_provs
@@ -2617,42 +2657,38 @@ with tab_aux:
             key="aux_year",
         )
 
-    if _cc_df.empty and _fr_df.empty:
+    import pandas as _pd
+
+    def _style_conflicts(df):
+        """Highlight conflict rows in orange."""
+        def _row_style(row):
+            if row.get("status") == "conflict":
+                return ["background-color: #fff3cd"] * len(row)
+            return [""] * len(row)
+        return df.style.apply(_row_style, axis=1)
+
+    # ── Section 1: 容量补偿 ──────────────────────────────────────────────
+    st.markdown(f"### {_t('aux_cap_section')}")
+    if _cc_df.empty:
         st.info(_t("aux_no_data"))
     else:
-        import pandas as _pd
-
-        def _filter_latest(df, provs, year, value_col):
-            """Keep latest confirmed row per province for the selected year."""
-            if df.empty:
-                return df
-            _d = df.copy()
-            if not _d.empty and "effective_date" in _d.columns:
-                _d["_year"] = _d["effective_date"].apply(lambda x: x.year if hasattr(x, "year") else 0)
-                _d = _d[_d["_year"] == year]
-            if provs:
-                _d = _d[_d["province"].isin(provs)]
-            # Latest per province (already ordered DESC, drop_duplicates keeps first)
-            _confirmed = _d[_d["status"] == "confirmed"].drop_duplicates(subset=["province"], keep="first")
-            _conflict = _d[_d["status"] == "conflict"]
-            return _pd.concat([_confirmed, _conflict], ignore_index=True) if not _conflict.empty else _confirmed
-
-        def _style_conflicts(df):
-            """Highlight conflict rows in orange."""
-            def _row_style(row):
-                if row.get("status") == "conflict":
-                    return ["background-color: #fff3cd"] * len(row)
-                return [""] * len(row)
-            return df.style.apply(_row_style, axis=1)
-
-        # ── Section 1: 容量补偿 ──────────────────────────────────────────────
-        st.markdown(f"### {_t('aux_cap_section')}")
-        _cc_filt = _filter_latest(_cc_df, _aux_sel_provs, _aux_sel_year, "cap_comp_yuan_kw")
-        if _cc_filt.empty:
+        _cc_filt = _cc_df.copy()
+        if _aux_sel_provs:
+            _cc_filt = _cc_filt[_cc_filt["province"].isin(_aux_sel_provs)]
+        _cc_filt = _cc_filt[_cc_filt["effective_date"].apply(
+            lambda x: x.year if hasattr(x, "year") else 0) == _aux_sel_year]
+        # Latest confirmed per province + all conflicts
+        _cc_conf = _cc_filt[_cc_filt["status"] == "confirmed"].drop_duplicates(
+            subset=["province"], keep="first")
+        _cc_conf_prov = _cc_conf["province"].tolist() if not _cc_conf.empty else []
+        _cc_confl = _cc_filt[_cc_filt["status"] == "conflict"]
+        _cc_show = _pd.concat([_cc_conf, _cc_confl], ignore_index=True) if not _cc_confl.empty else _cc_conf
+        if _cc_show.empty:
             st.info(_t("aux_no_data"))
         else:
-            _cc_disp = _cc_filt[["province", "cap_comp_yuan_kw", "peak_duration_hours",
-                                   "effective_date", "source", "status"]].copy()
+            _cc_disp = _cc_show[["province", "cap_comp_yuan_kw", "peak_duration_hours",
+                                  "effective_date", "source", "status"]].copy()
+            _cc_disp["source"] = _cc_disp["source"].apply(lambda s: str(s)[:60] if s else "")
             _cc_disp = _cc_disp.rename(columns={
                 "province":            _t("rank_col_province"),
                 "cap_comp_yuan_kw":    _t("aux_cap_rate"),
@@ -2663,14 +2699,23 @@ with tab_aux:
             })
             st.dataframe(_style_conflicts(_cc_disp), use_container_width=True, hide_index=True)
 
-        # ── Section 2: 调频市场 ──────────────────────────────────────────────
-        st.markdown(f"### {_t('aux_fr_section')}")
-        _fr_filt = _filter_latest(_fr_df, _aux_sel_provs, _aux_sel_year, "fr_price_yuan_kw_h")
+    # ── Section 2: 调频市场 (all historical rows) ────────────────────────
+    st.markdown(f"### {_t('aux_fr_section')}")
+    st.caption(_t("aux_fr_history_note"))
+    if _fr_df.empty:
+        st.info(_t("aux_no_data"))
+    else:
+        _fr_filt = _fr_df.copy()
+        if _aux_sel_provs:
+            _fr_filt = _fr_filt[_fr_filt["province"].isin(_aux_sel_provs)]
+        # Show ALL historical rows (no year filter, no dedup) — FR data changes monthly
+        _fr_filt = _fr_filt.sort_values(["province", "effective_date"], ascending=[True, False])
         if _fr_filt.empty:
             st.info(_t("aux_no_data"))
         else:
             _fr_disp = _fr_filt[["province", "fr_price_yuan_kw_h", "fr_pool_billion_yuan",
                                    "effective_date", "source", "status"]].copy()
+            _fr_disp["source"] = _fr_disp["source"].apply(lambda s: str(s)[:60] if s else "")
             _fr_disp = _fr_disp.rename(columns={
                 "province":             _t("rank_col_province"),
                 "fr_price_yuan_kw_h":   _t("aux_fr_price"),
@@ -2680,6 +2725,36 @@ with tab_aux:
                 "status":               _t("aux_status"),
             })
             st.dataframe(_style_conflicts(_fr_disp), use_container_width=True, hide_index=True)
+
+    # ── Section 3: BESS Installed Capacity ──────────────────────────────
+    st.markdown(f"### {_t('aux_bess_section')}")
+    if _inst_df.empty:
+        st.info(_t("aux_no_data"))
+    else:
+        _inst_filt = _inst_df.copy()
+        if _aux_sel_provs:
+            _inst_filt = _inst_filt[_inst_filt["province"].isin(_aux_sel_provs)]
+        # Latest row per province
+        _inst_latest = _inst_filt.drop_duplicates(subset=["province"], keep="first")
+        if _inst_latest.empty:
+            st.info(_t("aux_no_data"))
+        else:
+            _inst_disp = _inst_latest[["province", "year_month", "bess_mw", "wind_mw",
+                                        "solar_mw", "total_mw", "source_file"]].copy()
+            _inst_disp["year_month"] = _inst_disp["year_month"].apply(
+                lambda d: d.strftime("%Y-%m") if hasattr(d, "strftime") else str(d)[:7])
+            _inst_disp["source_file"] = _inst_disp["source_file"].apply(
+                lambda s: str(s)[:60] if s else "")
+            _inst_disp = _inst_disp.rename(columns={
+                "province":    _t("rank_col_province"),
+                "year_month":  _t("aux_year_month"),
+                "bess_mw":     _t("aux_bess_mw"),
+                "wind_mw":     "Wind (MW)",
+                "solar_mw":    "Solar (MW)",
+                "total_mw":    _t("aux_bess_total"),
+                "source_file": _t("aux_bess_source"),
+            })
+            st.dataframe(_inst_disp, use_container_width=True, hide_index=True)
 
         # ── Conflict resolution ──────────────────────────────────────────────
         _cc_conflicts = _cc_df[_cc_df["status"] == "conflict"] if not _cc_df.empty else _pd.DataFrame()

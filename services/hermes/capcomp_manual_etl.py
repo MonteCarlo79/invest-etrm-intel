@@ -120,8 +120,8 @@ _PROMPT = """\
     {{
       "province": "省份名称",
       "fr_price_yuan_kw_h": <调频容量价格，元/kW/h，数字>,
-      "fr_pool_billion_yuan": <全省调频总资金池，亿元/年，数字或null>,
-      "effective_year": <生效年份，整数>,
+      "fr_pool_billion_yuan": <全省调频总资金池，亿元（该月或该年），数字或null>,
+      "effective_year_month": "<数据所属年月，格式YYYY-MM，如2026-04>",
       "source": "<来源说明>"
     }}
   ]
@@ -132,6 +132,8 @@ _PROMPT = """\
 - 省份名称使用标准名称（如"蒙西"写为"内蒙古（蒙西）"，"蒙东"写为"内蒙古（蒙东）"）
 - 如果找不到某类数据，对应数组返回空列表 []
 - 容量补偿元/kW（不含时长系数）；调频价格元/kW/h（即元/千瓦·时）
+- 调频资金池：若为月度结算数据填写当月金额（亿元），若为年度数据填写全年金额（亿元）
+- effective_year_month：调频数据用月度粒度（如"2026-04"），若只知年份则写"YYYY-01"
 """
 
 
@@ -216,6 +218,17 @@ def _build_cap_comp_row(raw: dict, default_year: int, default_source: str) -> Op
     }
 
 
+def _parse_year_month_field(val, default_year: int) -> date:
+    """Parse 'YYYY-MM' or 'YYYY' from effective_year_month field → date(year, month, 1)."""
+    if val:
+        m = re.match(r"(\d{4})-(\d{1,2})$", str(val).strip())
+        if m:
+            yr, mo = int(m.group(1)), int(m.group(2))
+            if 2015 <= yr <= 2035 and 1 <= mo <= 12:
+                return date(yr, mo, 1)
+    return date(_safe_year(val, default_year), 1, 1)
+
+
 def _build_fr_row(raw: dict, default_year: int, default_source: str) -> Optional[dict]:
     province = _normalise_province(raw.get("province", ""))
     if not province:
@@ -223,9 +236,11 @@ def _build_fr_row(raw: dict, default_year: int, default_source: str) -> Optional
     fr_price = _safe_float(raw.get("fr_price_yuan_kw_h"))
     if fr_price is None or fr_price <= 0:
         return None
+    # Support monthly granularity via effective_year_month ("YYYY-MM") or fallback to effective_year
+    eff_ym = raw.get("effective_year_month") or raw.get("effective_year")
     return {
         "province": province,
-        "effective_date": date(_safe_year(raw.get("effective_year"), default_year), 1, 1),
+        "effective_date": _parse_year_month_field(eff_ym, default_year),
         "fr_price_yuan_kw_h": fr_price,
         "fr_pool_billion_yuan": _safe_float(raw.get("fr_pool_billion_yuan")),
         "source": str(raw.get("source") or default_source)[:500],
