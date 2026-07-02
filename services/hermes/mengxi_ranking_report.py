@@ -303,7 +303,7 @@ def _enrich_and_rank(
 
     plant_df = pd.DataFrame(plant_list)[["plant_name", "owner", "mw"]]
     df = raw_df.merge(plant_df, on="plant_name", how="left")
-    df["owner"] = df["owner"].fillna("未知")
+    df["owner"] = df["owner"].fillna("未知").replace("nan", "未知")
     df["mw"] = df["mw"].fillna(0.0)
 
     # For plants missing MW in 电站.xlsx, infer from max observed dispatch energy.
@@ -739,9 +739,10 @@ def compute_and_store_nodal_pf_monthly(pg_url: str) -> None:
 def _latest_data_date(pg_url: str) -> Optional[date]:
     """Return the latest date with cleared_energy data, or None if table is empty.
 
-    Queries both md_id_cleared_energy (intraday) and md_da_cleared_energy (day-ahead)
-    and returns the most recent date across either table. This guards against the case
-    where the intraday market is suspended but day-ahead data continues to arrive.
+    Queries md_id_cleared_energy (intraday cleared prices) only — the ranking is
+    based entirely on this table. Using md_da_cleared_energy caused the date to jump
+    ahead by one day (DA data for tomorrow arrives before today's ID data settles),
+    producing empty "latest" and "month" sections.
     """
     import time as _time
     last_exc: Exception = RuntimeError("no attempts made")
@@ -754,10 +755,7 @@ def _latest_data_date(pg_url: str) -> Optional[date]:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT GREATEST(
-                            (SELECT MAX(data_date) FROM marketdata.md_id_cleared_energy),
-                            (SELECT MAX(data_date) FROM marketdata.md_da_cleared_energy)
-                        )
+                        SELECT MAX(data_date) FROM marketdata.md_id_cleared_energy
                         """
                     )
                     row = cur.fetchone()
