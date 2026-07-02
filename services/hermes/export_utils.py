@@ -91,14 +91,26 @@ def to_docx(title: str, text: str) -> bytes:
     return buf.getvalue()
 
 
+def _register_cjk_font() -> str:
+    """Register STSong-Light CIDFont for Chinese support. Returns font name."""
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        return "STSong-Light"
+    except Exception:
+        return "Helvetica"
+
+
 def to_pdf(title: str, text: str) -> bytes:
-    """Render title + text to a PDF. Returns bytes."""
+    """Render title + text to a PDF with CJK (Chinese) support. Returns bytes."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
     from reportlab.lib import colors
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-    from reportlab.lib.enums import TA_LEFT
+
+    font = _register_cjk_font()
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -108,15 +120,15 @@ def to_pdf(title: str, text: str) -> bytes:
     )
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("TitleStyle", parent=styles["Title"], fontSize=18, spaceAfter=6)
-    date_style  = ParagraphStyle("DateStyle",  parent=styles["Normal"], fontSize=9,
-                                  textColor=colors.grey, spaceAfter=12)
-    body_style  = ParagraphStyle("BodyStyle",  parent=styles["Normal"], fontSize=10,
-                                  leading=14, spaceAfter=6)
-    h2_style    = ParagraphStyle("H2Style",    parent=styles["Heading2"], fontSize=13, spaceAfter=4)
-    h3_style    = ParagraphStyle("H3Style",    parent=styles["Heading3"], fontSize=11, spaceAfter=4)
-    bullet_style = ParagraphStyle("BulletStyle", parent=styles["Normal"], fontSize=10,
-                                   leading=13, leftIndent=14, spaceAfter=3)
+    title_style  = ParagraphStyle("TitleStyle",  parent=styles["Title"],   fontName=font, fontSize=18, spaceAfter=6)
+    date_style   = ParagraphStyle("DateStyle",   parent=styles["Normal"],  fontName=font, fontSize=9,
+                                   textColor=colors.grey, spaceAfter=12)
+    body_style   = ParagraphStyle("BodyStyle",   parent=styles["Normal"],  fontName=font, fontSize=10,
+                                   leading=15, spaceAfter=6)
+    h2_style     = ParagraphStyle("H2Style",     parent=styles["Heading2"], fontName=font, fontSize=14, spaceAfter=4)
+    h3_style     = ParagraphStyle("H3Style",     parent=styles["Heading3"], fontName=font, fontSize=12, spaceAfter=4)
+    bullet_style = ParagraphStyle("BulletStyle", parent=styles["Normal"],  fontName=font, fontSize=10,
+                                   leading=14, leftIndent=16, spaceAfter=3)
 
     story = [
         Paragraph(title, title_style),
@@ -152,6 +164,30 @@ def to_pdf(title: str, text: str) -> bytes:
 
     doc.build(story)
     return buf.getvalue()
+
+
+def send_report_as_feishu_pdf(
+    title: str,
+    text: str,
+    open_id: str,
+    feishu,
+) -> None:
+    """Render report to PDF and send it as a Feishu file message.
+
+    Args:
+        title:   Report title (used as PDF filename).
+        text:    Markdown-ish report body.
+        open_id: Feishu recipient open_id.
+        feishu:  FeishuClient instance.
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in title)[:60].strip()
+    filename = f"{safe}_{ts}.pdf"
+
+    pdf_bytes = to_pdf(title, text)
+    file_key  = feishu.upload_file(pdf_bytes, filename, file_type="pdf")
+    feishu.send_file(open_id=open_id, file_key=file_key)
+    logger.info("Feishu PDF sent: %s (%d bytes)", filename, len(pdf_bytes))
 
 
 def to_png(title: str, text: str, width: int = 900) -> bytes:

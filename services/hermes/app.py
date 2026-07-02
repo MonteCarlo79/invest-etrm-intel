@@ -2529,6 +2529,15 @@ def _handle_message(
                 _result_full = f"{_result}\n─\n[{_bj_now2.strftime('%Y-%m-%d %H:%M')} 北京时间]"
                 if msg.source == "feishu" and feishu:
                     feishu.send_text(open_id=msg.sender_id, text=_result_full)
+                    # Also send as PDF file attachment
+                    try:
+                        from services.hermes.export_utils import send_report_as_feishu_pdf
+                        send_report_as_feishu_pdf(
+                            title=_topic, text=_result,
+                            open_id=msg.sender_id, feishu=feishu,
+                        )
+                    except Exception as _pdf_err:
+                        logger.warning("PDF send failed: %s", _pdf_err)
                 elif msg.source == "wecom" and wecom:
                     wecom.send_text(user_id=msg.sender_id, text=_result_full)
                 elif msg.source == "telegram" and telegram:
