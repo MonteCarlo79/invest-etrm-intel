@@ -219,7 +219,7 @@ Rules:
 - When user says "meeting prep", "会议准备", "prepare me for a meeting about X", "briefing for X", use REPLY with KB context structured as: Background | Key Data Points | Talking Points | Questions to Prepare.
 - When user says "structuring", "term sheet", "market entry", "project financing", "条款", use REPLY drawing from KB context with: Market Context | Key Economics | Risk Factors | Recommendation.
 - When user says "Inner Mongolia", "内蒙古", "Mengxi", "蒙西" for operational data (P&L, dispatch), use MARKET_AGENT(bess-map) or REPLY with KB context if no specific data question.
-- When user asks about "装机容量", "installed capacity", "total MW", "total GW", "总容量", "总装机", "蒙西储能容量", use MARKET_AGENT(bess-map) — the bess-map agent has get_mengxi_capacity.
+- When user asks about "装机容量", "installed capacity", "total MW", "total GW", "总容量", "总装机", "蒙西储能容量", use MARKET_AGENT(bess-map) — the bess-map agent has get_mengxi_capacity. EXCEPTION: if the message starts with "/capacity" or "/capacity-add" followed by actual province data (e.g. "/capacity 山东 9.7GW"), that is a WRITE command handled before the LLM — use REPLY and tell the user the data was accepted.
 - When user asks what you can do in a certain area (e.g. "what can you do for X?"), use REPLY and describe the relevant capabilities from the CAPABILITY AREAS section above, with concrete examples.
 - Always match the user's language in the reply field. If the user writes in Chinese (Simplified), reply in Chinese (Simplified). If in English, reply in English.
 - Always respond with valid JSON only. No markdown fences, no extra text."""

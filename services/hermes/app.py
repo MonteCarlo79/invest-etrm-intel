@@ -2145,7 +2145,7 @@ def _handle_message(
     # Usage: /capacity-add 广东 2026-05 储能2000MW 风电5000MW 光伏8000MW
     #        /capacity-add https://example.com/installed_capacity_202605.pdf
     _capadd_m = _re.match(
-        r'^/?(?:capacity[-_](?:add|update|手动|更新|录入)|装机[-_]?(?:录入|手动|更新))\s+(.*)',
+        r'^/?(?:capacity[-_](?:add|update|手动|更新|录入)|装机[-_]?(?:录入|手动|更新)|capacity(?=\s+\S))\s+(.*)',
         msg.text.strip(), _re.I | _re.DOTALL,
     )
     if _capadd_m:
