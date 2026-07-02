@@ -320,10 +320,12 @@ _DAILY_TOOL = {
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "title": {"type": "string"},
-                                    "summary": {"type": "string"},
+                                    "title":   {"type": "string"},
+                                    "content": {"type": "string", "description": "2-4句分析，结合文章内容和市场意义"},
+                                    "source":  {"type": "string"},
+                                    "date":    {"type": "string"},
                                 },
-                                "required": ["title", "summary"],
+                                "required": ["title", "content"],
                             },
                         },
                     },
