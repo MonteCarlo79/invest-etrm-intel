@@ -59,59 +59,189 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "")
 
 
 def _run_spot_query(question: str, api_key: str) -> str:
-    """Simple spot market query using MCP tools directly."""
+    """Full Strategist-parity spot market agent with 7 data tools."""
     import anthropic
     import json
-    from datetime import date, timedelta
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    # Import spot tools
     try:
-        from services.spot_mcp.tools import get_spot_prices, get_market_summaries, search_reference_docs
+        from services.spot_mcp.tools import (
+            get_spot_prices,
+            get_interprov_flow,
+            get_market_summaries,
+            get_market_fundamentals,
+        )
+        from services.bess_mcp.tools import bess_get_portfolio_pnl
+        from services.knowledge_pool.knowledge_docs import search_reference_docs as _srd
     except ImportError as e:
         return f"Spot market tools unavailable: {e}"
 
     tools = [
-        {"name": "get_spot_prices",
-         "description": "China spot electricity market prices by province and date range.",
-         "input_schema": {"type": "object",
-                          "properties": {"start_date": {"type": "string"}, "end_date": {"type": "string"},
-                                         "province": {"type": "string"}},
-                          "required": ["start_date", "end_date"]}},
-        {"name": "get_market_summaries",
-         "description": "Daily spot market summary statistics.",
-         "input_schema": {"type": "object",
-                          "properties": {"start_date": {"type": "string"}, "end_date": {"type": "string"}},
-                          "required": ["start_date", "end_date"]}},
-        {"name": "search_reference_docs",
-         "description": "Search spot market regulatory documents and reference materials.",
-         "input_schema": {"type": "object",
-                          "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
-                          "required": ["query"]}},
+        {
+            "name": "get_spot_prices",
+            "description": (
+                "Fetch day-ahead (DA) and real-time (RT) spot electricity clearing prices "
+                "from public.spot_daily. Prices in ¥/kWh. Covers all Chinese provinces "
+                "participating in spot markets."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "ISO date e.g. '2026-01-01'"},
+                    "end_date":   {"type": "string", "description": "ISO date e.g. '2026-06-30'"},
+                    "provinces":  {"type": "array", "items": {"type": "string"},
+                                   "description": "Optional list of province_en names"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "get_interprov_flow",
+            "description": (
+                "Fetch inter-provincial spot trading data (省间现货交易情况). "
+                "Returns daily peak/floor average prices and volumes for exporting "
+                "(送端) and importing (受端) provinces."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string"},
+                    "end_date":   {"type": "string"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "get_market_summaries",
+            "description": (
+                "Fetch AI-generated daily market narrative summaries covering price levels, "
+                "key drivers, inter-provincial flows, and notable events."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string"},
+                    "end_date":   {"type": "string"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "get_market_fundamentals",
+            "description": (
+                "Fetch market fundamentals for Chinese electricity provinces: "
+                "installed capacity by fuel type (万kW), generation mix (亿kWh), "
+                "and seasonal peak loads (MW). Data covers 2024 and 2025."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "provinces": {"type": "array", "items": {"type": "string"},
+                                  "description": "Optional list of province_en names. Omit for all."},
+                    "year":      {"type": "integer", "description": "2024 or 2025"},
+                },
+                "required": [],
+            },
+        },
+        {
+            "name": "get_bess_pnl",
+            "description": (
+                "Fetch daily P&L and dispatch metrics for Inner Mongolia BESS assets "
+                "across all strategy scenarios. Assets: suyou, hangjinqi, siziwangqi, gushanliang. "
+                "Scenarios: perfect_foresight_hourly, forecast_ols_rt_time_v1, nominated_dispatch, "
+                "cleared_actual, trading_cleared."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date":   {"type": "string"},
+                    "end_date":     {"type": "string"},
+                    "asset_codes":  {"type": "array", "items": {"type": "string"},
+                                     "description": "Optional. Omit for all 4 IM assets."},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "search_reference_docs",
+            "description": (
+                "Search the spot market knowledge base: market rules, annual reports, "
+                "policy documents, regulatory filings, technical specs, research reports, "
+                "Excel spreadsheets with trading volumes / network losses / contract data, "
+                "and all market-fundamentals files (2.8M chunks). "
+                "Supports Chinese and English queries."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query":    {"type": "string", "description": "Search query in Chinese or English"},
+                    "category": {"type": "string",
+                                 "description": "Optional: market_rules | annual_report | policy_doc | "
+                                                "technical_spec | research_report | other"},
+                    "limit":    {"type": "integer", "description": "Max chunks (default 5, max 10)"},
+                },
+                "required": ["query"],
+            },
+        },
     ]
 
     def dispatch(name: str, inputs: dict) -> str:
         try:
             if name == "get_spot_prices":
                 result = get_spot_prices(**inputs)
+            elif name == "get_interprov_flow":
+                result = get_interprov_flow(**inputs)
             elif name == "get_market_summaries":
                 result = get_market_summaries(**inputs)
+            elif name == "get_market_fundamentals":
+                result = get_market_fundamentals(**inputs)
+            elif name == "get_bess_pnl":
+                result = bess_get_portfolio_pnl(
+                    asset_codes=inputs.get("asset_codes"),
+                    start_date=inputs["start_date"],
+                    end_date=inputs["end_date"],
+                )
             elif name == "search_reference_docs":
-                result = search_reference_docs(**inputs)
+                rows = _srd(
+                    query=inputs["query"],
+                    category=inputs.get("category"),
+                    app="strategist",
+                    limit=min(int(inputs.get("limit", 5)), 10),
+                )
+                result = {"count": len(rows), "chunks": rows}
             else:
-                return "Unknown tool"
+                return json.dumps({"error": f"Unknown tool: {name}"})
             return json.dumps(result, ensure_ascii=False, default=str)
         except Exception as e:
-            return f"Error: {e}"
+            logger.error("spot tool %s error: %s", name, e)
+            return json.dumps({"error": str(e)})
 
-    system = (
-        "You are the China Spot Electricity Market analyst. "
-        "Answer questions using data from your tools only. "
-        "Quote numbers with full units (¥/MWh). "
-        "State the date range used. "
-        "If no data is available, say so clearly."
-    )
+    system = """\
+You are a specialist analyst for China's spot electricity market, \
+answering via the Hermes assistant in Feishu. \
+Your knowledge comes exclusively from the data tools below. \
+Never state any price, trend, or market event unless it was returned by a tool call.
+
+## Domain definitions
+- DA price: Day-Ahead clearing price (¥/kWh). RT price: Real-Time price (¥/kWh).
+- Spread: DA − RT; positive = DA premium (normal); negative = RT spike.
+- 送端: Exporting province. 受端: Importing province.
+- Province names in DB: Shandong, Guangdong, Mengxi, Shanxi, Gansu, Sichuan, Yunnan, \
+Guizhou, Guangxi, Hunan, Hubei, Anhui, Zhejiang, Jiangsu, Fujian, Henan, Shaanxi, \
+Ningxia, Xinjiang, Liaoning, Jilin, Heilongjiang, Mengdong, Hebei, Hebei-North, \
+Hebei-South, Qinghai, Jiangxi, Hainan, Chongqing, Shanghai, Beijing, Tianjin.
+
+## Rules
+1. Call a tool before stating any price, spread, volume, or trend.
+2. Use markdown tables for multi-province or multi-period comparisons.
+3. Cite the date range of the data used in every response.
+4. For structural questions (fuel mix, capacity, renewables), call get_market_fundamentals.
+5. For BESS asset performance in Inner Mongolia, call get_bess_pnl.
+6. For market rules, policy docs, or knowledge base questions, call search_reference_docs.
+7. Keep responses concise — this is a chat interface, not a full report.
+8. Respond in the same language as the question (Chinese or English).\
+"""
 
     messages = [{"role": "user", "content": question}]
     while True:
