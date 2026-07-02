@@ -138,7 +138,7 @@ EMAIL_SUMMARY — check and summarise recent unread emails
   reply: you will generate after seeing results
 
 MARKET_AGENT — ask a specialist market agent a data question
-  params: {"market": "gb|au|ercot|caiso|pjm|ph|po|bess-map|spot", "question": "the full question to ask"}
+  params: {"market": "gb|au|ercot|caiso|pjm|ph|po|bess-map|spot|mengxi|internet", "question": "the full question to ask"}
   reply: you will generate after seeing results
   note: use when user asks about specific market data, BESS revenues, prices, assets, economics
 
@@ -186,7 +186,8 @@ Rules:
 - When user says "X 已完成", "已完成 X", "X done", "X finished", "X completed" — where X is a task name or partial description — use DONE action with X as the title.
 - When user says "mark X as done/complete/finished" or "将X标为完成", use DONE.
 - When user asks about market data, prices, revenues, BESS economics, or a specific market, use MARKET_AGENT.
-- For MARKET_AGENT: gb=GB/Great Britain market, au=Australia NEM, ercot=Texas, caiso=California, pjm=PJM, ph=Philippines, po=Portugal, bess-map=China provinces (广东/山东/蒙西/蒙东/山西/江苏/浙江/湖南/etc.) for BESS economics/revenues/capacity, spot=China spot market prices, internet=web search/URL reading/GitHub/YouTube/RSS/Bilibili. NEVER use market='mengxi' — 蒙西 questions go to bess-map.
+- For MARKET_AGENT market keys: gb=GB/Great Britain (9 tools: system price, EPEX, ancillary, BESS leaderboard/revenue index/assets, Elexon ops, KB search), au=Australia NEM, ercot=Texas, caiso=California, pjm=PJM, ph=Philippines, po=Portugal (all via intl_market_common: spot price, ancillary, BESS leaderboard/revenue index/assets, KB search), bess-map=China BESS economics for all provinces (get_bess_economics, get_dispatch_detail, get_mengxi_capacity, get_irr_estimate), spot=China spot electricity prices + DA/RT spreads + fundamentals + BESS P&L + KB (7 tools), mengxi=Inner Mongolia BESS operations (P&L attribution waterfall, 15-min dispatch data, RT prices, strategy comparison, KB — use for trading ops questions about the 4 IM BESS assets), internet=web search/URL reading/GitHub/YouTube/RSS/Bilibili.
+- Use MARKET_AGENT(mengxi) for operational/trading questions about the 4 Inner Mongolia BESS assets (景蓝乌尔图/悦杭独贵/景通四益堂储/裕昭沙子坝): P&L breakdown, dispatch execution, RT prices, strategy comparison. Use MARKET_AGENT(bess-map) for province-level BESS economics (capture rates, IRR, theoretical revenue) including 蒙西 as a market.
 - When user asks to "search the web", "look up a URL", "read this link", "search GitHub", "find on YouTube/Bilibili/B站", "check RSS", or research any topic online, use MARKET_AGENT(internet). IMPORTANT: "搜索" (search) in Chinese is an explicit internet search request — use MARKET_AGENT(internet) whenever "搜索" appears in the message, especially combined with "最新" (latest) or "网上". This takes PRIORITY over all other routing rules (bess-map, spot, etc.).
 - For GENERATE_CHART: use market=spot for ANY Chinese province spot price chart (现货价格/实时价格/日前价格/RT price/DA price/spot price — regardless of which province 陕西/山东/广东/蒙西/etc.). Use market=bess-map only for BESS economics charts (BESS revenues, capture rates, IRR, capacity). For international markets use the corresponding market code.
 - If the message is exactly "蒙西储能日报", use REPLY with text "正在生成日报…" — the app handles this as a report trigger, do NOT use MARKET_AGENT.
