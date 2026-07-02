@@ -159,6 +159,18 @@ GENERATE_CHART — query market data and render it as a chart image sent directl
         chart_type=line for time series (prices, revenues over time); bar for rankings/comparisons.
         The chart is rendered and sent as an image — no need to repeat data in the text reply.
 
+DRAFT_REPORT — compile a deep multi-source report from market agents + uploaded reference files
+  params: {"topic": "report title / subject",
+           "markets": ["spot", "bess-map"],
+           "outline": "user's notes, thoughts, key points — include verbatim"}
+  reply: brief acknowledgment that report is being drafted (in user's language), mention ~1-2 min wait
+  note: use when user says "帮我起草/生成/写一份深度报告/研究报告/分析报告/会议材料",
+        "draft a report", "conference report/materials", "prepare a report on X".
+        Extract topic from the message. Put ALL user notes/outline/instructions into outline param.
+        Default markets: ["spot","bess-map"] for China reports; add "mengxi" for IM ops;
+        add "internet" for web-research-backed reports; adjust to international codes for global scope.
+        If the user uploaded reference files before sending this command, they are automatically included.
+
 EXPORT_ANSWER — export the last assistant answer to a file and save to OneDrive
   params: {"title": "document title", "fmt": "docx|pdf|png", "folder": "/OneDrive path (default /Hermes Exports)"}
   reply: you will generate after seeing results
@@ -193,6 +205,7 @@ Rules:
 - If the message is exactly "蒙西储能日报", use REPLY with text "正在生成日报…" — the app handles this as a report trigger, do NOT use MARKET_AGENT.
 - If the market is ambiguous and you cannot infer it from context, use CLARIFY.
 - When user says "save as Word/PDF/PNG/file" or "export" about a previous answer, use EXPORT_ANSWER.
+- When user says "帮我起草/生成/写一份深度报告/分析报告/研究报告/会议材料", "draft a report", "conference report/materials", "prepare a report on X", use DRAFT_REPORT. Extract the topic from the message. Put ALL user notes, outline details, and strategic thoughts into the outline param. Default markets ["spot","bess-map"] for China; add "mengxi" for Inner Mongolia ops; add "internet" for web-backed; adjust to intl codes for global scope. Uploaded reference files (pdf/ppt/txt) sent before this command are automatically included.
 - When KNOWLEDGE BASE CONTEXT is provided above, use it to write an informed reply for REPLY actions.
 - When user asks about "IRR", "NPV", "payback period", "project economics" for a specific province or market, use MARKET_AGENT(bess-map) — the bess-map agent has get_irr_estimate.
 - When user says "meeting prep", "会议准备", "prepare me for a meeting about X", "briefing for X", use REPLY with KB context structured as: Background | Key Data Points | Talking Points | Questions to Prepare.

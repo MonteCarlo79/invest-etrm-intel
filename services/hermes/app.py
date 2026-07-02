@@ -12,6 +12,10 @@ from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 
+# sender_id → [{filename, text, ts}] — last 5 uploaded file texts cached for DRAFT_REPORT (2h TTL)
+import time as _time
+_report_file_cache: dict[str, list[dict]] = {}
+
 # sender_id → (folder_path, remaining_count)
 # remaining_count: N = save next N files to this folder; -1 = unlimited until cleared
 _pending_folders: dict[str, tuple[str, int]] = {}
@@ -1462,6 +1466,18 @@ def _handle_file_message(
         feishu.send_text(open_id=sender_id, text=reply)
         return False
 
+    # Cache file text for potential DRAFT_REPORT use (TTL 2h, keep last 5 per user)
+    try:
+        from services.hermes.report_drafter import _extract_file_text
+        _txt = _extract_file_text(filename, file_bytes)
+        if _txt:
+            _now = _time.time()
+            _cache = [e for e in _report_file_cache.get(sender_id, []) if _now - e["ts"] < 7200]
+            _report_file_cache[sender_id] = (_cache + [{"filename": filename, "text": _txt, "ts": _now}])[-5:]
+            logger.debug("Cached file text for report: %s (%d chars)", filename, len(_txt))
+    except Exception as _ce:
+        logger.debug("Report file cache failed for %s: %s", filename, _ce)
+
     # Show remaining count hint if a multi-file batch is active
     _remaining_hint = ""
     _cur_entry = _pending_folders.get(sender_id)
@@ -2479,6 +2495,50 @@ def _handle_message(
                 except Exception as exc:
                     logger.error("EMAIL_SUMMARY failed: %s", exc)
                     reply = f"读取邮件失败：{exc}"
+        elif action.action == "DRAFT_REPORT":
+            # Send ack immediately (report generation takes 1-2 min)
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _bj_now = _dt.now(tz=_tz(_td(hours=8)))
+            _bj_str = _bj_now.strftime('%Y-%m-%d %H:%M')
+            ack = action.reply or "📊 正在起草深度报告，正在查询市场数据库…（约1-2分钟）"
+            _ack_full = f"{ack}\n─\n[{_bj_str} 北京时间]"
+            if msg.source == "feishu" and feishu:
+                feishu.send_text(open_id=msg.sender_id, text=_ack_full)
+            elif msg.source == "wecom" and wecom:
+                wecom.send_text(user_id=msg.sender_id, text=_ack_full)
+            elif msg.source == "telegram" and telegram:
+                telegram.send_text(chat_id=msg.sender_id, text=_ack_full)
+            # Generate report synchronously in this thread
+            _topic    = action.params.get("topic", msg.text)
+            _markets  = action.params.get("markets", ["spot", "bess-map"])
+            _outline  = action.params.get("outline", "")
+            _api_key  = os.environ.get("ANTHROPIC_API_KEY", "")
+            _pg_url   = os.environ.get("PGURL") or os.environ.get("DATABASE_URL", "")
+            # Pull cached file texts for this sender
+            _now_ts = _time.time()
+            _cached  = [e for e in _report_file_cache.get(msg.sender_id, []) if _now_ts - e["ts"] < 7200]
+            _file_texts = [{"filename": e["filename"], "text": e["text"]} for e in _cached]
+            try:
+                from services.hermes.report_drafter import draft_report as _draft
+                _result = _draft(
+                    topic=_topic, user_notes=_outline, markets=_markets,
+                    file_texts=_file_texts, api_key=_api_key, pg_url=_pg_url,
+                )
+                agent._last_answer = _result
+                _bj_now2 = _dt.now(tz=_tz(_td(hours=8)))
+                _result_full = f"{_result}\n─\n[{_bj_now2.strftime('%Y-%m-%d %H:%M')} 北京时间]"
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=_result_full)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=_result_full)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=_result_full)
+            except Exception as _re:
+                logger.error("DRAFT_REPORT failed: %s", _re, exc_info=True)
+                _err = f"报告生成失败：{_re}"
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=_err)
+            reply = ""  # already sent above
         else:
             extra = agent.execute(action)
             reply = extra if extra else action.reply
