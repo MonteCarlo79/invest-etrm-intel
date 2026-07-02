@@ -36,7 +36,8 @@ RUN npm install -g mcporter bili-cli 2>/dev/null || true
 RUN agent-reach install --env=server --yes 2>/dev/null || true
 
 # Pre-download embedding model so it's baked into the image (avoids runtime download)
-RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding('BAAI/bge-small-zh-v1.5').embed(['test']))"
+# Non-fatal: if model CDN is unreachable at build time, it will download on first use
+RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding('BAAI/bge-small-zh-v1.5').embed(['test']))" || true
 
 # Copy hermes service code and shared modules
 COPY services/ /app/services/

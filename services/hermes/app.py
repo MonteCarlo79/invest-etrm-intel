@@ -15,6 +15,8 @@ logging.basicConfig(level=logging.INFO)
 # sender_id → [{filename, text, ts}] — last 5 uploaded file texts cached for DRAFT_REPORT (2h TTL)
 import time as _time
 _report_file_cache: dict[str, list[dict]] = {}
+# sender_id → {"files": [{filename, text}], "ts": float} — explicit report session (files tagged by user)
+_report_sessions: dict[str, dict] = {}
 
 # sender_id → (folder_path, remaining_count)
 # remaining_count: N = save next N files to this folder; -1 = unlimited until cleared
@@ -1472,9 +1474,21 @@ def _handle_file_message(
         _txt = _extract_file_text(filename, file_bytes)
         if _txt:
             _now = _time.time()
-            _cache = [e for e in _report_file_cache.get(sender_id, []) if _now - e["ts"] < 7200]
-            _report_file_cache[sender_id] = (_cache + [{"filename": filename, "text": _txt, "ts": _now}])[-5:]
-            logger.debug("Cached file text for report: %s (%d chars)", filename, len(_txt))
+            # If an explicit report session is active, append to it
+            if sender_id in _report_sessions:
+                _sess = _report_sessions[sender_id]
+                _sess["files"] = (_sess["files"] + [{"filename": filename, "text": _txt}])[-5:]
+                n_files = len(_sess["files"])
+                logger.info("Report session file added: %s (%d total)", filename, n_files)
+                feishu.send_text(
+                    open_id=sender_id,
+                    text=f"📎 已加入报告参考文件（第{n_files}个）：{filename}\n发完文件后，告诉我报告主题即可。",
+                )
+            else:
+                # General cache fallback
+                _cache = [e for e in _report_file_cache.get(sender_id, []) if _now - e["ts"] < 7200]
+                _report_file_cache[sender_id] = (_cache + [{"filename": filename, "text": _txt, "ts": _now}])[-5:]
+                logger.debug("Cached file text for report: %s (%d chars)", filename, len(_txt))
     except Exception as _ce:
         logger.debug("Report file cache failed for %s: %s", filename, _ce)
 
@@ -2347,6 +2361,13 @@ def _handle_message(
             logger.error("survey asset card failed: %s", _se)
         return True
 
+    # Cancel report session mode
+    if _re.match(r'^取消报告模式$|^cancel report$|^退出报告模式$', _txt, _re.I) and msg.sender_id in _report_sessions:
+        _report_sessions.pop(msg.sender_id, None)
+        if msg.source == "feishu" and feishu:
+            feishu.send_text(open_id=msg.sender_id, text="✅ 已退出报告文件收集模式。")
+        return True
+
     # Cancel survey mode
     if _re.match(r'^/?取消$|^/?cancel$', _txt, _re.I) and chat_id in _pending_survey:
         _pending_survey.pop(chat_id, None)
@@ -2495,6 +2516,14 @@ def _handle_message(
                 except Exception as exc:
                     logger.error("EMAIL_SUMMARY failed: %s", exc)
                     reply = f"读取邮件失败：{exc}"
+        elif action.action == "START_REPORT_SESSION":
+            _report_sessions[msg.sender_id] = {"files": [], "ts": _time.time()}
+            reply = action.reply or (
+                "📋 报告文件收集模式已开启。\n"
+                "请依次发送参考文件（PDF、PPT、Word、Excel、TXT 均可，最多5个）。\n"
+                "发完后告诉我报告主题和你的想法，我会结合文件和市场数据为你起草报告。\n"
+                "发送「取消报告模式」可随时退出。"
+            )
         elif action.action == "DRAFT_REPORT":
             # Send ack immediately (report generation takes 1-2 min)
             from datetime import datetime as _dt, timezone as _tz, timedelta as _td
@@ -2514,10 +2543,15 @@ def _handle_message(
             _outline  = action.params.get("outline", "")
             _api_key  = os.environ.get("ANTHROPIC_API_KEY", "")
             _pg_url   = os.environ.get("PGURL") or os.environ.get("DATABASE_URL", "")
-            # Pull cached file texts for this sender
+            # Prefer explicit report session files; fall back to general timed cache
             _now_ts = _time.time()
-            _cached  = [e for e in _report_file_cache.get(msg.sender_id, []) if _now_ts - e["ts"] < 7200]
-            _file_texts = [{"filename": e["filename"], "text": e["text"]} for e in _cached]
+            _session = _report_sessions.pop(msg.sender_id, None)
+            if _session and _session.get("files"):
+                _file_texts = _session["files"]
+                logger.info("DRAFT_REPORT: using %d session files", len(_file_texts))
+            else:
+                _cached = [e for e in _report_file_cache.get(msg.sender_id, []) if _now_ts - e["ts"] < 7200]
+                _file_texts = [{"filename": e["filename"], "text": e["text"]} for e in _cached]
             try:
                 from services.hermes.report_drafter import draft_report as _draft
                 _result = _draft(
