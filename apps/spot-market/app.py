@@ -931,16 +931,19 @@ def _load_wap(_conn_fn, provinces: tuple, start: str, end: str):
 
 # ── data quality filter ───────────────────────────────────────────────────────
 def _apply_quality_filter(df: pd.DataFrame) -> pd.DataFrame:
-    mask = pd.Series(True, index=df.index)
+    # Only remove rows where avg itself is impossible (bad_range).
+    # When avg > max or avg < min, the max/min is wrong (parser column mismatch)
+    # but the avg is still valid — nullify the bad bound instead of dropping the row.
+    df = df.copy()
     for m in ("da", "rt"):
         avg, mx, mn = f"{m}_avg", f"{m}_max", f"{m}_min"
-        bad_lo = df[avg].notna() & df[mn].notna() & (df[avg] < df[mn] - 0.001)
-        bad_hi = df[avg].notna() & df[mx].notna() & (df[avg] > df[mx] + 0.001)
         bad_range = df[avg].notna() & ((df[avg] < -0.5) | (df[avg] > 2.0))
-        mask &= ~(bad_lo | bad_hi | bad_range)
-    df = df[mask].copy()
-    for m in ("da", "rt"):
-        for col in (f"{m}_max", f"{m}_min"):
+        df = df[~bad_range]
+        bad_hi = df[avg].notna() & df[mx].notna() & (df[avg] > df[mx] + 0.001)
+        bad_lo = df[avg].notna() & df[mn].notna() & (df[avg] < df[mn] - 0.001)
+        df.loc[bad_hi, mx] = None
+        df.loc[bad_lo, mn] = None
+        for col in (mx, mn):
             df.loc[df[col].notna() & ((df[col] > 2.0) | (df[col] < -1.0)), col] = None
     return df
 
