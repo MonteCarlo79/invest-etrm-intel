@@ -190,9 +190,11 @@ def upsert_cap_comp_rows(rows: list[dict], pg_url: str, source: str) -> dict:
                         province, eff_date, existing_row[1], cap_val, source,
                     )
 
+                # Prefer per-row source (e.g. KB filename, policy doc) over generic tag
+                row_source = str(row.get("source") or source)[:500]
                 try:
                     cur.execute(_INSERT_CAP_COMP_SQL,
-                                (province, eff_date, cap_val, peak_h, source, status))
+                                (province, eff_date, cap_val, peak_h, row_source, status))
                     upserted += 1
                 except Exception as exc:
                     errors.append(f"{province}/{eff_date}: {exc}")
@@ -262,9 +264,11 @@ def upsert_fr_rows(rows: list[dict], pg_url: str, source: str) -> dict:
                         province, eff_date, existing_row[1], fr_price, source,
                     )
 
+                # Prefer per-row source over generic tag
+                row_source = str(row.get("source") or source)[:500]
                 try:
                     cur.execute(_INSERT_FR_SQL,
-                                (province, eff_date, fr_price, fr_pool, source, status))
+                                (province, eff_date, fr_price, fr_pool, row_source, status))
                     upserted += 1
                 except Exception as exc:
                     errors.append(f"{province}/{eff_date}: {exc}")
