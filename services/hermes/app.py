@@ -1050,6 +1050,19 @@ def create_app() -> FastAPI:
         act     = value.get("act", "")
 
         # ── Routing-card actions ──────────────────────────────────────────────
+        if act == "done_task":
+            task_id = value.get("task_id", "")
+            title   = value.get("title", "任务")
+            try:
+                agent.tasks.complete_card(title=title)
+                if open_id and feishu:
+                    feishu.send_text(open_id=open_id, text=f"✅ 已完成：{title}")
+            except Exception as exc:
+                logger.error("done_task callback failed: %s", exc)
+                if open_id and feishu:
+                    feishu.send_text(open_id=open_id, text=f"⚠️ 标记完成失败：{exc}")
+            return {}
+
         if act == "confirm":
             # User confirmed the auto-detected folder — just clean up
             mid = value.get("mid", "")

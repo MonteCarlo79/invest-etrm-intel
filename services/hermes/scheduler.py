@@ -14,6 +14,30 @@ logger = logging.getLogger(__name__)
 _WEEKDAYS_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 
+def _get_shanghai_weather() -> str:
+    """Fetch today's Shanghai weather from wttr.in. Returns a short string or empty on failure."""
+    try:
+        import urllib.request, json as _json
+        url = "https://wttr.in/Shanghai?format=j1&lang=zh"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = _json.loads(resp.read())
+        today = data["weather"][0]
+        desc  = today["hourly"][4].get("lang_zh", [{}])[0].get("value", "") or today["hourly"][4].get("weatherDesc", [{}])[0].get("value", "")
+        max_c = today["maxtempC"]
+        min_c = today["mintempC"]
+        feels = today["hourly"][4].get("FeelsLikeC", "")
+        humidity = today["hourly"][4].get("humidity", "")
+        parts = [f"上海今日天气：{desc}，{min_c}–{max_c}°C"]
+        if humidity:
+            parts.append(f"湿度{humidity}%")
+        if feels:
+            parts.append(f"体感{feels}°C")
+        return "，".join(parts)
+    except Exception as exc:
+        logger.debug("Weather fetch failed: %s", exc)
+        return ""
+
+
 def send_due_reminders(
     tasks: TasksClient,
     wecom: Optional[WeComClient],
@@ -42,6 +66,38 @@ def send_due_reminders(
                 pass
 
 
+def _task_done_button(task_id: str, title: str) -> dict:
+    """A green '✅ 完成' button that fires act=done_task when tapped."""
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": "✅ 完成"},
+        "type": "primary",
+        "value": {"act": "done_task", "task_id": task_id, "title": title},
+    }
+
+
+def _task_row(label: str, title: str, task_id: str) -> dict:
+    """One div row with task label on left and a done-button on right."""
+    return {
+        "tag": "column_set",
+        "flex_mode": "stretch",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 4,
+                "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": label}}],
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [{"tag": "action", "actions": [_task_done_button(task_id, title)]}],
+            },
+        ],
+    }
+
+
 def send_morning_briefing(
     tasks: TasksClient,
     feishu: Optional[FeishuClient] = None,
@@ -51,7 +107,6 @@ def send_morning_briefing(
     if not feishu or not feishu_owner_open_id:
         return
     if now is None:
-        # Beijing time = UTC+8
         now = datetime.now(tz=timezone(timedelta(hours=8)))
 
     today = now.date()
@@ -75,42 +130,79 @@ def send_morning_briefing(
                 later.append((t, due))
 
     date_str = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
-    lines = [f"早上好！今天是 {date_str}\n"]
+    weather   = _get_shanghai_weather()
+
+    # ── Build Feishu interactive card ─────────────────────────────────────────
+    elements: list[dict] = []
+
+    # Date + weather header block
+    header_md = f"**早上好！今天是 {date_str}**"
+    if weather:
+        header_md += f"\n🌤 {weather}"
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": header_md}})
+    elements.append({"tag": "hr"})
 
     if not open_tasks:
-        lines.append("✅ 没有待办事项，今天轻松！")
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "✅ 没有待办事项，今天轻松！"}})
     else:
+        def _add_section(section_label: str, items):
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**{section_label}**"}})
+            for entry in items:
+                t = entry[0] if isinstance(entry, tuple) else entry
+                due = entry[1] if isinstance(entry, tuple) else None
+                tid   = str(t.get("id", t.get("card_id", "")))
+                title = t["title"]
+                if due:
+                    delta_d = (due - today).days
+                    if delta_d < 0:
+                        suffix = f"（逾期 {abs(delta_d)} 天）"
+                    elif delta_d == 0:
+                        suffix = "（今天）"
+                    elif due.weekday() < 7:
+                        suffix = f"（{_WEEKDAYS_CN[due.weekday()]}）"
+                    else:
+                        suffix = f"（{due.month}月{due.day}日）"
+                    label = f"{title}{suffix}"
+                else:
+                    label = title
+                elements.append(_task_row(label, title, tid))
+
         if overdue:
-            lines.append(f"🔴 已逾期 ({len(overdue)}项)")
-            for t, due in overdue:
-                days = (today - due).days
-                lines.append(f"  • {t['title']}（逾期 {days} 天）")
-
+            _add_section(f"🔴 已逾期 ({len(overdue)}项)", overdue)
+            elements.append({"tag": "hr"})
         if due_today:
-            lines.append(f"\n🟡 今天到期 ({len(due_today)}项)")
-            for t in due_today:
-                lines.append(f"  • {t['title']}")
-
+            _add_section(f"🟡 今天到期 ({len(due_today)}项)", due_today)
+            elements.append({"tag": "hr"})
         if due_week:
-            lines.append(f"\n📅 本周到期 ({len(due_week)}项)")
-            for t, due in due_week:
-                lines.append(f"  • {t['title']}（{_WEEKDAYS_CN[due.weekday()]}）")
-
+            _add_section(f"📅 本周到期 ({len(due_week)}项)", due_week)
+            elements.append({"tag": "hr"})
         if no_date:
-            lines.append(f"\n📋 无截止日期 ({len(no_date)}项)")
-            for t in no_date:
-                lines.append(f"  • {t['title']}")
-
+            _add_section(f"📋 无截止日期 ({len(no_date)}项)", no_date)
+            elements.append({"tag": "hr"})
         if later:
-            lines.append(f"\n🗓 之后到期 ({len(later)}项)")
-            for t, due in later:
-                lines.append(f"  • {t['title']}（{due.month}月{due.day}日）")
+            _add_section(f"🗓 之后到期 ({len(later)}项)", later)
 
-    lines.append("\n有什么需要帮忙的吗？")
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "有什么需要帮忙的吗？"}})
+
+    card = {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"content": f"📋 每日提醒 — {date_str}", "tag": "plain_text"},
+        },
+        "elements": elements,
+    }
+
     try:
-        feishu.send_text(open_id=feishu_owner_open_id, text="\n".join(lines))
+        feishu.send_card(open_id=feishu_owner_open_id, card=card)
     except Exception as exc:
-        logger.error("Morning briefing failed: %s", exc)
+        logger.error("Morning briefing card failed: %s", exc)
+        # Fallback to plain text
+        lines = [header_md.replace("**", ""), "\n有什么需要帮忙的吗？"]
+        try:
+            feishu.send_text(open_id=feishu_owner_open_id, text="\n".join(lines))
+        except Exception:
+            pass
 
 
 def summarize_emails(messages: list[dict], api_key: str) -> str:
