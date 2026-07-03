@@ -80,11 +80,16 @@ def _load_avg_economics(
 ) -> dict:
     """Average daily economics for a province over a recent window (default: 2024-present).
 
-    Using all-time data inflates the IRR because early spot-market periods had
-    extreme theoretical spreads that are not representative of current market conditions.
+    Default window is current calendar year (Jan 1 to today) — power trading rules
+    change annually so prior-year spreads are not representative of current economics.
     """
     from datetime import date as _date
-    end = end or str(_date.today())
+    today = _date.today()
+    # Default to current calendar year — trading rules change annually so
+    # prior-year spreads are not representative of today's market conditions.
+    if start == "2024-01-01":
+        start = f"{today.year}-01-01"
+    end = end or str(today)
     sql = sql_text("""
         SELECT t.theo_per_mwh_day, r.real_per_mwh_day, r.capture_rate
         FROM (
