@@ -906,7 +906,7 @@ def load_scraping_progress(_eng_key) -> pd.DataFrame:
                    COUNT(DISTINCT datetime::date) AS days_present,
                    MAX(datetime::date)             AS latest_date
             FROM marketdata.spot_fundamentals_hourly
-            WHERE bidding_space_mw > 0
+            WHERE load_mw IS NOT NULL
               AND datetime::date >= '2025-12-01'
             GROUP BY province, month_start
         )
