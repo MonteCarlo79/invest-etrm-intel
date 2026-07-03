@@ -306,6 +306,7 @@ CATEGORY_LABELS: dict[str, str] = {
     "policy_doc":        "Policy Document",
     "technical_spec":    "Technical Spec",
     "research_report":   "Research Report",
+    "monthly_report":    "Exchange Monthly Report",
     "conversation_log":  "Conversation Log",
     "other":             "Other",
 }
@@ -316,6 +317,7 @@ CATEGORY_LABELS_ZH: dict[str, str] = {
     "policy_doc":        "政策文件",
     "technical_spec":    "技术规范",
     "research_report":   "研究报告",
+    "monthly_report":    "交易所月报",
     "conversation_log":  "对话记录",
     "other":             "其他",
 }

@@ -5332,3 +5332,106 @@ with tab_mgmt:
                         st.error(_t("report_send_error", err=str(_rpt_exc)))
             else:
                 st.error("spot_report module not available.")
+
+    # ── Exchange Monthly Reports ───────────────────────────────────────────────
+    st.divider()
+    with st.expander("📋 交易所月报管理 Exchange Monthly Reports", expanded=False):
+        st.caption(
+            "Upload and manage provincial power exchange monthly/quarterly reports. "
+            "Files are ingested into the shared knowledge base and searchable by the Strategist agent."
+        )
+
+        # ── Upload new reports ─────────────────────────────────────────────────
+        _emr_uploaded = st.file_uploader(
+            "Upload report (PDF or DOCX)",
+            type=["pdf", "doc", "docx"],
+            accept_multiple_files=True,
+            key="emr_upload",
+        )
+        if _emr_uploaded:
+            _emr_province_options = [
+                "自动识别 Auto-detect",
+                "上海", "冀南", "安徽", "山东", "广东", "江苏", "浙江", "福建", "蒙西",
+            ]
+            _emr_province_sel = st.selectbox(
+                "Province (leave auto to infer from filename)",
+                _emr_province_options,
+                key="emr_province_sel",
+            )
+            if st.button(
+                f"Ingest {len(_emr_uploaded)} file(s) into KB",
+                type="primary",
+                key="emr_do_ingest",
+            ):
+                import sys as _sys
+                _sys.path.insert(0, str(_REPO))
+                try:
+                    from services.exchange_reports.ingestor import ingest_report
+                    _emr_ok, _emr_dup, _emr_fail = 0, 0, 0
+                    for _emr_f in _emr_uploaded:
+                        _emr_bytes = _emr_f.read()
+                        _emr_prov = (
+                            None if _emr_province_sel == "自动识别 Auto-detect"
+                            else _emr_province_sel
+                        )
+                        try:
+                            _emr_res = ingest_report(
+                                file_bytes=_emr_bytes,
+                                filename=_emr_f.name,
+                                province=_emr_prov,
+                                pg_url=_os.environ.get("PGURL"),
+                                anthropic_api_key=_os.environ.get("ANTHROPIC_API_KEY"),
+                            )
+                            if _emr_res["status"] == "ingested":
+                                _emr_ok += 1
+                            elif _emr_res["status"] == "duplicate":
+                                _emr_dup += 1
+                            else:
+                                _emr_fail += 1
+                        except Exception as _emr_exc:
+                            st.error(f"Failed {_emr_f.name}: {_emr_exc}")
+                            _emr_fail += 1
+                    if _emr_ok:
+                        st.success(f"✅ Ingested {_emr_ok} new report(s).")
+                    if _emr_dup:
+                        st.info(f"ℹ️ {_emr_dup} file(s) already in KB (skipped).")
+                    if _emr_fail:
+                        st.warning(f"⚠️ {_emr_fail} file(s) failed — check logs.")
+                    st.rerun()
+                except ImportError as _emr_ie:
+                    st.error(f"exchange_reports service not found: {_emr_ie}")
+
+        st.divider()
+
+        # ── Report inventory ───────────────────────────────────────────────────
+        _emr_filter_prov = st.selectbox(
+            "Filter by province",
+            ["All", "上海", "冀南", "安徽", "山东", "广东", "江苏", "浙江", "福建", "蒙西"],
+            key="emr_filter_prov",
+        )
+
+        @st.cache_data(ttl=120, show_spinner=False)
+        def _load_exchange_reports(_prov: str) -> list:
+            try:
+                from services.exchange_reports.ingestor import list_reports
+                return list_reports(
+                    province=None if _prov == "All" else _prov,
+                    pg_url=_os.environ.get("PGURL"),
+                )
+            except Exception:
+                return []
+
+        _emr_rows = _load_exchange_reports(_emr_filter_prov)
+        if _emr_rows:
+            import pandas as _pd_emr
+            _emr_df = _pd_emr.DataFrame(_emr_rows)
+            _emr_df["report_month"] = _pd_emr.to_datetime(_emr_df["report_month"]).dt.strftime("%Y-%m")
+            _emr_df["created_at"] = _pd_emr.to_datetime(_emr_df["created_at"]).dt.strftime("%Y-%m-%d")
+            st.dataframe(
+                _emr_df[["province", "report_month", "report_type", "file_name", "created_at"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(f"{len(_emr_rows)} report(s) in KB.")
+        else:
+            st.info("No exchange monthly reports ingested yet. Upload files above or run the backfill script.")

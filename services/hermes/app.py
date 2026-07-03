@@ -56,6 +56,7 @@ from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
 from services.hermes.sysopfee_etl import upsert_sysopfee, is_sysopfee_file
 from services.hermes.sysopfee_screener import screen_sysopfee as _screen_sysopfee
 from services.hermes.daili_etl import upsert_daili_file as _upsert_daili_file, is_daili_file
+from services.exchange_reports.ingestor import ingest_report as _ingest_exchange_report, is_exchange_report
 from services.hermes.daili_screener import screen_daili as _screen_daili
 from services.hermes.capcomp_screener import screen_capcomp as _screen_capcomp, get_scan_status as _get_capcomp_status
 from services.hermes.capcomp_etl import resolve_conflict as _resolve_conflict
@@ -1688,6 +1689,28 @@ def _handle_file_message(
             logger.error("Daili ETL failed: %s", exc, exc_info=True)
             feishu.send_text(open_id=sender_id, text=f"⚠️ 代理购电入库失败：{exc}")
 
+    # Auto ETL: exchange monthly report → shared KB
+    _exchange_province = is_exchange_report(filename)
+    if _exchange_province:
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            _emr = _ingest_exchange_report(
+                file_bytes=file_bytes, filename=filename,
+                pg_url=pg_url, anthropic_api_key=api_key,
+            )
+            if _emr["status"] == "ingested":
+                feishu.send_text(open_id=sender_id, text=(
+                    f"📋 交易所月报已入库\n"
+                    f"省份：{_emr['province']}  期次：{_emr['report_month']}\n"
+                    f"已添加到共享知识库，Strategist可检索。"
+                ))
+            elif _emr["status"] == "duplicate":
+                feishu.send_text(open_id=sender_id, text=f"ℹ️ 该月报已在知识库中（{_emr['province']} {_emr['report_month']}）。")
+        except Exception as exc:
+            logger.error("Exchange report ingest failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 交易所月报入库失败：{exc}")
+
     # Auto ETL: upsert cap comp / FR market data from cap-comp-related files
     if is_capcomp_file(filename):
         try:
@@ -1851,6 +1874,27 @@ def _handle_telegram_file(
                 telegram.send_text(chat_id, "⚠️ 代理购电入库：未提取到有效数据")
         except Exception as exc:
             logger.error("Daili ETL (Telegram) failed: %s", exc, exc_info=True)
+
+    # Auto ETL: exchange monthly report → shared KB (Telegram)
+    _exchange_province_tg = is_exchange_report(filename)
+    if _exchange_province_tg:
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            _emr_tg = _ingest_exchange_report(
+                file_bytes=file_bytes, filename=filename,
+                pg_url=pg_url, anthropic_api_key=api_key,
+            )
+            if _emr_tg["status"] == "ingested":
+                telegram.send_text(chat_id, (
+                    f"📋 交易所月报已入库\n"
+                    f"省份：{_emr_tg['province']}  期次：{_emr_tg['report_month']}\n"
+                    f"已添加到共享知识库。"
+                ))
+            elif _emr_tg["status"] == "duplicate":
+                telegram.send_text(chat_id, f"ℹ️ 该月报已在知识库中（{_emr_tg['province']} {_emr_tg['report_month']}）。")
+        except Exception as exc:
+            logger.error("Exchange report ingest (Telegram) failed: %s", exc, exc_info=True)
 
     # Auto ETL: upsert cap comp / FR market data (Telegram)
     if is_capcomp_file(filename):
@@ -2081,6 +2125,40 @@ def _handle_message(
 
         import threading as _threading
         _threading.Thread(target=_run_sysopfee, daemon=True).start()
+        return True
+
+    # ── /exchange-report command — list ingested exchange monthly reports ────
+    if _re.match(r'^/?(?:exchange[-_]?report|交易所月报|月报列表|exchange\.report)$', msg.text.strip(), _re.I):
+        def _emr_cmd_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("exchange-report reply failed: %s", _e)
+
+        try:
+            from services.exchange_reports.ingestor import list_reports as _list_emr
+            _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            _emr_list = _list_emr(pg_url=_pg)
+            if not _emr_list:
+                _emr_cmd_reply("📋 知识库中暂无交易所月报。\n\n通过Feishu/Telegram发送月报PDF/DOCX文件即可自动入库。")
+            else:
+                # Group by province
+                from collections import defaultdict as _dd
+                _by_prov: dict = _dd(list)
+                for _r in _emr_list:
+                    _by_prov[_r["province"]].append(_r["report_month"])
+                lines = ["📋 已入库交易所月报：\n"]
+                for _prov, _months in sorted(_by_prov.items()):
+                    _month_strs = sorted([str(m)[:7] for m in _months], reverse=True)
+                    lines.append(f"• {_prov}：{', '.join(_month_strs[:6])}")
+                lines.append(f"\n共 {len(_emr_list)} 份报告，可通过Strategist或MARKET_AGENT(spot)检索。")
+                _emr_cmd_reply("\n".join(lines))
+        except Exception as _e:
+            logger.error("/exchange-report command failed: %s", _e)
+            _emr_cmd_reply(f"⚠️ 获取月报列表失败：{_e}")
         return True
 
     # ── /daili command — manually trigger 代理购电 screener ─────────────────
