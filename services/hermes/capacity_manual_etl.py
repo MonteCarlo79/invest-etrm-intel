@@ -104,6 +104,8 @@ _SYSTEM = (
 )
 
 _PROMPT = """\
+今天日期：{today}
+
 以下是待提取的文本：
 
 {context}
@@ -127,7 +129,7 @@ _PROMPT = """\
 
 规则：
 - province：使用标准省份名称（如广东、山西、内蒙古、蒙西、蒙东、冀北、河北等）
-- year_month：从文本中推断年月，格式YYYY-MM（如2026-05）。若文本未明确月份，推断为最近一个月
+- year_month：从文本中推断年月，格式YYYY-MM（如2026-05）。若文本未明确月份，使用今天日期的当月（{today_ym}）
 - 单位转换：万kW×10=MW，万MW极少见勿用；GW×1000=MW
 - 跳过合计、小计、全国、total等汇总行
 - 只填写文本中实际出现的数值，无数据填null
@@ -138,8 +140,14 @@ _PROMPT = """\
 
 def _call_claude(context: str, api_key: str) -> Optional[dict]:
     """Call Claude Haiku to extract province capacity data."""
+    from datetime import date as _date
+    today = _date.today()
     context = context[:12000]
-    prompt = _PROMPT.format(context=context)
+    prompt = _PROMPT.format(
+        context=context,
+        today=today.strftime("%Y-%m-%d"),
+        today_ym=today.strftime("%Y-%m"),
+    )
     try:
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
