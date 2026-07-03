@@ -241,6 +241,7 @@ def ingest_report(
     report_type: Optional[str] = None,
     pg_url: Optional[str] = None,
     anthropic_api_key: Optional[str] = None,
+    embed: bool = True,
 ) -> dict:
     """
     Ingest one exchange monthly report.
@@ -399,15 +400,16 @@ def ingest_report(
                             )
                     kconn.commit()
 
-                # Trigger background embedding (best-effort)
-                try:
-                    import threading
-                    from services.knowledge_pool.knowledge_docs import _embed_chunks_for_doc
-                    threading.Thread(
-                        target=_embed_chunks_for_doc, args=(kb_doc_id,), daemon=True,
-                    ).start()
-                except Exception:
-                    pass
+                # Trigger background embedding (best-effort; skip during bulk backfill)
+                if embed:
+                    try:
+                        import threading
+                        from services.knowledge_pool.knowledge_docs import _embed_chunks_for_doc
+                        threading.Thread(
+                            target=_embed_chunks_for_doc, args=(kb_doc_id,), daemon=True,
+                        ).start()
+                    except Exception:
+                        pass
 
         except Exception as exc:
             logger.error("KB ingestion failed for %s: %s", filename, exc)
@@ -479,6 +481,7 @@ def ingest_folder(
                 report_type=infer_report_type(path.name),
                 pg_url=pg_url,
                 anthropic_api_key=anthropic_api_key,
+                embed=False,  # skip OpenBLAS embedding during bulk backfill
             )
             res["file"] = str(path)
             results.append(res)
