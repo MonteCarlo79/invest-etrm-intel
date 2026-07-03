@@ -264,6 +264,11 @@ def ingest_report(
     if report_type is None:
         report_type = infer_report_type(filename)
 
+    # If province not in known list but file looks like an exchange report,
+    # try Claude-based detection from the first page of text
+    if province is None and anthropic_api_key and report_month is not None:
+        province = _detect_province_via_llm(file_bytes, filename, anthropic_api_key)
+
     if province is None:
         raise ValueError(f"Cannot infer province from filename: {filename!r}")
     if report_month is None:
@@ -424,6 +429,24 @@ def ingest_report(
             )
         conn.commit()
 
+        # Extract structured metrics via Claude (best-effort; non-blocking for backfill)
+        if anthropic_api_key:
+            try:
+                from services.exchange_reports.metrics_extractor import extract_and_store
+                full_text = "\n".join(text for _, text in pages)
+                extract_and_store(
+                    full_text=full_text,
+                    province=province,
+                    report_month=report_month,
+                    report_type=report_type,
+                    exchange_report_id=report_id,
+                    api_key=anthropic_api_key,
+                    pg_url=pg_url,
+                )
+                logger.info("Metrics extracted for %s %s", province, report_month)
+            except Exception as exc:
+                logger.error("Metrics extraction failed for %s: %s", filename, exc)
+
         logger.info(
             "Ingested %s: province=%s month=%s kb_doc_id=%s",
             filename, province, report_month, kb_doc_id,
@@ -439,6 +462,42 @@ def ingest_report(
 def _ensure_monthly_report_category() -> None:
     """No-op: spot_knowledge_docs.category is a free-form TEXT column."""
     pass
+
+
+def _detect_province_via_llm(
+    file_bytes: bytes,
+    filename: str,
+    api_key: str,
+) -> Optional[str]:
+    """
+    Use Claude Haiku to detect the province from the first page of the report.
+    Returns the Chinese province name (e.g. '河南') or None.
+    """
+    try:
+        pages = extract_pages(file_bytes, filename)
+        sample = (pages[0][1] if pages else "")[:1500]
+        if not sample.strip():
+            return None
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=30,
+            system=(
+                "You are identifying which Chinese province a power exchange monthly report "
+                "belongs to. Reply with ONLY the Chinese province/region name (e.g. '河南', '四川', "
+                "'湖北', '云南', '新疆') and nothing else. If you cannot determine it, reply 'unknown'."
+            ),
+            messages=[{"role": "user", "content": f"文件名: {filename}\n\n{sample}"}],
+        )
+        detected = resp.content[0].text.strip()
+        if detected and detected != "unknown" and len(detected) <= 10:
+            logger.info("LLM detected province '%s' from %s", detected, filename)
+            return detected
+    except Exception as exc:
+        logger.error("Province LLM detection failed: %s", exc)
+    return None
 
 
 # ── Folder batch ingest ───────────────────────────────────────────────────────
@@ -530,17 +589,26 @@ def list_reports(
         conn.close()
 
 
+_EXCHANGE_REPORT_KEYWORDS = re.compile(r"月报|市场信息|结算概况|交易信息|信息披露|电力交易|电力市场.*报告")
+_EXCHANGE_UNKNOWN_PROVINCE = "__unknown__"  # sentinel: looks like exchange report but province unclear
+
+
 def is_exchange_report(filename: str) -> Optional[str]:
     """
     Return province if filename looks like an exchange monthly report, else None.
+
+    Returns '__unknown__' if the file has exchange-report keywords and a
+    detectable month but province cannot be inferred from filename alone
+    (e.g. a new province not yet in the mapping). In that case Hermes will
+    use Claude to detect the province from the file content.
+
     Used by Hermes file handler for auto-ingest.
     """
-    # Must contain 月报 or 市场信息 or 结算概况 or 交易信息
-    if not re.search(r"月报|市场信息|结算概况|交易信息|信息披露", filename):
-        return None
-    province = infer_province(Path(filename))
-    if province is None:
+    if not _EXCHANGE_REPORT_KEYWORDS.search(filename):
         return None
     if infer_report_month(filename) is None:
         return None
+    province = infer_province(Path(filename))
+    if province is None:
+        return _EXCHANGE_UNKNOWN_PROVINCE  # known exchange report, unknown province
     return province

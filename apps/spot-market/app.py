@@ -5410,28 +5410,119 @@ with tab_mgmt:
             key="emr_filter_prov",
         )
 
-        @st.cache_data(ttl=120, show_spinner=False)
-        def _load_exchange_reports(_prov: str) -> list:
-            try:
-                from services.exchange_reports.ingestor import list_reports
-                return list_reports(
-                    province=None if _prov == "All" else _prov,
-                    pg_url=_os.environ.get("PGURL"),
-                )
-            except Exception:
-                return []
+        # ── Metrics tab switcher ───────────────────────────────────────────────
+        _emr_view = st.radio(
+            "View",
+            ["📊 数据汇总表 Metrics", "📂 文件清单 File List"],
+            horizontal=True, key="emr_view",
+        )
 
-        _emr_rows = _load_exchange_reports(_emr_filter_prov)
-        if _emr_rows:
-            import pandas as _pd_emr
-            _emr_df = _pd_emr.DataFrame(_emr_rows)
-            _emr_df["report_month"] = _pd_emr.to_datetime(_emr_df["report_month"]).dt.strftime("%Y-%m")
-            _emr_df["created_at"] = _pd_emr.to_datetime(_emr_df["created_at"]).dt.strftime("%Y-%m-%d")
-            st.dataframe(
-                _emr_df[["province", "report_month", "report_type", "file_name", "created_at"]],
-                use_container_width=True,
-                hide_index=True,
-            )
-            st.caption(f"{len(_emr_rows)} report(s) in KB.")
+        if _emr_view == "📊 数据汇总表 Metrics":
+            # Month selector
+            @st.cache_data(ttl=120, show_spinner=False)
+            def _emr_avail_months() -> list:
+                try:
+                    from services.exchange_reports.metrics_extractor import get_available_months
+                    return get_available_months(pg_url=_os.environ.get("PGURL"))
+                except Exception:
+                    return []
+
+            _emr_months = _emr_avail_months()
+            if not _emr_months:
+                st.info("No structured metrics yet. Run the backfill script with ANTHROPIC_API_KEY set, or upload reports via Feishu.")
+            else:
+                _emr_sel_month = st.selectbox(
+                    "Report month", _emr_months, key="emr_sel_month",
+                )
+                _emr_yr, _emr_mo = int(_emr_sel_month[:4]), int(_emr_sel_month[5:])
+
+                @st.cache_data(ttl=120, show_spinner=False)
+                def _load_emr_metrics(_yr: int, _mo: int) -> list:
+                    try:
+                        from services.exchange_reports.metrics_extractor import get_metrics_table
+                        return get_metrics_table(year=_yr, month=_mo, pg_url=_os.environ.get("PGURL"))
+                    except Exception:
+                        return []
+
+                _emr_mrows = _load_emr_metrics(_emr_yr, _emr_mo)
+                if not _emr_mrows:
+                    st.info(f"No metrics extracted for {_emr_sel_month}.")
+                else:
+                    import pandas as _pd_emr2
+                    _emr_mdf = _pd_emr2.DataFrame(_emr_mrows)
+
+                    # Numeric display columns
+                    _emr_disp_cols = {
+                        "province": "省份",
+                        "total_volume_gwh": "总成交量(亿kWh)",
+                        "volume_yoy_pct": "同比(%)",
+                        "avg_price_yuan_mwh": "均价(元/MWh)",
+                        "peak_price_yuan_mwh": "峰段价(元/MWh)",
+                        "valley_price_yuan_mwh": "谷段价(元/MWh)",
+                        "spot_volume_gwh": "现货量(亿kWh)",
+                        "spot_avg_price_yuan_mwh": "现货均价",
+                        "renewable_pct": "新能源占比(%)",
+                        "installed_capacity_gw": "装机容量(GW)",
+                        "max_load_gw": "最大负荷(GW)",
+                        "market_participants_total": "市场主体(户)",
+                    }
+                    _avail = [c for c in _emr_disp_cols if c in _emr_mdf.columns]
+                    _emr_show = _emr_mdf[_avail].rename(columns=_emr_disp_cols)
+                    st.dataframe(
+                        _emr_show.set_index("省份"),
+                        use_container_width=True,
+                    )
+                    st.caption(f"{len(_emr_mrows)} provinces with extracted metrics for {_emr_sel_month}.")
+
+                    # Highlights
+                    _emr_hl = [(r["province"], r["key_highlights"]) for r in _emr_mrows if r.get("key_highlights")]
+                    if _emr_hl:
+                        with st.expander("📝 各省市场要点", expanded=False):
+                            for _p, _h in sorted(_emr_hl):
+                                st.markdown(f"**{_p}**：{_h}")
+
+                    # PDF download
+                    if st.button("📄 下载汇总PDF", key="emr_dl_pdf"):
+                        try:
+                            from services.exchange_reports.summary_pdf import build_summary_pdf
+                            _emr_pdf_bytes = build_summary_pdf(
+                                _emr_mrows,
+                                month_label=f"{_emr_yr}年{_emr_mo}月",
+                            )
+                            st.download_button(
+                                "⬇️ 保存PDF",
+                                data=_emr_pdf_bytes,
+                                file_name=f"交易所月报汇总_{_emr_yr}-{_emr_mo:02d}.pdf",
+                                mime="application/pdf",
+                                key="emr_pdf_dl_btn",
+                            )
+                        except Exception as _emr_pe:
+                            st.error(f"PDF生成失败：{_emr_pe}")
+
         else:
-            st.info("No exchange monthly reports ingested yet. Upload files above or run the backfill script.")
+            # File list view
+            @st.cache_data(ttl=120, show_spinner=False)
+            def _load_exchange_reports(_prov: str) -> list:
+                try:
+                    from services.exchange_reports.ingestor import list_reports
+                    return list_reports(
+                        province=None if _prov == "All" else _prov,
+                        pg_url=_os.environ.get("PGURL"),
+                    )
+                except Exception:
+                    return []
+
+            _emr_rows = _load_exchange_reports(_emr_filter_prov)
+            if _emr_rows:
+                import pandas as _pd_emr
+                _emr_df = _pd_emr.DataFrame(_emr_rows)
+                _emr_df["report_month"] = _pd_emr.to_datetime(_emr_df["report_month"]).dt.strftime("%Y-%m")
+                _emr_df["created_at"] = _pd_emr.to_datetime(_emr_df["created_at"]).dt.strftime("%Y-%m-%d")
+                st.dataframe(
+                    _emr_df[["province", "report_month", "report_type", "file_name", "created_at"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption(f"{len(_emr_rows)} report(s) in KB.")
+            else:
+                st.info("No exchange monthly reports ingested yet. Upload files above or run the backfill script.")

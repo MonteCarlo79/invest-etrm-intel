@@ -82,6 +82,10 @@ def main():
             print(f"  [{status}]  {path.relative_to(folder)}  |  province={prov}  month={mon}  type={rtype}")
         return
 
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.warning("ANTHROPIC_API_KEY not set — text will be ingested to KB but structured metrics will NOT be extracted.")
+
     # Live ingest
     if args.province:
         # Find all subfolder(s) matching the province
@@ -91,10 +95,10 @@ def main():
                 continue
             if args.province in sub.name or sub.name == args.province + "月报":
                 logger.info("Ingesting province folder: %s", sub)
-                sub_results.extend(ingest_folder(sub, pg_url=pg_url))
+                sub_results.extend(ingest_folder(sub, pg_url=pg_url, anthropic_api_key=api_key))
         results = sub_results
     else:
-        results = ingest_folder(folder, pg_url=pg_url)
+        results = ingest_folder(folder, pg_url=pg_url, anthropic_api_key=api_key)
 
     # Summary
     ingested  = [r for r in results if r.get("status") == "ingested"]

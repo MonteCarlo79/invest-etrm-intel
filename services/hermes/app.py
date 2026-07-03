@@ -1695,8 +1695,10 @@ def _handle_file_message(
         try:
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            _emr_province_arg = None if _exchange_province == "__unknown__" else _exchange_province
             _emr = _ingest_exchange_report(
                 file_bytes=file_bytes, filename=filename,
+                province=_emr_province_arg,
                 pg_url=pg_url, anthropic_api_key=api_key,
             )
             if _emr["status"] == "ingested":
@@ -1881,8 +1883,10 @@ def _handle_telegram_file(
         try:
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            _emr_tg_prov = None if _exchange_province_tg == "__unknown__" else _exchange_province_tg
             _emr_tg = _ingest_exchange_report(
                 file_bytes=file_bytes, filename=filename,
+                province=_emr_tg_prov,
                 pg_url=pg_url, anthropic_api_key=api_key,
             )
             if _emr_tg["status"] == "ingested":
@@ -2159,6 +2163,64 @@ def _handle_message(
         except Exception as _e:
             logger.error("/exchange-report command failed: %s", _e)
             _emr_cmd_reply(f"⚠️ 获取月报列表失败：{_e}")
+        return True
+
+    # ── /exchange-summary — send PDF summary of exchange monthly metrics ─────
+    _emr_summary_match = _re.match(
+        r'^/?(?:exchange[-_]?summary|月报汇总|月报数据|交易所汇总|交易月报汇总)(?:\s+(\d{4})[年-](\d{1,2})月?)?$',
+        msg.text.strip(), _re.I,
+    )
+    if _emr_summary_match:
+        def _ems_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("exchange-summary reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            _ems_reply("⚠️ 数据库未配置。")
+            return True
+
+        try:
+            from services.exchange_reports.metrics_extractor import get_metrics_table, get_available_months
+            from services.exchange_reports.summary_pdf import build_summary_pdf
+
+            # Parse optional year/month from command
+            _ems_year = int(_emr_summary_match.group(1)) if _emr_summary_match.group(1) else None
+            _ems_month = int(_emr_summary_match.group(2)) if _emr_summary_match.group(2) else None
+
+            _ems_rows = get_metrics_table(year=_ems_year, month=_ems_month, pg_url=_pg)
+            if not _ems_rows:
+                _avail = get_available_months(pg_url=_pg)
+                if _avail:
+                    _ems_reply(f"⚠️ 未找到月报数据。\n可用月份：{', '.join(_avail[:6])}")
+                else:
+                    _ems_reply("⚠️ 知识库暂无交易所月报数据，请先上传月报文件。")
+                return True
+
+            # Determine month label
+            _ems_months_in_data = sorted({str(r["report_month"])[:7] for r in _ems_rows}, reverse=True)
+            _ems_label = (
+                f"{_ems_year}年{_ems_month}月" if _ems_month
+                else f"{_ems_months_in_data[0]}（最新）"
+            )
+            _ems_reply(f"⏳ 正在生成 {_ems_label} 各省月报汇总PDF，稍候…")
+
+            _ems_pdf = build_summary_pdf(_ems_rows, month_label=_ems_label)
+
+            _ems_fname = f"交易所月报汇总_{_ems_label.replace('年', '-').replace('月', '')}.pdf"
+            if msg.source == "feishu" and feishu:
+                _ems_fkey = feishu.upload_file(_ems_pdf, _ems_fname, "stream")
+                feishu.send_file(open_id=msg.sender_id, file_key=_ems_fkey, file_type="pdf")
+            elif msg.source == "telegram" and telegram:
+                telegram.send_document(chat_id=msg.sender_id, document=_ems_pdf, filename=_ems_fname)
+        except Exception as _e:
+            logger.error("/exchange-summary failed: %s", _e, exc_info=True)
+            _ems_reply(f"⚠️ 月报汇总PDF生成失败：{_e}")
         return True
 
     # ── /daili command — manually trigger 代理购电 screener ─────────────────
