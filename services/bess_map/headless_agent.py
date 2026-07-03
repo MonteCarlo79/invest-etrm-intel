@@ -76,19 +76,23 @@ def _load_dispatch_day(engine, province: str, duration_h: float, day: str) -> pd
 
 def _load_avg_economics(
     engine, province: str, duration_h: float, model: str = _MODEL,
-    start: str = "2024-01-01", end: str | None = None,
+    start: str | None = None, end: str | None = None,
 ) -> dict:
-    """Average daily economics for a province over a recent window (default: 2024-present).
+    """Average daily economics for a province over a recent window.
 
-    Default window is current calendar year (Jan 1 to today) — power trading rules
-    change annually so prior-year spreads are not representative of current economics.
+    Window logic (mirrors annual trading rule cycles):
+    - If today >= July 1 (≥6 months of current-year data available): use current year.
+    - Otherwise: use previous year (full 12 months of stable rule-set data).
+    Callers may override by passing explicit start/end.
     """
     from datetime import date as _date
     today = _date.today()
-    # Default to current calendar year — trading rules change annually so
-    # prior-year spreads are not representative of today's market conditions.
-    if start == "2024-01-01":
-        start = f"{today.year}-01-01"
+    if start is None:
+        if today.month >= 7:
+            start = f"{today.year}-01-01"
+        else:
+            start = f"{today.year - 1}-01-01"
+            end = end or f"{today.year - 1}-12-31"
     end = end or str(today)
     sql = sql_text("""
         SELECT t.theo_per_mwh_day, r.real_per_mwh_day, r.capture_rate
