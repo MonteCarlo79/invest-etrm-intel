@@ -278,7 +278,7 @@ def load_latest_installed_monthly(dsn: str) -> dict[str, dict]:
             province, year_month,
             wind_mw, solar_mw, thermal_mw, hydro_mw, nuclear_mw, bess_mw,
             total_mw, source_file
-        FROM province_installed_monthly
+        FROM marketdata.province_installed_monthly
         ORDER BY province, year_month DESC
     """
     result: dict[str, dict] = {}
