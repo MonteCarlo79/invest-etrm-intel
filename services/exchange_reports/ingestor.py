@@ -132,6 +132,16 @@ def infer_report_type(filename: str) -> str:
     return "monthly"
 
 
+def infer_report_year(filename: str) -> Optional[int]:
+    """Extract the year from a filename (e.g. '2025年年报' → 2025)."""
+    m = re.search(r"(\d{4})年", filename)
+    if m:
+        yr = int(m.group(1))
+        if 2015 <= yr <= 2035:
+            return yr
+    return None
+
+
 # ── Text extraction ────────────────────────────────────────────────────────────
 
 def _extract_text_pdf(file_bytes: bytes) -> list[tuple[int, str]]:
@@ -502,6 +512,120 @@ def _detect_province_via_llm(
     return None
 
 
+# ── Annual / non-monthly KB ingest ───────────────────────────────────────────
+
+def ingest_annual_report(
+    file_bytes: bytes,
+    filename: str,
+    province: str,
+    year: Optional[int] = None,
+    pg_url: Optional[str] = None,
+    embed: bool = True,
+) -> dict:
+    """
+    Ingest a non-monthly exchange publication (annual report, semi-annual summary,
+    supply forecast, operations bulletin, etc.) directly into the shared KB.
+
+    Unlike ingest_report(), this does NOT write to staging.exchange_monthly_reports
+    (which requires a report_month). It uses the KB's own SHA256 dedup.
+
+    Returns:
+        {"status": "ingested"|"duplicate"|"failed", "province": str, "year": int|None, ...}
+    """
+    try:
+        pages = extract_pages(file_bytes, filename)
+    except Exception as exc:
+        logger.error("Text extraction failed for %s: %s", filename, exc)
+        return {"file": filename, "status": "failed", "error": str(exc),
+                "province": province, "year": year}
+
+    try:
+        from services.knowledge_pool.knowledge_docs import (
+            init_knowledge_tables, sha256_bytes,
+            _chunk_text as _kp_chunk, _infer_title,
+        )
+        from services.knowledge_pool.db import get_conn as _kp_conn
+
+        init_knowledge_tables()
+        kb_hash = sha256_bytes(file_bytes)
+
+        with _kp_conn() as kconn:
+            with kconn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM staging.spot_knowledge_docs WHERE file_hash = %s",
+                    (kb_hash,),
+                )
+                row = cur.fetchone()
+
+        if row:
+            logger.info("Annual report already in KB: %s (kb_doc_id=%s)", filename, row[0])
+            return {"file": filename, "status": "duplicate",
+                    "province": province, "year": year, "kb_doc_id": row[0]}
+
+        _ensure_monthly_report_category()
+        first_text = pages[0][1] if pages else ""
+        title = _infer_title(filename, first_text)
+
+        with _kp_conn() as kconn:
+            with kconn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO staging.spot_knowledge_docs
+                        (file_name, file_hash, category, app, title,
+                         region_province, source_name,
+                         file_size_bytes, page_count, ingest_status)
+                    VALUES (%s, %s, 'monthly_report', 'shared', %s,
+                            %s, %s, %s, %s, 'parsed')
+                    RETURNING id
+                    """,
+                    (
+                        filename, kb_hash, title,
+                        province, f"{province}电力交易中心",
+                        len(file_bytes), len(pages),
+                    ),
+                )
+                kb_doc_id = cur.fetchone()[0]
+
+                chunk_index = 0
+                inserts = []
+                for page_no, text in pages:
+                    for chunk in _kp_chunk(text):
+                        inserts.append((kb_doc_id, page_no, chunk_index, chunk))
+                        chunk_index += 1
+
+                if inserts:
+                    cur.executemany(
+                        """
+                        INSERT INTO staging.spot_knowledge_chunks
+                            (doc_id, page_no, chunk_index, chunk_text)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (doc_id, chunk_index) DO NOTHING
+                        """,
+                        inserts,
+                    )
+            kconn.commit()
+
+        if embed:
+            try:
+                import threading
+                from services.knowledge_pool.knowledge_docs import _embed_chunks_for_doc
+                threading.Thread(
+                    target=_embed_chunks_for_doc, args=(kb_doc_id,), daemon=True,
+                ).start()
+            except Exception:
+                pass
+
+    except Exception as exc:
+        logger.error("KB ingest failed for annual report %s: %s", filename, exc)
+        return {"file": filename, "status": "failed", "error": str(exc),
+                "province": province, "year": year}
+
+    logger.info("Ingested annual report %s: province=%s year=%s kb_doc_id=%s",
+                filename, province, year, kb_doc_id)
+    return {"file": filename, "status": "ingested",
+            "province": province, "year": year, "kb_doc_id": kb_doc_id}
+
+
 # ── Folder batch ingest ───────────────────────────────────────────────────────
 
 def ingest_folder(
@@ -526,12 +650,26 @@ def ingest_folder(
             province = infer_province(path)
             report_month = infer_report_month(path.name)
             if province is None or report_month is None:
-                logger.warning(
-                    "Skipping %s — cannot infer province=%r month=%r",
-                    path.name, province, report_month,
-                )
-                results.append({"file": str(path), "status": "skipped",
-                                 "reason": f"province={province} month={report_month}"})
+                if province is not None and report_month is None:
+                    # Annual/semi-annual/forecast — no specific month; ingest to KB only
+                    year = infer_report_year(path.name)
+                    res = ingest_annual_report(
+                        file_bytes=file_bytes,
+                        filename=path.name,
+                        province=province,
+                        year=year,
+                        pg_url=pg_url,
+                        embed=False,
+                    )
+                    res["file"] = str(path)
+                    results.append(res)
+                else:
+                    logger.warning(
+                        "Skipping %s — cannot infer province=%r month=%r",
+                        path.name, province, report_month,
+                    )
+                    results.append({"file": str(path), "status": "skipped",
+                                     "reason": f"province={province} month={report_month}"})
                 continue
 
             res = ingest_report(

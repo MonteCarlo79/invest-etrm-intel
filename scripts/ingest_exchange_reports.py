@@ -59,9 +59,14 @@ def _run_extract_metrics_only(folder: Path, pg_url: str, args) -> None:
     from services.exchange_reports.ingestor import infer_province, infer_report_month, infer_report_type
     from services.exchange_reports.metrics_extractor import extract_and_store, init_metrics_table
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.error("ANTHROPIC_API_KEY not set — cannot extract metrics")
+    # Accept any supported provider: DeepSeek > Bedrock > Anthropic
+    api_key = (
+        os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        or os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    )
+    bedrock_region = os.environ.get("BEDROCK_REGION", "").strip()
+    if not api_key and not bedrock_region:
+        logger.error("No LLM API key set — set DEEPSEEK_API_KEY, BEDROCK_REGION, or ANTHROPIC_API_KEY")
         sys.exit(1)
 
     init_metrics_table(pg_url)
@@ -232,7 +237,8 @@ def main():
     if ingested:
         print("\nNewly ingested:")
         for r in ingested:
-            print(f"  [OK] {r.get('province')} {r.get('report_month')} -- {Path(r['file']).name}")
+            period = r.get('report_month') or r.get('year') or 'annual'
+            print(f"  [OK] {r.get('province')} {period} -- {Path(r['file']).name}")
 
     if skipped:
         print("\nSkipped (cannot infer province/month):")
