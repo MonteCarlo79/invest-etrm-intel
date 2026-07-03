@@ -4,7 +4,7 @@ services/exchange_reports/ingestor.py
 ETL pipeline for provincial power exchange monthly/quarterly reports.
 
 Supports: PDF, DOCX
-Provinces: 上海, 冀南, 安徽, 山东, 广东, 江苏, 浙江, 福建, 蒙西
+Provinces: 上海, 冀南, 安徽, 山东, 广东, 江苏, 浙江, 福建, 蒙西, 广西
 
 Pipeline:
   1. Infer province + report_month from folder path / filename
@@ -46,6 +46,7 @@ _FOLDER_TO_PROVINCE: dict[str, str] = {
     "浙江月报": "浙江",
     "福建月报": "福建",
     "蒙西月报": "蒙西",
+    "广西月报": "广西",
 }
 
 # Also detect from filenames directly
@@ -62,6 +63,7 @@ _NAME_TO_PROVINCE: dict[str, str] = {
     "福建": "福建",
     "内蒙古": "蒙西",
     "蒙西": "蒙西",
+    "广西": "广西",
 }
 
 # Quarter → first month of quarter
@@ -479,10 +481,10 @@ def _detect_province_via_llm(
         if not sample.strip():
             return None
 
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        from services.exchange_reports.metrics_extractor import _get_client
+        client, model_id, provider = _get_client(api_key=api_key)
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=model_id,
             max_tokens=30,
             system=(
                 "You are identifying which Chinese province a power exchange monthly report "

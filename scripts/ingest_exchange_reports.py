@@ -16,6 +16,9 @@ Usage:
 
     # Custom folder:
     py scripts/ingest_exchange_reports.py --folder /path/to/reports
+
+    # Backfill metrics only (for already-ingested files with no metrics row):
+    py scripts/ingest_exchange_reports.py --extract-metrics-only
 """
 from __future__ import annotations
 
@@ -44,12 +47,119 @@ logger = logging.getLogger(__name__)
 _DEFAULT_FOLDER = Path(__file__).parent.parent / "data" / "exchange-monthly-reports"
 
 
+def _run_extract_metrics_only(folder: Path, pg_url: str, args) -> None:
+    """
+    For every file in `folder` that is already registered in
+    staging.exchange_monthly_reports but has no row in
+    staging.exchange_monthly_metrics, extract and upsert metrics via Claude.
+    """
+    import hashlib
+    import psycopg2
+
+    from services.exchange_reports.ingestor import infer_province, infer_report_month, infer_report_type
+    from services.exchange_reports.metrics_extractor import extract_and_store, init_metrics_table
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY not set — cannot extract metrics")
+        sys.exit(1)
+
+    init_metrics_table(pg_url)
+
+    conn = psycopg2.connect(pg_url)
+    try:
+        # Fetch all ingested reports that have no metrics row yet
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT r.id, r.file_hash, r.province, r.report_month, r.report_type, r.file_name
+                FROM staging.exchange_monthly_reports r
+                LEFT JOIN staging.exchange_monthly_metrics m
+                    ON m.exchange_report_id = r.id
+                WHERE r.ingest_status = 'ingested'
+                  AND m.id IS NULL
+                  AND (%s IS NULL OR r.province = %s)
+                ORDER BY r.province, r.report_month
+                """,
+                (args.province, args.province),
+            )
+            pending = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not pending:
+        print("No ingested reports are missing metrics. Nothing to do.")
+        return
+
+    print(f"\nMetrics backfill — {len(pending)} reports need extraction\n")
+
+    # Build a hash → path index from disk so we can find files
+    hash_to_path: dict[str, Path] = {}
+    for path in sorted(folder.rglob("*")):
+        if path.suffix.lower() not in (".pdf", ".doc", ".docx"):
+            continue
+        if path.name.startswith("~$"):
+            continue
+        if args.province:
+            prov = infer_province(path)
+            if prov != args.province:
+                continue
+        try:
+            h = hashlib.sha256(path.read_bytes()).hexdigest()
+            hash_to_path[h] = path
+        except Exception:
+            pass
+
+    extracted = skipped = failed = 0
+    for report_id, file_hash, province, report_month, report_type, file_name in pending:
+        path = hash_to_path.get(file_hash)
+        if path is None:
+            logger.warning("File not found on disk: %s (%s %s) — skipping", file_name, province, report_month)
+            skipped += 1
+            continue
+
+        try:
+            from services.exchange_reports.ingestor import extract_pages
+            file_bytes = path.read_bytes()
+            pages = extract_pages(file_bytes, path.name)
+            full_text = "\n".join(text for _, text in pages)
+
+            row_id = extract_and_store(
+                full_text=full_text,
+                province=province,
+                report_month=report_month,
+                report_type=report_type,
+                exchange_report_id=report_id,
+                api_key=api_key,
+                pg_url=pg_url,
+            )
+            if row_id:
+                logger.info("  [OK] %s %s → metrics row %s", province, report_month, row_id)
+                extracted += 1
+            else:
+                logger.warning("  [SKIP] %s %s — extraction returned None", province, report_month)
+                skipped += 1
+        except Exception as exc:
+            logger.error("  [FAIL] %s %s — %s", province, report_month, exc)
+            failed += 1
+
+    print(f"\n{'='*50}")
+    print(f"  Metrics Backfill Summary")
+    print(f"{'='*50}")
+    print(f"  Extracted : {extracted}")
+    print(f"  Skipped   : {skipped}")
+    print(f"  Failed    : {failed}")
+    print(f"{'='*50}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Ingest exchange monthly reports into DB + KB")
     parser.add_argument("--folder", default=str(_DEFAULT_FOLDER),
                         help=f"Root folder (default: {_DEFAULT_FOLDER})")
     parser.add_argument("--province", help="Only ingest one province (e.g. 上海)")
     parser.add_argument("--dry-run", action="store_true", help="Print files without ingesting")
+    parser.add_argument("--extract-metrics-only", action="store_true",
+                        help="Re-extract metrics for already-ingested files that have no metrics row")
     args = parser.parse_args()
 
     folder = Path(args.folder)
@@ -65,6 +175,10 @@ def main():
     from services.exchange_reports.ingestor import (
         ingest_folder, infer_province, infer_report_month, infer_report_type,
     )
+
+    if args.extract_metrics_only:
+        _run_extract_metrics_only(folder, pg_url, args)
+        return
 
     if args.dry_run:
         print(f"\nDRY RUN — scanning {folder}\n")

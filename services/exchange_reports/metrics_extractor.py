@@ -28,6 +28,73 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# ── LLM provider config ───────────────────────────────────────────────────────
+#
+# Provider selection (first match wins):
+#   1. DEEPSEEK_API_KEY set           → DeepSeek  (OpenAI-compatible, China-accessible)
+#   2. BEDROCK_REGION set             → AWS Bedrock Claude
+#   3. ANTHROPIC_API_KEY set          → Direct Anthropic API
+#
+# Optional overrides:
+#   DEEPSEEK_MODEL   (default: deepseek-chat)
+#   BEDROCK_MODEL_ID (default: anthropic.claude-haiku-4-5-20251001-v1:0)
+
+_DEFAULT_DIRECT_MODEL   = "claude-haiku-4-5-20251001"
+_DEFAULT_BEDROCK_MODEL  = "anthropic.claude-haiku-4-5-20251001-v1:0"
+_DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+_DEEPSEEK_BASE_URL      = "https://api.deepseek.com"
+
+# OpenAI-format tool schema for DeepSeek (same fields, different wrapper)
+_TOOL_SCHEMA_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "store_market_metrics",
+        "description": (
+            "Store structured metrics extracted from a Chinese provincial power exchange "
+            "monthly report. Use null for any field not found in the report text."
+        ),
+        "parameters": None,  # filled in after _TOOL_SCHEMA is defined
+    },
+}
+
+
+def _get_provider() -> str:
+    """Return 'deepseek', 'bedrock', or 'anthropic'."""
+    if os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        return "deepseek"
+    if os.environ.get("BEDROCK_REGION", "").strip():
+        return "bedrock"
+    return "anthropic"
+
+
+def _get_client(api_key: Optional[str] = None):
+    """
+    Return (client, model_id, provider) for LLM calls.
+    provider is 'deepseek', 'bedrock', or 'anthropic'.
+    """
+    provider = _get_provider()
+
+    if provider == "deepseek":
+        from openai import OpenAI
+        key = os.environ.get("DEEPSEEK_API_KEY", "")
+        model_id = os.environ.get("DEEPSEEK_MODEL", _DEFAULT_DEEPSEEK_MODEL)
+        client = OpenAI(api_key=key, base_url=_DEEPSEEK_BASE_URL)
+        logger.debug("Using DeepSeek client, model=%s", model_id)
+        return client, model_id, "deepseek"
+
+    import anthropic
+    if provider == "bedrock":
+        region = os.environ.get("BEDROCK_REGION")
+        model_id = os.environ.get("BEDROCK_MODEL_ID", _DEFAULT_BEDROCK_MODEL)
+        client = anthropic.AnthropicBedrock(aws_region=region)
+        logger.debug("Using Bedrock client in %s, model=%s", region, model_id)
+        return client, model_id, "bedrock"
+
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    client = anthropic.Anthropic(api_key=key)
+    return client, _DEFAULT_DIRECT_MODEL, "anthropic"
+
+
 # ── DB DDL ────────────────────────────────────────────────────────────────────
 
 _DDL = """
@@ -211,6 +278,9 @@ _TOOL_SCHEMA = {
     },
 }
 
+# Patch the OpenAI schema now that _TOOL_SCHEMA is defined
+_TOOL_SCHEMA_OPENAI["function"]["parameters"] = _TOOL_SCHEMA["input_schema"]
+
 
 def extract_metrics(
     full_text: str,
@@ -219,48 +289,65 @@ def extract_metrics(
     api_key: Optional[str] = None,
 ) -> Optional[dict]:
     """
-    Call Claude Haiku to extract structured metrics from report full text.
+    Extract structured metrics from report full text via LLM (DeepSeek / Bedrock / Anthropic).
 
     Returns dict of metric fields (matching DB columns), or None on failure.
     """
-    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.warning("No ANTHROPIC_API_KEY — skipping metrics extraction")
-        return None
+    provider = _get_provider()
+    if provider == "anthropic":
+        api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            logger.warning("No LLM provider configured (set DEEPSEEK_API_KEY, BEDROCK_REGION, or ANTHROPIC_API_KEY)")
+            return None
 
-    # Truncate to ~12k chars (fits Haiku context comfortably, covers ~6 pages)
+    # Truncate to ~12k chars (fits context comfortably, covers ~6 pages)
     text_sample = full_text[:12000]
 
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=(
-                "You are extracting structured data from a Chinese provincial power exchange "
-                f"monthly market report. Province: {province}, Month: {report_month.strftime('%Y年%m月')}. "
-                "Extract numerical values precisely as reported. "
-                "For volume units: 亿千瓦时 = GWh×100. Always report volumes in 亿千瓦时. "
-                "For prices: if given as 元/千瓦时, multiply by 1000 to get 元/兆瓦时 (yuan/MWh). "
-                "If given as 分/千瓦时, divide by 10 to get yuan/MWh. "
-                "Use null for any field not present in the text."
-            ),
-            tools=[_TOOL_SCHEMA],
-            tool_choice={"type": "tool", "name": "store_market_metrics"},
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Extract market metrics from this {province} power exchange report "
-                    f"for {report_month.strftime('%Y年%m月')}:\n\n{text_sample}"
-                ),
-            }],
-        )
+    system_prompt = (
+        "You are extracting structured data from a Chinese provincial power exchange "
+        f"monthly market report. Province: {province}, Month: {report_month.strftime('%Y年%m月')}. "
+        "Extract numerical values precisely as reported. "
+        "For volume units: 亿千瓦时 = GWh×100. Always report volumes in 亿千瓦时. "
+        "For prices: if given as 元/千瓦时, multiply by 1000 to get 元/兆瓦时 (yuan/MWh). "
+        "If given as 分/千瓦时, divide by 10 to get yuan/MWh. "
+        "Use null for any field not present in the text."
+    )
+    user_message = (
+        f"Extract market metrics from this {province} power exchange report "
+        f"for {report_month.strftime('%Y年%m月')}:\n\n{text_sample}"
+    )
 
-        # Find the tool_use block
-        for block in resp.content:
-            if block.type == "tool_use" and block.name == "store_market_metrics":
-                return block.input
+    try:
+        client, model_id, provider = _get_client(api_key=api_key)
+
+        if provider == "deepseek":
+            # OpenAI-compatible function calling
+            resp = client.chat.completions.create(
+                model=model_id,
+                tools=[_TOOL_SCHEMA_OPENAI],
+                tool_choice={"type": "function", "function": {"name": "store_market_metrics"}},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_message},
+                ],
+            )
+            tool_calls = resp.choices[0].message.tool_calls
+            if tool_calls:
+                return json.loads(tool_calls[0].function.arguments)
+
+        else:
+            # Anthropic SDK (direct or Bedrock)
+            resp = client.messages.create(
+                model=model_id,
+                max_tokens=1024,
+                system=system_prompt,
+                tools=[_TOOL_SCHEMA],
+                tool_choice={"type": "tool", "name": "store_market_metrics"},
+                messages=[{"role": "user", "content": user_message}],
+            )
+            for block in resp.content:
+                if block.type == "tool_use" and block.name == "store_market_metrics":
+                    return block.input
 
     except Exception as exc:
         logger.error("Metrics extraction failed for %s %s: %s", province, report_month, exc)
