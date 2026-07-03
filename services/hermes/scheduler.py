@@ -38,6 +38,54 @@ def _get_shanghai_weather() -> str:
         return ""
 
 
+# WMO weather code → Chinese description (open-meteo codes)
+_WMO_CN = {
+    0: "晴", 1: "晴间多云", 2: "多云", 3: "阴",
+    45: "雾", 48: "雾凇",
+    51: "小毛毛雨", 53: "毛毛雨", 55: "大毛毛雨",
+    61: "小雨", 63: "中雨", 65: "大雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 77: "冰晶",
+    80: "阵雨", 81: "中阵雨", 82: "强阵雨",
+    85: "阵雪", 86: "强阵雪",
+    95: "雷雨", 96: "冰雹雷雨", 99: "强冰雹雷雨",
+}
+
+
+def _get_shanghai_weekly_forecast() -> str:
+    """Fetch Mon–Sun 7-day forecast for Shanghai from Open-Meteo (no API key needed).
+    Returns a markdown table string or empty string on failure.
+    """
+    try:
+        import urllib.request, json as _json
+        from datetime import date as _date
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            "?latitude=31.2304&longitude=121.4737"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum"
+            "&forecast_days=7&timezone=Asia%2FShanghai"
+        )
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = _json.loads(resp.read())
+        daily = data["daily"]
+        rows = ["| 日期 | 天气 | 最高 | 最低 | 降水 |",
+                "| ---- | ---- | ---- | ---- | ---- |"]
+        for i, date_str in enumerate(daily["time"]):
+            dt = _date.fromisoformat(date_str)
+            wd = _WEEKDAYS_CN[dt.weekday()]
+            day_label = f"{dt.month}/{dt.day} {wd}"
+            code = int(daily["weather_code"][i])
+            desc = _WMO_CN.get(code, f"代码{code}")
+            tmax = f"{daily['temperature_2m_max'][i]:.0f}°C"
+            tmin = f"{daily['temperature_2m_min'][i]:.0f}°C"
+            rain = daily["precipitation_sum"][i]
+            rain_str = f"{rain:.1f}mm" if rain and rain > 0 else "—"
+            rows.append(f"| {day_label} | {desc} | {tmax} | {tmin} | {rain_str} |")
+        return "\n".join(rows)
+    except Exception as exc:
+        logger.debug("Weekly forecast fetch failed: %s", exc)
+        return ""
+
+
 def send_due_reminders(
     tasks: TasksClient,
     wecom: Optional[WeComClient],
@@ -131,6 +179,8 @@ def send_morning_briefing(
 
     date_str = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
     weather   = _get_shanghai_weather()
+    is_monday = (now.weekday() == 0)
+    weekly    = _get_shanghai_weekly_forecast() if is_monday else ""
 
     # ── Build Feishu interactive card ─────────────────────────────────────────
     elements: list[dict] = []
@@ -140,6 +190,13 @@ def send_morning_briefing(
     if weather:
         header_md += f"\n🌤 {weather}"
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": header_md}})
+
+    # Monday: insert full weekly forecast table
+    if weekly:
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+            "content": f"**🗓 本周上海天气预报（周一至周日）**\n{weekly}"}})
+
     elements.append({"tag": "hr"})
 
     if not open_tasks:
