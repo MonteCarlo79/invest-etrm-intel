@@ -314,6 +314,11 @@ def load_latest_installed_monthly(dsn: str) -> dict[str, dict]:
             conn.close()
     except Exception:
         pass   # table may not exist yet; caller falls back to annual data
+    # Normalise province aliases so demand-tab lookups match spot_fundamentals_hourly names
+    _ALIASES = {"冀南": "河北南网", "冀北": "河北北网"}
+    for old, new in _ALIASES.items():
+        if old in result and new not in result:
+            result[new] = result.pop(old)
     return result
 
 
