@@ -4,7 +4,7 @@
 -- Units stored in MW throughout.
 -- Populated by:  scripts/scan_installed_capacity.py  (run monthly via Task Scheduler)
 
-CREATE TABLE IF NOT EXISTS province_installed_monthly (
+CREATE TABLE IF NOT EXISTS marketdata.province_installed_monthly (
     id          SERIAL PRIMARY KEY,
     province    TEXT    NOT NULL,          -- Chinese province name (e.g. 山东)
     year_month  DATE    NOT NULL,          -- always first day of month
@@ -21,4 +21,4 @@ CREATE TABLE IF NOT EXISTS province_installed_monthly (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pim_province_ym
-    ON province_installed_monthly (province, year_month DESC);
+    ON marketdata.province_installed_monthly (province, year_month DESC);

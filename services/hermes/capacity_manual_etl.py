@@ -180,18 +180,18 @@ def _safe_mw(val) -> Optional[float]:
 
 
 _UPSERT_SQL = """
-INSERT INTO province_installed_monthly
+INSERT INTO marketdata.province_installed_monthly
     (province, year_month, wind_mw, solar_mw, thermal_mw, hydro_mw,
      nuclear_mw, bess_mw, total_mw, source_file)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (province, year_month) DO UPDATE SET
-    wind_mw     = COALESCE(EXCLUDED.wind_mw,    province_installed_monthly.wind_mw),
-    solar_mw    = COALESCE(EXCLUDED.solar_mw,   province_installed_monthly.solar_mw),
-    thermal_mw  = COALESCE(EXCLUDED.thermal_mw, province_installed_monthly.thermal_mw),
-    hydro_mw    = COALESCE(EXCLUDED.hydro_mw,   province_installed_monthly.hydro_mw),
-    nuclear_mw  = COALESCE(EXCLUDED.nuclear_mw, province_installed_monthly.nuclear_mw),
-    bess_mw     = COALESCE(EXCLUDED.bess_mw,    province_installed_monthly.bess_mw),
-    total_mw    = COALESCE(EXCLUDED.total_mw,   province_installed_monthly.total_mw),
+    wind_mw     = COALESCE(EXCLUDED.wind_mw,    marketdata.province_installed_monthly.wind_mw),
+    solar_mw    = COALESCE(EXCLUDED.solar_mw,   marketdata.province_installed_monthly.solar_mw),
+    thermal_mw  = COALESCE(EXCLUDED.thermal_mw, marketdata.province_installed_monthly.thermal_mw),
+    hydro_mw    = COALESCE(EXCLUDED.hydro_mw,   marketdata.province_installed_monthly.hydro_mw),
+    nuclear_mw  = COALESCE(EXCLUDED.nuclear_mw, marketdata.province_installed_monthly.nuclear_mw),
+    bess_mw     = COALESCE(EXCLUDED.bess_mw,    marketdata.province_installed_monthly.bess_mw),
+    total_mw    = COALESCE(EXCLUDED.total_mw,   marketdata.province_installed_monthly.total_mw),
     source_file = EXCLUDED.source_file,
     ingested_at = NOW()
 """
@@ -201,7 +201,7 @@ def _upsert_records(records: list[dict], pg_url: str, source_name: str) -> dict:
     import psycopg2
     upserted = []
     errors = []
-    conn = psycopg2.connect(pg_url, connect_timeout=10)
+    conn = psycopg2.connect(pg_url)
     try:
         with conn.cursor() as cur:
             for rec in records:

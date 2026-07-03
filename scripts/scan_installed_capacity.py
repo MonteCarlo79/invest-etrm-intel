@@ -657,7 +657,7 @@ def parse_file(path: Path, province: str) -> list[dict]:
 # ── DB upsert ─────────────────────────────────────────────────────────────────
 
 _UPSERT_SQL = """
-INSERT INTO province_installed_monthly
+INSERT INTO marketdata.province_installed_monthly
     (province, year_month, wind_mw, solar_mw, thermal_mw, hydro_mw,
      nuclear_mw, bess_mw, total_mw, source_file, ingested_at)
 VALUES
@@ -723,7 +723,7 @@ def _ensure_table(dsn: str) -> None:
     ddl = ddl_path.read_text(encoding="utf-8") if ddl_path.exists() else None
     if not ddl:
         ddl = """
-        CREATE TABLE IF NOT EXISTS province_installed_monthly (
+        CREATE TABLE IF NOT EXISTS marketdata.province_installed_monthly (
             id SERIAL PRIMARY KEY, province TEXT NOT NULL, year_month DATE NOT NULL,
             wind_mw NUMERIC, solar_mw NUMERIC, thermal_mw NUMERIC,
             hydro_mw NUMERIC, nuclear_mw NUMERIC, bess_mw NUMERIC,
@@ -731,7 +731,7 @@ def _ensure_table(dsn: str) -> None:
             UNIQUE (province, year_month)
         );
         CREATE INDEX IF NOT EXISTS idx_pim_province_ym
-            ON province_installed_monthly (province, year_month DESC);
+            ON marketdata.province_installed_monthly (province, year_month DESC);
         """
     conn = psycopg2.connect(dsn)
     try:
