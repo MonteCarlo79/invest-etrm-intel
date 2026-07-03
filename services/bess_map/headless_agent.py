@@ -80,19 +80,31 @@ def _load_avg_economics(
 ) -> dict:
     """Average daily economics for a province over a recent window.
 
-    Window logic (mirrors annual trading rule cycles):
-    - If today >= July 1 (≥6 months of current-year data available): use current year.
-    - Otherwise: use previous year (full 12 months of stable rule-set data).
-    Callers may override by passing explicit start/end.
+    Auto window logic (callers may override with explicit start/end):
+    - Count distinct dates in current calendar year for this province/duration.
+    - If >= 180 days: use current year (Jan 1 → today).
+    - Otherwise: use rolling 365 days (today-364 → today) to capture the
+      most recent full-year price cycle regardless of calendar position.
     """
-    from datetime import date as _date
+    from datetime import date as _date, timedelta as _td
     today = _date.today()
     if start is None:
-        if today.month >= 7:
-            start = f"{today.year}-01-01"
+        cy_start = f"{today.year}-01-01"
+        count_sql = sql_text("""
+            SELECT COUNT(DISTINCT date) AS n
+            FROM marketdata.bess_capture_daily
+            WHERE province = :p AND ABS(duration_h - :d) < 0.01
+              AND date >= :cy_start
+        """)
+        try:
+            n_days = pd.read_sql(count_sql, engine,
+                                 params={"p": province, "d": duration_h, "cy_start": cy_start}).iloc[0]["n"]
+        except Exception:
+            n_days = 0
+        if int(n_days) >= 180:
+            start = cy_start
         else:
-            start = f"{today.year - 1}-01-01"
-            end = end or f"{today.year - 1}-12-31"
+            start = str(today - _td(days=364))
     end = end or str(today)
     sql = sql_text("""
         SELECT t.theo_per_mwh_day, r.real_per_mwh_day, r.capture_rate
