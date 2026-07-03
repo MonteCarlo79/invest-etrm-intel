@@ -109,7 +109,12 @@ If the Notes are primarily analytical (no positioning language), use the standar
 
 Rules:
 - NEVER invent numbers. Only state data that was provided in the context.
-- Cite the data source in parentheses after figures (e.g. "(spot agent, Jun 2026)").
+- Cite the data source in parentheses after EVERY figure: agent name, tool/basis, and time window \
+  (e.g. "(bess-map agent, realised revenue, 2024–2025)"; "(spot agent, DA prices, Jun 2026)").
+- IRR SANITY CHECK: Typical China merchant BESS equity IRR is 8–20%. If any IRR above 25% appears \
+  in the data, you MUST flag it explicitly: state whether it is based on theoretical (perfect-foresight) \
+  or realised revenue, the data window, and that actual performance will be lower. Never present a \
+  theoretical IRR as an investment recommendation without this caveat.
 - If a market agent returned an error or no data, omit that section gracefully.
 - Integrate the Author's Notes as the strategic narrative backbone of the entire report.
 - Reference file content as supporting evidence; analyse and synthesise it, do not merely summarise it.

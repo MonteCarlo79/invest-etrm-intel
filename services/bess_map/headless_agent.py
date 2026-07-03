@@ -74,13 +74,24 @@ def _load_dispatch_day(engine, province: str, duration_h: float, day: str) -> pd
         return pd.DataFrame()
 
 
-def _load_avg_economics(engine, province: str, duration_h: float, model: str = _MODEL) -> dict:
+def _load_avg_economics(
+    engine, province: str, duration_h: float, model: str = _MODEL,
+    start: str = "2024-01-01", end: str | None = None,
+) -> dict:
+    """Average daily economics for a province over a recent window (default: 2024-present).
+
+    Using all-time data inflates the IRR because early spot-market periods had
+    extreme theoretical spreads that are not representative of current market conditions.
+    """
+    from datetime import date as _date
+    end = end or str(_date.today())
     sql = sql_text("""
         SELECT t.theo_per_mwh_day, r.real_per_mwh_day, r.capture_rate
         FROM (
             SELECT AVG(theoretical_profit_per_mwh_day) AS theo_per_mwh_day
             FROM marketdata.bess_capture_daily
             WHERE province = :p AND ABS(duration_h - :d) < 0.01
+              AND date BETWEEN :start AND :end
         ) t
         CROSS JOIN (
             SELECT AVG(realized_profit_per_mwh_day) AS real_per_mwh_day,
@@ -88,13 +99,17 @@ def _load_avg_economics(engine, province: str, duration_h: float, model: str = _
             FROM marketdata.bess_capture_daily
             WHERE province = :p AND ABS(duration_h - :d) < 0.01
               AND model = :model
+              AND date BETWEEN :start AND :end
         ) r
     """)
     try:
-        row = pd.read_sql(sql, engine, params={"p": province, "d": duration_h, "model": model}).iloc[0]
-        return row.to_dict()
+        row = pd.read_sql(
+            sql, engine,
+            params={"p": province, "d": duration_h, "model": model, "start": start, "end": end},
+        ).iloc[0]
+        return {**row.to_dict(), "_data_window": f"{start} to {end}"}
     except Exception:
-        return {"theo_per_mwh_day": 0, "real_per_mwh_day": 0, "capture_rate": 0}
+        return {"theo_per_mwh_day": 0, "real_per_mwh_day": 0, "capture_rate": 0, "_data_window": f"{start} to {end}"}
 
 
 def _compute_irr(cashflows: list) -> Optional[float]:
@@ -252,7 +267,9 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
         "ANALYTICAL FRAMEWORK:\n"
         "1. Province screening → call get_bess_economics\n"
         "2. Dispatch quality → call get_dispatch_detail\n"
-        "3. Financial case → call get_irr_estimate (IRR < 8% = marginal, < 0% = rejected)\n"
+        "3. Financial case → call get_irr_estimate (always use default use_realised=true; "
+        "IRR < 8% = marginal, 8-20% = normal range, > 20% = strong, > 30% = flag as exceptional "
+        "and state the data window and revenue basis explicitly in your answer)\n"
         "4. Mengxi installed capacity / plant list / 装机容量 → call get_mengxi_capacity\n"
     )
 
@@ -282,10 +299,13 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
                 econ = _load_avg_economics(engine, inp["province"], float(inp.get("duration_h", 4.0)))
                 td = float(econ.get("theo_per_mwh_day") or 0)
                 rd = float(econ.get("real_per_mwh_day") or 0)
-                rev_day = rd if inp.get("use_realised") else td
+                # Default to REALISED revenue; theoretical inflates IRR significantly
+                # because it assumes perfect-foresight dispatch which is unachievable.
+                use_realised = inp.get("use_realised", True)
+                rev_day = rd if use_realised else td
                 cfs = _build_cashflows(
                     theo_per_mwh_day=rev_day,
-                    capture_rate=1.0,
+                    capture_rate=1.0,  # rev_day already incorporates capture (realised basis)
                     duration_h=float(inp.get("duration_h", 4.0)),
                     capex_per_kwh=float(inp.get("capex_yuan_per_kwh", 600)),
                     rte=float(inp.get("rte_pct", 85)) / 100,
@@ -304,13 +324,26 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
                     cum += cf
                     if cum >= 0 and payback is None:
                         payback = yr
+                irr_pct = round(irr * 100, 2) if irr is not None else None
+                data_window = econ.get("_data_window", "2024-present")
+                warning = ""
+                if irr_pct is not None and irr_pct > 30:
+                    warning = (
+                        f"⚠️ IRR {irr_pct}% is above typical China merchant BESS range (8–20%). "
+                        f"This is based on {'realised' if use_realised else 'theoretical perfect-foresight'} "
+                        f"revenue averaged over {data_window}. Verify whether recent spreads remain at this level."
+                    )
                 return str({
                     "province": inp["province"], "duration_h": inp.get("duration_h"),
-                    "revenue_basis": "realised" if inp.get("use_realised") else "theoretical",
+                    "revenue_basis": "realised" if use_realised else "theoretical_perfect_foresight",
+                    "data_window": data_window,
                     "rev_per_mwh_cap_day": round(rev_day, 2),
-                    "irr_pct": round(irr * 100, 2) if irr is not None else None,
+                    "theo_per_mwh_cap_day": round(td, 2),
+                    "real_per_mwh_cap_day": round(rd, 2),
+                    "irr_pct": irr_pct,
                     "simple_payback_yr": payback,
                     "npv_yuan": round(npv, 0),
+                    "warning": warning,
                 })
         except Exception as e:
             return f"Error: {e}"
