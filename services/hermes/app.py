@@ -2257,6 +2257,46 @@ def _handle_message(
         _threading.Thread(target=_run_daili, daemon=True).start()
         return True
 
+    # ── /backfill-annual — pre-compute annual nodal PF ranks ─────────────────
+    # Usage: /backfill-annual 2025
+    _bfa_m = _re.match(r'^/?backfill[-_]annual(?:\s+(\d{4}))?$', msg.text.strip(), _re.I)
+    if _bfa_m:
+        import datetime as _dt
+        _year = int(_bfa_m.group(1)) if _bfa_m.group(1) else _dt.date.today().year - 1
+
+        def _bfa_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("backfill-annual reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            _bfa_reply("⚠️ 数据库未配置。")
+            return True
+        _bfa_reply(f"⏳ 开始计算 {_year} 年节点PF排名（约2-4分钟），稍候…")
+
+        def _run_bfa():
+            try:
+                from services.hermes.mengxi_ranking_report import (
+                    _read_station_master,
+                    compute_and_store_nodal_pf_annual as _do_annual,
+                )
+                plants = _read_station_master(_pg)
+                plant_names = [p["plant_name"] for p in plants]
+                _do_annual(_pg, _year, plant_names)
+                _bfa_reply(f"✅ {_year} 年节点PF排名已计算完成，存入 reports.nodal_pf_annual。")
+            except Exception as _e:
+                logger.error("backfill-annual failed: %s", _e)
+                _bfa_reply(f"⚠️ 计算失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_bfa, daemon=True).start()
+        return True
+
     # ── /capcomp command — manually trigger 容量补偿+调频 screener ──────────
     if _re.match(r'^/?(?:capcomp|容量补偿|调频市场|cap.comp)$', msg.text.strip(), _re.I):
         def _cap_reply(text: str) -> None:
