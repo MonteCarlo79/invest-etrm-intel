@@ -44,6 +44,7 @@ from services.hermes.scheduler import send_due_reminders, send_morning_briefing,
 from services.hermes.mengxi_ranking_report import (
     send_daily_ranking as _send_mengxi_ranking,
     compute_and_store_nodal_pf_monthly as _compute_nodal_pf_monthly,
+    compute_and_store_nodal_pf_annual as _compute_nodal_pf_annual,
 )
 from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
 from services.hermes.news_screener import screen_news_sources as _screen_news_sources, get_sources as _ns_get_sources, backfill_source as _backfill_source
@@ -473,6 +474,14 @@ def create_app() -> FastAPI:
             day=5, hour=1, minute=0,
             kwargs={"pg_url": _mengxi_pg_url},
         )
+        # Nodal PF annual ranking: 1 Jan at 02:00 UTC — computes prior year for all
+        # plants currently in station_master (internal-only ranking, 4h only).
+        # Can also be triggered via POST /hermes/ranking/backfill-annual
+        scheduler.add_job(
+            lambda: _compute_nodal_pf_annual_with_plants(_mengxi_pg_url),
+            "cron",
+            month=1, day=1, hour=2, minute=0,
+        )
         # New-BESS screener: 06:30 UTC (14:30 Beijing) — after market data typically arrives
         scheduler.add_job(
             _screen_new_bess,
@@ -619,6 +628,37 @@ def create_app() -> FastAPI:
                                  wecom_webhook_url=os.environ.get("WECOM_RANKING_WEBHOOK_URL") or None)
             return {"status": "triggered", "report": report}
         return {"status": "unknown_report", "report": report}
+
+    def _compute_nodal_pf_annual_with_plants(pg_url: str, year: int = None) -> None:
+        """Load plant list from station_master and run annual nodal PF compute."""
+        import datetime as _dt
+        from services.hermes.mengxi_ranking_report import _read_station_master
+        if year is None:
+            year = _dt.date.today().year - 1
+        try:
+            plants = _read_station_master(pg_url)
+            plant_names = [p["plant_name"] for p in plants]
+            _compute_nodal_pf_annual(pg_url, year, plant_names)
+        except Exception as exc:
+            logger.error("Annual nodal PF compute failed for %d: %s", year, exc)
+
+    @app.post("/hermes/ranking/backfill-annual")
+    async def backfill_annual_nodal(request: Request, background: BackgroundTasks):
+        """Pre-compute annual 4h nodal PF ranks for a given year.
+        Body: {"year": 2025}  (defaults to last year if omitted).
+        """
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            return Response(content="DB not configured", status_code=503)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        import datetime as _dt
+        year = int(body.get("year", _dt.date.today().year - 1))
+        background.add_task(_compute_nodal_pf_annual_with_plants, _pg, year)
+        return {"status": "started", "year": year}
 
     @app.post("/hermes/news-screener/run")
     async def run_news_screener(background: BackgroundTasks):

@@ -296,6 +296,7 @@ def _enrich_and_rank(
     raw_df: pd.DataFrame,
     plant_list: list[dict],
     nodal_ranks: Optional[dict[str, dict]] = None,
+    annual_ranks_4h: Optional[dict[str, int]] = None,
 ) -> pd.DataFrame:
     """Merge DB result with plant metadata, compute rank, and attach nodal PF ranks."""
     if raw_df.empty:
@@ -329,7 +330,7 @@ def _enrich_and_rank(
     df["profit_wan"] = df["profit_wan"].round(1)
     df["score"] = df["score"].round(4)
 
-    # Attach nodal PF ranks
+    # Attach nodal PF ranks (period-specific)
     if nodal_ranks:
         df["nodal_rank_2h"] = df["plant_name"].map(
             lambda n: nodal_ranks[n]["rank_2h"] if n in nodal_ranks else None
@@ -341,8 +342,13 @@ def _enrich_and_rank(
         df["nodal_rank_2h"] = None
         df["nodal_rank_4h"] = None
 
+    # Attach 2025 full-year 4h nodal rank (pre-computed, same for all periods)
+    df["annual_rank_4h"] = df["plant_name"].map(
+        lambda n: annual_ranks_4h.get(n) if annual_ranks_4h else None
+    )
+
     return df[["rank", "plant_name", "owner", "mw", "profit_wan", "score", "days",
-               "nodal_rank_2h", "nodal_rank_4h"]]
+               "nodal_rank_2h", "nodal_rank_4h", "annual_rank_4h"]]
 
 
 # ── PDF generation ────────────────────────────────────────────────────────────
@@ -402,11 +408,11 @@ def _generate_pdf(
                    textColor=colors.HexColor("#1f3b63"))
     note_s   = _ps("n",     7, textColor=colors.grey, spaceAfter=4)
 
-    # 9 columns — narrowed name/owner to make room for two nodal rank cols
-    # Total: 11+46+28+13+20+20+13+15+15 = 181mm (A4 printable = 186mm)
+    # 10 columns — trimmed name/owner/profit cols to fit A4 (186mm printable)
+    # Total: 10+40+24+12+18+18+12+14+14+16 = 178mm
     COL_HDR = ["排名", "项目名称", "业主", "MW", "总收益(万元)", "收益/MWh/天", "天数",
-               "2h节点排名", "4h节点排名"]
-    COL_W   = [11*mm, 46*mm, 28*mm, 13*mm, 20*mm, 20*mm, 13*mm, 15*mm, 15*mm]
+               "2h节点排名", "4h节点排名", "2025年4h"]
+    COL_W   = [10*mm, 40*mm, 24*mm, 12*mm, 18*mm, 18*mm, 12*mm, 14*mm, 14*mm, 16*mm]
 
     def _nodal_cell(val) -> str:
         if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -427,6 +433,7 @@ def _generate_pdf(
                 str(r["days"]),
                 _nodal_cell(r.get("nodal_rank_2h")),
                 _nodal_cell(r.get("nodal_rank_4h")),
+                _nodal_cell(r.get("annual_rank_4h")),
             ])
 
         cmds = [
@@ -453,7 +460,7 @@ def _generate_pdf(
                     ("TEXTCOLOR",  (0, i), (-1, i), ENVISION_FG),
                     ("FONTNAME",   (0, i), (-1, i), F),
                 ]
-            # Nodal rank colour coding (non-Envision rows only)
+            # Nodal rank colour coding cols 7+8 (period-specific: green=outperforms node)
             if not is_envision and actual_rank is not None:
                 for col_idx in (7, 8):
                     cell_val = rows[i][col_idx]
@@ -594,8 +601,12 @@ def _generate_pdf(
             note_s,
         ),
         Paragraph(
-            "节点排名：2h/4h节点排名基于完美预见MILP套利，往返效率85%。"
+            "节点排名：2h/4h节点排名基于对应时段完美预见MILP套利，往返效率85%，仅限报告内储能互排。"
             "绿色 = 实际排名优于节点排名（超越地理优势）；红色 = 低于节点排名（未充分利用地理优势）。",
+            note_s,
+        ),
+        Paragraph(
+            "2025年4h：2025年全年4小时完美预见节点价值排名（预计算，每年1月1日更新）。",
             note_s,
         ),
     ]
@@ -635,6 +646,108 @@ def _query_nodal_monthly_df(pg_url: str) -> pd.DataFrame:
     except Exception as exc:
         logger.warning("Could not read reports.nodal_pf_monthly: %s", exc)
         return pd.DataFrame()
+    finally:
+        conn.close()
+
+
+def _query_nodal_annual_ranks(pg_url: str, year: int) -> dict[str, int]:
+    """Return {plant_name: rank_4h} for the given year from reports.nodal_pf_annual.
+    Returns empty dict if the table does not exist or has no rows for that year.
+    """
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT plant_name, rank_4h FROM reports.nodal_pf_annual WHERE year = %s",
+                (year,),
+            )
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as exc:
+        logger.warning("Could not read reports.nodal_pf_annual for %d: %s", year, exc)
+        return {}
+    finally:
+        conn.close()
+
+
+def compute_and_store_nodal_pf_annual(pg_url: str, year: int, plant_names: list[str]) -> None:
+    """
+    Compute 4h perfect-foresight BESS values for the given year for the supplied
+    plant list (internal BESS assets only — ranked among themselves) and upsert
+    results into reports.nodal_pf_annual.
+
+    Designed to be run once per year (auto-scheduled 1 Jan at 02:00 UTC for the
+    prior year, or triggered manually via POST /hermes/ranking/backfill-annual).
+    """
+    year_start   = date(year, 1, 1)
+    year_end_excl = date(year + 1, 1, 1)
+    logger.info("Nodal PF annual: computing %d for %d plants", year, len(plant_names))
+
+    prices_df = _query_nodal_prices(pg_url, plant_names, year_start, year_end_excl)
+    if prices_df.empty:
+        logger.warning("Nodal PF annual: no price data for %d", year)
+        return
+
+    # 4h only — compute ranks among the supplied plant list
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices
+
+    def _compute_plant_4h(plant_name: str, group: pd.DataFrame) -> tuple[str, float, int]:
+        prices_s = group.set_index("datetime")["cleared_price"].sort_index().astype(float)
+        n_days = prices_s.index.normalize().nunique()
+        try:
+            _, profit = compute_dispatch_from_15min_prices(
+                prices_s, power_mw=1.0, duration_h=4.0, roundtrip_eff=0.85
+            )
+            score = float(profit.sum()) / (4.0 * max(n_days, 1))
+        except Exception as exc:
+            logger.warning("Annual nodal PF failed for %s: %s", plant_name, exc)
+            return plant_name, float("nan"), n_days
+        return plant_name, score, n_days
+
+    raw_scores: dict[str, tuple[float, int]] = {}
+    plant_groups = [(name, grp) for name, grp in prices_df.groupby("plant_name")]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_compute_plant_4h, n, g): n for n, g in plant_groups}
+        for future in as_completed(futures):
+            name, score, nd = future.result()
+            if not pd.isna(score):
+                raw_scores[name] = (score, nd)
+
+    if not raw_scores:
+        logger.warning("Nodal PF annual: all plants failed for %d", year)
+        return
+
+    sorted_plants = sorted(raw_scores, key=lambda p: raw_scores[p][0], reverse=True)
+    ranks = {p: i + 1 for i, p in enumerate(sorted_plants)}
+
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS reports.nodal_pf_annual (
+                    year        INTEGER NOT NULL,
+                    plant_name  TEXT    NOT NULL,
+                    pf_score_4h FLOAT,
+                    rank_4h     INTEGER,
+                    n_days      INTEGER,
+                    computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (year, plant_name)
+                )
+            """)
+            conn.commit()
+            for plant_name, (score, nd) in raw_scores.items():
+                cur.execute("""
+                    INSERT INTO reports.nodal_pf_annual
+                        (year, plant_name, pf_score_4h, rank_4h, n_days, computed_at)
+                    VALUES (%s, %s, %s, %s, %s, now())
+                    ON CONFLICT (year, plant_name) DO UPDATE SET
+                        pf_score_4h = EXCLUDED.pf_score_4h,
+                        rank_4h     = EXCLUDED.rank_4h,
+                        n_days      = EXCLUDED.n_days,
+                        computed_at = now()
+                """, (year, plant_name, score, ranks[plant_name], nd))
+            conn.commit()
+        logger.info("Nodal PF annual: upserted %d rows for %d", len(raw_scores), year)
     finally:
         conn.close()
 
@@ -858,15 +971,42 @@ def send_daily_ranking(
     month_raw     = _apply_comp(month_raw,     first_seen_map, yesterday)
     ytd_raw       = _apply_comp(ytd_raw,       first_seen_map, yesterday)
 
-    # ── Compute yesterday's nodal PF ranks (inline MILP, ~10s for ~100 plants) ──
+    # ── Compute per-period nodal PF ranks in parallel ─────────────────────────
+    # Each section (latest/month/YTD) gets its own MILP run over the matching
+    # date window so the nodal rankings reflect the correct time period.
+    from concurrent.futures import ThreadPoolExecutor as _RankTPE
+
+    def _nodal_ranks_for(start: date, end: date) -> dict[str, dict]:
+        try:
+            prices = _query_nodal_prices(pg_url, plant_names, start, end)
+            return _compute_nodal_pf_ranks(prices) if not prices.empty else {}
+        except Exception as exc:
+            logger.warning("Nodal PF compute failed [%s→%s]: %s", start, end, exc)
+            return {}
+
     nodal_ranks_yesterday: dict[str, dict] = {}
+    nodal_ranks_month:     dict[str, dict] = {}
+    nodal_ranks_ytd:       dict[str, dict] = {}
     try:
-        nodal_prices_df = _query_nodal_prices(pg_url, plant_names, yesterday, end_excl)
-        if not nodal_prices_df.empty:
-            nodal_ranks_yesterday = _compute_nodal_pf_ranks(nodal_prices_df)
-            logger.info("Nodal PF ranks computed for %d plants", len(nodal_ranks_yesterday))
+        with _RankTPE(max_workers=3) as _ex:
+            _f_yd  = _ex.submit(_nodal_ranks_for, yesterday,   end_excl)
+            _f_mo  = _ex.submit(_nodal_ranks_for, month_start, end_excl)
+            _f_ytd = _ex.submit(_nodal_ranks_for, ytd_start,   end_excl)
+            nodal_ranks_yesterday = _f_yd.result()
+            nodal_ranks_month     = _f_mo.result()
+            nodal_ranks_ytd       = _f_ytd.result()
+        logger.info("Nodal PF ranks: yd=%d mo=%d ytd=%d plants",
+                    len(nodal_ranks_yesterday), len(nodal_ranks_month), len(nodal_ranks_ytd))
     except Exception as exc:
-        logger.warning("Nodal PF inline compute failed: %s — nodal ranks will be blank", exc)
+        logger.warning("Nodal PF parallel compute failed: %s", exc)
+
+    # ── Read pre-computed 2025 annual 4h nodal ranks ───────────────────────────
+    annual_ranks_4h: dict[str, int] = {}
+    try:
+        annual_ranks_4h = _query_nodal_annual_ranks(pg_url, 2025)
+        logger.info("2025 annual nodal ranks loaded: %d plants", len(annual_ranks_4h))
+    except Exception as exc:
+        logger.warning("Could not load 2025 annual nodal ranks: %s", exc)
 
     # ── Read monthly nodal ranking page (pre-computed on 5th of each month) ───
     nodal_monthly_df = pd.DataFrame()
@@ -875,10 +1015,16 @@ def send_daily_ranking(
     except Exception as exc:
         logger.warning("Could not read nodal_pf_monthly: %s — monthly page omitted", exc)
 
-    # ── Enrich with owner/mw and compute rank ─────────────────────────────────
-    yesterday_df = _enrich_and_rank(yesterday_raw, plant_list, nodal_ranks=nodal_ranks_yesterday)
-    month_df     = _enrich_and_rank(month_raw,     plant_list, nodal_ranks=nodal_ranks_yesterday)
-    ytd_df       = _enrich_and_rank(ytd_raw,       plant_list, nodal_ranks=nodal_ranks_yesterday)
+    # ── Enrich with owner/mw, compute rank, attach period-specific nodal ranks ──
+    yesterday_df = _enrich_and_rank(yesterday_raw, plant_list,
+                                    nodal_ranks=nodal_ranks_yesterday,
+                                    annual_ranks_4h=annual_ranks_4h)
+    month_df     = _enrich_and_rank(month_raw,     plant_list,
+                                    nodal_ranks=nodal_ranks_month,
+                                    annual_ranks_4h=annual_ranks_4h)
+    ytd_df       = _enrich_and_rank(ytd_raw,       plant_list,
+                                    nodal_ranks=nodal_ranks_ytd,
+                                    annual_ranks_4h=annual_ranks_4h)
 
     # ── Generate PDF ───────────────────────────────────────────────────────────
     total_mw = float(ytd_df["mw"].sum()) if not ytd_df.empty else 0.0
