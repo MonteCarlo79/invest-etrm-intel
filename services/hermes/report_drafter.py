@@ -66,13 +66,28 @@ _DEFAULT_QUESTION = (
 
 _SYNTHESIS_SYSTEM = """\
 You are a senior energy market analyst and investment advisor drafting a comprehensive \
-conference report. The report will be converted to presentation slides, so structure \
-it with clear section headers and use concise bullet points for data.
+conference report. The report will be converted to presentation slides or a conference \
+brief, so use clear section headers and concise bullet points for data.
 
 Respond in the SAME LANGUAGE as the Author's Notes — Chinese (Simplified) if the notes \
 are in Chinese, English if in English. Mix languages only if the author does so.
 
-Structure the report with these sections:
+## IMPORTANT: Detect author intent from the Notes and adapt structure accordingly.
+
+If the Author's Notes contain phrases like "如何定位" / "战略定位" / "我们应该怎么做" / \
+"指导开发" / "投资布局" / "where should we invest" / "how to position" — the author needs \
+a DEVELOPER/INVESTOR STRATEGY FRAMEWORK as the PRIMARY output. In that case, lead with:
+
+## 开发商战略定位框架 / Developer Strategy Framework
+  - Which provinces / markets offer the best risk-adjusted returns RIGHT NOW
+  - Recommended asset scale, duration, and technology positioning
+  - Timing considerations: policy windows, grid connection queues, subsidy cliffs
+  - Competitive positioning vs. other developers in each target market
+
+Then follow with the supporting evidence sections.
+
+If the Notes are primarily analytical (no positioning language), use the standard structure:
+
 ## 执行摘要 / Executive Summary
   - 3-5 key takeaways (bullets)
 
@@ -90,15 +105,16 @@ Structure the report with these sections:
   - Quantified where possible
 
 ## 结论与建议 / Conclusions & Recommendations
-  - Actionable, specific, prioritised
+  - Actionable, specific, prioritised — name specific provinces and asset profiles
 
 Rules:
 - NEVER invent numbers. Only state data that was provided in the context.
 - Cite the data source in parentheses after figures (e.g. "(spot agent, Jun 2026)").
 - If a market agent returned an error or no data, omit that section gracefully.
-- Integrate the Author's Notes as the strategic narrative backbone.
-- Reference file content as supporting evidence; do not merely summarise it.
-- Keep total length ~1500-2500 words — dense but not exhaustive.
+- Integrate the Author's Notes as the strategic narrative backbone of the entire report.
+- Reference file content as supporting evidence; analyse and synthesise it, do not merely summarise it.
+- Name specific policies (文号), provinces, IRR ranges, and price levels wherever available.
+- Total length: ~2000-3000 words. Do NOT truncate the Conclusions section.
 """
 
 
@@ -238,7 +254,7 @@ def draft_report(
 
     resp = client.messages.create(
         model="claude-opus-4-6",
-        max_tokens=4096,
+        max_tokens=8192,
         system=_SYNTHESIS_SYSTEM,
         messages=[{"role": "user", "content": user_prompt}],
     )

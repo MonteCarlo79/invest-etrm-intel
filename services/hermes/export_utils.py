@@ -92,9 +92,48 @@ def to_docx(title: str, text: str) -> bytes:
 
 
 def _register_cjk_font() -> str:
-    """Register STSong-Light CIDFont for Chinese support. Returns font name."""
+    """Register a CJK-capable font for Chinese support. Returns font name.
+
+    Priority: WQY Micro Hei → Noto Sans CJK → STSong-Light (CIDFont) → Helvetica.
+    WQY and Noto are installed via fonts-wqy-microhei / fonts-noto-cjk in the Dockerfile
+    and render Chinese glyphs correctly in all PDF viewers.
+    """
+    import glob as _glob
+    import os as _os
+    from reportlab.pdfbase import pdfmetrics
+
+    # 1. WQY Micro Hei — clear CJK rendering
+    for p in [
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/wqy/wqy-microhei.ttc",
+    ]:
+        if _os.path.exists(p):
+            try:
+                from reportlab.pdfbase.ttfonts import TTFont
+                pdfmetrics.registerFont(TTFont("WQYMicroHei", p, subfontIndex=0))
+                return "WQYMicroHei"
+            except Exception:
+                pass
+
+    # 2. Noto Sans CJK
+    for pat in [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/*.ttf",
+    ]:
+        files = _glob.glob(pat) if "*" in pat else ([pat] if _os.path.exists(pat) else [])
+        for f in files:
+            try:
+                from reportlab.pdfbase.ttfonts import TTFont
+                kw = {"subfontIndex": 0} if f.endswith(".ttc") else {}
+                pdfmetrics.registerFont(TTFont("NotoSansCJK", f, **kw))
+                return "NotoSansCJK"
+            except Exception:
+                pass
+
+    # 3. STSong-Light CIDFont (ReportLab built-in, last resort)
     try:
-        from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.cidfonts import UnicodeCIDFont
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
         return "STSong-Light"
