@@ -219,8 +219,11 @@ def _claude_extract(
         )
         text = resp.content[0].text.strip()
         data = _extract_json(text)
-        if data and source_hint and not data.get("source_url"):
+        # Always prefer source_hint (actual KB filenames) over Claude's guessed source_url
+        if data and source_hint:
             data["source_url"] = source_hint
+        elif data and not data.get("source_url"):
+            data["source_url"] = source_hint  # empty string / None → keep hint
         return data
     except Exception as exc:
         logger.error("Claude extraction failed for %s/%s: %s", province, query_type, exc)

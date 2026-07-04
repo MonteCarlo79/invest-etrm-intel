@@ -1558,7 +1558,7 @@ def load_cap_comp(_eng_key):
                        peak_duration_hours, source, status
                 FROM marketdata.province_cap_comp
                 WHERE status IN ('confirmed', 'conflict')
-                ORDER BY province, effective_date DESC
+                ORDER BY province, effective_date DESC, ingested_at DESC
             """)
             rows = cur.fetchall()
             cols = [d[0] for d in cur.description]
