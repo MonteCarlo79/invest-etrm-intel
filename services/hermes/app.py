@@ -1516,7 +1516,7 @@ def _handle_file_message(
         except Exception as exc:
             logger.error("Auto-classify failed: %s", exc)
     if folder is None:
-        folder = "Hermes Uploads"
+        folder = _BASE_CN_CARD  # default: etrm/bess-platform/data/market-fundamentals
     try:
         file_bytes = feishu.download_resource(message_id, file_key, resource_type)
         result = agent.onedrive.upload_file(folder_path=folder, filename=filename, content=file_bytes)
@@ -1782,7 +1782,7 @@ def _handle_telegram_file(
         except Exception as exc:
             logger.error("Auto-classify (Telegram) failed: %s", exc)
     if folder is None:
-        folder = "Hermes Uploads"
+        folder = _BASE_CN_CARD  # default: etrm/bess-platform/data/market-fundamentals
     try:
         file_bytes = telegram.get_file_bytes(file_id)
         if not file_bytes:
