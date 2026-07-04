@@ -175,7 +175,7 @@ _SURVEY_REPORT_BASE  = "etrm/bess-platform/data/market-fundamentals/调研报告
 _SURVEY_ASSET_BASE   = "etrm/bess-platform/assets/调研"
 
 
-def _build_route_card(filename: str, current_folder: str, message_id: str, web_url: str = "") -> dict:
+def _build_route_card(filename: str, current_folder: str, message_id: str, web_url: str = "") -> dict:  # web_url kept for compat but no longer shown (times out in Feishu browser)
     """Post-upload routing card — lets the user re-route a file with one tap."""
 
     def _btn(label: str, folder: str, btn_type: str = "default") -> dict:
@@ -187,10 +187,10 @@ def _build_route_card(filename: str, current_folder: str, message_id: str, web_u
         }
 
     short = current_folder.replace("etrm/bess-platform/data/", "…/")
-    body = f"已归档至 `{short}`"
-    if web_url:
-        body += f"\n[📎 在 OneDrive 中打开]({web_url})"
-    body += "\n路径有误？点击下方按钮重新存档："
+    # Show local Windows sync path — more useful than the webUrl which
+    # requires Microsoft auth and times out in Feishu's in-app browser.
+    local_path = "OneDrive\\" + current_folder.replace("/", "\\")
+    body = f"已归档至 `{short}`\n📂 本地路径：`{local_path}`\n路径有误？点击下方按钮重新存档："
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -1138,10 +1138,8 @@ def create_app() -> FastAPI:
                         filename=info["filename"],
                         content=fb,
                     )
-                    web_url = result.get("webUrl", "")
-                    msg = f"✅ 已重新归档《{result.get('name')}》到 OneDrive/{new_folder.strip('/')}"
-                    if web_url:
-                        msg += f"\n[📎 在 OneDrive 中打开]({web_url})"
+                    local = "OneDrive\\" + new_folder.strip("/").replace("/", "\\")
+                    msg = f"✅ 已重新归档《{result.get('name')}》\n📂 本地路径：`{local}`"
                     feishu.send_text(open_id=info["sender_id"], text=msg)
                 except Exception as exc:
                     logger.error("Re-route failed: %s", exc)
