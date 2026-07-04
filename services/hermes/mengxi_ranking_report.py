@@ -415,9 +415,13 @@ def _generate_pdf(
     COL_W   = [10*mm, 40*mm, 24*mm, 12*mm, 18*mm, 18*mm, 12*mm, 14*mm, 14*mm, 16*mm]
 
     def _nodal_cell(val) -> str:
+        """Format a nodal rank value.  Negative = proxy-inferred (shown as ~#N)."""
         if val is None or (isinstance(val, float) and pd.isna(val)):
             return "—"
-        return f"#{int(val)}"
+        iv = int(val)
+        if iv < 0:
+            return f"~#{-iv}"
+        return f"#{iv}"
 
     def _build_table(df: pd.DataFrame):
         sub = df.reset_index(drop=True)
@@ -652,19 +656,121 @@ def _query_nodal_monthly_df(pg_url: str) -> pd.DataFrame:
 
 def _query_nodal_annual_ranks(pg_url: str, year: int) -> dict[str, int]:
     """Return {plant_name: rank_4h} for the given year from reports.nodal_pf_annual.
-    Returns empty dict if the table does not exist or has no rows for that year.
+
+    Proxy-based entries (proxy_plant_name IS NOT NULL) are returned with a negative
+    rank value so callers can distinguish them: abs(rank) is the rank, sign < 0 means
+    inferred via nodal peer.  Returns empty dict if the table does not exist.
     """
     conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT plant_name, rank_4h FROM reports.nodal_pf_annual WHERE year = %s",
+                "SELECT plant_name, rank_4h, proxy_plant_name "
+                "FROM reports.nodal_pf_annual WHERE year = %s",
                 (year,),
             )
-            return {row[0]: row[1] for row in cur.fetchall()}
+            result = {}
+            for plant_name, rank_4h, proxy in cur.fetchall():
+                if rank_4h is None:
+                    continue
+                # Negative rank signals proxy-inferred value to the caller
+                result[plant_name] = -rank_4h if proxy else rank_4h
+            return result
     except Exception as exc:
         logger.warning("Could not read reports.nodal_pf_annual for %d: %s", year, exc)
         return {}
+    finally:
+        conn.close()
+
+
+def _resolve_nodal_proxies(
+    pg_url: str,
+    missing_plants: list[str],
+    year_start: "date",
+    year_end_excl: "date",
+) -> dict[str, str]:
+    """
+    For each plant in *missing_plants* that has no price data in the target year,
+    find a nodal peer from marketdata.inner_mongolia_nodal_clusters that DOES have
+    data and return a mapping {original_plant -> proxy_plant}.
+
+    Uses the most recent cluster run (highest end_date) so the node assignments
+    reflect the current market topology.
+    """
+    if not missing_plants:
+        return {}
+    # Use a long timeout — this is a background backfill task
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=120000")
+    try:
+        with conn.cursor() as cur:
+            # Latest cluster run
+            cur.execute("""
+                SELECT start_date, end_date
+                FROM marketdata.inner_mongolia_nodal_clusters
+                ORDER BY end_date DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+            if not row:
+                logger.warning("Nodal proxy: inner_mongolia_nodal_clusters is empty")
+                return {}
+            clust_start, clust_end = row
+
+            # Load cluster assignments for all plants in that run
+            cur.execute("""
+                SELECT plant_name, cluster_id
+                FROM marketdata.inner_mongolia_nodal_clusters
+                WHERE start_date = %s AND end_date = %s
+            """, (clust_start, clust_end))
+            plant_to_cluster: dict[str, int] = {r[0]: r[1] for r in cur.fetchall()}
+
+        # Build cluster → [plants] index
+        from collections import defaultdict
+        cluster_to_plants: dict[int, list[str]] = defaultdict(list)
+        for p, c in plant_to_cluster.items():
+            cluster_to_plants[c].append(p)
+
+        # Collect all candidate peers across all missing plants in one batch query
+        all_peers: set[str] = set()
+        missing_to_peers: dict[str, list[str]] = {}
+        for plant in missing_plants:
+            cid = plant_to_cluster.get(plant)
+            if cid is None:
+                logger.warning("Nodal proxy: %s not found in cluster table", plant)
+                continue
+            peers = [p for p in cluster_to_plants[cid] if p != plant]
+            if not peers:
+                logger.warning("Nodal proxy: %s has no peers in cluster %d", plant, cid)
+                continue
+            missing_to_peers[plant] = peers
+            all_peers.update(peers)
+
+        if not all_peers:
+            return {}
+
+        # Single query: which of all candidate peers have data in the target year?
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT plant_name
+                FROM marketdata.md_id_cleared_energy
+                WHERE data_date >= %s AND data_date < %s
+                  AND plant_name = ANY(%s)
+            """, (year_start, year_end_excl, list(all_peers)))
+            peers_with_data: set[str] = {r[0] for r in cur.fetchall()}
+
+        proxy_map: dict[str, str] = {}
+        for plant, peers in missing_to_peers.items():
+            cid = plant_to_cluster[plant]
+            available = [p for p in peers if p in peers_with_data]
+            if available:
+                proxy_map[plant] = available[0]
+                logger.info("Nodal proxy: %s → %s (cluster %d)", plant, available[0], cid)
+            else:
+                logger.warning(
+                    "Nodal proxy: %s — no peer in cluster %d has %d data",
+                    plant, cid, year_start.year,
+                )
+        return proxy_map
     finally:
         conn.close()
 
@@ -675,16 +781,43 @@ def compute_and_store_nodal_pf_annual(pg_url: str, year: int, plant_names: list[
     plant list (internal BESS assets only — ranked among themselves) and upsert
     results into reports.nodal_pf_annual.
 
+    Plants that have no direct price data for *year* are resolved via nodal-cluster
+    peers from marketdata.inner_mongolia_nodal_clusters.  The proxy plant's prices
+    are used to compute the hypothetical score; proxy_plant_name is recorded so the
+    PDF can distinguish direct from inferred values.
+
     Designed to be run once per year (auto-scheduled 1 Jan at 02:00 UTC for the
-    prior year, or triggered manually via POST /hermes/ranking/backfill-annual).
+    prior year, or triggered manually via /backfill-annual Feishu command).
     """
-    year_start   = date(year, 1, 1)
+    year_start    = date(year, 1, 1)
     year_end_excl = date(year + 1, 1, 1)
     logger.info("Nodal PF annual: computing %d for %d plants", year, len(plant_names))
 
     prices_df = _query_nodal_prices(pg_url, plant_names, year_start, year_end_excl)
+
+    # Identify plants with no direct data and resolve proxies
+    plants_with_data = set(prices_df["plant_name"].unique()) if not prices_df.empty else set()
+    missing = [p for p in plant_names if p not in plants_with_data]
+    proxy_map: dict[str, str] = {}  # original → proxy
+    if missing:
+        logger.info("Nodal PF annual: %d plants missing %d data — resolving via cluster peers",
+                    len(missing), year)
+        proxy_map = _resolve_nodal_proxies(pg_url, missing, year_start, year_end_excl)
+        if proxy_map:
+            proxy_plants = list(set(proxy_map.values()))
+            proxy_prices = _query_nodal_prices(pg_url, proxy_plants, year_start, year_end_excl)
+            # Re-label proxy prices as the original plant names
+            proxy_rows = []
+            for orig, proxy in proxy_map.items():
+                chunk = proxy_prices[proxy_prices["plant_name"] == proxy].copy()
+                if not chunk.empty:
+                    chunk["plant_name"] = orig
+                    proxy_rows.append(chunk)
+            if proxy_rows:
+                prices_df = pd.concat([prices_df] + proxy_rows, ignore_index=True)
+
     if prices_df.empty:
-        logger.warning("Nodal PF annual: no price data for %d", year)
+        logger.warning("Nodal PF annual: no price data for %d (direct or proxy)", year)
         return
 
     # 4h only — compute ranks among the supplied plant list
@@ -725,29 +858,42 @@ def compute_and_store_nodal_pf_annual(pg_url: str, year: int, plant_names: list[
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS reports.nodal_pf_annual (
-                    year        INTEGER NOT NULL,
-                    plant_name  TEXT    NOT NULL,
-                    pf_score_4h FLOAT,
-                    rank_4h     INTEGER,
-                    n_days      INTEGER,
-                    computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    year             INTEGER NOT NULL,
+                    plant_name       TEXT    NOT NULL,
+                    pf_score_4h      FLOAT,
+                    rank_4h          INTEGER,
+                    n_days           INTEGER,
+                    proxy_plant_name TEXT,
+                    computed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
                     PRIMARY KEY (year, plant_name)
                 )
             """)
+            # Add proxy_plant_name column if upgrading from an older schema
+            cur.execute("""
+                ALTER TABLE reports.nodal_pf_annual
+                ADD COLUMN IF NOT EXISTS proxy_plant_name TEXT
+            """)
             conn.commit()
             for plant_name, (score, nd) in raw_scores.items():
+                proxy = proxy_map.get(plant_name)
                 cur.execute("""
                     INSERT INTO reports.nodal_pf_annual
-                        (year, plant_name, pf_score_4h, rank_4h, n_days, computed_at)
-                    VALUES (%s, %s, %s, %s, %s, now())
+                        (year, plant_name, pf_score_4h, rank_4h, n_days, proxy_plant_name, computed_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, now())
                     ON CONFLICT (year, plant_name) DO UPDATE SET
-                        pf_score_4h = EXCLUDED.pf_score_4h,
-                        rank_4h     = EXCLUDED.rank_4h,
-                        n_days      = EXCLUDED.n_days,
-                        computed_at = now()
-                """, (year, plant_name, score, ranks[plant_name], nd))
+                        pf_score_4h      = EXCLUDED.pf_score_4h,
+                        rank_4h          = EXCLUDED.rank_4h,
+                        n_days           = EXCLUDED.n_days,
+                        proxy_plant_name = EXCLUDED.proxy_plant_name,
+                        computed_at      = now()
+                """, (year, plant_name, score, ranks[plant_name], nd, proxy))
             conn.commit()
-        logger.info("Nodal PF annual: upserted %d rows for %d", len(raw_scores), year)
+        n_direct = len(raw_scores) - len(proxy_map)
+        n_proxy  = sum(1 for p in raw_scores if p in proxy_map)
+        logger.info(
+            "Nodal PF annual: upserted %d rows for %d (%d direct, %d via proxy)",
+            len(raw_scores), year, n_direct, n_proxy,
+        )
     finally:
         conn.close()
 
