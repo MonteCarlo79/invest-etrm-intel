@@ -114,35 +114,22 @@ def send_due_reminders(
                 pass
 
 
-def _task_done_button(task_id: str, title: str) -> dict:
-    """A green '✅ 完成' button that fires act=done_task when tapped."""
-    return {
-        "tag": "button",
-        "text": {"tag": "plain_text", "content": "✅ 完成"},
-        "type": "primary",
-        "value": {"act": "done_task", "task_id": task_id, "title": title},
-    }
-
-
 def _task_row(label: str, title: str, task_id: str) -> dict:
-    """One div row with task label on left and a done-button on right."""
+    """One div row with task label on left and a ✅ 完成 button on right.
+
+    Uses the `extra` field pattern — the correct Feishu way to attach an inline
+    button to a div. Nesting `action` inside a `column` is NOT supported and
+    causes Feishu to degrade the entire card to plain text.
+    """
     return {
-        "tag": "column_set",
-        "flex_mode": "stretch",
-        "columns": [
-            {
-                "tag": "column",
-                "width": "weighted",
-                "weight": 4,
-                "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": label}}],
-            },
-            {
-                "tag": "column",
-                "width": "weighted",
-                "weight": 1,
-                "elements": [{"tag": "action", "actions": [_task_done_button(task_id, title)]}],
-            },
-        ],
+        "tag": "div",
+        "text": {"tag": "lark_md", "content": label},
+        "extra": {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "✅ 完成"},
+            "type": "primary",
+            "value": {"act": "done_task", "task_id": task_id, "title": title},
+        },
     }
 
 

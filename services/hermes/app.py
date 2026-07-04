@@ -441,12 +441,13 @@ def create_app() -> FastAPI:
             "feishu_owner_open_id": os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
         },
     )
-    # Morning briefing: 8:00 AM Beijing time (UTC+8 = 00:00 UTC)
+    # Morning briefing: 8:03 AM Beijing time (UTC+8 = 00:03 UTC)
+    # Offset by 3 minutes to avoid exact-midnight ECS container startup race.
     scheduler.add_job(
         send_morning_briefing,
         "cron",
         hour=0,
-        minute=0,
+        minute=3,
         kwargs={
             "tasks": tasks,
             "feishu": feishu,
