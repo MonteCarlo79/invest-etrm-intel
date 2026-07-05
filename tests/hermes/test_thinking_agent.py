@@ -63,7 +63,7 @@ class TestQueryDb:
         agent = _make_agent()
         with patch("psycopg2.connect") as mock_conn:
             mock_cur = MagicMock()
-            mock_cur.description = [MagicMock(name="col") for _ in ["col"]]
+            mock_cur.description = [("col",)]
             mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn.return_value)
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
             mock_conn.return_value.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)

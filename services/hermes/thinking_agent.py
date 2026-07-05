@@ -178,18 +178,21 @@ class ThinkingAgent:
             return "ERROR: Query not allowed — only SELECT statements are permitted."
         try:
             conn = psycopg2.connect(self._pg_url, options="-c statement_timeout=10000")
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql)
-                    rows = cur.fetchmany(50)
-                    if not rows:
-                        return "(no rows returned)"
-                    cols = [d[0] for d in cur.description]
-                    lines = ["| " + " | ".join(cols) + " |",
-                             "| " + " | ".join("---" for _ in cols) + " |"]
-                    for row in rows:
-                        lines.append("| " + " | ".join(str(v) for v in row) + " |")
-                    return "\n".join(lines)
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql)
+                        rows = cur.fetchmany(50)
+                        if not rows:
+                            return "(no rows returned)"
+                        cols = [d[0] for d in cur.description]
+                        lines = ["| " + " | ".join(cols) + " |",
+                                 "| " + " | ".join("---" for _ in cols) + " |"]
+                        for row in rows:
+                            lines.append("| " + " | ".join(str(v) for v in row) + " |")
+                        return "\n".join(lines)
+            finally:
+                conn.close()
         except Exception as exc:
             logger.warning("query_db error: %s", exc)
             return f"ERROR: {exc}"
@@ -234,18 +237,19 @@ class ThinkingAgent:
     # ── Tool: read_source_file ────────────────────────────────────────────────
 
     def _tool_read_source_file(self, path: str) -> str:
-        clean = os.path.normpath(path).replace("\\", "/")
-        if ".." in clean:
+        # Resolve to absolute path within repo root
+        abs_path = os.path.normpath(os.path.join(_REPO_ROOT, path))
+        if not abs_path.startswith(_REPO_ROOT + os.sep):
             return "ERROR: Path traversal not allowed."
-        if not clean.endswith(".py"):
+        if not abs_path.endswith(".py"):
             return "ERROR: Only .py files are allowed."
-        abs_path = os.path.join(_REPO_ROOT, clean)
         if not os.path.isfile(abs_path):
             return f"ERROR: File not found: {clean}"
         try:
             with open(abs_path, encoding="utf-8") as fh:
-                lines = fh.readlines()[:300]
-            truncated = len(lines) == 300
+                all_lines = fh.readlines()
+            lines = all_lines[:300]
+            truncated = len(all_lines) > 300
             content = "".join(lines)
             if truncated:
                 content += "\n... (truncated at 300 lines)"
@@ -284,10 +288,13 @@ class ThinkingAgent:
         """
         try:
             conn = psycopg2.connect(self._pg_url, options="-c statement_timeout=5000")
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql, (mode, str(days), prefix + "%"))
-                    return cur.fetchone() is not None
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql, (mode, str(days), prefix + "%"))
+                        return cur.fetchone() is not None
+            finally:
+                conn.close()
         except Exception as exc:
             logger.warning("Dedup check failed (allowing send): %s", exc)
             return False
@@ -368,9 +375,12 @@ class ThinkingAgent:
         """
         try:
             conn = psycopg2.connect(self._pg_url, options="-c statement_timeout=5000")
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql, (mode, files_read, tables_checked, message_sent, model_used))
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql, (mode, files_read, tables_checked, message_sent, model_used))
+            finally:
+                conn.close()
         except Exception as exc:
             logger.warning("ThinkingAgent: _log_run failed: %s", exc)
 
