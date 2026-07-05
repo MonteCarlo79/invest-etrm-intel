@@ -178,6 +178,13 @@ DRAFT_REPORT — compile a deep multi-source report from market agents + uploade
         add "internet" for web-research-backed reports; adjust to international codes for global scope.
         If the user uploaded reference files before sending this command, they are automatically included.
 
+WRITE_DEV_REQUEST — record a development request as a structured .md file to OneDrive for laptop-side development with company Claude token
+  params: {"message": "user's full request message verbatim"}
+  reply: brief acknowledgment that the request is being processed
+  note: use when user says "记录需求", "记录一个需求", "save dev request", "记录开发需求",
+        "写一个需求文档", "帮我记录", "development request", "dev request", "需求文档".
+        Pass the user's FULL original message in the message param — ThinkingAgent will structure it.
+
 EXPORT_ANSWER — export the last assistant answer to a file and save to OneDrive
   params: {"title": "document title", "fmt": "docx|pdf|png", "folder": "/OneDrive path (default /Hermes Exports)"}
   reply: you will generate after seeing results
@@ -221,6 +228,7 @@ Rules:
 - When user says "Inner Mongolia", "内蒙古", "Mengxi", "蒙西" for operational data (P&L, dispatch), use MARKET_AGENT(bess-map) or REPLY with KB context if no specific data question.
 - When user asks about "装机容量", "installed capacity", "total MW", "total GW", "总容量", "总装机", "蒙西储能容量", use MARKET_AGENT(bess-map) — the bess-map agent has get_mengxi_capacity. EXCEPTION: if the message starts with "/capacity" or "/capacity-add" followed by actual province data (e.g. "/capacity 山东 9.7GW"), that is a WRITE command handled before the LLM — use REPLY and tell the user the data was accepted.
 - When user asks what you can do in a certain area (e.g. "what can you do for X?"), use REPLY and describe the relevant capabilities from the CAPABILITY AREAS section above, with concrete examples.
+- When user says "记录需求", "记录开发需求", "写需求文档", "save dev request", "development request", "dev request", use WRITE_DEV_REQUEST with the user's verbatim message in the message param.
 - Always match the user's language in the reply field. If the user writes in Chinese (Simplified), reply in Chinese (Simplified). If in English, reply in English.
 - Always respond with valid JSON only. No markdown fences, no extra text."""
 
@@ -596,6 +604,19 @@ class HermesAgent:
                     y_label=action.params.get("y_label", ""),
                     x_label=action.params.get("x_label", "日期"),
                 )
+            if action.action == "WRITE_DEV_REQUEST":
+                msg = action.params.get("message", "")
+                if not msg:
+                    return "请说明需求内容。"
+                from services.hermes.thinking_agent import ThinkingAgent
+                thinker = ThinkingAgent(
+                    anthropic_api_key=self._api_key,
+                    pg_url=os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", ""),
+                    feishu=None,
+                    feishu_owner_open_id="",
+                    onedrive=self.onedrive,
+                )
+                return thinker.write_dev_request_from_message(msg)
             elif action.action == "EXPORT_ANSWER":
                 return self._export_answer(
                     title=action.params.get("title", "Hermes Answer"),
