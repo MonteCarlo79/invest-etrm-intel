@@ -74,6 +74,7 @@ from services.hermes.capacity_manual_etl import (
     is_capacity_file_extended,
     format_result_message as _capacity_fmt,
 )
+from services.hermes.thinking_agent import ThinkingAgent
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -423,11 +424,18 @@ def _make_clients():
         anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
         onedrive=onedrive,
     )
-    return tasks, wecom, feishu, telegram, agent, outlook
+    thinking_agent = ThinkingAgent(
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        pg_url=os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", ""),
+        feishu=feishu,
+        feishu_owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+        onedrive=agent.onedrive,
+    )
+    return tasks, wecom, feishu, telegram, agent, outlook, thinking_agent
 
 
 def create_app() -> FastAPI:
-    tasks, wecom, feishu, telegram, agent, outlook = _make_clients()
+    tasks, wecom, feishu, telegram, agent, outlook, thinking_agent = _make_clients()
 
     scheduler = BackgroundScheduler()
     # Due reminders: once daily at 8:05 AM Beijing (00:05 UTC) — not every 15 min
@@ -456,6 +464,21 @@ def create_app() -> FastAPI:
             "feishu": feishu,
             "feishu_owner_open_id": os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
         },
+    )
+    # Thinking: health check daily 00:10 UTC (08:10 Beijing) — after morning briefing
+    scheduler.add_job(
+        thinking_agent.run,
+        "cron",
+        hour=0, minute=10,
+        kwargs={"mode": "health"},
+    )
+
+    # Thinking: design review every Monday 00:30 UTC (08:30 Beijing)
+    scheduler.add_job(
+        thinking_agent.run,
+        "cron",
+        day_of_week="mon", hour=0, minute=30,
+        kwargs={"mode": "design"},
     )
     # Mengxi BESS ranking report: 7:00 AM Beijing (23:00 UTC previous day)
     _mengxi_pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
