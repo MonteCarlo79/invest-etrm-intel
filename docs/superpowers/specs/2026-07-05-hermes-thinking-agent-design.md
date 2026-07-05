@@ -178,11 +178,86 @@ scheduler.add_job(
 
 ---
 
+## Development Request Pipeline
+
+### Motivation
+
+Hermes runs on ECS with a personal Anthropic token (cost-sensitive). Heavy code development should use the company Claude token on the user's laptop. The pipeline splits responsibilities:
+
+| Stage | Where | Token used |
+|-------|-------|-----------|
+| Observe + reason + spec | ECS (Hermes) | Personal (Haiku — cheap) |
+| Develop + test + deploy | Laptop (Claude Code) | Company |
+
+### Trigger
+
+Two ways Hermes creates a dev request:
+
+1. **Design review auto-generates** — when she identifies an improvement during weekly review, she writes a request file in addition to the Feishu message
+2. **User asks explicitly** — e.g. "Hermes，帮我记录一个需求：在 mengxi-dashboard 加 IRR 对比" → she reasons about it and writes the file
+
+### Output File Format
+
+Files written to OneDrive: `etrm/bess-platform/dev-requests/YYYY-MM-DD-<slug>.md`
+
+```markdown
+# Dev Request: <title>
+**Created:** YYYY-MM-DD HH:MM by Hermes (ThinkingAgent)
+**Priority:** high | medium | low
+**Triggered by:** design review | health check | user request
+**Status:** pending
+
+## Context
+<Why this matters — what Hermes observed or what the user asked>
+
+## Requested Change
+<What needs to be built or fixed, described precisely>
+
+## Files to Touch
+- `path/to/file.py` — what to change
+- `path/to/other.py` — read-only reference
+
+## Data Sources / APIs
+<Which DB tables, agent tools, or external APIs are relevant>
+
+## Acceptance Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
+- [ ] No new DB tables unless specified
+
+## Notes
+<Hermes's observations about edge cases, similar existing code, etc.>
+```
+
+### Laptop Pickup
+
+OneDrive syncs the file to `C:\Users\dipeng.chen\OneDrive\etrm\bess-platform\dev-requests\` automatically. User opens the file in Claude Code and executes with the company token. No automated watcher needed — the Feishu notification is the trigger.
+
+### Feishu Notification
+
+After writing the file, Hermes sends:
+> 📝 已记录开发需求：`dev-requests/2026-07-05-fix-irr-display.md`
+> 同步到 OneDrive 后可用公司 Claude token 拾取开发。
+
+### Completion Signal
+
+When development is done, user can:
+- Reply to Hermes in Feishu: "IRR 需求已完成" → Hermes marks it done in the thinking log
+- Or manually update the file's `Status: completed` field
+
+### New Tool for ThinkingAgent
+
+| Tool | Signature | Purpose |
+|------|-----------|---------|
+| `write_dev_request` | `(slug: str, content: str) → str` | Write `.md` to OneDrive dev-requests folder via OneDriveClient |
+
+---
+
 ## Files Changed / Created
 
 | File | Change |
 |------|--------|
-| `services/hermes/thinking_agent.py` | **New** — `ThinkingAgent` class |
+| `services/hermes/thinking_agent.py` | **New** — `ThinkingAgent` class with `write_dev_request` tool |
 | `db/ddl/hermes/005_thinking_log.sql` | **New** — `hermes_thinking_log` table |
 | `services/hermes/app.py` | **Edit** — import `ThinkingAgent`, 2 new scheduler jobs |
 
@@ -196,4 +271,5 @@ No changes to `HermesAgent`, `scheduler.py`, or any app code.
 |------|-------|----------------|----------------|
 | Health check (daily) | Haiku | ~3k in + 1k out | ~$0.30 |
 | Design review (weekly) | Sonnet | ~15k in + 2k out | ~$0.80 |
-| **Total** | | | **~$1.10/month** |
+| Dev request write (on-demand) | Haiku | ~2k in + 1k out | ~$0.10 |
+| **Total** | | | **~$1.20/month** |
