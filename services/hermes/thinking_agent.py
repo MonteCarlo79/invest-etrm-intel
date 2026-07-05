@@ -244,7 +244,7 @@ class ThinkingAgent:
         if not abs_path.endswith(".py"):
             return "ERROR: Only .py files are allowed."
         if not os.path.isfile(abs_path):
-            return f"ERROR: File not found: {clean}"
+            return f"ERROR: File not found: {abs_path}"
         try:
             with open(abs_path, encoding="utf-8") as fh:
                 all_lines = fh.readlines()
