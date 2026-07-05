@@ -604,7 +604,7 @@ class HermesAgent:
                     y_label=action.params.get("y_label", ""),
                     x_label=action.params.get("x_label", "日期"),
                 )
-            if action.action == "WRITE_DEV_REQUEST":
+            elif action.action == "WRITE_DEV_REQUEST":
                 msg = action.params.get("message", "")
                 if not msg:
                     return "请说明需求内容。"
