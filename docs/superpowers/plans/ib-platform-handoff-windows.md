@@ -3,8 +3,8 @@
 > **For a new Claude session on this Windows machine:** Read this document first, then proceed.
 > **Repo on disk:** `C:\Users\dipeng.chen\OneDrive\ETRM\ib-platform`
 > **GitHub remote:** `git@github.com:MonteCarlo79/ib-platform.git` (SSH key at `~/.ssh/id_ed25519`)
-> **Latest commit:** `9598ae7` — pushed 2026-06-29
-> **Tests:** 502 passing
+> **Latest commit:** `7e2541c` — pushed 2026-06-29
+> **Tests:** 521 passing
 
 ---
 
@@ -132,6 +132,7 @@ See the full spec at `docs/superpowers/specs/2026-06-14-ib-trading-platform-desi
 | 7 | Strategy signals + backtest engine, Strategies tab in Portfolio app | 437 |
 | 8 | Options strategies, paper shadow mode, Feishu reporting, options_cockpit fixed | **480** |
 | 9A | Options chain ingestion (yfinance), EOD P&L calculator, trade_monitor P&L loop | **502** |
+| 9B | Portfolio Greeks aggregation (paper + live + total), `compute_greeks` job at 09:30 ET | **521** |
 
 ### Key files added / changed in Phase 8
 ```
@@ -164,6 +165,13 @@ db/migrations/006_paper_fills.sql
 - `services/broker_service/trade_monitor.py` — reads real P&L from `strategy_pnl`, falls back to raw estimate
 - `db/migrations/007_strategy_pnl.sql` — `trading.strategy_pnl` table
 
+### Phase 9B — Portfolio Greeks Aggregation (complete)
+- `services/broker_service/greeks_calculator.py` — `compute_portfolio_greeks(conn)` → upserts paper/live/total rows to `trading.portfolio_risk`
+- `services/broker_service/algo_scheduler.py` — `compute_greeks` job at 09:30 ET (6 jobs total)
+- Paper options: `paper_fills LEFT JOIN signals` → `options_chain` IV → `bs_greeks`
+- Live options: `trading.positions` (has expiry/strike/right) → `options_chain` IV → `bs_greeks`
+- Portfolio app Risk tab now shows real Greeks data
+
 ### Strategy execution modes (in `trading.strategy_config.mode`)
 | Mode | Paper broker | Live broker |
 |---|---|---|
@@ -176,8 +184,10 @@ Auto-promote job (09:00 ET): computes Sharpe + MaxDD from paper fills → if thr
 ### APScheduler jobs (started in FastAPI lifespan)
 | Job ID | Schedule | Function |
 |---|---|---|
-| `run_all_strategies` | Mon-Fri 09:35 ET | Execute all enabled strategies |
 | `paper_promotions` | Mon-Fri 09:00 ET | Auto-promote paper→shadow |
+| `compute_greeks` | Mon-Fri 09:30 ET | Portfolio Greeks → trading.portfolio_risk |
+| `run_all_strategies` | Mon-Fri 09:35 ET | Execute all enabled strategies |
+| `compute_pnl` | Mon-Fri 16:15 ET | EOD P&L → trading.strategy_pnl |
 | `daily_report` | Mon-Fri 16:30 ET | Feishu daily brief |
 | `weekly_report` | Friday 17:00 ET | Feishu weekly table |
 | `ingest_docs` (knowledge) | Mon-Fri 06:00 ET | KB doc ingest |
@@ -210,10 +220,11 @@ FEISHU_REPORT_OPEN_ID=
 
 ## What To Build Next
 
-### Phase 9B — (not yet designed)
+### Phase 9C — (not yet designed)
 No design spec exists yet. Start with `superpowers:brainstorming`.
 
-Potential directions:
-- Portfolio-level Greeks aggregation service (populate `trading.portfolio_risk` from live positions)
+Potential directions (from 9B known gaps):
+- `var_1d_95` computation — requires returns history in `trading.portfolio_risk`
+- `nav` computation — requires account value from broker
 - Alert service — Feishu/Telegram push on signal generated, order filled, risk limit breached, paper strategy promoted
 - Options backtest — extend backtest engine to simulate options fills using historical IV from `trading.options_chain`

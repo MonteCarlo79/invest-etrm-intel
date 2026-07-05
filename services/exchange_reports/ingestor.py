@@ -144,13 +144,131 @@ def infer_report_year(filename: str) -> Optional[int]:
 
 # ── Text extraction ────────────────────────────────────────────────────────────
 
-def _extract_text_pdf(file_bytes: bytes) -> list[tuple[int, str]]:
-    """Return [(page_no, text), ...] from PDF."""
+def _render_pdf_page_to_png(file_bytes: bytes, page_index: int) -> bytes:
+    """Render a single PDF page to PNG bytes at 2× zoom using PyMuPDF."""
+    import fitz  # pymupdf
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    page = doc[page_index]
+    mat = fitz.Matrix(2.0, 2.0)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+    return pix.tobytes("png")
+
+
+def _ocr_page_with_vision(image_bytes: bytes, api_key: str) -> str:
+    """
+    Send a rendered page image to Claude Haiku for OCR.
+    Returns the extracted text, or empty string on failure.
+    """
+    import base64
+    import anthropic
+    # Force direct Anthropic API — bypass any ANTHROPIC_BASE_URL proxy that
+    # may be set in the local dev environment (e.g. LiteLLM corporate gateway).
+    client = anthropic.Anthropic(
+        api_key=api_key,
+        base_url="https://api.anthropic.com",
+    )
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=3000,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": base64.b64encode(image_bytes).decode(),
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "This is a page from a Chinese provincial power exchange monthly "
+                        "market report. Extract ALL visible text, numbers, percentages, "
+                        "and units — especially from tables and charts. "
+                        "For tables: output each row as 'col1 | col2 | col3'. "
+                        "Preserve all numerical values exactly as shown. "
+                        "Output the raw extracted text only, no commentary."
+                    ),
+                },
+            ],
+        }],
+    )
+    return resp.content[0].text.strip()
+
+
+def _ocr_page_with_textract(image_bytes: bytes, region: str = "ap-southeast-1") -> str:
+    """
+    OCR a rendered page image via AWS Textract detect_document_text.
+    Returns extracted text lines joined by newline, or empty string on failure.
+    Works without S3 — passes PNG bytes directly (sync API, < 10 MB).
+    """
+    import boto3
+    client = boto3.client("textract", region_name=region)
+    resp = client.detect_document_text(Document={"Bytes": image_bytes})
+    lines = [b["Text"] for b in resp.get("Blocks", []) if b["BlockType"] == "LINE"]
+    return "\n".join(lines)
+
+
+def _extract_text_pdf(
+    file_bytes: bytes,
+    vision_api_key: Optional[str] = None,
+    textract_region: Optional[str] = None,
+) -> list[tuple[int, str]]:
+    """
+    Return [(page_no, text), ...] from PDF, including table cell content.
+
+    For pages with < 50 chars of extractable text, OCR fallback chain:
+      1. Claude Haiku Vision  (if vision_api_key set)
+      2. AWS Textract          (if textract_region set, e.g. 'ap-southeast-1')
+    Handles scanned PDFs (安徽) and vector-graphic table pages (上海).
+    """
     import pdfplumber
     pages = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            pages.append((i, page.extract_text() or ""))
+            text = page.extract_text() or ""
+            # Also extract table content — many reports store key data (prices,
+            # volumes, capacity) in tables that extract_text() skips entirely.
+            table_lines = []
+            for table in (page.extract_tables() or []):
+                for row in (table or []):
+                    if row:
+                        row_str = " | ".join(str(c).strip() for c in row if c)
+                        if row_str.strip():
+                            table_lines.append(row_str)
+            if table_lines:
+                text = text + "\n" + "\n".join(table_lines)
+
+            # OCR fallback chain for pages with no extractable text
+            if len(text.strip()) < 50:
+                img_bytes = None  # render once, reuse for both fallbacks
+
+                # 1. Claude Haiku Vision
+                if vision_api_key:
+                    try:
+                        img_bytes = _render_pdf_page_to_png(file_bytes, i - 1)
+                        ocr_text = _ocr_page_with_vision(img_bytes, vision_api_key)
+                        if ocr_text:
+                            logger.info("Vision OCR page %d: %d chars", i, len(ocr_text))
+                            text = ocr_text
+                    except Exception as exc:
+                        logger.warning("Vision OCR failed for page %d: %s", i, exc)
+
+                # 2. AWS Textract (if vision didn't produce text)
+                if len(text.strip()) < 50 and textract_region:
+                    try:
+                        if img_bytes is None:
+                            img_bytes = _render_pdf_page_to_png(file_bytes, i - 1)
+                        ocr_text = _ocr_page_with_textract(img_bytes, textract_region)
+                        if ocr_text:
+                            logger.info("Textract OCR page %d: %d chars", i, len(ocr_text))
+                            text = ocr_text
+                    except Exception as exc:
+                        logger.warning("Textract OCR failed for page %d: %s", i, exc)
+
+            pages.append((i, text))
     return pages
 
 
@@ -167,12 +285,27 @@ def _extract_text_docx(file_bytes: bytes) -> list[tuple[int, str]]:
     return pages or [(1, "")]
 
 
-def extract_pages(file_bytes: bytes, filename: str) -> list[tuple[int, str]]:
-    """Dispatch to correct extractor based on extension."""
+def extract_pages(
+    file_bytes: bytes,
+    filename: str,
+    vision_api_key: Optional[str] = None,
+    textract_region: Optional[str] = None,
+) -> list[tuple[int, str]]:
+    """
+    Dispatch to correct extractor based on extension.
+
+    vision_api_key:   Anthropic API key for Claude Vision OCR (1st fallback).
+    textract_region:  AWS region for Textract OCR (2nd fallback, e.g. 'ap-southeast-1').
+    Both fallbacks apply only to PDF pages with < 50 chars of extractable text.
+    """
     ext = Path(filename).suffix.lower()
     if ext in (".doc", ".docx"):
         return _extract_text_docx(file_bytes)
-    return _extract_text_pdf(file_bytes)
+    return _extract_text_pdf(
+        file_bytes,
+        vision_api_key=vision_api_key,
+        textract_region=textract_region,
+    )
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -326,9 +459,19 @@ def ingest_report(
             report_id = cur.fetchone()[0]
         conn.commit()
 
-        # Extract text
+        # Extract text (with OCR fallback chain: Vision → Textract)
+        import os as _os
+        _vision_key = (
+            (anthropic_api_key or "").strip()
+            or _os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        ) or None
+        _textract_region = _os.environ.get("TEXTRACT_REGION") or _os.environ.get("BEDROCK_REGION") or None
         try:
-            pages = extract_pages(file_bytes, filename)
+            pages = extract_pages(
+                file_bytes, filename,
+                vision_api_key=_vision_key,
+                textract_region=_textract_region,
+            )
         except Exception as exc:
             with conn.cursor() as cur:
                 cur.execute(

@@ -822,33 +822,43 @@ with tab_data_mgmt:
 
     st.markdown("---")
 
-    # ── Section 6: Shanxi Nodal Prices (Fengxing API) ───────────────────────
-    st.subheader("Shanxi Nodal Prices — Fengxing API")
+    # ── Section 6 & 7 (combined): Nodal Prices — Fengxing API ───────────────
+    st.subheader("Nodal Prices — Fengxing API")
     st.caption(
-        "Download 15-min avg nodal prices for all Shanxi nodes from the Fengxing API "
-        "and store in `marketdata.md_shanxi_nodal_price_96`. "
-        "API key is read from the `FENGXING_API_KEY` environment variable."
+        "Download 15-min avg nodal prices from the Fengxing API. "
+        "**Download → DB** upserts into `marketdata.md_shanxi_nodal_price_96`. "
+        "**Download → CSV** saves one file per market per month to `data/nodal/`. "
+        "API key is read from `FENGXING_API_KEY`."
     )
 
     _fx_api_key = os.environ.get("FENGXING_API_KEY", "")
     if not _fx_api_key:
         st.warning(
             "⚠️ `FENGXING_API_KEY` environment variable is not set. "
-            "Contact the ops team for the API key and add it to `config/.env`."
+            "Add it to `config/.env`."
         )
+
+    _ALL_MARKETS = ["蒙西", "山西", "山东", "陕西", "湖南", "浙江", "云南", "贵州", "广东", "广西", "海南", "甘肃"]
+
+    _fx_markets = st.multiselect(
+        "Markets",
+        _ALL_MARKETS,
+        default=["蒙西"],
+        key="fx_markets",
+        help="Select one or more markets to download.",
+    )
 
     _fx_c1, _fx_c2, _fx_c3 = st.columns([2, 2, 2])
     _fx_start = _fx_c1.date_input(
-        "Start date", value=date.today() - timedelta(days=7), key="fx_start"
+        "Start date", value=date(date.today().year, 1, 1), key="fx_start"
     )
     _fx_end = _fx_c2.date_input(
         "End date", value=date.today() - timedelta(days=1), key="fx_end"
     )
 
-    # Coverage check — how many distinct dates already in DB for this range
+    # DB coverage — shown only when a single market is selected
     @st.cache_data(ttl=60, show_spinner=False)
-    def _fx_coverage(start: date, end: date) -> tuple[int, int]:
-        """Return (dates_in_db, total_days) for the given range."""
+    def _fx_coverage(start: date, end: date, market: str) -> tuple[int, int]:
         try:
             conn = _get_pg_conn()
             df = pd.read_sql(
@@ -856,9 +866,10 @@ with tab_data_mgmt:
                 SELECT COUNT(DISTINCT metric_time::date) AS n
                 FROM marketdata.md_shanxi_nodal_price_96
                 WHERE metric_time::date >= %s AND metric_time::date <= %s
+                  AND market_name = %s
                 """,
                 conn,
-                params=(start, end),
+                params=(start, end, market),
             )
             n_in_db = int(df["n"].iloc[0])
         except Exception:
@@ -866,159 +877,94 @@ with tab_data_mgmt:
         total = max((end - start).days + 1, 1)
         return n_in_db, total
 
-    if _fx_api_key:
-        _fx_n_db, _fx_total = _fx_coverage(_fx_start, _fx_end)
+    if _fx_api_key and len(_fx_markets) == 1:
+        _fx_n_db, _fx_total = _fx_coverage(_fx_start, _fx_end, _fx_markets[0])
         _fx_badge = "🟢" if _fx_n_db >= _fx_total else ("🟡" if _fx_n_db > 0 else "🔴")
-        _fx_c3.metric(
-            f"{_fx_badge} DB coverage",
-            f"{_fx_n_db} / {_fx_total} days",
-        )
+        _fx_c3.metric(f"{_fx_badge} DB coverage ({_fx_markets[0]})", f"{_fx_n_db} / {_fx_total} days")
 
-    _fx_btn_col, _fx_probe_col = st.columns([2, 1])
+    _nd_out_dir = os.path.join(_repo_root, "data", "nodal")
+    st.caption(f"CSV output directory: `{_nd_out_dir}`")
 
-    if _fx_probe_col.button("🔌 Test connection", key="fx_probe_btn", disabled=not _fx_api_key):
+    _fx_col_db, _fx_col_csv, _fx_col_probe = st.columns([2, 2, 1])
+    _fx_disabled = not _fx_api_key or not _fx_markets or _fx_start > _fx_end
+
+    if _fx_col_probe.button("🔌 Test connection", key="fx_probe_btn", disabled=not _fx_api_key or not _fx_markets):
         from services.fengxing.nodal_price import probe as _fx_probe
-        with st.spinner("Testing API connectivity…"):
-            _probe_result = _fx_probe(_fx_api_key)
-        if _probe_result == "ok":
-            st.success("✅ API reachable.")
+        with st.spinner("Testing…"):
+            _probe_result = _fx_probe(_fx_api_key, market_name=_fx_markets[0])
+        if _probe_result.startswith("ok"):
+            st.success(f"✅ {_probe_result}")
         else:
             st.error(f"❌ {_probe_result}")
 
-    if _fx_btn_col.button(
-        "⬇ Download nodal prices",
-        key="fx_download_btn",
-        type="primary",
-        disabled=not _fx_api_key or _fx_start > _fx_end,
-    ):
+    # ── Download → DB ────────────────────────────────────────────────────────
+    if _fx_col_db.button("⬇ Download → DB", key="fx_dl_db_btn", type="primary", disabled=_fx_disabled):
         from services.fengxing.nodal_price import download_and_upsert as _fx_dl
 
         _fx_n_days = (_fx_end - _fx_start).days + 1
-        _fx_progress = st.progress(0, text=f"0 / {_fx_n_days} days…")
+        _fx_total_tasks = len(_fx_markets) * _fx_n_days
+        _fx_progress = st.progress(0, text="Starting…")
         _fx_log = st.empty()
-        _fx_done_count = [0]
         _fx_log_lines: list[str] = []
+        _fx_done_count = [0]
 
-        def _fx_day_cb(day, status, n_rows, msg):
+        def _fx_day_cb(day, status, n_rows, msg, market=""):
             _fx_done_count[0] += 1
             icon = "✅" if status == "ok" else "❌"
-            _fx_log_lines.append(f"{icon} {day}  {msg}")
-            pct = _fx_done_count[0] / _fx_n_days
-            _fx_progress.progress(pct, text=f"{_fx_done_count[0]} / {_fx_n_days} days…")
-            _fx_log.code("\n".join(_fx_log_lines[-20:]))   # show last 20 lines
+            _fx_log_lines.append(f"{icon} {market} {day}  {msg}")
+            _fx_progress.progress(
+                _fx_done_count[0] / _fx_total_tasks,
+                text=f"{_fx_done_count[0]} / {_fx_total_tasks} day-market tasks…",
+            )
+            _fx_log.code("\n".join(_fx_log_lines[-20:]))
 
+        _fx_all_ok: list = []
+        _fx_all_err: list = []
         try:
             engine = _get_sqlalchemy_engine()
-            _fx_results = _fx_dl(
-                start_date=_fx_start,
-                end_date=_fx_end,
-                api_key=_fx_api_key,
-                engine=engine,
-                day_cb=_fx_day_cb,
-            )
+            for _mkt in _fx_markets:
+                _fx_results = _fx_dl(
+                    start_date=_fx_start,
+                    end_date=_fx_end,
+                    api_key=_fx_api_key,
+                    engine=engine,
+                    market_name=_mkt,
+                    day_cb=lambda d, s, n, m, _m=_mkt: _fx_day_cb(d, s, n, m, _m),
+                )
+                _fx_all_ok += [r for r in _fx_results if r["status"] == "ok"]
+                _fx_all_err += [r for r in _fx_results if r["status"] == "error"]
             _fx_progress.progress(1.0, text="Done.")
-            _ok = [r for r in _fx_results if r["status"] == "ok"]
-            _err = [r for r in _fx_results if r["status"] == "error"]
-            _total_rows = sum(r["rows"] for r in _ok)
-            if _err:
+            _total_rows = sum(r["rows"] for r in _fx_all_ok)
+            if _fx_all_err:
                 st.warning(
-                    f"✅ {len(_ok)} day(s) saved ({_total_rows:,} rows)  |  "
-                    f"❌ {len(_err)} day(s) failed — see log above."
+                    f"✅ {len(_fx_all_ok)} day(s) saved ({_total_rows:,} rows)  |  "
+                    f"❌ {len(_fx_all_err)} day(s) failed."
                 )
             else:
-                st.success(f"✅ {len(_ok)} day(s) saved, {_total_rows:,} rows total.")
+                st.success(f"✅ {len(_fx_all_ok)} day(s) saved, {_total_rows:,} rows total.")
             _fx_coverage.clear()
         except Exception as _fx_exc:
             _fx_progress.empty()
             st.error(f"Download failed: {_fx_exc}")
 
-    # Quick data preview
-    with st.expander("Preview stored data", expanded=False):
-        try:
-            _fx_prev = pd.read_sql(
-                """
-                SELECT metric_time, node_name, market_name, time_order_96, avg_node_price
-                FROM marketdata.md_shanxi_nodal_price_96
-                ORDER BY metric_time DESC, node_name
-                LIMIT 200
-                """,
-                _get_sqlalchemy_engine(),
-            )
-            if _fx_prev.empty:
-                st.info("No data yet.")
-            else:
-                st.dataframe(
-                    _fx_prev,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=300,
-                )
-        except Exception as _fx_prev_exc:
-            st.info(f"Table not yet created or empty. ({_fx_prev_exc})")
-
-    st.markdown("---")
-
-    # ── Section 7: Multi-province nodal price local CSV download ────────────
-    st.subheader("Nodal Prices — Local CSV Download (Multi-Province)")
-    st.caption(
-        "Download avg_node_price for any province from the Fengxing API and save locally. "
-        "One CSV file per province per month — no database writes. "
-        "Output: `data/nodal/<province>_<YYYY-MM>.csv`"
-    )
-
-    _NODAL_PROVINCES = [
-        "山西", "陕西", "湖南", "浙江", "云南",
-        "贵州", "广东", "广西", "海南", "甘肃",
-    ]
-
-    _nd_c1, _nd_c2 = st.columns(2)
-    _nd_start = _nd_c1.date_input(
-        "Start date",
-        value=date(date.today().year, 1, 1),
-        key="nd_start",
-        help="The download will be split into one CSV per province per month.",
-    )
-    _nd_end = _nd_c2.date_input(
-        "End date",
-        value=date.today() - timedelta(days=1),
-        key="nd_end",
-    )
-    _nd_provinces = st.multiselect(
-        "Provinces",
-        _NODAL_PROVINCES,
-        default=["山西"],
-        key="nd_provinces",
-    )
-
-    _nd_out_dir = os.path.join(_repo_root, "data", "nodal")
-    st.caption(f"Output directory: `{_nd_out_dir}`")
-
-    if st.button(
-        "Download CSV files",
-        key="nd_download_btn",
-        type="primary",
-        disabled=not _fx_api_key or not _nd_provinces or _nd_start > _nd_end,
-    ):
+    # ── Download → CSV ───────────────────────────────────────────────────────
+    if _fx_col_csv.button("⬇ Download → CSV", key="fx_dl_csv_btn", disabled=_fx_disabled):
         import csv
         import calendar as _calendar
-        from services.fengxing.nodal_price import (
-            _fetch_day as _nd_fetch_day,
-            _COLUMNS as _nd_cols,
-        )
+        from services.fengxing.nodal_price import _fetch_day as _nd_fetch_day
 
         os.makedirs(_nd_out_dir, exist_ok=True)
 
-        # Build list of (year, month) periods spanning the date range
         _nd_months: list[tuple[int, int]] = []
-        _y, _m = _nd_start.year, _nd_start.month
-        while (_y, _m) <= (_nd_end.year, _nd_end.month):
+        _y, _m = _fx_start.year, _fx_start.month
+        while (_y, _m) <= (_fx_end.year, _fx_end.month):
             _nd_months.append((_y, _m))
             _m += 1
             if _m > 12:
                 _m = 1
                 _y += 1
 
-        _nd_total_tasks = len(_nd_provinces) * len(_nd_months)
+        _nd_total_tasks = len(_fx_markets) * len(_nd_months)
         _nd_progress = st.progress(0, text=f"0 / {_nd_total_tasks} tasks…")
         _nd_log = st.empty()
         _nd_log_lines: list[str] = []
@@ -1028,17 +974,15 @@ with tab_data_mgmt:
             _nd_log_lines.append(msg)
             _nd_log.code("\n".join(_nd_log_lines[-25:]))
 
-        _nd_fieldnames = _nd_cols + ["avg_node_price"]
+        _nd_fieldnames = ["node_name", "metric_time", "time_order_96", "market_name", "avg_node_price"]
         _nd_errors: list[str] = []
 
-        for _nd_province in _nd_provinces:
-            _nd_filter = [f'[market_name] = "{_nd_province}"']
+        for _nd_province in _fx_markets:
             for _nd_yr, _nd_mo in _nd_months:
-                # Clamp to user-specified date range
                 _mo_first = date(_nd_yr, _nd_mo, 1)
                 _mo_last = date(_nd_yr, _nd_mo, _calendar.monthrange(_nd_yr, _nd_mo)[1])
-                _day_start = max(_mo_first, _nd_start)
-                _day_end = min(_mo_last, _nd_end)
+                _day_start = max(_mo_first, _fx_start)
+                _day_end = min(_mo_last, _fx_end)
 
                 _fname = f"{_nd_province}_{_nd_yr:04d}-{_nd_mo:02d}.csv"
                 _fpath = os.path.join(_nd_out_dir, _fname)
@@ -1049,7 +993,7 @@ with tab_data_mgmt:
                 _d = _day_start
                 while _d <= _day_end:
                     try:
-                        _day_rows = _nd_fetch_day(_d, _fx_api_key, filters=_nd_filter)
+                        _day_rows = _nd_fetch_day(_d, _fx_api_key, _nd_province)
                         _month_rows.extend(_day_rows)
                     except Exception as _nd_exc:
                         _month_failed.append(str(_d))
@@ -1066,12 +1010,9 @@ with tab_data_mgmt:
                     _nd_done_count[0] / _nd_total_tasks,
                     text=f"{_nd_done_count[0]} / {_nd_total_tasks} tasks…",
                 )
-
                 if _month_failed:
                     _nd_errors.append(f"{_nd_province} {_nd_yr}-{_nd_mo:02d}: {len(_month_failed)} day(s) failed")
-                    _nd_append_log(
-                        f"  Saved {len(_month_rows):,} rows → {_fname}  ({len(_month_failed)} failure(s))"
-                    )
+                    _nd_append_log(f"  Saved {len(_month_rows):,} rows → {_fname}  ({len(_month_failed)} failure(s))")
                 else:
                     _nd_append_log(f"  Saved {len(_month_rows):,} rows → {_fname}")
 
@@ -1080,6 +1021,25 @@ with tab_data_mgmt:
             st.warning("Completed with errors:\n" + "\n".join(_nd_errors))
         else:
             st.success(f"All {_nd_total_tasks} file(s) saved to `{_nd_out_dir}`")
+
+    # Quick data preview
+    with st.expander("Preview stored data (DB)", expanded=False):
+        try:
+            _fx_prev = pd.read_sql(
+                """
+                SELECT metric_time, node_name, market_name, time_order_96, avg_node_price
+                FROM marketdata.md_shanxi_nodal_price_96
+                ORDER BY metric_time DESC, node_name
+                LIMIT 200
+                """,
+                _get_sqlalchemy_engine(),
+            )
+            if _fx_prev.empty:
+                st.info("No data yet.")
+            else:
+                st.dataframe(_fx_prev, use_container_width=True, hide_index=True, height=300)
+        except Exception as _fx_prev_exc:
+            st.info(f"Table not yet created or empty. ({_fx_prev_exc})")
 
     # ── Section 8: Ingest local CSV files → RDS ──────────────────────────────
     st.markdown("---")

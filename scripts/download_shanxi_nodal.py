@@ -49,19 +49,19 @@ def cmd_download(args):
 
     from services.fengxing.nodal_price import (
         _fetch_day, init_table, upsert,
-        _COLUMNS,
     )
 
+    market = args.market
     engine = None if args.csv_only else _get_engine()
     if engine:
         init_table(engine)
 
-    fieldnames = _COLUMNS + ["avg_node_price"]
+    fieldnames = ["node_name", "metric_time", "time_order_96", "market_name", "avg_node_price"]
     total_rows = 0
     failed = []
 
-    mode = "CSV only" if args.csv_only else f"CSV + RDS"
-    print(f"Downloading {start} → {end}  [{mode}]")
+    mode = "CSV only" if args.csv_only else "CSV + RDS"
+    print(f"Downloading {start} → {end}  market={market}  [{mode}]")
     print(f"Output CSV : {csv_path}\n")
 
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as fh:
@@ -72,7 +72,7 @@ def cmd_download(args):
         d = start
         while d <= end:
             try:
-                rows = _fetch_day(d, api_key)
+                rows = _fetch_day(d, api_key, market)
                 writer.writerows(rows)
                 fh.flush()
                 if engine:
@@ -113,6 +113,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--start",    help="YYYY-MM-DD  (required unless --from-csv)")
     parser.add_argument("--end",      help="YYYY-MM-DD  (required unless --from-csv)")
+    parser.add_argument("--market",   default="山西", help="Market name (default: 山西)")
     parser.add_argument("--csv-only", action="store_true",
                         help="Save to CSV only, skip RDS write")
     parser.add_argument("--out",      help="CSV output path (default: shanxi_nodal_START_END.csv)")

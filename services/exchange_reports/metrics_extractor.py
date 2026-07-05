@@ -300,16 +300,29 @@ def extract_metrics(
             logger.warning("No LLM provider configured (set DEEPSEEK_API_KEY, BEDROCK_REGION, or ANTHROPIC_API_KEY)")
             return None
 
-    # Truncate to ~12k chars (fits context comfortably, covers ~6 pages)
-    text_sample = full_text[:12000]
+    # Truncate to ~20k chars to cover more pages
+    text_sample = full_text[:20000]
 
     system_prompt = (
         "You are extracting structured data from a Chinese provincial power exchange "
         f"monthly market report. Province: {province}, Month: {report_month.strftime('%Y年%m月')}. "
         "Extract numerical values precisely as reported. "
-        "For volume units: 亿千瓦时 = GWh×100. Always report volumes in 亿千瓦时. "
-        "For prices: if given as 元/千瓦时, multiply by 1000 to get 元/兆瓦时 (yuan/MWh). "
-        "If given as 分/千瓦时, divide by 10 to get yuan/MWh. "
+        "\n\nVOLUME UNIT CONVERSIONS (always output in 亿千瓦时):\n"
+        "- 亿千瓦时 → use directly\n"
+        "- 万千瓦时 → divide by 10000 (e.g. 62.84万千瓦时 = 0.006284 亿千瓦时)\n"
+        "- 亿kWh → use directly\n"
+        "- GWh → divide by 100\n"
+        "\n\nPRICE UNIT CONVERSIONS (always output in 元/兆瓦时 yuan/MWh):\n"
+        "- 元/千瓦时 → multiply by 1000 (e.g. 0.3743 元/千瓦时 = 374.3 元/兆瓦时)\n"
+        "- 分/千瓦时 → multiply by 10 (e.g. 35.4 分/千瓦时 = 354 元/兆瓦时)\n"
+        "- 元/兆瓦时 → use directly\n"
+        "\n\nCAPACITY/LOAD UNIT CONVERSIONS (always output in GW):\n"
+        "- 万千瓦 → divide by 100 (e.g. 16500万千瓦 = 165 GW)\n"
+        "- 亿瓦 → divide by 10 (e.g. 1650亿瓦 = 165 GW)\n"
+        "- GW → use directly\n"
+        "\n\nFor avg_price look for: 结算均价, 成交均价, 加权平均价, 市场均价, 平均电价. "
+        "For spot_volume look for: 现货成交量, 日前+实时成交量之和, 现货市场成交. "
+        "For spot_avg_price look for: 现货均价, 日前均价, 现货结算均价. "
         "Use null for any field not present in the text."
     )
     user_message = (
@@ -333,7 +346,8 @@ def extract_metrics(
             )
             tool_calls = resp.choices[0].message.tool_calls
             if tool_calls:
-                return json.loads(tool_calls[0].function.arguments)
+                result = json.loads(tool_calls[0].function.arguments)
+                return _sanity_check(result)
 
         else:
             # Anthropic SDK (direct or Bedrock)
@@ -347,12 +361,43 @@ def extract_metrics(
             )
             for block in resp.content:
                 if block.type == "tool_use" and block.name == "store_market_metrics":
-                    return block.input
+                    return _sanity_check(block.input)
 
     except Exception as exc:
         logger.error("Metrics extraction failed for %s %s: %s", province, report_month, exc)
 
     return None
+
+
+def _sanity_check(metrics: dict) -> dict:
+    """
+    Post-process LLM output to fix common unit conversion failures.
+    Modifies in-place and returns the dict.
+    """
+    # installed_capacity_gw: any single Chinese province is 25–500 GW.
+    # If LLM returned raw 万千瓦 without dividing by 100, correct it.
+    # If result is still implausibly low after correction, null it out.
+    cap = metrics.get("installed_capacity_gw")
+    if cap is not None and cap > 500:
+        cap = round(cap / 100, 2)
+        logger.info("sanity_check: corrected installed_capacity_gw → %.2f GW (÷100)", cap)
+    if cap is not None and cap < 25:
+        logger.info("sanity_check: nulled installed_capacity_gw %.2f GW (implausibly low)", cap)
+        cap = None
+    metrics["installed_capacity_gw"] = cap
+
+    # max_load_gw / avg_load_gw: < 500 GW and > 5 GW for any province
+    for field in ("max_load_gw", "avg_load_gw"):
+        val = metrics.get(field)
+        if val is not None and val > 500:
+            val = round(val / 100, 2)
+            logger.info("sanity_check: corrected %s → %.2f GW (÷100)", field, val)
+        if val is not None and val < 5:
+            logger.info("sanity_check: nulled %s %.2f GW (implausibly low)", field, val)
+            val = None
+        metrics[field] = val
+
+    return metrics
 
 
 # ── DB upsert ─────────────────────────────────────────────────────────────────

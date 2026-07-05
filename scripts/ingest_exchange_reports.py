@@ -126,7 +126,13 @@ def _run_extract_metrics_only(folder: Path, pg_url: str, args) -> None:
         try:
             from services.exchange_reports.ingestor import extract_pages
             file_bytes = path.read_bytes()
-            pages = extract_pages(file_bytes, path.name)
+            vision_key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or None
+            textract_region = os.environ.get("TEXTRACT_REGION") or os.environ.get("BEDROCK_REGION") or "ap-southeast-1"
+            pages = extract_pages(
+                file_bytes, path.name,
+                vision_api_key=vision_key,
+                textract_region=textract_region,
+            )
             full_text = "\n".join(text for _, text in pages)
 
             row_id = extract_and_store(

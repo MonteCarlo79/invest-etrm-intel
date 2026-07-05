@@ -5380,7 +5380,10 @@ with tab_mgmt:
                                 filename=_emr_f.name,
                                 province=_emr_prov,
                                 pg_url=_os.environ.get("PGURL"),
-                                anthropic_api_key=_os.environ.get("ANTHROPIC_API_KEY"),
+                                anthropic_api_key=(
+                                    _os.environ.get("ANTHROPIC_API_KEY")
+                                    or _os.environ.get("DEEPSEEK_API_KEY")
+                                ),
                             )
                             if _emr_res["status"] == "ingested":
                                 _emr_ok += 1
@@ -5406,7 +5409,7 @@ with tab_mgmt:
         # ── Report inventory ───────────────────────────────────────────────────
         _emr_filter_prov = st.selectbox(
             "Filter by province",
-            ["All", "上海", "冀南", "安徽", "山东", "广东", "江苏", "浙江", "福建", "蒙西"],
+            ["All", "上海", "冀南", "安徽", "山东", "广东", "广西", "江苏", "浙江", "福建", "蒙西"],
             key="emr_filter_prov",
         )
 

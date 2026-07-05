@@ -46,6 +46,7 @@ for container in td["containerDefinitions"]:
     # Inject vars from environment (only if set)
     for key in [
         "ANTHROPIC_API_KEY",
+        "DEEPSEEK_API_KEY",
         "HERMES_DB_URL",
         "ONEDRIVE_CLIENT_ID", "ONEDRIVE_CLIENT_SECRET", "ONEDRIVE_REFRESH_TOKEN",
         "FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_OWNER_OPEN_ID",

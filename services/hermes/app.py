@@ -50,6 +50,7 @@ from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_
 from services.hermes.news_screener import screen_news_sources as _screen_news_sources, get_sources as _ns_get_sources, backfill_source as _backfill_source
 from services.hermes.capacity_screener import screen_installed_capacity as _screen_capacity
 from services.hermes.market_report import send_daily_report as _send_daily_report, send_monthly_report as _send_monthly_report
+from services.hermes.nodal_scraper import scrape_daily as _scrape_nodal_daily, scrape_date as _scrape_nodal_date, format_summary as _nodal_summary
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
 from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
@@ -510,6 +511,24 @@ def create_app() -> FastAPI:
             "cron",
             month=1, day=1, hour=2, minute=0,
         )
+        # Provincial nodal price scraper: 23:30 UTC (07:30 Beijing next day)
+        # Fetches yesterday's data for all FENGXING_PROVINCES, saves to OneDrive CSVs.
+        _fx_api_key = os.environ.get("FENGXING_API_KEY", "")
+        if _fx_api_key and agent.onedrive:
+            scheduler.add_job(
+                _scrape_nodal_daily,
+                "cron",
+                hour=23, minute=30,
+                kwargs={
+                    "onedrive": agent.onedrive,
+                    "api_key":  _fx_api_key,
+                    "pg_url":   _mengxi_pg_url or None,
+                },
+            )
+            logger.info("Nodal scraper scheduled: 23:30 UTC daily")
+        else:
+            logger.warning("Nodal scraper NOT scheduled: missing FENGXING_API_KEY or OneDrive")
+
         # New-BESS screener: 06:30 UTC (14:30 Beijing) — after market data typically arrives
         scheduler.add_job(
             _screen_new_bess,
@@ -2322,6 +2341,63 @@ def _handle_message(
 
         import threading as _threading
         _threading.Thread(target=_run_bfa, daemon=True).start()
+        return True
+
+    # ── /scrape-nodal — manually trigger provincial nodal price scrape ────────
+    # Usage:  /scrape-nodal               → yesterday
+    #         /scrape-nodal 2026-07-04    → specific date
+    #         /scrape-nodal 2026-07-01 2026-07-04  → date range
+    _sn_m = _re.match(
+        r'^/?scrape[-_]nodal(?:\s+(\d{4}-\d{2}-\d{2})(?:\s+(\d{4}-\d{2}-\d{2}))?)?$',
+        msg.text.strip(), _re.I,
+    )
+    if _sn_m:
+        def _sn_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _sn_e:
+                logger.error("scrape-nodal reply failed: %s", _sn_e)
+
+        _sn_api_key = os.environ.get("FENGXING_API_KEY", "")
+        if not _sn_api_key:
+            _sn_reply("⚠️ FENGXING_API_KEY 未配置，无法抓取节点电价。")
+            return True
+        if not agent.onedrive:
+            _sn_reply("⚠️ OneDrive 未连接，无法保存文件。")
+            return True
+
+        import datetime as _sn_dt
+        _sn_pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+
+        if _sn_m.group(1):
+            _sn_start = _sn_dt.date.fromisoformat(_sn_m.group(1))
+            _sn_end   = _sn_dt.date.fromisoformat(_sn_m.group(2)) if _sn_m.group(2) else _sn_start
+        else:
+            _sn_start = _sn_end = _sn_dt.date.today() - _sn_dt.timedelta(days=1)
+
+        _sn_days = (_sn_end - _sn_start).days + 1
+        _sn_reply(f"⏳ 开始抓取 {_sn_start} → {_sn_end}（{_sn_days} 天）各省节点电价…")
+
+        def _run_sn():
+            try:
+                all_results = []
+                _d = _sn_start
+                while _d <= _sn_end:
+                    day_results = _scrape_nodal_date(
+                        _d, agent.onedrive, _sn_api_key, pg_url=_sn_pg or None
+                    )
+                    all_results.extend(day_results)
+                    _d += _sn_dt.timedelta(days=1)
+                _sn_reply(_nodal_summary(all_results))
+            except Exception as _sn_exc:
+                logger.error("scrape-nodal failed: %s", _sn_exc)
+                _sn_reply(f"⚠️ 抓取失败：{_sn_exc}")
+
+        import threading as _sn_threading
+        _sn_threading.Thread(target=_run_sn, daemon=True).start()
         return True
 
     # ── /capcomp command — manually trigger 容量补偿+调频 screener ──────────

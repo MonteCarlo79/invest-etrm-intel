@@ -90,3 +90,7 @@ local_launcher.py
 
 # Sensitive tokens
 scripts/onedrive_refresh_token.txt
+hermes_td_deploy.json
+hermes_td_src.json
+bm_td_deploy.json
+bm_td_src.json

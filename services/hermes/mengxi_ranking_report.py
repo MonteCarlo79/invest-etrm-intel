@@ -297,6 +297,7 @@ def _enrich_and_rank(
     plant_list: list[dict],
     nodal_ranks: Optional[dict[str, dict]] = None,
     annual_ranks_4h: Optional[dict[str, int]] = None,
+    nodal_impact: Optional[dict[str, int]] = None,
 ) -> pd.DataFrame:
     """Merge DB result with plant metadata, compute rank, and attach nodal PF ranks."""
     if raw_df.empty:
@@ -347,8 +348,14 @@ def _enrich_and_rank(
         lambda n: annual_ranks_4h.get(n) if annual_ranks_4h else None
     )
 
+    # Attach nodal impact delta: 2026 YTD nodal rank − 2025 annual nodal rank
+    # Positive = node degraded (rank number rose); negative = node improved
+    df["nodal_impact"] = df["plant_name"].map(
+        lambda n: nodal_impact.get(n) if nodal_impact else None
+    )
+
     return df[["rank", "plant_name", "owner", "mw", "profit_wan", "score", "days",
-               "nodal_rank_2h", "nodal_rank_4h", "annual_rank_4h"]]
+               "nodal_rank_2h", "nodal_rank_4h", "annual_rank_4h", "nodal_impact"]]
 
 
 # ── PDF generation ────────────────────────────────────────────────────────────
@@ -408,11 +415,11 @@ def _generate_pdf(
                    textColor=colors.HexColor("#1f3b63"))
     note_s   = _ps("n",     7, textColor=colors.grey, spaceAfter=4)
 
-    # 10 columns — trimmed name/owner/profit cols to fit A4 (186mm printable)
-    # Total: 10+40+24+12+18+18+12+14+14+16 = 178mm
+    # 11 columns — fit A4 (186mm printable)
+    # Total: 10+40+24+12+18+16+12+14+14+14+12 = 186mm
     COL_HDR = ["排名", "项目名称", "业主", "MW", "总收益(万元)", "收益/MWh/天", "天数",
-               "2h节点排名", "4h节点排名", "2025年4h"]
-    COL_W   = [10*mm, 40*mm, 24*mm, 12*mm, 18*mm, 18*mm, 12*mm, 14*mm, 14*mm, 16*mm]
+               "2h节点排名", "4h节点排名", "2025年4h", "节点影响"]
+    COL_W   = [10*mm, 40*mm, 24*mm, 12*mm, 18*mm, 16*mm, 12*mm, 14*mm, 14*mm, 14*mm, 12*mm]
 
     def _nodal_cell(val) -> str:
         """Format a nodal rank value.  Negative = proxy-inferred (shown as ~#N)."""
@@ -422,6 +429,17 @@ def _generate_pdf(
         if iv < 0:
             return f"~#{-iv}"
         return f"#{iv}"
+
+    def _impact_cell(val) -> str:
+        """Format a nodal impact delta.  ↓N = degraded (red); ↑N = improved (green); = = unchanged."""
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return "—"
+        iv = int(val)
+        if iv > 0:
+            return f"↓{iv}"
+        if iv < 0:
+            return f"↑{-iv}"
+        return "="
 
     def _build_table(df: pd.DataFrame):
         sub = df.reset_index(drop=True)
@@ -438,6 +456,7 @@ def _generate_pdf(
                 _nodal_cell(r.get("nodal_rank_2h")),
                 _nodal_cell(r.get("nodal_rank_4h")),
                 _nodal_cell(r.get("annual_rank_4h")),
+                _impact_cell(r.get("nodal_impact")),
             ])
 
         cmds = [
@@ -477,6 +496,13 @@ def _generate_pdf(
                                 cmds.append(("TEXTCOLOR", (col_idx, i), (col_idx, i), RED_TEXT))
                         except ValueError:
                             pass
+            # 节点影响 colour coding col 10: ↓ = degraded (red), ↑ = improved (green)
+            if not is_envision:
+                impact_val = rows[i][10]
+                if impact_val.startswith("↓"):
+                    cmds.append(("TEXTCOLOR", (10, i), (10, i), RED_TEXT))
+                elif impact_val.startswith("↑"):
+                    cmds.append(("TEXTCOLOR", (10, i), (10, i), GREEN_TEXT))
 
         t = Table(rows, colWidths=COL_W, repeatRows=1)
         t.setStyle(TableStyle(cmds))
@@ -611,6 +637,11 @@ def _generate_pdf(
         ),
         Paragraph(
             "2025年4h：2025年全年4小时完美预见节点价值排名（预计算，每年1月1日更新）。",
+            note_s,
+        ),
+        Paragraph(
+            "节点影响：2026年累计4h节点排名 − 2025年4h节点排名。"
+            "↓N（红色）= 节点因新建BESS竞争而退化N位；↑N（绿色）= 节点相对改善N位。",
             note_s,
         ),
     ]
@@ -1154,6 +1185,15 @@ def send_daily_ranking(
     except Exception as exc:
         logger.warning("Could not load 2025 annual nodal ranks: %s", exc)
 
+    # ── Compute nodal impact delta: 2026 YTD 4h rank − 2025 annual 4h rank ────
+    # annual_ranks_4h uses negative values for proxy-inferred plants; use abs() for delta.
+    nodal_impact: dict[str, int] = {}
+    for plant, ytd_val in nodal_ranks_ytd.items():
+        annual_rank = annual_ranks_4h.get(plant)
+        if annual_rank is not None:
+            nodal_impact[plant] = ytd_val["rank_4h"] - abs(annual_rank)
+    logger.info("Nodal impact delta computed: %d plants", len(nodal_impact))
+
     # ── Read monthly nodal ranking page (pre-computed on 5th of each month) ───
     nodal_monthly_df = pd.DataFrame()
     try:
@@ -1164,13 +1204,16 @@ def send_daily_ranking(
     # ── Enrich with owner/mw, compute rank, attach period-specific nodal ranks ──
     yesterday_df = _enrich_and_rank(yesterday_raw, plant_list,
                                     nodal_ranks=nodal_ranks_yesterday,
-                                    annual_ranks_4h=annual_ranks_4h)
+                                    annual_ranks_4h=annual_ranks_4h,
+                                    nodal_impact=nodal_impact)
     month_df     = _enrich_and_rank(month_raw,     plant_list,
                                     nodal_ranks=nodal_ranks_month,
-                                    annual_ranks_4h=annual_ranks_4h)
+                                    annual_ranks_4h=annual_ranks_4h,
+                                    nodal_impact=nodal_impact)
     ytd_df       = _enrich_and_rank(ytd_raw,       plant_list,
                                     nodal_ranks=nodal_ranks_ytd,
-                                    annual_ranks_4h=annual_ranks_4h)
+                                    annual_ranks_4h=annual_ranks_4h,
+                                    nodal_impact=nodal_impact)
 
     # ── Generate PDF ───────────────────────────────────────────────────────────
     total_mw = float(ytd_df["mw"].sum()) if not ytd_df.empty else 0.0

@@ -1,24 +1,21 @@
 """
-Fengxing Shanxi Nodal Price API client.
+Fengxing Nodal Price API client (v1.1).
 
-Downloads avg_node_price (15-min, 96 intervals/day) for all Shanxi nodes
-from the LingFeng SaaS REST API and upserts into:
+Downloads avg_node_price (15-min, 96 intervals/day) for all nodes
+in a given market from the LingFeng SaaS REST API and upserts into:
     marketdata.md_shanxi_nodal_price_96
 
-API reference: data/nodal/山西节点电价接口使用说明文档_V1.0.pdf
-  Endpoint  : POST https://lingfeng-saas.tradingthink.cn/api/base/metrics/data/query
+API reference: data/nodal/实时节点电价接口使用说明文档_V1.1.pdf
+  Endpoint  : POST https://lingfengsaas.tradingthink.cn/api/open/v1/ods/data/query
   Auth      : X-API-KEY-SECRET  request header
-  Metric    : avg_node_price
-  Columns   : market_name, node_name, metric_time, time_order_96, avg_node_price
-  Page size : max 50 000 rows   (1-based pageNum)
+  Request   : {"marketName": "山东", "date": "YYYY-MM-DD"}
+  Response  : {"code": 200, "data": [{"nodeName": "…", "date": "…",
+                "price": {"1": 300.0, …, "96": 300.0}}]}
   Rate limit: 10 req/s
 
-Strategy: fetch ONE calendar day per API request.  Shanxi has ~200 nodes
-× 96 intervals = ~19 200 rows/day, well within the 50 000-row page limit.
-Fetching day-by-day means:
-  • each request is small and fast (< 5 s typical)
-  • partial results are saved immediately — a mid-run timeout loses nothing
-  • progress is reported per-day so failures are easy to identify
+Strategy: fetch ONE calendar day per API request.  One call returns all nodes
+for that day (no pagination needed).  Day-by-day approach means partial results
+are saved immediately — a mid-run timeout loses nothing.
 
 Usage:
     from services.fengxing.nodal_price import download_and_upsert
@@ -26,16 +23,17 @@ Usage:
         start_date=date(2026, 5, 1),
         end_date=date(2026, 5, 10),
         api_key=os.environ["FENGXING_API_KEY"],
+        market_name="蒙西",
         engine=sqlalchemy_engine,
         day_cb=lambda day, status, n_rows, msg: print(day, status, msg),
     )
-    # results = [{"date": ..., "status": "ok"|"error", "rows": N, "msg": ...}, ...]
+    # results = [{"date": …, "status": "ok"|"error", "rows": N, "msg": …}, …]
 """
 from __future__ import annotations
 
 import logging
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 import requests
@@ -44,176 +42,138 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
-_ENDPOINT = "https://lingfeng-saas.tradingthink.cn/api/open/v1/metrics/data/query"
-_METRIC_NAME = "avg_node_price"
-_COLUMNS = ["market_name", "node_name", "metric_time", "time_order_96"]
-_PAGE_SIZE = 50_000
+_ENDPOINT = "https://lingfengsaas.tradingthink.cn/api/open/v1/ods/data/query"
 
 # Per-request timeouts: (connect_timeout_s, read_timeout_s)
-# Short connect timeout catches unreachable hosts quickly.
-# Read timeout is generous — a busy server on a cross-border link can be slow.
 _TIMEOUT = (10, 120)
 
-_MAX_RETRIES = 2          # 2 attempts per page (total 3 tries including the first)
-_RETRY_DELAY = 3          # seconds between retries
-_DAY_DELAY   = 0.15       # seconds between day-requests to stay under 10 req/s
+_MAX_RETRIES = 2      # 2 extra attempts (3 total per day)
+_RETRY_DELAY = 3      # seconds between retries
+_DAY_DELAY   = 0.15   # seconds between day-requests to stay under 10 req/s
+
+_CST = timezone(timedelta(hours=8))  # China Standard Time
 
 
 # ---------------------------------------------------------------------------
 # Response parsing
 # ---------------------------------------------------------------------------
 
-def _parse_columnar(body: dict) -> list[dict]:
-    """Convert the columnar API response into a list of row dicts.
+def _parse_response(body: dict, market_name: str, day: date) -> list[dict]:
+    """Convert the v1.1 API response into a list of row dicts.
 
     Response shape:
-        body.data.table.columns[field_name] = [{value: X}, {value: X}, ...]
-    All arrays are the same length; row i = zip by index across all fields.
+        body.data = [{"nodeName": "…", "date": "YYYY-MM-DD",
+                       "price": {"1": float, …, "96": float}}, …]
+
+    Output schema matches marketdata.md_shanxi_nodal_price_96:
+        node_name, metric_time (TIMESTAMPTZ), time_order_96, market_name, avg_node_price
     """
-    table = body.get("data", {}).get("table", {})
-    cols: dict = table.get("columns", {})
-    if not cols:
-        return []
-    field_names = list(cols.keys())
-    n_rows = len(cols[field_names[0]])
-    return [
-        {field: cols[field][i]["value"] for field in field_names}
-        for i in range(n_rows)
-    ]
+    data = body.get("data") or []
+    rows: list[dict] = []
+    midnight_cst = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=_CST)
+    for item in data:
+        node_name = item.get("nodeName") or ""
+        price_map: dict = item.get("price") or {}
+        for slot_str, price_val in price_map.items():
+            try:
+                slot = int(slot_str)
+            except (ValueError, TypeError):
+                continue
+            if not (1 <= slot <= 96):
+                continue
+            # slot 1 = 00:00–00:15 CST; metric_time = start of interval
+            metric_time = midnight_cst + timedelta(minutes=15 * (slot - 1))
+            rows.append({
+                "node_name":      node_name,
+                "metric_time":    metric_time,
+                "time_order_96":  slot,
+                "market_name":    market_name,
+                "avg_node_price": price_val,
+            })
+    return rows
 
 
 # ---------------------------------------------------------------------------
-# Single page fetch (one attempt)
+# Single-day fetch (with retries)
 # ---------------------------------------------------------------------------
 
-def _post_page(
-    day: date,
-    page_num: int,
-    api_key: str,
-    filters: list[str] | None = None,
-) -> tuple[list[dict], bool]:
-    """POST one page for a single calendar day.  Returns (rows, has_more).
+def _fetch_day(day: date, api_key: str, market_name: str) -> list[dict]:
+    """Fetch all nodes for a single calendar day.
 
-    Raises requests.RequestException or RuntimeError on failure.
-    filters: optional list of filter strings, e.g. ['[market_name] = "山西"']
+    Retries up to _MAX_RETRIES times on transient errors.
+    Raises on persistent failure.
     """
     payload = {
-        "metricName": _METRIC_NAME,
-        "columns":    _COLUMNS,
-        "startDate":  day.strftime("%Y-%m-%d"),
-        "endDate":    day.strftime("%Y-%m-%d"),
-        "pageSize":   _PAGE_SIZE,
-        "pageNum":    page_num,
+        "marketName": market_name,
+        "date":       day.strftime("%Y-%m-%d"),
     }
-    if filters:
-        payload["filters"] = filters
     headers = {
-        "Content-Type":    "application/json",
+        "Content-Type":     "application/json; charset=utf-8",
         "X-API-KEY-SECRET": api_key,      # never logged
     }
 
-    resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=_TIMEOUT, verify=False)
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = requests.post(
+                _ENDPOINT, json=payload, headers=headers,
+                timeout=_TIMEOUT, verify=False,
+            )
+            if resp.status_code == 429:
+                wait = 2 ** (attempt + 1)
+                logger.warning("Rate limited on %s, waiting %ds", day, wait)
+                time.sleep(wait)
+                last_exc = RuntimeError("rate_limited")
+                continue
+            if resp.status_code != 200:
+                raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-    if resp.status_code == 429:
-        raise RuntimeError("rate_limited")
+            body = resp.json()
+            code = body.get("code")
+            if code not in (None, 0, 200):
+                raise RuntimeError(f"API error {code}: {body.get('message', '')}")
 
-    if resp.status_code != 200:
-        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            rows = _parse_response(body, market_name, day)
+            logger.debug("Fetched %s %s: %d nodes × 96 = %d rows",
+                         market_name, day, len(body.get("data") or []), len(rows))
+            return rows
 
-    body = resp.json()
-    code = body.get("code")
-    if code not in (None, 0, 200):
-        raise RuntimeError(f"API error {code}: {body.get('message', '')}")
+        except RuntimeError as exc:
+            if "rate_limited" in str(exc):
+                continue
+            raise
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                time.sleep(_RETRY_DELAY * (attempt + 1))
 
-    rows = _parse_columnar(body)
-    has_more = len(rows) == _PAGE_SIZE
-    return rows, has_more
-
-
-# ---------------------------------------------------------------------------
-# Fetch one day (with retry + pagination)
-# ---------------------------------------------------------------------------
-
-def _fetch_day(day: date, api_key: str, filters: list[str] | None = None) -> list[dict]:
-    """Fetch all rows for a single calendar day, auto-paginating.
-
-    Retries each page up to _MAX_RETRIES times on transient errors.
-    Raises on persistent failure.
-    filters: optional list of filter strings, e.g. ['[market_name] = "山西"']
-    """
-    all_rows: list[dict] = []
-    seen_keys: set[tuple] = set()   # (node_name, time_order_96) dedup
-    page_num = 1
-
-    while True:
-        last_exc: Exception | None = None
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                rows, has_more = _post_page(day, page_num, api_key, filters=filters)
-                break
-            except RuntimeError as exc:
-                if "rate_limited" in str(exc):
-                    time.sleep(2 ** (attempt + 1))
-                    last_exc = exc
-                    continue
-                raise                          # non-transient API error
-            except requests.RequestException as exc:
-                last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    time.sleep(_RETRY_DELAY * (attempt + 1))
-        else:
-            raise RuntimeError(f"page {page_num} failed after retries: {last_exc}")
-
-        # The API cycles indefinitely after exhausting unique rows — every page
-        # returns exactly _PAGE_SIZE rows even when there is no new data.
-        # Discard any row whose (node_name, time_order_96) we've already seen.
-        new_rows = []
-        for r in rows:
-            key = (r.get("node_name"), r.get("time_order_96"))
-            if key not in seen_keys:
-                seen_keys.add(key)
-                new_rows.append(r)
-
-        if not new_rows:
-            break  # entire page was duplicate — real data exhausted
-        all_rows.extend(new_rows)
-        if not has_more:
-            break
-        page_num += 1
-        time.sleep(_DAY_DELAY)
-
-    return all_rows
+    raise RuntimeError(f"Day {day} failed after retries: {last_exc}")
 
 
 # ---------------------------------------------------------------------------
 # Connectivity probe
 # ---------------------------------------------------------------------------
 
-def probe(api_key: str) -> str:
-    """Quick connectivity check: fetch page 1 for yesterday with pageSize=1.
+def probe(api_key: str, market_name: str = "山东") -> str:
+    """Quick connectivity check: fetch yesterday's data.
 
     Returns "ok" or an error string — does NOT raise.
     """
     yesterday = date.today() - timedelta(days=1)
-    payload = {
-        "metricName": _METRIC_NAME,
-        "columns":    _COLUMNS,
-        "startDate":  yesterday.strftime("%Y-%m-%d"),
-        "endDate":    yesterday.strftime("%Y-%m-%d"),
-        "pageSize":   1,
-        "pageNum":    1,
-    }
+    payload = {"marketName": market_name, "date": yesterday.strftime("%Y-%m-%d")}
     headers = {
-        "Content-Type":    "application/json",
+        "Content-Type":     "application/json; charset=utf-8",
         "X-API-KEY-SECRET": api_key,
     }
     try:
-        resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=(10, 20), verify=False)
+        resp = requests.post(_ENDPOINT, json=payload, headers=headers,
+                             timeout=(10, 20), verify=False)
         if resp.status_code == 200:
             body = resp.json()
             code = body.get("code")
             if code in (None, 0, 200):
-                return "ok"
+                n_nodes = len(body.get("data") or [])
+                return f"ok ({n_nodes} nodes for {yesterday})"
             return f"API error {code}: {body.get('message', '')}"
         return f"HTTP {resp.status_code}"
     except requests.Timeout:
@@ -304,6 +264,7 @@ def download_and_upsert(
     end_date: date,
     api_key: str,
     engine,
+    market_name: str = "蒙西",
     day_cb: Callable[[date, str, int, str], None] | None = None,
 ) -> list[DayResult]:
     """Fetch day-by-day and upsert immediately.
@@ -323,7 +284,7 @@ def download_and_upsert(
 
     for day in days:
         try:
-            rows = _fetch_day(day, api_key)
+            rows = _fetch_day(day, api_key, market_name)
             n = upsert(rows, engine)
             result: DayResult = {"date": day, "status": "ok", "rows": n, "msg": f"{n:,} rows"}
         except Exception as exc:
