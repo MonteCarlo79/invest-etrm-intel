@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Optional
 from services.hermes.tasks_client import TasksClient
@@ -10,6 +11,30 @@ if TYPE_CHECKING:
     from services.hermes.outlook_client import OutlookClient
 
 logger = logging.getLogger(__name__)
+
+
+def _retry_list_open_cards(tasks: TasksClient, attempts: int = 3, delay: float = 30.0) -> list:
+    """Call tasks.list_open_cards() with retries for transient DB connection failures."""
+    import psycopg2
+    last_exc: Exception = RuntimeError("no attempts")
+    for attempt in range(1, attempts + 1):
+        try:
+            return tasks.list_open_cards()
+        except psycopg2.OperationalError as exc:
+            last_exc = exc
+            if attempt < attempts:
+                logger.warning(
+                    "send_morning_briefing: DB connection failed (attempt %d/%d), "
+                    "retrying in %.0fs: %s",
+                    attempt, attempts, delay, exc,
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    "send_morning_briefing: DB unavailable after %d attempts: %s",
+                    attempts, exc,
+                )
+    raise last_exc
 
 _WEEKDAYS_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -145,7 +170,18 @@ def send_morning_briefing(
         now = datetime.now(tz=timezone(timedelta(hours=8)))
 
     today = now.date()
-    open_tasks = tasks.list_open_cards()
+    try:
+        open_tasks = _retry_list_open_cards(tasks)
+    except Exception as exc:
+        logger.error("send_morning_briefing: skipping — could not load tasks: %s", exc)
+        try:
+            feishu.send_text(
+                open_id=feishu_owner_open_id,
+                text=f"📋 早上好！今天是 {now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}。\n⚠️ 无法加载待办事项（数据库暂时不可用）。",
+            )
+        except Exception:
+            pass
+        return
 
     overdue, due_today, due_week, later, no_date = [], [], [], [], []
     for t in open_tasks:
