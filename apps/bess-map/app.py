@@ -2118,12 +2118,16 @@ with tab_demand:
     st.caption(_t("demand_caption"))
 
     _all_provs_d = load_province_list(_ENG_KEY)
+    if "demand_provinces" not in st.session_state:
+        _dp_saved = [p for p in st.query_params.get("dp", "").split(",") if p in _all_provs_d]
+        st.session_state["demand_provinces"] = _dp_saved if _dp_saved else (
+            _all_provs_d[:6] if len(_all_provs_d) >= 6 else _all_provs_d
+        )
     _d_col_sel, _d_col_yr = st.columns([3, 1])
     with _d_col_sel:
         _d_provs = st.multiselect(
             _t("demand_province"),
             options=_all_provs_d,
-            default=_all_provs_d[:6] if len(_all_provs_d) >= 6 else _all_provs_d,
             key="demand_provinces",
         )
     with _d_col_yr:
@@ -2134,6 +2138,11 @@ with tab_demand:
             horizontal=False,
         )
         _fund_yr = 2025 if _cap_src != "Annual 2024" else 2024
+    # Persist demand province selection to URL
+    if _d_provs:
+        st.query_params["dp"] = ",".join(_d_provs)
+    elif "dp" in st.query_params:
+        del st.query_params["dp"]
 
     if not _d_provs:
         st.info(_t("demand_no_hourly"))
@@ -2449,15 +2458,20 @@ with tab_sysopfee:
     else:
         _all_provs_sof = sorted(_sof_df["province"].unique().tolist())
 
-        # Province filter with persistent session state
+        # Province filter with persistent session state + URL params
         if "sysopfee_provinces" not in st.session_state:
-            st.session_state["sysopfee_provinces"] = _all_provs_sof
+            _sp_saved = [p for p in st.query_params.get("sp", "").split(",") if p in _all_provs_sof]
+            st.session_state["sysopfee_provinces"] = _sp_saved if _sp_saved else _all_provs_sof
 
         _sof_provs = st.multiselect(
             _t("sysopfee_province"),
             options=_all_provs_sof,
             key="sysopfee_provinces",
         )
+        if _sof_provs:
+            st.query_params["sp"] = ",".join(_sof_provs)
+        elif "sp" in st.query_params:
+            del st.query_params["sp"]
 
         if not _sof_provs:
             st.info("Select at least one province.")
@@ -2636,7 +2650,8 @@ with tab_aux:
         list(_inst_df["province"].unique() if not _inst_df.empty else [])
     ))
     if _aux_all_provs and not st.session_state["aux_provinces"]:
-        st.session_state["aux_provinces"] = _aux_all_provs
+        _ap_saved = [p for p in st.query_params.get("ap", "").split(",") if p in _aux_all_provs]
+        st.session_state["aux_provinces"] = _ap_saved if _ap_saved else _aux_all_provs
 
     _aux_years = sorted(set(
         list(_cc_df["effective_date"].apply(lambda d: d.year).unique() if not _cc_df.empty else []) +
@@ -2650,6 +2665,10 @@ with tab_aux:
             options=_aux_all_provs,
             key="aux_provinces",
         )
+        if _aux_sel_provs:
+            st.query_params["ap"] = ",".join(_aux_sel_provs)
+        elif "ap" in st.query_params:
+            del st.query_params["ap"]
     with _aux_col2:
         _aux_sel_year = st.selectbox(
             _t("aux_year_filter"),
