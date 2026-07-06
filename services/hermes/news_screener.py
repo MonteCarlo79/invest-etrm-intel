@@ -234,9 +234,11 @@ class SogouCaptchaError(Exception):
     """Raised when Sogou returns a verification/CAPTCHA page instead of an article."""
 
 
-def _fetch_wechat_article(url: str) -> tuple[str, str]:
+def _fetch_wechat_article(url: str) -> tuple[str, str, str]:
     """
-    Fetch a WeChat article URL. Returns (body_text, title).
+    Fetch a WeChat article URL. Returns (body_text, title, final_url).
+    final_url is the permanent mp.weixin.qq.com URL after redirect resolution —
+    use this instead of the Sogou redirect URL which expires within hours.
     Raises SogouCaptchaError if Sogou serves a verification page instead of the article.
     """
     from bs4 import BeautifulSoup
@@ -273,7 +275,7 @@ def _fetch_wechat_article(url: str) -> tuple[str, str]:
     )
     text = content_div.get_text(separator="\n") if content_div else soup.get_text(separator="\n")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    return "\n".join(lines), title
+    return "\n".join(lines), title, final_url
 
 
 def _discover_wechat_paginated(source: dict, start_date: datetime, max_pages: int = 30) -> list[dict]:
@@ -419,8 +421,11 @@ def backfill_source(
             title = art.get("title", "")
             if stype == "wechat":
                 try:
-                    body, fetched_title = _fetch_wechat_article(url)
+                    body, fetched_title, final_url = _fetch_wechat_article(url)
                     title = title or fetched_title
+                    # Replace expiring Sogou redirect with permanent mp.weixin URL
+                    if final_url and "mp.weixin.qq.com" in final_url:
+                        art["url"] = final_url
                     captcha_hits = 0  # reset on success
                 except SogouCaptchaError:
                     captcha_hits += 1
@@ -1011,8 +1016,11 @@ def screen_news_sources(
                         body = ""
                         if stype == "wechat":
                             try:
-                                body, fetched_title = _fetch_wechat_article(url)
+                                body, fetched_title, final_url = _fetch_wechat_article(url)
                                 title = title or fetched_title
+                                # Replace expiring Sogou redirect with permanent mp.weixin URL
+                                if final_url and "mp.weixin.qq.com" in final_url:
+                                    art["url"] = final_url
                             except SogouCaptchaError:
                                 logger.warning("Sogou CAPTCHA for %s — scoring from title only", url[:80])
                                 body = ""
@@ -1034,7 +1042,7 @@ def screen_news_sources(
 
                         all_results.append({
                             "title": art["title"],
-                            "url": url,
+                            "url": art.get("url", url),  # use resolved URL if available
                             "source_name": source["name"],
                             "relevance": ai_result.get("relevance"),
                             "category": ai_result.get("category"),
