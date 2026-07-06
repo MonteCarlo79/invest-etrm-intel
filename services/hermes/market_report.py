@@ -726,6 +726,8 @@ def _build_pdf(report: dict, report_type: str, period_str: str) -> bytes:
 
     # ── Content sections ───────────────────────────────────────────────────────
     for section in report.get("sections", []):
+        if not isinstance(section, dict):
+            continue
         sec_title = section.get("title", "")
         if not sec_title:
             continue
@@ -734,6 +736,9 @@ def _build_pdf(report: dict, report_type: str, period_str: str) -> bytes:
         story.append(Spacer(1, 0.15 * cm))
 
         for item in section.get("items", []):
+            if not isinstance(item, dict):
+                # LLM occasionally returns strings instead of objects — skip gracefully
+                continue
             if item.get("title"):
                 story.append(Paragraph(_esc(item["title"]), item_title))
             # Meta line: source + date
