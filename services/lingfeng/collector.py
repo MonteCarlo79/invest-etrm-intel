@@ -429,7 +429,7 @@ async def _collect_province_async(
 
                 logger.info(f"[{market}] Clicking 导出 (span.down-load-container) …")
                 async with page.expect_download(timeout=60_000) as dl_info:
-                    await page.locator("button", has_text=re.compile(r"导.?出")).first.click()
+                    await page.locator("span.down-load-container").first.click()
                 download = await dl_info.value
 
                 # Always include date range in filename to avoid collisions across chunks
