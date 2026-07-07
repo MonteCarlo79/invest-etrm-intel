@@ -231,10 +231,10 @@ async def _collect_async(
         await page.wait_for_timeout(1500)
 
         # ── 7. Click 导出 and capture download ───────────────────────────
-        # 导出 is a secondary button with text "导出" or "导 出" (space variant).
-        logger.info("Clicking 导出 …")
+        # 导出 is a <span class="down-load-container">, not a <button>.
+        logger.info("Clicking 导出 (span.down-load-container) …")
         async with page.expect_download(timeout=60_000) as dl_info:
-            await page.locator("button", has_text=re.compile(r"导.?出")).first.click()
+            await page.locator("span.down-load-container").first.click()
         download = await dl_info.value
 
         suggested = download.suggested_filename or ""
@@ -427,7 +427,7 @@ async def _collect_province_async(
                 await page.locator("button.ant-btn-primary").first.click()
                 await page.wait_for_timeout(1500)
 
-                logger.info(f"[{market}] Clicking 导出 …")
+                logger.info(f"[{market}] Clicking 导出 (span.down-load-container) …")
                 async with page.expect_download(timeout=60_000) as dl_info:
                     await page.locator("button", has_text=re.compile(r"导.?出")).first.click()
                 download = await dl_info.value
