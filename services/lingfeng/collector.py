@@ -147,25 +147,41 @@ async def _collect_async(
 
         logger.info(f"Logged in — current URL: {page.url}")
 
-        # ── 2. Navigate to Data Consultation ─────────────────────────────
+        # ── 2. Navigate to Market Data page ──────────────────────────────
         await page.goto(_DATA_URL)
         await page.wait_for_load_state("networkidle")
 
-        # Form uses Ant Design — wait for .ant-select-selector to be visible
+        # Wait for the page form to render (交易市场 dropdown + tab bar)
         logger.info("Waiting for form to render …")
         await page.wait_for_selector(".ant-select-selector", timeout=30_000)
-        await page.wait_for_timeout(300)
-        logger.info("On data-consultation page.")
+        await page.wait_for_timeout(500)
+        logger.info("On market data page.")
 
-        # ── 3. Select market (市场交易) — first ant-select ────────────────
-        # Only change if current value differs from requested market
+        # ── 3. Click indicator tab ────────────────────────────────────────
+        # Indicator is now a top tab (市场供需数据 / 节点价格对比 / etc.)
+        _tab_btn = page.locator(".ant-tabs-tab-btn", has_text=indicator)
+        if await _tab_btn.count() > 0:
+            _tab_active = await _tab_btn.first.evaluate(
+                "el => el.closest('.ant-tabs-tab')?.classList.contains('ant-tabs-tab-active') ?? false"
+            )
+            if not _tab_active:
+                await _tab_btn.first.click()
+                await page.wait_for_timeout(400)
+                logger.info(f"Clicked tab: {indicator}")
+            else:
+                logger.info(f"Tab '{indicator}' already active.")
+        else:
+            logger.warning(f"Tab '{indicator}' not found — using default tab.")
+        logger.info(f"Indicator: {indicator}")
+
+        # ── 4. Select market (交易市场) — first ant-select ────────────────
         current_market = await page.locator(
             ".ant-select-selection-item"
         ).nth(0).inner_text()
         if current_market.strip() != market.strip():
             logger.info(f"Current market '{current_market}' ≠ '{market}' — selecting …")
             await page.locator(".ant-select-selector").nth(0).click()
-            await page.wait_for_selector(".ant-select-dropdown", timeout=10_000)
+            await page.wait_for_selector(".ant-select-dropdown:not(.ant-select-dropdown-hidden)", timeout=10_000)
             await page.wait_for_timeout(300)
             # Scroll through the virtual list until the target option is rendered
             _list = page.locator(".rc-virtual-list-holder").first
@@ -184,22 +200,6 @@ async def _collect_async(
         else:
             logger.info(f"Market already set to '{market}' — no change needed.")
         logger.info(f"Market: {market}")
-
-        # ── 4. Select indicator (指标选择) — second ant-select ───────────
-        current_indicator = await page.locator(
-            ".ant-select-selection-item"
-        ).nth(1).inner_text()
-        if current_indicator.strip() != indicator.strip():
-            logger.info(f"Current indicator '{current_indicator}' ≠ '{indicator}' — selecting …")
-            await page.locator(".ant-select-selector").nth(1).click()
-            await page.wait_for_selector(".ant-select-item-option-content", timeout=10_000)
-            await page.locator(".ant-select-item-option-content").filter(
-                has_text=indicator
-            ).first.click()
-            await page.wait_for_timeout(400)
-        else:
-            logger.info(f"Indicator already set to '{indicator}' — no change needed.")
-        logger.info(f"Indicator: {indicator}")
 
         # ── 5. Set date range ─────────────────────────────────────────────
         # Ant Design range picker: input[date-range="start"] and input[date-range="end"]
@@ -222,11 +222,16 @@ async def _collect_async(
         await page.wait_for_timeout(300)
         logger.info(f"Date range set: {start_str} → {end_str}")
 
-        # ── 6. Click 导出 and capture download ───────────────────────────
-        # Button text is "导 出" (with a space) and has class ant-btn-primary
-        logger.info("Clicking 导 出 …")
+        # ── 6. Click 查询 to fetch data ───────────────────────────────────
+        # On the new page layout, 查询 loads the chart; 导出 then downloads.
+        logger.info("Clicking 查询 …")
+        await page.locator("button", has_text="查询").first.click()
+        await page.wait_for_timeout(1500)
+
+        # ── 7. Click 导出 and capture download ───────────────────────────
+        logger.info("Clicking 导出 …")
         async with page.expect_download(timeout=60_000) as dl_info:
-            await page.locator("button.ant-btn-primary").first.click()
+            await page.locator("button", has_text="导出").first.click()
         download = await dl_info.value
 
         suggested = download.suggested_filename or ""
@@ -335,14 +340,26 @@ async def _collect_province_async(
 
         logger.info(f"[{market}] Logged in — current URL: {page.url}")
 
-        # ── Helper: navigate to data page and select market + indicator ───
+        # ── Helper: navigate to data page and select indicator tab + market ─
         async def _goto_data_page() -> None:
             await page.goto(_DATA_URL)
             await page.wait_for_load_state("networkidle")
             await page.wait_for_selector(".ant-select-selector", timeout=30_000)
             await page.wait_for_timeout(800)  # extra time for form to fully initialise
 
-            # Select market
+            # Click indicator tab (indicator is now a top tab, not a dropdown)
+            _tab_btn = page.locator(".ant-tabs-tab-btn", has_text=indicator)
+            if await _tab_btn.count() > 0:
+                _tab_active = await _tab_btn.first.evaluate(
+                    "el => el.closest('.ant-tabs-tab')?.classList.contains('ant-tabs-tab-active') ?? false"
+                )
+                if not _tab_active:
+                    await _tab_btn.first.click()
+                    await page.wait_for_timeout(400)
+            else:
+                logger.warning(f"[{market}] Tab '{indicator}' not found — using default tab.")
+
+            # Select market (交易市场) — only dropdown on the page
             _current_market = ""
             try:
                 _current_market = (await page.locator(".ant-select-selection-item").nth(0).inner_text()).strip()
@@ -374,23 +391,9 @@ async def _collect_province_async(
                     raise RuntimeError(f"Market '{market}' not found in dropdown after scrolling")
                 await page.wait_for_timeout(400)
 
-            # Select indicator
-            _current_indicator = ""
-            try:
-                _current_indicator = (await page.locator(".ant-select-selection-item").nth(1).inner_text()).strip()
-            except Exception:
-                pass
-            if _current_indicator != indicator.strip():
-                await page.locator(".ant-select-selector").nth(1).click()
-                await page.wait_for_selector(".ant-select-item-option-content", timeout=10_000)
-                await page.locator(".ant-select-item-option-content").filter(
-                    has_text=indicator
-                ).first.click()
-                await page.wait_for_timeout(400)
-
-        # ── 2. Navigate to Data Consultation and set market + indicator ───
+        # ── 2. Navigate to Market Data page and set indicator tab + market ─
         await _goto_data_page()
-        logger.info(f"[{market}] Ready — market & indicator selected, starting chunk loop.")
+        logger.info(f"[{market}] Ready — indicator tab & market selected, starting chunk loop.")
 
         # ── 3. Loop over chunks ───────────────────────────────────────────
         for idx, (chunk_start, chunk_end) in enumerate(chunks):
@@ -416,9 +419,14 @@ async def _collect_province_async(
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(300)
 
-                logger.info(f"[{market}] Clicking 导 出 …")
+                # Click 查询 to load data, then 导出 to download
+                logger.info(f"[{market}] Clicking 查询 …")
+                await page.locator("button", has_text="查询").first.click()
+                await page.wait_for_timeout(1500)
+
+                logger.info(f"[{market}] Clicking 导出 …")
                 async with page.expect_download(timeout=60_000) as dl_info:
-                    await page.locator("button.ant-btn-primary").first.click()
+                    await page.locator("button", has_text="导出").first.click()
                 download = await dl_info.value
 
                 # Always include date range in filename to avoid collisions across chunks
