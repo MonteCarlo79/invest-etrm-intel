@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -223,15 +224,17 @@ async def _collect_async(
         logger.info(f"Date range set: {start_str} → {end_str}")
 
         # ── 6. Click 查询 to fetch data ───────────────────────────────────
-        # On the new page layout, 查询 loads the chart; 导出 then downloads.
-        logger.info("Clicking 查询 …")
-        await page.locator("button", has_text="查询").first.click()
+        # 查询 is the primary (green) button; text may include a space ("查 询")
+        # so we match by class rather than text to avoid encoding surprises.
+        logger.info("Clicking 查询 (ant-btn-primary) …")
+        await page.locator("button.ant-btn-primary").first.click()
         await page.wait_for_timeout(1500)
 
         # ── 7. Click 导出 and capture download ───────────────────────────
+        # 导出 is a secondary button with text "导出" or "导 出" (space variant).
         logger.info("Clicking 导出 …")
         async with page.expect_download(timeout=60_000) as dl_info:
-            await page.locator("button", has_text="导出").first.click()
+            await page.locator("button", has_text=re.compile(r"导.?出")).first.click()
         download = await dl_info.value
 
         suggested = download.suggested_filename or ""
@@ -419,14 +422,14 @@ async def _collect_province_async(
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(300)
 
-                # Click 查询 to load data, then 导出 to download
-                logger.info(f"[{market}] Clicking 查询 …")
-                await page.locator("button", has_text="查询").first.click()
+                # Click 查询 (primary/green button) to load data, then 导出 to download
+                logger.info(f"[{market}] Clicking 查询 (ant-btn-primary) …")
+                await page.locator("button.ant-btn-primary").first.click()
                 await page.wait_for_timeout(1500)
 
                 logger.info(f"[{market}] Clicking 导出 …")
                 async with page.expect_download(timeout=60_000) as dl_info:
-                    await page.locator("button", has_text="导出").first.click()
+                    await page.locator("button", has_text=re.compile(r"导.?出")).first.click()
                 download = await dl_info.value
 
                 # Always include date range in filename to avoid collisions across chunks

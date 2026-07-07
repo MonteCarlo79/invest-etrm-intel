@@ -88,9 +88,41 @@ async def inspect():
         print(f"    Total div[class] elements: {all_divs}")
 
         for selector in ["div.el-select", "select", ".el-form", "form", ".el-form-item",
-                         "input", "button", ".v-select", ".ant-select"]:
+                         "input", "button", ".v-select", ".ant-select",
+                         ".ant-tabs-tab", "button.ant-btn-primary"]:
             cnt = await page.locator(selector).count()
             print(f"    '{selector}': {cnt} found")
+
+        # Print all visible button texts
+        btns = await page.locator("button").all()
+        print(f"    Button texts ({len(btns)} total):")
+        for btn in btns[:20]:
+            try:
+                txt = (await btn.inner_text()).strip()
+                cls = await btn.get_attribute("class") or ""
+                if txt:
+                    print(f"      [{cls[:40]}] '{txt}'")
+            except Exception:
+                pass
+
+        # Print all tab texts
+        tabs = await page.locator(".ant-tabs-tab-btn").all()
+        print(f"    Tab texts ({len(tabs)} total):")
+        for tab in tabs:
+            try:
+                print(f"      '{(await tab.inner_text()).strip()}'")
+            except Exception:
+                pass
+
+        # Print all input attributes
+        inputs = await page.locator("input").all()
+        print(f"    Inputs ({len(inputs)} total):")
+        for inp in inputs[:10]:
+            try:
+                attrs = {a: await inp.get_attribute(a) for a in ["type", "placeholder", "date-range", "class"]}
+                print(f"      {attrs}")
+            except Exception:
+                pass
 
         # Print page title and h1/h2
         title = await page.title()
