@@ -231,10 +231,11 @@ async def _collect_async(
         await page.wait_for_timeout(1500)
 
         # ── 7. Click 导出 and capture download ───────────────────────────
-        # 导出 is a <span class="down-load-container">, not a <button>.
-        logger.info("Clicking 导出 (span.down-load-container) …")
+        # 导出 is <span class="down-load-container"> (without mr-10).
+        # The .mr-10 sibling opens a data-comparison drawer — skip it.
+        logger.info("Clicking 导出 (span.down-load-container:not(.mr-10)) …")
         async with page.expect_download(timeout=60_000) as dl_info:
-            await page.locator("span.down-load-container").first.click()
+            await page.locator("span.down-load-container:not(.mr-10)").first.click()
         download = await dl_info.value
 
         suggested = download.suggested_filename or ""
@@ -427,9 +428,9 @@ async def _collect_province_async(
                 await page.locator("button.ant-btn-primary").first.click()
                 await page.wait_for_timeout(1500)
 
-                logger.info(f"[{market}] Clicking 导出 (span.down-load-container) …")
+                logger.info(f"[{market}] Clicking 导出 (span.down-load-container:not(.mr-10)) …")
                 async with page.expect_download(timeout=60_000) as dl_info:
-                    await page.locator("span.down-load-container").first.click()
+                    await page.locator("span.down-load-container:not(.mr-10)").first.click()
                 download = await dl_info.value
 
                 # Always include date range in filename to avoid collisions across chunks
