@@ -208,30 +208,33 @@ class ModoAIConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     def _login(self, page) -> bool:
-        """Navigate to Modo app and authenticate. Returns True on success."""
+        """Navigate to Modo sign-in page and authenticate via email + password.
+
+        Flow (as of 2026-07):
+          1. Load /sign-in  →  email field + "Continue with email link" button
+          2. Fill email, then click "sign in with a password" link
+          3. Password-only screen appears  →  fill password + click "Continue"
+        """
         try:
             page.goto(
-                "https://modoenergy.com/home",
+                "https://modoenergy.com/sign-in",
                 timeout=_NAV_TIMEOUT,
                 wait_until="domcontentloaded",
             )
         except Exception as exc:
-            logger.warning("[modo_ai] Could not load modoenergy.com/home: %s", exc)
+            logger.warning("[modo_ai] Could not load modoenergy.com/sign-in: %s", exc)
             return False
 
-        # Let React hydrate and auth state resolve before checking
         page.wait_for_timeout(3_000)
         _save_screenshot(page, "01_after_nav")
 
-        # Check if genuinely authenticated (URL = /home AND no login form visible)
         if self._is_authenticated(page):
             logger.info("[modo_ai] Already authenticated")
             return True
 
-        logger.info("[modo_ai] Login form detected — attempting login (URL: %s)", page.url)
+        logger.info("[modo_ai] Sign-in page loaded (URL: %s)", page.url)
 
-        # --- Email step ---
-        # Some auth flows (Auth0, Okta) show email first, then password on next screen
+        # --- Step 1: fill email ---
         email_sel = _first_visible(page, [
             'input[type="email"]',
             'input[name="email"]',
@@ -240,16 +243,39 @@ class ModoAIConnector(BaseConnector):
             'input[autocomplete="email"]',
         ])
         if not email_sel:
-            logger.error(
-                "[modo_ai] Email input not found (URL: %s); see /tmp/modo_02_no_email.png",
-                page.url,
-            )
+            logger.error("[modo_ai] Email input not found; see /tmp/modo_02_no_email.png")
             _save_screenshot(page, "02_no_email")
             return False
         page.fill(email_sel, self._email)
         logger.info("[modo_ai] Email filled")
 
-        # Click Continue/Next if password field is not yet visible
+        # --- Step 2: click "sign in with a password" link ---
+        pw_link_sel = _first_visible(page, [
+            'a:has-text("sign in with a password")',
+            'button:has-text("sign in with a password")',
+            'span:has-text("sign in with a password")',
+            '*:has-text("sign in with a password")',
+        ])
+        if pw_link_sel:
+            page.click(pw_link_sel)
+            logger.info("[modo_ai] Clicked 'sign in with a password' link")
+        else:
+            logger.warning("[modo_ai] 'sign in with a password' link not found — will try JS click")
+            try:
+                page.evaluate("""() => {
+                    const links = Array.from(document.querySelectorAll('a, button, span'));
+                    const link = links.find(el => el.textContent.toLowerCase().includes('sign in with a password'));
+                    if (link) link.click();
+                }""")
+            except Exception as exc:
+                logger.error("[modo_ai] JS click failed: %s", exc)
+                _save_screenshot(page, "03_no_pw_link")
+                return False
+
+        page.wait_for_timeout(2_500)
+        _save_screenshot(page, "03_after_pw_link_click")
+
+        # --- Step 3: fill password and submit ---
         pass_sel = _first_visible(page, [
             'input[type="password"]',
             'input[name="password"]',
@@ -257,53 +283,25 @@ class ModoAIConnector(BaseConnector):
             'input[autocomplete*="password"]',
         ])
         if not pass_sel:
-            # Two-step flow: submit email to reveal password field
-            next_sel = _first_visible(page, [
-                'button[type="submit"]',
-                'button:has-text("Continue")',
-                'button:has-text("Next")',
-                'button:has-text("Sign in")',
-                'button:has-text("Sign In")',
-                'button:has-text("Log in")',
-            ])
-            if next_sel:
-                page.click(next_sel)
-            else:
-                page.keyboard.press("Enter")
-            page.wait_for_timeout(2_500)
-            _save_screenshot(page, "03_after_email_submit")
-
-            pass_sel = _first_visible(page, [
-                'input[type="password"]',
-                'input[name="password"]',
-                'input[id*="password" i]',
-                'input[autocomplete*="password"]',
-            ])
-
-        # --- Password step ---
-        if not pass_sel:
             logger.error("[modo_ai] Password input not found; see /tmp/modo_04_no_pass.png")
             _save_screenshot(page, "04_no_pass")
             return False
         page.fill(pass_sel, self._password)
         logger.info("[modo_ai] Password filled")
 
-        # Submit
         submit_sel = _first_visible(page, [
+            'button:has-text("Continue")',
             'button[type="submit"]',
             'button:has-text("Sign in")',
             'button:has-text("Sign In")',
             'button:has-text("Log in")',
-            'button:has-text("Login")',
-            'button:has-text("Continue")',
         ])
         if submit_sel:
             page.click(submit_sel)
         else:
             page.keyboard.press("Enter")
-        logger.info("[modo_ai] Submit clicked — waiting for redirect")
+        logger.info("[modo_ai] Submit clicked — waiting for redirect to /home")
 
-        # Wait up to 30 s for post-login navigation
         try:
             page.wait_for_url(
                 lambda url: "modoenergy.com/home" in url,
