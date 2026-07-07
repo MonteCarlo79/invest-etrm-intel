@@ -27,7 +27,7 @@ USERNAME = os.environ.get("LINGFENG_USERNAME", "")
 PASSWORD = os.environ.get("LINGFENG_PASSWORD", "")
 
 _LOGIN_URL = "https://lingfeng-saas.tradingthink.cn/#/login"
-_DATA_URL  = "https://lingfeng-saas.tradingthink.cn/#/powerTrading/sass/data-consultation"
+_DATA_URL  = "https://lingfeng-saas.tradingthink.cn/#/powerTrading/market"
 
 
 async def inspect():

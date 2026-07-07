@@ -44,7 +44,7 @@ class CredentialError(RuntimeError):
     Signals to the pipeline that it must halt immediately without retrying,
     to prevent the account-lock mechanism from triggering.
     """
-_DATA_URL  = "https://lingfeng-saas.tradingthink.cn/#/powerTrading/sass/data-consultation"
+_DATA_URL  = "https://lingfeng-saas.tradingthink.cn/#/powerTrading/market"
 
 # Element UI select option click timeout (ms)
 _TIMEOUT = 20_000
