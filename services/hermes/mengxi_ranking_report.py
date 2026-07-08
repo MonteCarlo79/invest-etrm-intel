@@ -732,6 +732,143 @@ def _query_nodal_annual_ranks(pg_url: str, year: int) -> dict[str, int]:
         conn.close()
 
 
+def _query_nodal_pf_daily_ranks(pg_url: str, start: "date", end_excl: "date") -> dict[str, dict]:
+    """Read pre-computed daily PF scores from reports.nodal_pf_daily and return ranked dict.
+
+    Aggregates daily score_2h / score_4h (average across the window), then ranks plants
+    by descending score.  Returns {} if the table doesn't exist or has no rows for the period.
+    Returns {plant_name: {score_2h, score_4h, rank_2h, rank_4h, n_days}}.
+    """
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT plant_name,
+                   AVG(score_2h)  AS score_2h,
+                   AVG(score_4h)  AS score_4h,
+                   COUNT(*)       AS n_days
+            FROM reports.nodal_pf_daily
+            WHERE data_date >= %(start)s AND data_date < %(end_excl)s
+              AND score_4h IS NOT NULL
+            GROUP BY plant_name
+            """,
+            conn,
+            params={"start": start, "end_excl": end_excl},
+        )
+    except Exception as exc:
+        logger.debug("_query_nodal_pf_daily_ranks: table missing or error: %s", exc)
+        return {}
+    finally:
+        conn.close()
+
+    if df.empty:
+        return {}
+
+    df["rank_4h"] = df["score_4h"].rank(ascending=False, method="min").astype(int)
+    df["rank_2h"] = df["score_2h"].rank(ascending=False, method="min").astype(int)
+    return {
+        row["plant_name"]: {
+            "score_2h": float(row["score_2h"]),
+            "score_4h": float(row["score_4h"]),
+            "rank_2h":  int(row["rank_2h"]),
+            "rank_4h":  int(row["rank_4h"]),
+            "n_days":   int(row["n_days"]),
+        }
+        for _, row in df.iterrows()
+    }
+
+
+def compute_and_store_nodal_pf_daily(
+    pg_url: str,
+    data_date: "date",
+    plant_names: list[str],
+    rte: float = 0.85,
+    milp_timeout_s: float = 120.0,
+) -> int:
+    """Compute perfect-foresight 2h/4h BESS scores for all plants on *data_date* and
+    upsert into reports.nodal_pf_daily.
+
+    Single-day MILP is very fast (~96 intervals), so 40 plants finish in seconds.
+    Designed to be called nightly (22:30 UTC) before the 23:00 UTC ranking report.
+    Returns number of plants stored.
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait as _wait
+    from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices
+
+    prices_df = _query_nodal_prices(pg_url, plant_names, data_date, data_date + timedelta(days=1))
+    if prices_df.empty:
+        logger.warning("compute_nodal_pf_daily: no price data for %s", data_date)
+        return 0
+
+    def _compute_one(plant_name: str, group: pd.DataFrame):
+        prices_s = group.set_index("datetime")["cleared_price"].sort_index()
+        n_days = prices_s.index.normalize().nunique()
+        try:
+            _, p2h = compute_dispatch_from_15min_prices(
+                prices_s, power_mw=1.0, duration_h=2.0, roundtrip_eff=rte
+            )
+            _, p4h = compute_dispatch_from_15min_prices(
+                prices_s, power_mw=1.0, duration_h=4.0, roundtrip_eff=rte
+            )
+            score_2h = float(p2h.sum()) / (2.0 * max(n_days, 1))
+            score_4h = float(p4h.sum()) / (4.0 * max(n_days, 1))
+            return plant_name, score_2h, score_4h
+        except Exception as exc:
+            logger.warning("Daily PF compute failed for %s on %s: %s", plant_name, data_date, exc)
+            return None
+
+    executor = ThreadPoolExecutor(max_workers=8)
+    try:
+        fut_map = {
+            executor.submit(_compute_one, name, grp): name
+            for name, grp in prices_df.groupby("plant_name")
+        }
+        done, not_done = _wait(fut_map, timeout=milp_timeout_s)
+        if not_done:
+            logger.warning(
+                "compute_nodal_pf_daily: %d plants timed out on %s", len(not_done), data_date
+            )
+    finally:
+        executor.shutdown(wait=False)
+
+    rows = [fut.result() for fut in done if fut.result() is not None]
+    if not rows:
+        return 0
+
+    conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS reports.nodal_pf_daily (
+                    data_date   DATE        NOT NULL,
+                    plant_name  TEXT        NOT NULL,
+                    score_2h    FLOAT,
+                    score_4h    FLOAT,
+                    computed_at TIMESTAMPTZ DEFAULT NOW(),
+                    PRIMARY KEY (data_date, plant_name)
+                )
+            """)
+            for plant_name, score_2h, score_4h in rows:
+                cur.execute(
+                    """
+                    INSERT INTO reports.nodal_pf_daily
+                        (data_date, plant_name, score_2h, score_4h)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (data_date, plant_name) DO UPDATE SET
+                        score_2h    = EXCLUDED.score_2h,
+                        score_4h    = EXCLUDED.score_4h,
+                        computed_at = NOW()
+                    """,
+                    (data_date, plant_name, score_2h, score_4h),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+    logger.info("Nodal PF daily: stored %d plants for %s", len(rows), data_date)
+    return len(rows)
+
+
 def _resolve_nodal_proxies(
     pg_url: str,
     missing_plants: list[str],
@@ -1203,11 +1340,21 @@ def send_daily_ranking(
     from concurrent.futures import ThreadPoolExecutor as _RankTPE
 
     def _nodal_ranks_for(start: date, end: date, milp_timeout_s: float = 300.0) -> dict[str, dict]:
+        # Try pre-computed daily cache first (fast DB read, no MILP)
+        try:
+            cached = _query_nodal_pf_daily_ranks(pg_url, start, end)
+            if cached:
+                logger.info("Nodal PF [%s→%s]: using pre-computed daily cache (%d plants)",
+                            start, end, len(cached))
+                return cached
+        except Exception as exc:
+            logger.warning("Nodal PF daily cache read failed [%s→%s]: %s", start, end, exc)
+        # Fall back to live MILP (may timeout for long windows)
         try:
             prices = _query_nodal_prices(pg_url, plant_names, start, end)
             return _compute_nodal_pf_ranks(prices, overall_timeout_s=milp_timeout_s) if not prices.empty else {}
         except Exception as exc:
-            logger.warning("Nodal PF compute failed [%s→%s]: %s", start, end, exc)
+            logger.warning("Nodal PF live MILP failed [%s→%s]: %s", start, end, exc)
             return {}
 
     nodal_ranks_yesterday: dict[str, dict] = {}
