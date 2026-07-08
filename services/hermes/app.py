@@ -25,6 +25,8 @@ _pending_folders: dict[str, tuple[str, int]] = {}
 _pending_classify: dict[str, str] = {}
 # sender_id → (category, hint) for knowledge base ingestion
 _pending_kb_ingest: dict[str, tuple[str, str]] = {}
+# sender_id → remaining image count for capcomp image ingest (KB + province_cap_comp ETL)
+_pending_capcomp_ingest: dict[str, int] = {}
 # message_id → {sender_id, filename, file_key, resource_type, current_folder}
 # allows the post-upload routing card to re-route files to a different folder
 _pending_reroute: dict[str, dict] = {}
@@ -65,6 +67,7 @@ from services.hermes.capcomp_manual_etl import (
     extract_capcomp_from_text as _capcomp_from_text,
     extract_capcomp_from_file as _capcomp_from_file,
     extract_capcomp_from_url as _capcomp_from_url,
+    extract_capcomp_from_image as _capcomp_from_image,
     is_capcomp_file,
     format_result_message as _capcomp_fmt,
 )
@@ -1666,8 +1669,25 @@ def _handle_file_message(
     if not _sent_card:
         feishu.send_text(open_id=sender_id, text=reply)
 
+    # Capcomp image ingest: KB + province_cap_comp ETL
+    if sender_id in _pending_capcomp_ingest:
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="other")
+            capcomp_result = _capcomp_from_image(file_bytes, filename, api_key, pg_url)
+            feishu.send_text(open_id=sender_id, text=kb_reply)
+            feishu.send_text(open_id=sender_id, text=_capcomp_fmt(capcomp_result))
+        except Exception as exc:
+            logger.error("Capcomp image ingest (Feishu) failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"容量补偿数据提取失败：{exc}")
+        finally:
+            _pending_capcomp_ingest[sender_id] -= 1
+            if _pending_capcomp_ingest.get(sender_id, 0) <= 0:
+                _pending_capcomp_ingest.pop(sender_id, None)
+
     # Knowledge base ingestion (explicit user request)
-    if sender_id in _pending_kb_ingest:
+    elif sender_id in _pending_kb_ingest:
         category, hint = _pending_kb_ingest.pop(sender_id)
         kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category=category)
         feishu.send_text(open_id=sender_id, text=kb_reply)
@@ -1877,8 +1897,25 @@ def _handle_telegram_file(
 
     telegram.send_text(chat_id, reply)
 
+    # Capcomp image ingest: KB + province_cap_comp ETL
+    if chat_id in _pending_capcomp_ingest:
+        try:
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="other")
+            capcomp_result = _capcomp_from_image(file_bytes, filename, api_key, pg_url)
+            telegram.send_text(chat_id, kb_reply)
+            telegram.send_text(chat_id, _capcomp_fmt(capcomp_result))
+        except Exception as exc:
+            logger.error("Capcomp image ingest (Telegram) failed: %s", exc, exc_info=True)
+            telegram.send_text(chat_id, f"容量补偿数据提取失败：{exc}")
+        finally:
+            _pending_capcomp_ingest[chat_id] -= 1
+            if _pending_capcomp_ingest.get(chat_id, 0) <= 0:
+                _pending_capcomp_ingest.pop(chat_id, None)
+
     # Knowledge base ingestion
-    if chat_id in _pending_kb_ingest:
+    elif chat_id in _pending_kb_ingest:
         category, hint = _pending_kb_ingest.pop(chat_id)
         kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category=category)
         telegram.send_text(chat_id, kb_reply)
@@ -3060,6 +3097,14 @@ def _handle_message(
             hint = action.params.get("hint", "")
             _pending_kb_ingest[msg.sender_id] = (category, hint)
             reply = action.reply or "好的，把文件发给我，我帮你添加到知识库。"
+        elif action.action == "CAPCOMP_INGEST_NEXT_FILE":
+            count = int(action.params.get("count", 1))
+            _pending_capcomp_ingest[msg.sender_id] = count
+            reply = action.reply or (
+                f"好的，请依次发送{count}张截图，我会提取容量补偿数据并更新知识库和 bess-map。"
+                if count > 1 else
+                "好的，把截图发给我，我会提取容量补偿数据并更新知识库和 bess-map。"
+            )
         elif action.action == "EMAIL_SUMMARY":
             if not outlook:
                 reply = "邮件未配置。请先运行 py scripts/auth_microsoft_mail.py 并设置 OUTLOOK_REFRESH_TOKEN。"

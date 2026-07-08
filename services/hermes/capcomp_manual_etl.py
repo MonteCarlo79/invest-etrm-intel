@@ -347,6 +347,68 @@ def extract_capcomp_from_file(
     return _process_extracted(data, api_key, pg_url, year, source_tag)
 
 
+def extract_capcomp_from_image(
+    image_bytes: bytes,
+    filename: str,
+    api_key: str,
+    pg_url: str,
+    year: Optional[int] = None,
+) -> dict:
+    """
+    Extract cap comp / FR market data from an image (screenshot or photo) using
+    Claude vision to transcribe the text, then the standard extraction pipeline.
+    Returns the same summary dict as extract_capcomp_from_file.
+    """
+    import base64
+    year = year or datetime.now().year
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpeg"
+    _mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+             "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+    media_type = _mime.get(ext, "image/jpeg")
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4000,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": base64.standard_b64encode(image_bytes).decode("utf-8"),
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "请完整转录这张图片中的所有文字内容，"
+                            "保留所有省份名称、数字、单位和政策规则，逐字转录，不要总结。"
+                        ),
+                    },
+                ],
+            }],
+        )
+        extracted_text = resp.content[0].text.strip()
+    except Exception as exc:
+        return {
+            "cap_comp_upserted": 0, "fr_upserted": 0, "conflicts": 0,
+            "errors": [f"图片文字识别失败：{exc}"],
+            "cap_comp_provinces": [], "fr_provinces": [],
+        }
+    if not extracted_text:
+        return {
+            "cap_comp_upserted": 0, "fr_upserted": 0, "conflicts": 0,
+            "errors": ["图片中未识别到文字"],
+            "cap_comp_provinces": [], "fr_provinces": [],
+        }
+    source_tag = f"manual_image:{filename[:80]}"
+    data = _call_claude(extracted_text, api_key, year)
+    return _process_extracted(data, api_key, pg_url, year, source_tag)
+
+
 def extract_capcomp_from_url(
     url: str,
     api_key: str,

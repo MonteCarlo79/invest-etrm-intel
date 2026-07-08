@@ -116,6 +116,11 @@ INGEST_NEXT_FILE — user wants to add an upcoming file to the knowledge base (s
   params: {"category": "market_rules|policy_doc|technical_spec|research_report|annual_report|other", "hint": "optional description"}
   reply: tell user to send the file (in their language)
 
+CAPCOMP_INGEST_NEXT_FILE — save upcoming image(s) containing capacity compensation / 容量补偿 data to KB AND extract the data into province_cap_comp table (so bess-map Capacity Compensation tab is updated)
+  params: {"count": <integer, default 1>, "hint": "optional context e.g. province or year"}
+  reply: tell user to send the image(s) (in their language)
+  note: use when user sends capcomp/容量补偿 screenshots or says to save capacity compensation data; if count>1 say "请依次发送{count}张截图"
+
 INGEST_URL — fetch a URL, add its content to the knowledge base, and return a summary
   params: {"url": "https://...", "category": "market_rules|policy_doc|research_report|other"}
   reply: short acknowledgment that you are fetching and summarising (in their language); the actual summary is appended automatically
@@ -213,6 +218,7 @@ Rules:
 - When user wants to save a PDF, image, Excel, Word or any binary file to OneDrive to a specific folder, use SAVE_NEXT_FILE (not ONEDRIVE_UPLOAD). ONLY use SAVE_NEXT_FILE when user explicitly says they have a file/document to upload or save (e.g. "存这个文件", "save this to folder X", "上传到"). Never use SAVE_NEXT_FILE for factual questions about market data or storage capacity. If they mention a number (e.g. "5个文件"), set count accordingly.
 - When user says "classify", "categorize", "归类", "分类", or "market fundamentals / 市场基础信息" for an upcoming file, use CLASSIFY_NEXT_FILE instead of SAVE_NEXT_FILE.
 - When user says "add to knowledge base", "知识库", "让你学习", "分析这份文件", use INGEST_NEXT_FILE. ONLY use INGEST_NEXT_FILE when user explicitly says they want to ingest a file — never for factual data questions.
+- When user sends capacity compensation / 容量补偿 screenshots or says to save capcomp data to knowledge base, use CAPCOMP_INGEST_NEXT_FILE (NOT INGEST_NEXT_FILE). This also extracts data into province_cap_comp so bess-map is updated.
 - When user asks about email, inbox, unread messages, or says "邮件"/"收件箱"/"邮箱", use EMAIL_SUMMARY.
 - When user says "from now on / automatically / whenever I send X" route files to a folder, use ADD_FILE_RULE.
 - When ADD_FILE_RULE is used with "also ingest/add to knowledge base" or "also analyze/digest", set auto_kb=true and/or auto_digest=true accordingly.
