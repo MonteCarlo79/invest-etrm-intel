@@ -311,12 +311,27 @@ def digest_kb_docs(api_key: str, limit: int = 50) -> int:
         logger.info("[kb_digest] Digesting %d docs…", len(docs))
         client = anthropic.Anthropic(api_key=api_key)
         total = 0
+        today = date.today().isoformat()
         for doc in docs:
             insights = _extract_insights_from_doc(client, doc)
             if insights:
                 n = _store_doc_insights(conn, insights, source_doc_url=doc["url"])
                 total += n
                 logger.info("[kb_digest] %s → %d insights", doc.get("url", "")[:60], n)
+            else:
+                # Mark doc as processed (no insights found) so it is never retried.
+                # active=FALSE keeps it out of all insight queries.
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO intl_market.gb_expert_insights "
+                        "(insight_text, insight_type, confidence, source_session, "
+                        " source_doc_url, active) "
+                        "VALUES ('_processed_no_insights', 'other', 'low', %s, %s, FALSE) "
+                        "ON CONFLICT DO NOTHING",
+                        (today, doc["url"]),
+                    )
+                conn.commit()
+                logger.debug("[kb_digest] %s → 0 insights (marked processed)", doc.get("url", "")[:60])
 
         logger.info("[kb_digest] Done — %d total insights extracted from %d docs", total, len(docs))
         return total
