@@ -158,30 +158,19 @@ def _task_row(label: str, title: str, task_id: str) -> dict:
     }
 
 
-def send_morning_briefing(
-    tasks: TasksClient,
-    feishu: Optional[FeishuClient] = None,
-    feishu_owner_open_id: str = "",
-    now: Optional[datetime] = None,
-) -> None:
-    if not feishu or not feishu_owner_open_id:
-        return
-    if now is None:
-        now = datetime.now(tz=timezone(timedelta(hours=8)))
+def build_task_card(
+    open_tasks: list,
+    now: datetime,
+    weather_line: str = "",
+    weekly_line: str = "",
+) -> dict:
+    """Build (but do not send) the morning briefing interactive card.
 
-    today = now.date()
-    try:
-        open_tasks = _retry_list_open_cards(tasks)
-    except Exception as exc:
-        logger.error("send_morning_briefing: skipping — could not load tasks: %s", exc)
-        try:
-            feishu.send_text(
-                open_id=feishu_owner_open_id,
-                text=f"📋 早上好！今天是 {now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}。\n⚠️ 无法加载待办事项（数据库暂时不可用）。",
-            )
-        except Exception:
-            pass
-        return
+    Extracted so the done_task callback can rebuild the card in-place
+    after marking a task complete (removes it from the list immediately).
+    """
+    today    = now.date()
+    date_str = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
 
     overdue, due_today, due_week, later, no_date = [], [], [], [], []
     for t in open_tasks:
@@ -200,25 +189,17 @@ def send_morning_briefing(
             else:
                 later.append((t, due))
 
-    date_str = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
-    weather   = _get_shanghai_weather()
-    is_monday = (now.weekday() == 0)
-    weekly    = _get_shanghai_weekly_forecast() if is_monday else ""
-
-    # ── Build Feishu interactive card ─────────────────────────────────────────
     elements: list[dict] = []
 
-    # Date + weather header block
     header_md = f"**早上好！今天是 {date_str}**"
-    if weather:
-        header_md += f"\n🌤 {weather}"
+    if weather_line:
+        header_md += f"\n🌤 {weather_line}"
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": header_md}})
 
-    # Monday: insert full weekly forecast table
-    if weekly:
+    if weekly_line:
         elements.append({"tag": "hr"})
         elements.append({"tag": "div", "text": {"tag": "lark_md",
-            "content": f"**🗓 本周上海天气预报（周一至周日）**\n{weekly}"}})
+            "content": f"**🗓 本周上海天气预报（周一至周日）**\n{weekly_line}"}})
 
     elements.append({"tag": "hr"})
 
@@ -264,7 +245,7 @@ def send_morning_briefing(
 
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "有什么需要帮忙的吗？"}})
 
-    card = {
+    return {
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "blue",
@@ -273,12 +254,46 @@ def send_morning_briefing(
         "elements": elements,
     }
 
+
+def send_morning_briefing(
+    tasks: TasksClient,
+    feishu: Optional[FeishuClient] = None,
+    feishu_owner_open_id: str = "",
+    now: Optional[datetime] = None,
+) -> None:
+    if not feishu or not feishu_owner_open_id:
+        return
+    if now is None:
+        now = datetime.now(tz=timezone(timedelta(hours=8)))
+
+    try:
+        open_tasks = _retry_list_open_cards(tasks)
+    except Exception as exc:
+        logger.error("send_morning_briefing: skipping — could not load tasks: %s", exc)
+        try:
+            feishu.send_text(
+                open_id=feishu_owner_open_id,
+                text=f"📋 早上好！今天是 {now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}。\n⚠️ 无法加载待办事项（数据库暂时不可用）。",
+            )
+        except Exception:
+            pass
+        return
+
+    weather   = _get_shanghai_weather()
+    is_monday = (now.weekday() == 0)
+    weekly    = _get_shanghai_weekly_forecast() if is_monday else ""
+
+    card = build_task_card(open_tasks, now, weather_line=weather, weekly_line=weekly)
+
     try:
         feishu.send_card(open_id=feishu_owner_open_id, card=card)
     except Exception as exc:
         logger.error("Morning briefing card failed: %s", exc)
-        # Fallback to plain text
-        lines = [header_md.replace("**", ""), "\n有什么需要帮忙的吗？"]
+        date_str  = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
+        header_md = f"早上好！今天是 {date_str}"
+        if weather:
+            header_md += f"\n🌤 {weather}"
+        lines = [header_md, "\n有什么需要帮忙的吗？"]
         try:
             feishu.send_text(open_id=feishu_owner_open_id, text="\n".join(lines))
         except Exception:

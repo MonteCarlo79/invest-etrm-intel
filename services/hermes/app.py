@@ -1185,13 +1185,20 @@ def create_app() -> FastAPI:
             title   = value.get("title", "任务")
             try:
                 agent.tasks.complete_card(title=title)
-                if open_id and feishu:
-                    feishu.send_text(open_id=open_id, text=f"✅ 已完成：{title}")
             except Exception as exc:
                 logger.error("done_task callback failed: %s", exc)
-                if open_id and feishu:
-                    feishu.send_text(open_id=open_id, text=f"⚠️ 标记完成失败：{exc}")
-            return {}
+                return {"toast": {"type": "fail", "content": f"⚠️ 标记失败：{exc}"}}
+            # Rebuild card in-place so completed task disappears immediately
+            try:
+                from datetime import timezone as _tz, timedelta as _td
+                from services.hermes.scheduler import build_task_card, _retry_list_open_cards
+                _now = datetime.now(tz=_tz(_td(hours=8)))
+                _fresh = _retry_list_open_cards(agent.tasks)
+                _new_card = build_task_card(_fresh, _now)
+                return {"card": _new_card, "toast": {"type": "success", "content": f"✅ 已完成：{title}"}}
+            except Exception as exc:
+                logger.error("Card rebuild after done_task failed: %s", exc)
+                return {"toast": {"type": "success", "content": f"✅ 已完成：{title}"}}
 
         if act == "confirm":
             # User confirmed the auto-detected folder — just clean up
