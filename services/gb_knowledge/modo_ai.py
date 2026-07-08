@@ -142,9 +142,26 @@ class ModoAIConnector(BaseConnector):
                 logger.warning("[modo_ai] playwright-stealth not installed — running without stealth")
 
             try:
-                logged_in = self._login(page)
+                logged_in = False
+                for _attempt in range(1, 3):   # max 2 attempts
+                    logger.info("[modo_ai] Login attempt %d/2", _attempt)
+                    logged_in = self._login(page)
+                    if logged_in:
+                        break
+                    if _attempt < 2:
+                        logger.warning("[modo_ai] Login attempt %d failed — retrying in 10s", _attempt)
+                        time.sleep(10)
+                        # Reload the sign-in page fresh before retrying
+                        try:
+                            page.goto("https://modoenergy.com/sign-in", timeout=_NAV_TIMEOUT,
+                                      wait_until="domcontentloaded")
+                            page.wait_for_timeout(2_000)
+                        except Exception:
+                            pass
+
                 if not logged_in:
-                    logger.error("[modo_ai] Login failed — aborting distillation")
+                    logger.error("[modo_ai] Login failed after 2 attempts — aborting distillation")
+                    _notify_login_failure(2, page.url)
                     return
 
                 all_questions = [
@@ -488,8 +505,25 @@ class ModoAIConnector(BaseConnector):
                 pass
 
             try:
-                if not self._login(page):
-                    logger.error("[modo_ai] Login failed — aborting custom distillation")
+                logged_in = False
+                for _attempt in range(1, 3):
+                    logger.info("[modo_ai] Login attempt %d/2", _attempt)
+                    logged_in = self._login(page)
+                    if logged_in:
+                        break
+                    if _attempt < 2:
+                        logger.warning("[modo_ai] Login attempt %d failed — retrying in 10s", _attempt)
+                        time.sleep(10)
+                        try:
+                            page.goto("https://modoenergy.com/sign-in", timeout=_NAV_TIMEOUT,
+                                      wait_until="domcontentloaded")
+                            page.wait_for_timeout(2_000)
+                        except Exception:
+                            pass
+
+                if not logged_in:
+                    logger.error("[modo_ai] Login failed after 2 attempts — aborting custom distillation")
+                    _notify_login_failure(2, page.url)
                     return
 
                 for i, question in enumerate(questions):
@@ -633,6 +667,31 @@ class ModoAIConnector(BaseConnector):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _notify_login_failure(attempt: int, final_url: str) -> None:
+    """Send a WeCom text alert when Modo login fails after max retries."""
+    webhook_url = os.environ.get("WECOM_WEBHOOK_URL", "")
+    if not webhook_url:
+        logger.warning("[modo_ai] WECOM_WEBHOOK_URL not set — cannot send login-failure alert")
+        return
+    import requests as _req
+    msg = (
+        f"⚠️ Modo AI login failed after {attempt} attempt(s).\n"
+        f"Final URL: {final_url}\n"
+        f"Action needed: check MODO_EMAIL / MODO_PASSWORD or inspect debug screenshots at /tmp/modo_*.png."
+    )
+    for url in [u.strip() for u in webhook_url.split(",") if u.strip()]:
+        try:
+            resp = _req.post(
+                url,
+                json={"msgtype": "text", "text": {"content": msg}},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            logger.info("[modo_ai] Login-failure alert sent to WeCom")
+        except Exception as exc:
+            logger.warning("[modo_ai] Could not send WeCom alert: %s", exc)
+
 
 def _first_visible(page, selectors: list[str]) -> str | None:
     """Return the first selector that matches a currently visible element."""
