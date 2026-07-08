@@ -47,6 +47,7 @@ from services.hermes.mengxi_ranking_report import (
     send_daily_ranking as _send_mengxi_ranking,
     compute_and_store_nodal_pf_monthly as _compute_nodal_pf_monthly,
     compute_and_store_nodal_pf_annual as _compute_nodal_pf_annual,
+    compute_and_store_nodal_pf_daily as _compute_nodal_pf_daily,
 )
 from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
 from services.hermes.news_screener import screen_news_sources as _screen_news_sources, get_sources as _ns_get_sources, backfill_source as _backfill_source
@@ -269,7 +270,33 @@ def _build_route_card(filename: str, current_folder: str, message_id: str, web_u
                 _btn("CAISO",   f"{_BASE_INTL_CARD}/caiso/reports"),
                 _btn("PJM",     f"{_BASE_INTL_CARD}/pjm/reports"),
             ]},
+            {"tag": "hr"},
+            # Custom path input — user types any OneDrive path
+            {"tag": "div", "text": {"tag": "lark_md", "content": "或输入自定义路径（etrm/... 或 OneDrive/etrm/...）："}},
+            {"tag": "action", "actions": [
+                {"tag": "input", "name": "custom_path",
+                 "placeholder": {"tag": "plain_text", "content": "etrm/bess-platform/data/..."},
+                 "width": "fill"},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "→ 存入"},
+                 "type": "default",
+                 "value": {"act": "route_custom", "mid": message_id}},
+            ]},
         ],
+    }
+
+
+def _build_route_confirmed_card(filename: str, folder: str, pending: bool = False) -> dict:
+    """Collapsed card shown after the user picks a folder — removes all buttons."""
+    short = folder.replace("etrm/bess-platform/data/", "…/")
+    local = "OneDrive\\" + folder.strip("/").replace("/", "\\")
+    if pending:
+        icon, msg = "⏳", f"正在归档到 `{short}`…\n📂 本地路径：`{local}`"
+    else:
+        icon, msg = "✅", f"路径已确认：`{short}`\n📂 本地路径：`{local}`"
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {"template": "green", "title": {"content": f"📁 {filename}", "tag": "plain_text"}},
+        "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": f"{icon} {msg}"}}],
     }
 
 
@@ -554,6 +581,14 @@ def create_app() -> FastAPI:
             "cron",
             month=1, day=1, hour=2, minute=0,
         )
+        # Nodal PF daily pre-compute: 22:30 UTC (06:30 Beijing) — 30 min before the
+        # ranking report.  Stores per-plant 2h/4h scores in reports.nodal_pf_daily so
+        # the report reads pre-computed values instead of running slow live MILP.
+        scheduler.add_job(
+            lambda: _compute_nodal_pf_daily_with_plants(_mengxi_pg_url),
+            "cron",
+            hour=22, minute=30,
+        )
         # Provincial nodal price scraper: 23:30 UTC (07:30 Beijing next day)
         # Fetches yesterday's data for all FENGXING_PROVINCES, saves to OneDrive CSVs.
         _fx_api_key = os.environ.get("FENGXING_API_KEY", "")
@@ -731,6 +766,19 @@ def create_app() -> FastAPI:
             _compute_nodal_pf_annual(pg_url, year, plant_names)
         except Exception as exc:
             logger.error("Annual nodal PF compute failed for %d: %s", year, exc)
+
+    def _compute_nodal_pf_daily_with_plants(pg_url: str) -> None:
+        """Load plant list from station_master and pre-compute yesterday's daily PF scores."""
+        import datetime as _dt
+        from services.hermes.mengxi_ranking_report import _read_station_master
+        yesterday = _dt.date.today() - _dt.timedelta(days=1)
+        try:
+            plants = _read_station_master(pg_url)
+            plant_names = [p["plant_name"] for p in plants]
+            n = _compute_nodal_pf_daily(pg_url, yesterday, plant_names)
+            logger.info("Daily nodal PF pre-compute: %d plants stored for %s", n, yesterday)
+        except Exception as exc:
+            logger.error("Daily nodal PF pre-compute failed for %s: %s", yesterday, exc)
 
     @app.post("/hermes/ranking/backfill-annual")
     async def backfill_annual_nodal(request: Request, background: BackgroundTasks):
@@ -1201,27 +1249,25 @@ def create_app() -> FastAPI:
                 return {"toast": {"type": "success", "content": f"✅ 已完成：{title}"}}
 
         if act == "confirm":
-            # User confirmed the auto-detected folder — just clean up
+            # User confirmed the auto-detected folder — collapse card, remove buttons
             mid = value.get("mid", "")
-            _pending_reroute.pop(mid, None)
-            if open_id and feishu:
-                feishu.send_text(open_id=open_id, text="✅ 路径确认。")
-            return {}
+            info = _pending_reroute.pop(mid, None)
+            fname  = info["filename"]   if info else "file"
+            folder = info["current_folder"] if info else ""
+            return {"card": _build_route_confirmed_card(fname, folder, pending=False)}
 
         if act == "route":
-            # User tapped a re-route button — re-download and upload to new folder
-            mid       = value.get("mid", "")
+            # User tapped a re-route button — collapse card immediately, then reroute in BG
+            mid        = value.get("mid", "")
             new_folder = value.get("to", "")
             info = _pending_reroute.pop(mid, None)
             if not info or not new_folder:
-                if open_id and feishu:
-                    feishu.send_text(open_id=open_id, text="⚠️ 无法重新归档（记录已过期，请重新发送文件）。")
-                return {}
+                return {"toast": {"type": "fail", "content": "⚠️ 记录已过期，请重新发送文件"}}
 
             def _reroute():
                 try:
                     fb = feishu.download_resource(
-                        info["filename"],  # message_id equivalent not needed — use file_key
+                        info["filename"],
                         info["file_key"],
                         info["resource_type"],
                     )
@@ -1239,7 +1285,39 @@ def create_app() -> FastAPI:
                         feishu.send_text(open_id=info["sender_id"], text=f"重新归档失败：{exc}")
 
             background.add_task(_reroute)
-            return {}
+            # Collapse card immediately so folder list disappears
+            return {"card": _build_route_confirmed_card(info["filename"], new_folder, pending=True)}
+
+        if act == "route_custom":
+            # User typed a custom path in the input field
+            mid         = value.get("mid", "")
+            form_value  = action.get("form_value") or {}
+            custom_path = (form_value.get("custom_path") or "").strip()
+            # Normalise: strip leading "OneDrive/" or "OneDrive\"
+            custom_path = custom_path.replace("\\", "/")
+            for prefix in ("OneDrive/etrm/", "etrm/"):
+                if custom_path.startswith(prefix):
+                    custom_path = "etrm/" + custom_path[len(prefix):]
+                    break
+            if not custom_path:
+                return {"toast": {"type": "fail", "content": "路径不能为空"}}
+            info = _pending_reroute.pop(mid, None)
+            if not info:
+                return {"toast": {"type": "fail", "content": "⚠️ 记录已过期，请重新发送文件"}}
+
+            def _reroute_custom():
+                try:
+                    fb = feishu.download_resource(info["filename"], info["file_key"], info["resource_type"])
+                    result = agent.onedrive.upload_file(folder_path=custom_path, filename=info["filename"], content=fb)
+                    local = "OneDrive\\" + custom_path.strip("/").replace("/", "\\")
+                    feishu.send_text(open_id=info["sender_id"],
+                                     text=f"✅ 已归档《{result.get('name')}》\n📂 本地路径：`{local}`")
+                except Exception as exc:
+                    logger.error("Route-custom failed: %s", exc)
+                    feishu.send_text(open_id=info["sender_id"], text=f"归档失败：{exc}")
+
+            background.add_task(_reroute_custom)
+            return {"card": _build_route_confirmed_card(info["filename"], custom_path, pending=True)}
 
         if act == "send_wecom_monthly":
             yr  = value.get("year")
