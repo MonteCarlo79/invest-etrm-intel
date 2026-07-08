@@ -228,6 +228,7 @@ def _query_nodal_prices(
 def _compute_nodal_pf_ranks(
     prices_df: pd.DataFrame,
     rte: float = 0.85,
+    overall_timeout_s: float = 300.0,
 ) -> dict[str, dict]:
     """
     Run perfect-foresight MILP for each plant in prices_df (both 2h and 4h durations).
@@ -262,15 +263,32 @@ def _compute_nodal_pf_ranks(
     plant_groups = [(name, grp) for name, grp in prices_df.groupby("plant_name")]
     raw_scores: dict[str, tuple[float, float, int]] = {}
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {
+    import concurrent.futures as _cf
+    # Use wait() + shutdown(wait=False) so that slow MILP threads don't block
+    # the executor context-manager's implicit shutdown(wait=True).
+    executor = ThreadPoolExecutor(max_workers=8)
+    try:
+        fut_map = {
             executor.submit(_compute_plant, name, grp): name
             for name, grp in plant_groups
         }
-        for future in as_completed(futures):
-            name, s2h, s4h, nd = future.result()
+        done, not_done = _cf.wait(fut_map, timeout=overall_timeout_s)
+        if not_done:
+            logger.warning(
+                "Nodal PF: %d/%d plants timed out after %.0fs — skipping",
+                len(not_done), len(fut_map), overall_timeout_s,
+            )
+        for future in done:
+            pname = fut_map[future]
+            try:
+                name, s2h, s4h, nd = future.result()
+            except Exception as exc:
+                logger.warning("Nodal PF failed for %s: %s", pname, exc)
+                continue
             if not (pd.isna(s2h) or pd.isna(s4h)):
                 raw_scores[name] = (s2h, s4h, nd)
+    finally:
+        executor.shutdown(wait=False)  # don't block — slow threads run in background
 
     if not raw_scores:
         return {}
@@ -806,7 +824,12 @@ def _resolve_nodal_proxies(
         conn.close()
 
 
-def compute_and_store_nodal_pf_annual(pg_url: str, year: int, plant_names: list[str]) -> None:
+def compute_and_store_nodal_pf_annual(
+    pg_url: str,
+    year: int,
+    plant_names: list[str],
+    progress_cb=None,          # optional: callable(done: int, total: int, plant_name: str)
+) -> None:
     """
     Compute 4h perfect-foresight BESS values for the given year for the supplied
     plant list (internal BESS assets only — ranked among themselves) and upsert
@@ -870,12 +893,38 @@ def compute_and_store_nodal_pf_annual(pg_url: str, year: int, plant_names: list[
 
     raw_scores: dict[str, tuple[float, int]] = {}
     plant_groups = [(name, grp) for name, grp in prices_df.groupby("plant_name")]
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    # Use as_completed() + shutdown(wait=False) to prevent blocking indefinitely
+    # on slow LP solves (365 days × 35,040 time steps per plant), while still
+    # reporting per-plant progress via progress_cb.
+    import concurrent.futures as _cf
+    _annual_timeout = 300 * (len(plant_groups) / 8 + 1)  # 5 min/plant budget
+    executor = ThreadPoolExecutor(max_workers=8)
+    _done_count = 0
+    try:
         futures = {executor.submit(_compute_plant_4h, n, g): n for n, g in plant_groups}
-        for future in as_completed(futures):
-            name, score, nd = future.result()
-            if not pd.isna(score):
-                raw_scores[name] = (score, nd)
+        try:
+            for future in _cf.as_completed(futures, timeout=_annual_timeout):
+                pname = futures[future]
+                _done_count += 1
+                try:
+                    name, score, nd = future.result()
+                    if not pd.isna(score):
+                        raw_scores[name] = (score, nd)
+                except Exception as exc:
+                    logger.warning("Annual nodal PF failed for %s: %s", pname, exc)
+                if progress_cb:
+                    try:
+                        progress_cb(_done_count, len(plant_groups), pname)
+                    except Exception:
+                        pass
+        except _cf.TimeoutError:
+            n_remaining = len(futures) - _done_count
+            logger.warning(
+                "Nodal PF annual: %d/%d plants timed out after %.0fs — skipping",
+                n_remaining, len(futures), _annual_timeout,
+            )
+    finally:
+        executor.shutdown(wait=False)
 
     if not raw_scores:
         logger.warning("Nodal PF annual: all plants failed for %d", year)
@@ -1153,10 +1202,10 @@ def send_daily_ranking(
     # date window so the nodal rankings reflect the correct time period.
     from concurrent.futures import ThreadPoolExecutor as _RankTPE
 
-    def _nodal_ranks_for(start: date, end: date) -> dict[str, dict]:
+    def _nodal_ranks_for(start: date, end: date, milp_timeout_s: float = 300.0) -> dict[str, dict]:
         try:
             prices = _query_nodal_prices(pg_url, plant_names, start, end)
-            return _compute_nodal_pf_ranks(prices) if not prices.empty else {}
+            return _compute_nodal_pf_ranks(prices, overall_timeout_s=milp_timeout_s) if not prices.empty else {}
         except Exception as exc:
             logger.warning("Nodal PF compute failed [%s→%s]: %s", start, end, exc)
             return {}
@@ -1165,13 +1214,30 @@ def send_daily_ranking(
     nodal_ranks_month:     dict[str, dict] = {}
     nodal_ranks_ytd:       dict[str, dict] = {}
     try:
+        from concurrent.futures import TimeoutError as _FutureTimeout
+        # MILP budgets scale with window size.  The inner _compute_nodal_pf_ranks
+        # uses wait(timeout=milp_timeout_s) + shutdown(wait=False) so these outer
+        # futures complete within milp_timeout_s regardless of LP solver speed.
+        _yd_budget  = 240    # 4 min   — 1 day  × 40 plants
+        _mo_budget  = 600    # 10 min  — ~30 days × 40 plants
+        _ytd_budget = 1500   # 25 min  — 180+ days × 40 plants (LP grows with T)
         with _RankTPE(max_workers=3) as _ex:
-            _f_yd  = _ex.submit(_nodal_ranks_for, yesterday,   end_excl)
-            _f_mo  = _ex.submit(_nodal_ranks_for, month_start, end_excl)
-            _f_ytd = _ex.submit(_nodal_ranks_for, ytd_start,   end_excl)
-            nodal_ranks_yesterday = _f_yd.result()
-            nodal_ranks_month     = _f_mo.result()
-            nodal_ranks_ytd       = _f_ytd.result()
+            _f_yd  = _ex.submit(_nodal_ranks_for, yesterday,   end_excl, _yd_budget)
+            _f_mo  = _ex.submit(_nodal_ranks_for, month_start, end_excl, _mo_budget)
+            _f_ytd = _ex.submit(_nodal_ranks_for, ytd_start,   end_excl, _ytd_budget)
+            # Outer timeouts add a safety margin on top of the inner budget.
+            try:
+                nodal_ranks_yesterday = _f_yd.result(timeout=_yd_budget + 60)
+            except _FutureTimeout:
+                logger.warning("Nodal PF yesterday timed out — skipping")
+            try:
+                nodal_ranks_month = _f_mo.result(timeout=_mo_budget + 60)
+            except _FutureTimeout:
+                logger.warning("Nodal PF month timed out — skipping")
+            try:
+                nodal_ranks_ytd = _f_ytd.result(timeout=_ytd_budget + 60)
+            except _FutureTimeout:
+                logger.warning("Nodal PF YTD timed out — skipping")
         logger.info("Nodal PF ranks: yd=%d mo=%d ytd=%d plants",
                     len(nodal_ranks_yesterday), len(nodal_ranks_month), len(nodal_ranks_ytd))
     except Exception as exc:

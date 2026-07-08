@@ -755,6 +755,10 @@ def main() -> None:
     else:
         download_dir = Path(tempfile.gettempdir()) / "lingfeng_downloads"
 
+    from datetime import datetime as _dt_now
+    _run_label = f"{start_date}→{end_date} ({','.join(markets[:3])}{'…' if len(markets) > 3 else ''})"
+    _db_set_setting("lingfeng_last_started", f"{_dt_now.now().isoformat(timespec='seconds')} | {_run_label}")
+
     run_pipeline(
         username=username,
         password=password,
@@ -774,6 +778,7 @@ def main() -> None:
         keep_files=args.keep_files,
         chunk_days=args.chunk_days,
     )
+    _db_set_setting("lingfeng_last_completed", f"{_dt_now.now().isoformat(timespec='seconds')} | {_run_label}")
 
     # ── Post-resume gap check ─────────────────────────────────────────────────
     if _resuming_from_halt:

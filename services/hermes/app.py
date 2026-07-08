@@ -80,6 +80,46 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# ── In-process job progress registry ─────────────────────────────────────────
+# Long-running background threads update this dict so /progress can report state.
+# Keys: job name (str); values: dict with status/done/total/current/timestamps.
+import threading as _registry_threading
+_JOB_REGISTRY: dict[str, dict] = {}
+_JOB_LOCK = _registry_threading.Lock()
+
+def _job_start(name: str, label: str, total: int = 0) -> None:
+    import datetime as _jdt
+    with _JOB_LOCK:
+        _JOB_REGISTRY[name] = {
+            "label": label,
+            "status": "running",
+            "done": 0,
+            "total": total,
+            "current": "",
+            "started_at": _jdt.datetime.now().strftime("%H:%M"),
+            "finished_at": None,
+            "note": "",
+        }
+
+def _job_update(name: str, done: int, total: int = None, current: str = "") -> None:
+    with _JOB_LOCK:
+        if name in _JOB_REGISTRY:
+            _JOB_REGISTRY[name]["done"] = done
+            if total is not None:
+                _JOB_REGISTRY[name]["total"] = total
+            _JOB_REGISTRY[name]["current"] = current
+
+def _job_finish(name: str, success: bool = True, note: str = "") -> None:
+    import datetime as _jdt
+    with _JOB_LOCK:
+        if name in _JOB_REGISTRY:
+            _JOB_REGISTRY[name].update({
+                "status": "done" if success else "failed",
+                "finished_at": _jdt.datetime.now().strftime("%H:%M"),
+                "note": note,
+                "current": "",
+            })
+
 # ── Hermes category menu ───────────────────────────────────────────────────────
 _MENU_TRIGGER_WORDS = {"/start", "/menu", "/help", "start", "menu", "help",
                        "菜单", "帮助菜单", "/菜单", "menu mengxi", "/menu mengxi"}
@@ -191,7 +231,7 @@ def _build_route_card(filename: str, current_folder: str, message_id: str, web_u
     short = current_folder.replace("etrm/bess-platform/data/", "…/")
     # Show local Windows sync path — more useful than the webUrl which
     # requires Microsoft auth and times out in Feishu's in-app browser.
-    local_path = "OneDrive\\" + current_folder.replace("/", "\\")
+    local_path = "OneDrive\\etrm\\bess-platform\\data\\" + current_folder.replace("etrm/bess-platform/data/", "").replace("/", "\\")
     body = f"已归档至 `{short}`\n📂 本地路径：`{local_path}`\n路径有误？点击下方按钮重新存档："
     return {
         "config": {"wide_screen_mode": True},
@@ -2029,6 +2069,181 @@ def _handle_message(
             logger.error("Failed to reply lingfeng password ack: %s", _e)
         return True
 
+    # ── "提供源文件 / 原文 / source file" — KB doc lookup by title ───────────────
+    # Intercept before LLM so the agent can't fall back to ONEDRIVE_SEARCH.
+    # Pattern: "提供源文件：XXX" / "给我看原文：XXX" / "找一下原文 XXX" / "source file: XXX"
+    _src_m = _re.search(
+        r'(?:提供源文件|给我看原文|新闻源文件|找一下原文|发给我原文|source\s*file)\s*[：:﹕]?\s*(.+)',
+        msg.text.strip(), _re.I,
+    )
+    if _src_m:
+        _src_title = _src_m.group(1).strip().rstrip(".pdfPDF").strip()
+        _pg_src = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+
+        def _src_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("source-file reply failed: %s", _e)
+
+        _pg_src = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _kb_doc = None
+
+        # Step 1: exact / fuzzy title match in spot_knowledge_docs
+        if _pg_src:
+            try:
+                import psycopg2 as _psyco
+                # Try progressively shorter keyword windows for a match
+                for _kw_len in (40, 20, 10):
+                    _kw = "%" + _src_title[:_kw_len] + "%"
+                    with _psyco.connect(_pg_src, options="-c statement_timeout=8000") as _kc:
+                        with _kc.cursor() as _kcur:
+                            _kcur.execute(
+                                "SELECT doc_id, title, url, source_name, category "
+                                "FROM staging.spot_knowledge_docs "
+                                "WHERE title ILIKE %s ORDER BY ingested_at DESC LIMIT 3",
+                                (_kw,)
+                            )
+                            _kb_doc = _kcur.fetchall()
+                    if _kb_doc:
+                        break
+            except Exception as _ke:
+                logger.warning("source-file KB title lookup failed: %s", _ke)
+
+        # Step 2: if title lookup missed, search chunk text using keywords from title
+        if not _kb_doc and _pg_src:
+            try:
+                import psycopg2 as _psyco2
+                # Extract 2–3 meaningful keywords (≥3 chars, skip stopwords)
+                _stopwords = {"的", "了", "和", "与", "及", "对", "在", "从", "到", "中",
+                              "年", "月", "日", "版", "pdf", "v1", "v2"}
+                _kws = [w for w in _re.findall(r'[\w\u4e00-\u9fff]{2,}', _src_title)
+                        if w.lower() not in _stopwords][:3]
+                if _kws:
+                    with _psyco2.connect(_pg_src, options="-c statement_timeout=10000") as _kc2:
+                        with _kc2.cursor() as _kcur2:
+                            # Use AND across all keywords for precision
+                            _where = " AND ".join(
+                                f"c.chunk_text ILIKE %s" for _ in _kws
+                            )
+                            _params = tuple(f"%{kw}%" for kw in _kws)
+                            _kcur2.execute(
+                                f"SELECT DISTINCT d.doc_id, d.title, d.url, d.source_name, d.category "
+                                f"FROM staging.spot_knowledge_docs d "
+                                f"JOIN staging.spot_knowledge_chunks c ON c.doc_id = d.doc_id "
+                                f"WHERE {_where} "
+                                f"ORDER BY d.doc_id DESC LIMIT 3",
+                                _params,
+                            )
+                            _kb_doc = _kcur2.fetchall()
+            except Exception as _ve:
+                logger.warning("source-file chunk lookup failed: %s", _ve)
+
+        if _kb_doc:
+            _lines = ["📄 知识库中找到以下匹配文档：\n"]
+            for _did, _dtitle, _durl, _dsrc, _dcat in _kb_doc:
+                _link = f"[{_dtitle}]({_durl})" if _durl else _dtitle
+                _lines.append(f"• {_link}\n  来源: {_dsrc or '—'}  分类: {_dcat or '—'}")
+            _src_reply("\n".join(_lines))
+            return True
+
+        # Nothing in KB — tell the user and stop (don't fall through to OneDrive)
+        _src_reply(
+            f"⚠️ 知识库中未找到「{_src_title[:50]}」。\n"
+            f"该文章可能是微信公众号文章，链接在发布后数小时内失效。\n"
+            f"如需保存，请直接发送文章链接，我会将其添加到知识库。"
+        )
+        return True
+
+    # ── /progress — show status of long-running background jobs ─────────────────
+    if _re.match(r'^/?progress$', msg.text.strip(), _re.I):
+        import datetime as _pdt
+
+        def _fmt_job(name: str, j: dict) -> str:
+            icon = "🔄" if j["status"] == "running" else ("✅" if j["status"] == "done" else "❌")
+            line = f"{icon} {j['label']}"
+            if j["total"]:
+                pct = int(100 * j["done"] / j["total"]) if j["total"] else 0
+                line += f"\n   进度: {j['done']}/{j['total']} ({pct}%)"
+            if j["current"]:
+                line += f"  当前: {j['current']}"
+            if j["started_at"]:
+                line += f"\n   开始: {j['started_at']}"
+            if j["finished_at"]:
+                line += f"  完成: {j['finished_at']}"
+            if j["note"]:
+                line += f"\n   {j['note']}"
+            return line
+
+        _pg_p = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _lines: list[str] = [f"📊 Job Progress  [{_pdt.datetime.now().strftime('%H:%M')}]", ""]
+
+        # In-process jobs
+        with _JOB_LOCK:
+            _snapshot = dict(_JOB_REGISTRY)
+        if _snapshot:
+            for _jname, _jstate in _snapshot.items():
+                _lines.append(_fmt_job(_jname, _jstate))
+        else:
+            _lines.append("（没有已知的进行中或最近完成的任务）")
+
+        # capcomp screener (has its own module-level status)
+        try:
+            _cs = _get_capcomp_status()
+            if _cs.get("running") or _cs.get("finished_at"):
+                _cs_icon = "🔄" if _cs["running"] else "✅"
+                _cs_total = _cs.get("provinces_total", 32)
+                _cs_done = _cs.get("provinces_done", 0)
+                _cs_pct = int(100 * _cs_done / _cs_total) if _cs_total else 0
+                _cs_line = f"{_cs_icon} capcomp 容量补偿扫描\n   {_cs_done}/{_cs_total} 省 ({_cs_pct}%)  ·  cap_comp: {_cs.get('cap_comp_found', 0)}条  FR: {_cs.get('fr_found', 0)}条"
+                if _cs.get("current_province"):
+                    _cs_line += f"  当前: {_cs['current_province']}"
+                if _cs.get("finished_at"):
+                    _cs_line += f"\n   完成: {_cs['finished_at'][:16]}"
+                _lines.append(_cs_line)
+        except Exception:
+            pass
+
+        # LingFeng (external process — status via DB)
+        if _pg_p:
+            try:
+                _lf_trigger  = agent.tasks.get_setting("lingfeng_trigger_run") or ""
+                _lf_started  = agent.tasks.get_setting("lingfeng_last_started") or ""
+                _lf_done     = agent.tasks.get_setting("lingfeng_last_completed") or ""
+                _lf_halt     = agent.tasks.get_setting("lingfeng_halt_date") or ""
+                if _lf_halt:
+                    _lines.append(f"🔴 LingFeng\n   账号锁定自 {_lf_halt}  发送新密码恢复")
+                elif _lf_trigger:
+                    _lines.append(f"⏳ LingFeng\n   已触发，等待调度器执行（≤15分钟）: {_lf_trigger}")
+                    if _lf_started:
+                        _lines.append(f"   上次开始: {_lf_started[:40]}")
+                elif _lf_started:
+                    _lf_icon = "✅" if _lf_done else "🔄"
+                    _lines.append(f"{_lf_icon} LingFeng\n   上次开始: {_lf_started[:40]}")
+                    if _lf_done:
+                        _lines.append(f"   上次完成: {_lf_done[:40]}")
+            except Exception:
+                pass
+
+        _progress_text = "\n".join(_lines)
+        def _prog_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _pe:
+                logger.error("progress reply failed: %s", _pe)
+        _prog_reply(_progress_text)
+        return True
+
     # ── LingFeng manual backfill trigger ──────────────────────────────────────
     # Accepts: "lingfeng run"  /  "lingfeng backfill"  /  "lingfeng补填"
     #          "lingfeng backfill 2026-01-01"  /  "lingfeng backfill 2026-01-01 to 2026-01-31"
@@ -2323,9 +2538,10 @@ def _handle_message(
         if not _pg:
             _bfa_reply("⚠️ 数据库未配置。")
             return True
-        _bfa_reply(f"⏳ 开始计算 {_year} 年节点PF排名（约2-4分钟），稍候…")
+        _bfa_reply(f"⏳ 开始计算 {_year} 年节点PF排名（约30分钟），稍候…\n发送 /progress 查看进度。")
 
         def _run_bfa():
+            _job_start("backfill-annual", f"{_year} 年节点PF排名")
             try:
                 from services.hermes.mengxi_ranking_report import (
                     _read_station_master,
@@ -2333,10 +2549,18 @@ def _handle_message(
                 )
                 plants = _read_station_master(_pg)
                 plant_names = [p["plant_name"] for p in plants]
-                _do_annual(_pg, _year, plant_names)
+                _job_update("backfill-annual", 0, len(plant_names))
+
+                def _cb(done: int, total: int, plant_name: str) -> None:
+                    _job_update("backfill-annual", done, total, plant_name)
+
+                _do_annual(_pg, _year, plant_names, progress_cb=_cb)
+                _job_finish("backfill-annual", success=True,
+                            note=f"{len(plant_names)} plants → reports.nodal_pf_annual")
                 _bfa_reply(f"✅ {_year} 年节点PF排名已计算完成，存入 reports.nodal_pf_annual。")
             except Exception as _e:
                 logger.error("backfill-annual failed: %s", _e)
+                _job_finish("backfill-annual", success=False, note=str(_e))
                 _bfa_reply(f"⚠️ 计算失败：{_e}")
 
         import threading as _threading
@@ -2860,6 +3084,35 @@ def _handle_message(
                 "发完后告诉我报告主题和你的想法，我会结合文件和市场数据为你起草报告。\n"
                 "发送「取消报告模式」可随时退出。"
             )
+        elif action.action == "BAYESIAN_ANALYSIS":
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _bj_now = _dt.now(tz=_tz(_td(hours=8)))
+            _bj_str = _bj_now.strftime('%Y-%m-%d %H:%M')
+            ack = action.reply or "🧠 正在进行贝叶斯推理分析（先验 → 证据 → 后验），约30秒…"
+            _ack_full = f"{ack}\n─\n[{_bj_str} 北京时间]"
+            if msg.source == "feishu" and feishu:
+                feishu.send_text(open_id=msg.sender_id, text=_ack_full)
+            elif msg.source == "wecom" and wecom:
+                wecom.send_text(user_id=msg.sender_id, text=_ack_full)
+            elif msg.source == "telegram" and telegram:
+                telegram.send_text(chat_id=msg.sender_id, text=_ack_full)
+            _bay_question = action.params.get("question", msg.text)
+            try:
+                _bay_result = agent.execute(action)
+                _bj_now2 = _dt.now(tz=_tz(_td(hours=8)))
+                _bay_full = f"{_bay_result}\n─\n[{_bj_now2.strftime('%Y-%m-%d %H:%M')} 北京时间]"
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=_bay_full)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=_bay_full)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=_bay_full)
+            except Exception as _bay_err:
+                logger.error("BAYESIAN_ANALYSIS failed: %s", _bay_err, exc_info=True)
+                _err = f"贝叶斯分析失败：{_bay_err}"
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=_err)
+            reply = ""  # already sent above
         elif action.action == "DRAFT_REPORT":
             # Send ack immediately (report generation takes 1-2 min)
             from datetime import datetime as _dt, timezone as _tz, timedelta as _td

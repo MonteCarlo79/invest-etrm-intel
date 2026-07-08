@@ -76,10 +76,17 @@ def _run_spot_query(question: str, api_key: str) -> str:
             get_market_summaries,
             get_market_fundamentals,
         )
-        from services.bess_mcp.tools import bess_get_portfolio_pnl
         from services.knowledge_pool.knowledge_docs import search_reference_docs as _srd
     except ImportError as e:
         return f"Spot market tools unavailable: {e}"
+
+    # bess_mcp is only present in the bess-mcp container, not in hermes — make optional
+    try:
+        from services.bess_mcp.tools import bess_get_portfolio_pnl as _bess_pnl
+        _bess_pnl_available = True
+    except ImportError:
+        _bess_pnl_available = False
+        _bess_pnl = None
 
     tools = [
         {
@@ -148,7 +155,7 @@ def _run_spot_query(question: str, api_key: str) -> str:
                 "required": [],
             },
         },
-        {
+        *([{
             "name": "get_bess_pnl",
             "description": (
                 "Fetch daily P&L and dispatch metrics for Inner Mongolia BESS assets "
@@ -166,7 +173,7 @@ def _run_spot_query(question: str, api_key: str) -> str:
                 },
                 "required": ["start_date", "end_date"],
             },
-        },
+        }] if _bess_pnl_available else []),
         {
             "name": "search_reference_docs",
             "description": (
@@ -201,7 +208,9 @@ def _run_spot_query(question: str, api_key: str) -> str:
             elif name == "get_market_fundamentals":
                 result = get_market_fundamentals(**inputs)
             elif name == "get_bess_pnl":
-                result = bess_get_portfolio_pnl(
+                if not _bess_pnl_available:
+                    return json.dumps({"error": "BESS P&L tool not available in this environment"})
+                result = _bess_pnl(
                     asset_codes=inputs.get("asset_codes"),
                     start_date=inputs["start_date"],
                     end_date=inputs["end_date"],

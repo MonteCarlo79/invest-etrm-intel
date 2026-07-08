@@ -116,9 +116,17 @@ INGEST_NEXT_FILE — user wants to add an upcoming file to the knowledge base (s
   params: {"category": "market_rules|policy_doc|technical_spec|research_report|annual_report|other", "hint": "optional description"}
   reply: tell user to send the file (in their language)
 
-INGEST_URL — fetch a URL and add its content to the knowledge base
+INGEST_URL — fetch a URL, add its content to the knowledge base, and return a summary
   params: {"url": "https://...", "category": "market_rules|policy_doc|research_report|other"}
-  reply: confirmation (in their language)
+  reply: short acknowledgment that you are fetching and summarising (in their language); the actual summary is appended automatically
+
+BAYESIAN_ANALYSIS — reason about a question using Prior → Evidence → Posterior thinking mode
+  params: {"question": "the full question to reason about"}
+  reply: brief acknowledgment that you are starting the analysis (in their language), mention ~30s wait
+  note: use when user asks forward-looking, probabilistic, or analytical questions that benefit from
+        explicit uncertainty quantification and evidence gathering. Triggers: 预测/估计/可能性/判断/
+        你怎么看/你认为/概率/forecast/estimate/how likely/what do you think/odds/probability/
+        分析一下/贝叶斯/bayesian. Do NOT use for simple factual lookups — use MARKET_AGENT for those.
 
 ADD_FILE_RULE — permanently remember to auto-route future files by filename pattern
   params: {"pattern": "partial filename to match (case-insensitive)", "folder_template": "etrm/bess-platform/data/spot reports/{year}", "auto_kb": false, "auto_digest": false, "auto_etl": false}
@@ -219,6 +227,7 @@ Rules:
 - If the message is exactly "蒙西储能日报", use REPLY with text "正在生成日报…" — the app handles this as a report trigger, do NOT use MARKET_AGENT.
 - If the market is ambiguous and you cannot infer it from context, use CLARIFY.
 - When user says "save as Word/PDF/PNG/file" or "export" about a previous answer, use EXPORT_ANSWER.
+- When user says "提供源文件", "给我看原文", "新闻源文件", "原文链接", "找一下原文", "发给我原文", or "source file" in the context of a news article or KB document (e.g. mentioning a ★ rating, article title, or PDF name from a news digest), use MARKET_AGENT(spot) with a KB search question like "find article: <title>". Do NOT use ONEDRIVE_SEARCH or ONEDRIVE_LIST for news/KB content — these articles are stored in the knowledge base, not OneDrive.
 - When user says "我要准备报告/报告模式/start report/先发参考文件/I'll upload files for the report", use START_REPORT_SESSION to open a file collection window before DRAFT_REPORT.
 - When user says "帮我起草/生成/写一份深度报告/分析报告/研究报告/会议材料", "draft a report", "conference report/materials", "prepare a report on X", use DRAFT_REPORT. Extract the topic from the message. Put ALL user notes, outline details, and strategic thoughts into the outline param. Default markets ["spot","bess-map"] for China; add "mengxi" for Inner Mongolia ops; add "internet" for web-backed; adjust to intl codes for global scope. Uploaded reference files (pdf/ppt/txt) sent before this command are automatically included.
 - When KNOWLEDGE BASE CONTEXT is provided above, use it to write an informed reply for REPLY actions.
@@ -585,6 +594,8 @@ class HermesAgent:
                 return f"Uploaded: {result.get('name')} ({result.get('size', '?')} bytes)"
             elif action.action == "INGEST_URL":
                 return self._ingest_url(action.params.get("url", ""))
+            elif action.action == "BAYESIAN_ANALYSIS":
+                return self._run_bayesian(action.params.get("question", ""))
             elif action.action == "MARKET_AGENT":
                 return self._run_market_agent(
                     market=action.params.get("market", ""),
@@ -636,13 +647,63 @@ class HermesAgent:
         try:
             from services.knowledge_pool.knowledge_docs import register_url
             doc_id, is_new, category = register_url(url=url, api_key=self._api_key)
-            if is_new:
-                return f"✅ URL 已添加到知识库 (doc_id={doc_id}, category={category})"
-            else:
-                return f"ℹ️ URL 已存在于知识库中 (doc_id={doc_id})"
+            status = (
+                f"✅ URL 已添加到知识库 (doc_id={doc_id}, category={category})"
+                if is_new
+                else f"ℹ️ URL 已存在于知识库中 (doc_id={doc_id})"
+            )
         except Exception as exc:
             logger.error("INGEST_URL failed for %s: %s", url, exc)
             return f"添加失败：{exc}"
+
+        # Summarise the ingested content so the user gets an immediate answer
+        try:
+            from services.knowledge_pool.knowledge_docs import get_conn
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT chunk_text FROM staging.spot_knowledge_chunks
+                        WHERE doc_id = %s ORDER BY chunk_index LIMIT 30
+                        """,
+                        (doc_id,),
+                    )
+                    rows = cur.fetchall()
+            if rows:
+                full_text = "\n\n".join(r[0] for r in rows)[:12000]
+                from anthropic import Anthropic
+                client = Anthropic(api_key=self._api_key)
+                resp = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=800,
+                    system=(
+                        "You are a research assistant. Summarise the article clearly and concisely. "
+                        "Structure: 核心观点 | 主要内容 | 关键数据/结论. "
+                        "Reply in the same language as the article (Chinese if Chinese)."
+                    ),
+                    messages=[{"role": "user", "content": f"请总结以下文章：\n\n{full_text}"}],
+                )
+                summary = resp.content[0].text.strip()
+                return f"{status}\n\n{summary}"
+        except Exception as exc:
+            logger.warning("INGEST_URL summary failed for doc %s: %s", doc_id, exc)
+
+        return status
+
+    def _run_bayesian(self, question: str) -> str:
+        if not question:
+            return "请告诉我你想分析的问题。"
+        try:
+            from services.hermes.bayesian_agent import BayesianAnalystAgent
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            agent = BayesianAnalystAgent(
+                anthropic_api_key=self._api_key,
+                pg_url=pg_url,
+            )
+            return agent.run(question)
+        except Exception as exc:
+            logger.error("BAYESIAN_ANALYSIS failed: %s", exc)
+            return f"贝叶斯分析失败：{exc}"
 
     def _run_market_agent(self, market: str, question: str) -> str:
         if not market or not question:

@@ -900,6 +900,19 @@ def _build_feishu_card(date_str: str, results: list[dict], api_key: str = "") ->
         summary = r.get("summary", "")
         relevance = r.get("relevance")
         score_str = f"★{relevance}" if relevance is not None else ""
+        # Resolve Sogou redirect URLs — they expire within hours.
+        # Try a quick redirect-follow; fall back to plain text if it fails.
+        if url and "weixin.sogou.com" in url:
+            try:
+                _r = requests.get(url, headers=_WECHAT_HEADERS, timeout=4,
+                                  allow_redirects=True)
+                _final = _r.url
+                if "mp.weixin.qq.com" in _final:
+                    url = _final
+                else:
+                    url = ""  # CAPTCHA / antispider page — omit link
+            except Exception:
+                url = ""  # timeout or network error — show plain text
         link = f"[{title}]({url})" if url else title
         meta = " · ".join(filter(None, [src, score_str, cat, region]))
         lines = [f"• {link}", f"  {meta}"]
