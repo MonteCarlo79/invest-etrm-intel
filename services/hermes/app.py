@@ -2689,6 +2689,105 @@ def _handle_message(
         _threading.Thread(target=_run_bfa, daemon=True).start()
         return True
 
+    # ── /backfill-daily — pre-compute nodal PF scores for a date range ───────
+    # Usage: /backfill-daily                          → 2025-01-01 to yesterday
+    #        /backfill-daily 2026-01-01               → given start to yesterday
+    #        /backfill-daily 2025-06-01 2026-07-08    → explicit range
+    _bfd_m = _re.match(
+        r'^/?backfill[-_]daily(?:\s+(\d{4}-\d{2}-\d{2})(?:\s+(\d{4}-\d{2}-\d{2}))?)?$',
+        msg.text.strip(), _re.I,
+    )
+    if _bfd_m:
+        import datetime as _dt
+
+        _bfd_start = _dt.date.fromisoformat(_bfd_m.group(1)) if _bfd_m.group(1) else _dt.date(2025, 1, 1)
+        _bfd_end   = _dt.date.fromisoformat(_bfd_m.group(2)) if _bfd_m.group(2) else _dt.date.today() - _dt.timedelta(days=1)
+
+        def _bfd_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("backfill-daily reply failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg:
+            _bfd_reply("⚠️ 数据库未配置。")
+            return True
+
+        _bfd_days = (_bfd_end - _bfd_start).days + 1
+        _bfd_reply(
+            f"⏳ 开始预计算节点PF日度数据 {_bfd_start} → {_bfd_end}（{_bfd_days} 天），稍候…\n"
+            f"每天约1秒，共约 {_bfd_days} 秒。完成后会通知。"
+        )
+
+        def _run_bfd():
+            import psycopg2 as _pg2
+            from services.hermes.mengxi_ranking_report import (
+                _read_station_master,
+                compute_and_store_nodal_pf_daily as _do_daily,
+            )
+            try:
+                plants = _read_station_master(_pg)
+                plant_names = [p["plant_name"] for p in plants]
+            except Exception as _e:
+                _bfd_reply(f"⚠️ 读取电站列表失败：{_e}")
+                return
+
+            # Ensure table exists and load already-done dates
+            conn = _pg2.connect(_pg)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS reports.nodal_pf_daily (
+                            data_date   DATE        NOT NULL,
+                            plant_name  TEXT        NOT NULL,
+                            score_2h    FLOAT,
+                            score_4h    FLOAT,
+                            computed_at TIMESTAMPTZ DEFAULT NOW(),
+                            PRIMARY KEY (data_date, plant_name)
+                        )
+                    """)
+                    cur.execute(
+                        "SELECT data_date, COUNT(*) FROM reports.nodal_pf_daily "
+                        "WHERE data_date >= %s AND data_date <= %s "
+                        "GROUP BY data_date",
+                        (_bfd_start, _bfd_end),
+                    )
+                    done_counts = {r[0]: r[1] for r in cur.fetchall()}
+                conn.commit()
+            finally:
+                conn.close()
+
+            d = _bfd_start
+            ok = skipped = errors = 0
+            while d <= _bfd_end:
+                if done_counts.get(d, 0) >= 20:
+                    skipped += 1
+                    d += _dt.timedelta(days=1)
+                    continue
+                try:
+                    n = _do_daily(_pg, d, plant_names, milp_timeout_s=120.0)
+                    if n > 0:
+                        ok += 1
+                    else:
+                        skipped += 1
+                except Exception as _e:
+                    logger.warning("backfill-daily: %s failed: %s", d, _e)
+                    errors += 1
+                d += _dt.timedelta(days=1)
+
+            _bfd_reply(
+                f"✅ 节点PF日度预计算完成：{ok} 天已写入 / {skipped} 天无数据或已存在 / {errors} 天失败\n"
+                f"数据范围：{_bfd_start} → {_bfd_end}"
+            )
+
+        import threading as _threading
+        _threading.Thread(target=_run_bfd, daemon=True).start()
+        return True
+
     # ── /scrape-nodal — manually trigger provincial nodal price scrape ────────
     # Usage:  /scrape-nodal               → yesterday
     #         /scrape-nodal 2026-07-04    → specific date

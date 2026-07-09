@@ -1116,25 +1116,30 @@ with tab_data_mgmt:
                 _ingest_log_lines.append(msg)
                 _ingest_log_area.code("\n".join(_ingest_log_lines[-30:]))
 
+            _CHUNK = 50_000  # rows per upsert batch
             for _i, _entry in enumerate(_ingest_selected):
                 _label = f"{_entry['province']} / {_entry['month']}"
-                _ingest_append_log(f"Reading {_entry['filename']} …")
+                _size_mb = _entry["size_kb"] / 1024
+                _ingest_append_log(f"Reading {_entry['filename']} ({_size_mb:.1f} MB) …")
                 try:
-                    _csv_data = _pd_ingest.read_csv(
+                    _file_total = 0
+                    for _chunk_df in _pd_ingest.read_csv(
                         _entry["path"],
                         encoding="utf-8-sig",
                         dtype={"time_order_96": "Int64"},
-                    )
-                    _rows_to_upsert = _csv_data.to_dict("records")
-                    _n_upserted = _nodal_upsert(_rows_to_upsert, _ingest_engine)
-                    _ingest_append_log(f"  ✓ {_label}: {_n_upserted:,} rows upserted")
+                        chunksize=_CHUNK,
+                    ):
+                        _n_upserted = _nodal_upsert(_chunk_df.to_dict("records"), _ingest_engine)
+                        _file_total += _n_upserted
+                        _ingest_append_log(f"  … {_label}: {_file_total:,} rows so far")
+                    _ingest_append_log(f"  ✓ {_label}: {_file_total:,} rows upserted")
                 except Exception as _exc:
                     _ingest_errors.append(_label)
                     _ingest_append_log(f"  ✗ {_label}: {_exc}")
 
                 _ingest_progress.progress(
                     (_i + 1) / len(_ingest_selected),
-                    text=f"{_i + 1} / {len(_ingest_selected)} files…",
+                    text=f"{_i + 1} / {len(_ingest_selected)} — {_label}",
                 )
 
             _ingest_progress.progress(1.0, text="Done.")
@@ -1142,6 +1147,162 @@ with tab_data_mgmt:
                 st.warning(f"Completed with {len(_ingest_errors)} error(s): " + ", ".join(_ingest_errors))
             else:
                 st.success(f"All {len(_ingest_selected)} file(s) ingested successfully.")
+
+    # ── Section 9: Ingest 南方区域 day-ahead nodal Excel → RDS ───────────────
+    st.markdown("---")
+    st.subheader("9 · Ingest 南方区域 day-ahead nodal Excel → RDS")
+    st.caption(
+        "Scan `data/market-fundamentals/【0.区域级】/南方区域/2-数据/日前节点电价数据/YYYYMM/` "
+        "for Excel files and upsert into `marketdata.md_shanxi_nodal_price_96`."
+    )
+
+    # Coverage summary — what's already in the DB
+    try:
+        import pandas as _pd_nf_cov
+        _nf_cov_sql = """
+            SELECT market_name AS "Province",
+                   TO_CHAR(DATE_TRUNC('month', metric_time::timestamp), 'YYYY-MM') AS "Month",
+                   COUNT(DISTINCT metric_time::date) AS "Days"
+            FROM marketdata.md_shanxi_nodal_price_96
+            WHERE market_name IN ('广东','广西','云南','贵州','海南')
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """
+        _nf_cov_df = _pd_nf_cov.read_sql(_nf_cov_sql, _get_sqlalchemy_engine())
+        if _nf_cov_df.empty:
+            st.info("No 南方区域 data in RDS yet.")
+        else:
+            _nf_pivot = _nf_cov_df.pivot(index="Province", columns="Month", values="Days").fillna(0).astype(int)
+            st.caption("Days ingested per province × month (in `md_shanxi_nodal_price_96`):")
+            st.dataframe(_nf_pivot, use_container_width=True)
+    except Exception as _nf_cov_exc:
+        st.info(f"Could not query coverage: {_nf_cov_exc}")
+
+    def _scan_nanfang_excels(root: str) -> list[dict]:
+        """Return list of {month_dir, filename, date, path, size_kb} for all matching Excel files."""
+        import re as _re_nf
+        entries = []
+        _base = os.path.join(root, "data", "market-fundamentals", "【0.区域级】", "南方区域",
+                             "2-数据", "日前节点电价数据")
+        if not os.path.isdir(_base):
+            return entries
+        _date_pat = _re_nf.compile(r"^(\d{4}-\d{2}-\d{2})日前节点电价查询\.xlsx$")
+        for _month_dir in sorted(os.listdir(_base)):
+            _month_path = os.path.join(_base, _month_dir)
+            if not os.path.isdir(_month_path):
+                continue
+            for _fname in sorted(os.listdir(_month_path)):
+                _m = _date_pat.match(_fname)
+                if not _m:
+                    continue
+                _fpath = os.path.join(_month_path, _fname)
+                _size_kb = os.path.getsize(_fpath) / 1024
+                entries.append({
+                    "month_dir": _month_dir,
+                    "filename":  _fname,
+                    "date":      _m.group(1),
+                    "path":      _fpath,
+                    "size_kb":   round(_size_kb, 1),
+                })
+        return entries
+
+    _nf_excel_entries = _scan_nanfang_excels(_repo_root)
+
+    if not _nf_excel_entries:
+        st.info(
+            "No Excel files found under "
+            "`data/market-fundamentals/【0.区域级】/南方区域/2-数据/日前节点电价数据/`."
+        )
+    else:
+        import pandas as _pd_nf
+
+        _nf_df = _pd_nf.DataFrame(_nf_excel_entries)[["month_dir", "date", "filename", "size_kb"]]
+        _nf_df.columns = ["Month Dir", "Date", "File", "Size (KB)"]
+
+        _nf_all_labels = [f"{r['month_dir']} / {r['date']}" for r in _nf_excel_entries]
+        _nf_selected_labels = st.multiselect(
+            "Select files to ingest",
+            options=_nf_all_labels,
+            default=_nf_all_labels,
+            key="nf_excel_ingest_sel",
+        )
+        st.dataframe(_nf_df, use_container_width=True, hide_index=True)
+
+        _nf_selected = [e for e, lbl in zip(_nf_excel_entries, _nf_all_labels) if lbl in _nf_selected_labels]
+
+        if st.button(
+            f"Ingest {len(_nf_selected)} Excel file(s) to RDS",
+            key="nf_excel_ingest_btn",
+            type="primary",
+            disabled=not bool(_nf_selected),
+        ):
+            from services.fengxing.nodal_price import init_table as _nf_init_table, upsert as _nf_upsert
+
+            _nf_engine = _get_sqlalchemy_engine()
+            _nf_init_table(_nf_engine)
+
+            _nf_progress = st.progress(0.0, text="Starting…")
+            _nf_log_lines: list[str] = []
+            _nf_errors: list[str] = []
+            _nf_log_area = st.empty()
+
+            def _nf_append_log(msg: str) -> None:
+                _nf_log_lines.append(msg)
+                _nf_log_area.code("\n".join(_nf_log_lines[-30:]))
+
+            for _nf_i, _nf_entry in enumerate(_nf_selected):
+                _nf_label = f"{_nf_entry['month_dir']} / {_nf_entry['date']}"
+                _nf_append_log(f"Reading {_nf_entry['filename']} …")
+                try:
+                    # Row 0 = title, row 1 = headers ([地区, 节点名称, 00:00, …, 23:45])
+                    _nf_raw = _pd_nf.read_excel(_nf_entry["path"], header=1, engine="openpyxl")
+                    # Identify the 96 time columns (format HH:MM, 5 chars)
+                    _nf_time_cols = [
+                        c for c in _nf_raw.columns
+                        if isinstance(c, str) and len(c) == 5 and c[2] == ":"
+                    ]
+                    _nf_melted = _nf_raw.melt(
+                        id_vars=["地区", "节点名称"],
+                        value_vars=_nf_time_cols,
+                        var_name="_time_col",
+                        value_name="avg_node_price",
+                    )
+                    # metric_time: YYYY-MM-DD HH:MM:00
+                    _nf_melted["metric_time"] = (
+                        _nf_entry["date"] + " " + _nf_melted["_time_col"] + ":00"
+                    )
+                    # time_order_96: 1-based slot index
+                    _nf_melted["time_order_96"] = _nf_melted["_time_col"].apply(
+                        lambda t: int(t[:2]) * 4 + int(t[3:]) // 15 + 1
+                    )
+                    _nf_melted["market_name"] = _nf_melted["地区"]
+                    _nf_melted["node_name"] = _nf_melted["节点名称"]
+                    _nf_melted["avg_node_price"] = _pd_nf.to_numeric(
+                        _nf_melted["avg_node_price"], errors="coerce"
+                    )
+                    _nf_rows = (
+                        _nf_melted[["node_name", "metric_time", "time_order_96", "market_name", "avg_node_price"]]
+                        .dropna(subset=["avg_node_price"])
+                        .to_dict("records")
+                    )
+                    _n_up = _nf_upsert(_nf_rows, _nf_engine)
+                    _nf_append_log(
+                        f"  ✓ {_nf_label}: {_n_up:,} rows upserted ({len(_nf_rows):,} parsed)"
+                    )
+                except Exception as _exc:
+                    _nf_errors.append(_nf_label)
+                    _nf_append_log(f"  ✗ {_nf_label}: {_exc}")
+
+                _nf_progress.progress(
+                    (_nf_i + 1) / len(_nf_selected),
+                    text=f"{_nf_i + 1} / {len(_nf_selected)} files…",
+                )
+
+            _nf_progress.progress(1.0, text="Done.")
+            if _nf_errors:
+                st.warning(f"Completed with {len(_nf_errors)} error(s): " + ", ".join(_nf_errors))
+            else:
+                st.success(f"All {len(_nf_selected)} Excel file(s) ingested successfully.")
 
 # ---------------------------------------------------------------------------
 # Tab 9: Nodal Maps — per-province PF spread ranking
