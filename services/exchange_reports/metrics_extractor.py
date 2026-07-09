@@ -134,6 +134,38 @@ CREATE TABLE IF NOT EXISTS staging.exchange_monthly_metrics (
     retailers_count             INT,             -- 售电公司
     consumers_count             INT,             -- 电力用户
 
+    -- Settlement prices by generation type (yuan/MWh)
+    contract_avg_price_yuan_mwh          NUMERIC(8,2),   -- 合约均价
+    thermal_settlement_price_yuan_mwh    NUMERIC(8,2),   -- 火电结算均价
+    wind_settlement_price_yuan_mwh       NUMERIC(8,2),   -- 风电结算均价
+    solar_settlement_price_yuan_mwh      NUMERIC(8,2),   -- 光伏结算均价
+    nuclear_settlement_price_yuan_mwh    NUMERIC(8,2),   -- 核电结算均价
+    bess_settlement_price_yuan_mwh       NUMERIC(8,2),   -- 储能结算均价
+
+    -- Generation volumes by fuel type (亿千瓦时)
+    thermal_volume_gwh          NUMERIC(12,2),   -- 火电上网/结算电量
+    wind_volume_gwh             NUMERIC(12,2),   -- 风电上网/结算电量
+    solar_volume_gwh            NUMERIC(12,2),   -- 光伏上网/结算电量
+    hydro_volume_gwh            NUMERIC(12,2),   -- 水电上网电量
+    nuclear_volume_gwh          NUMERIC(12,2),   -- 核电上网电量
+    bess_traded_volume_gwh      NUMERIC(12,2),   -- 储能成交/上网电量
+
+    -- Interprovincial flows (亿千瓦时)
+    incoming_volume_gwh         NUMERIC(12,2),   -- 外来电/省间受入
+    outgoing_volume_gwh         NUMERIC(12,2),   -- 外送电量
+
+    -- Capacity breakdown (GW)
+    wind_capacity_gw            NUMERIC(10,2),   -- 风电装机
+    solar_capacity_gw           NUMERIC(10,2),   -- 光伏装机
+    thermal_capacity_gw         NUMERIC(10,2),   -- 火电装机
+    bess_capacity_gw            NUMERIC(10,2),   -- 储能装机
+    nuclear_capacity_gw         NUMERIC(10,2),   -- 核电装机
+
+    -- Retailer trading
+    retailer_volume_gwh                    NUMERIC(12,2), -- 售电公司代理电量
+    retailer_settlement_price_yuan_mwh     NUMERIC(8,2),  -- 售电侧结算均价
+    retailer_service_fee_million_yuan      NUMERIC(10,2), -- 代理服务费 (万元)
+
     -- Text summary
     key_highlights              TEXT,            -- AI-generated 2-3 sentence summary
 
@@ -265,6 +297,118 @@ _TOOL_SCHEMA = {
                 "type": ["integer", "null"],
                 "description": "Number of electricity consumers. Look for 电力用户, 购电用户.",
             },
+            # ── Settlement prices by generation type ────────────────────
+            "contract_avg_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Average contract (中长期) price yuan/MWh. Look for 合约均价. "
+                               "Distinct from spot or settlement average.",
+            },
+            "thermal_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Thermal power settlement average price yuan/MWh. "
+                               "Look for 火电结算均价, 煤电结算均价.",
+            },
+            "wind_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Wind power settlement average price yuan/MWh. Look for 风电结算均价.",
+            },
+            "solar_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Solar/PV settlement average price yuan/MWh. Look for 光伏结算均价, 太阳能结算均价.",
+            },
+            "nuclear_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Nuclear power settlement average price yuan/MWh. Look for 核电结算均价.",
+            },
+            "bess_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Battery energy storage settlement average price yuan/MWh. "
+                               "Look for 储能结算均价, 独立新型储能结算均价.",
+            },
+            # ── Generation volumes by fuel type ─────────────────────────
+            "thermal_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Thermal power generation/settlement volume in 亿千瓦时. "
+                               "Look for 火电上网电量, 火电结算电量, 煤电发电量.",
+            },
+            "wind_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Wind power generation/settlement volume in 亿千瓦时. "
+                               "Look for 风电上网电量, 风电结算电量.",
+            },
+            "solar_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Solar/PV generation/settlement volume in 亿千瓦时. "
+                               "Look for 光伏上网电量, 光伏结算电量, 太阳能发电量.",
+            },
+            "hydro_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Hydro power generation/settlement volume in 亿千瓦时. "
+                               "Look for 水电上网电量, 水电发电量.",
+            },
+            "nuclear_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Nuclear power generation/settlement volume in 亿千瓦时. "
+                               "Look for 核电上网电量, 核电发电量.",
+            },
+            "bess_traded_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Battery storage traded/settlement volume in 亿千瓦时. "
+                               "Look for 储能成交电量, 独立新型储能上网电量, 储能放电量.",
+            },
+            # ── Interprovincial flows ────────────────────────────────────
+            "incoming_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Incoming electricity from other provinces (外来电/省间受入) in 亿千瓦时. "
+                               "Look for 省间受入, 外来电量, 受西电/云电/北电, 外购电.",
+            },
+            "outgoing_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Outgoing electricity to other provinces in 亿千瓦时. "
+                               "Look for 外送电量, 省间送出, 送广东/海南/华东.",
+            },
+            # ── Capacity breakdown ───────────────────────────────────────
+            "wind_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Wind power installed capacity in GW. "
+                               "Look for 风电装机容量. If in 万千瓦, divide by 100.",
+            },
+            "solar_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Solar/PV installed capacity in GW (include both centralised and distributed). "
+                               "Look for 光伏装机容量, 太阳能发电装机. If in 万千瓦, divide by 100.",
+            },
+            "thermal_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Thermal power installed capacity in GW. "
+                               "Look for 火电装机容量, 煤电装机. If in 万千瓦, divide by 100.",
+            },
+            "bess_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Battery energy storage installed capacity in GW. "
+                               "Look for 储能装机容量, 新型储能装机. If in 万千瓦, divide by 100.",
+            },
+            "nuclear_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Nuclear power installed capacity in GW. "
+                               "Look for 核电装机容量. If in 万千瓦, divide by 100.",
+            },
+            # ── Retailer trading ────────────────────────────────────────
+            "retailer_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Volume traded by electricity retailers in 亿千瓦时. "
+                               "Look for 售电公司成交/结算电量, 售电公司代理电量.",
+            },
+            "retailer_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Retailer-side settlement average price yuan/MWh. "
+                               "Look for 售电侧结算均价, 售电公司结算均价.",
+            },
+            "retailer_service_fee_million_yuan": {
+                "type": ["number", "null"],
+                "description": "Retailer service fee total in million yuan (万元). "
+                               "Look for 代理服务费, 售电服务费. If in 万元, use directly.",
+            },
             "key_highlights": {
                 "type": "string",
                 "description": (
@@ -323,7 +467,34 @@ def extract_metrics(
         "\n\nFor avg_price look for: 结算均价, 成交均价, 加权平均价, 市场均价, 平均电价. "
         "For spot_volume look for: 现货成交量, 日前+实时成交量之和, 现货市场成交. "
         "For spot_avg_price look for: 现货均价, 日前均价, 现货结算均价. "
-        "Use null for any field not present in the text."
+        "\n\nFor settlement prices by type: "
+        "contract_avg_price → 合约均价; "
+        "thermal_settlement_price → 火电/煤电结算均价; "
+        "wind_settlement_price → 风电结算均价; "
+        "solar_settlement_price → 光伏结算均价; "
+        "nuclear_settlement_price → 核电结算均价; "
+        "bess_settlement_price → 储能结算均价/独立新型储能结算均价. "
+        "\n\nFor generation volumes by type (in 亿千瓦时): "
+        "thermal_volume → 火电上网/发电/结算电量; "
+        "wind_volume → 风电上网/发电/结算电量; "
+        "solar_volume → 光伏上网/发电/结算电量; "
+        "hydro_volume → 水电上网/发电量; "
+        "nuclear_volume → 核电上网/发电量; "
+        "bess_traded_volume → 储能成交/结算/上网电量. "
+        "\n\nFor interprovincial flows: "
+        "incoming_volume → 省间受入/外来电量/受西电/受云电; "
+        "outgoing_volume → 外送电量/送广东/省间送出. "
+        "\n\nFor capacity breakdown (in GW, divide 万千瓦 by 100): "
+        "wind_capacity_gw → 风电装机; "
+        "solar_capacity_gw → 光伏装机 (include all types if stated separately); "
+        "thermal_capacity_gw → 火电/煤电装机; "
+        "bess_capacity_gw → 储能/新型储能装机; "
+        "nuclear_capacity_gw → 核电装机. "
+        "\n\nFor retailer trading: "
+        "retailer_volume → 售电公司代理/结算电量; "
+        "retailer_settlement_price → 售电侧/售电公司结算均价; "
+        "retailer_service_fee_million_yuan → 代理服务费 (in 万元). "
+        "\nUse null for any field not present in the text."
     )
     user_message = (
         f"Extract market metrics from this {province} power exchange report "
@@ -397,6 +568,28 @@ def _sanity_check(metrics: dict) -> dict:
             val = None
         metrics[field] = val
 
+    # Capacity breakdown sanity: each should be 0–300 GW per province
+    for field in ("wind_capacity_gw", "solar_capacity_gw", "thermal_capacity_gw",
+                  "nuclear_capacity_gw", "bess_capacity_gw"):
+        val = metrics.get(field)
+        if val is not None and val > 300:
+            val = round(val / 100, 2)
+            logger.info("sanity_check: corrected %s → %.2f GW (÷100)", field, val)
+        if val is not None and val <= 0:
+            val = None
+        metrics[field] = val
+
+    # Settlement prices: should be 0–5000 yuan/MWh; null if implausible
+    for field in ("contract_avg_price_yuan_mwh",
+                  "thermal_settlement_price_yuan_mwh", "wind_settlement_price_yuan_mwh",
+                  "solar_settlement_price_yuan_mwh", "nuclear_settlement_price_yuan_mwh",
+                  "bess_settlement_price_yuan_mwh", "retailer_settlement_price_yuan_mwh"):
+        val = metrics.get(field)
+        if val is not None and (val < 0 or val > 5000):
+            logger.info("sanity_check: nulled %s %.2f (out of range)", field, val)
+            val = None
+        metrics[field] = val
+
     return metrics
 
 
@@ -409,6 +602,22 @@ _METRIC_COLS = [
     "renewable_pct", "wind_pct", "solar_pct", "thermal_pct", "hydro_pct",
     "installed_capacity_gw", "max_load_gw", "avg_load_gw",
     "market_participants_total", "generators_count", "retailers_count", "consumers_count",
+    # Settlement prices by generation type
+    "contract_avg_price_yuan_mwh",
+    "thermal_settlement_price_yuan_mwh", "wind_settlement_price_yuan_mwh",
+    "solar_settlement_price_yuan_mwh", "nuclear_settlement_price_yuan_mwh",
+    "bess_settlement_price_yuan_mwh",
+    # Generation volumes by fuel type
+    "thermal_volume_gwh", "wind_volume_gwh", "solar_volume_gwh",
+    "hydro_volume_gwh", "nuclear_volume_gwh", "bess_traded_volume_gwh",
+    # Interprovincial flows
+    "incoming_volume_gwh", "outgoing_volume_gwh",
+    # Capacity breakdown
+    "wind_capacity_gw", "solar_capacity_gw", "thermal_capacity_gw",
+    "bess_capacity_gw", "nuclear_capacity_gw",
+    # Retailer trading
+    "retailer_volume_gwh", "retailer_settlement_price_yuan_mwh",
+    "retailer_service_fee_million_yuan",
     "key_highlights",
 ]
 
@@ -541,6 +750,46 @@ def get_available_months(pg_url: Optional[str] = None) -> list[str]:
                 "SELECT DISTINCT TO_CHAR(report_month, 'YYYY-MM') "
                 "FROM staging.exchange_monthly_metrics "
                 "ORDER BY 1 DESC"
+            )
+            return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_metrics_timeseries(
+    province: str,
+    report_type: str = "monthly",
+    pg_url: Optional[str] = None,
+) -> list[dict]:
+    """Return all metrics rows for a province ordered by report_month."""
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM staging.exchange_monthly_metrics
+                WHERE province = %s AND report_type = %s
+                ORDER BY report_month
+                """,
+                (province, report_type),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_available_provinces(pg_url: Optional[str] = None) -> list[str]:
+    """Return distinct provinces that have metrics rows, sorted."""
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT province FROM staging.exchange_monthly_metrics ORDER BY province"
             )
             return [r[0] for r in cur.fetchall()]
     finally:

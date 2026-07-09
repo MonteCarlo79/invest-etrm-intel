@@ -5416,7 +5416,7 @@ with tab_mgmt:
         # ── Metrics tab switcher ───────────────────────────────────────────────
         _emr_view = st.radio(
             "View",
-            ["📊 数据汇总表 Metrics", "📂 文件清单 File List"],
+            ["📊 数据汇总表 Metrics", "📈 趋势分析 Trends", "📂 文件清单 File List", "🗺️ 省级Excel数据 Province Data"],
             horizontal=True, key="emr_view",
         )
 
@@ -5454,28 +5454,104 @@ with tab_mgmt:
                     import pandas as _pd_emr2
                     _emr_mdf = _pd_emr2.DataFrame(_emr_mrows)
 
-                    # Numeric display columns
-                    _emr_disp_cols = {
-                        "province": "省份",
-                        "total_volume_gwh": "总成交量(亿kWh)",
-                        "volume_yoy_pct": "同比(%)",
-                        "avg_price_yuan_mwh": "均价(元/MWh)",
-                        "peak_price_yuan_mwh": "峰段价(元/MWh)",
-                        "valley_price_yuan_mwh": "谷段价(元/MWh)",
-                        "spot_volume_gwh": "现货量(亿kWh)",
-                        "spot_avg_price_yuan_mwh": "现货均价",
-                        "renewable_pct": "新能源占比(%)",
-                        "installed_capacity_gw": "装机容量(GW)",
-                        "max_load_gw": "最大负荷(GW)",
-                        "market_participants_total": "市场主体(户)",
-                    }
-                    _avail = [c for c in _emr_disp_cols if c in _emr_mdf.columns]
-                    _emr_show = _emr_mdf[_avail].rename(columns=_emr_disp_cols)
-                    st.dataframe(
-                        _emr_show.set_index("省份"),
-                        use_container_width=True,
+                    # ── Sub-tabs ───────────────────────────────────────────────
+                    _emr_t1, _emr_t2, _emr_t3, _emr_t4, _emr_t5 = st.tabs(
+                        ["概览", "结算价格", "发电量", "装机容量", "零售市场"]
                     )
-                    st.caption(f"{len(_emr_mrows)} provinces with extracted metrics for {_emr_sel_month}.")
+
+                    with _emr_t1:
+                        _emr_c1 = {
+                            "province": "省份",
+                            "total_volume_gwh": "总成交量(亿kWh)",
+                            "volume_yoy_pct": "同比(%)",
+                            "avg_price_yuan_mwh": "结算均价(元/MWh)",
+                            "contract_avg_price_yuan_mwh": "合约均价",
+                            "spot_volume_gwh": "现货量(亿kWh)",
+                            "spot_avg_price_yuan_mwh": "现货均价",
+                            "peak_price_yuan_mwh": "峰段价",
+                            "valley_price_yuan_mwh": "谷段价",
+                            "renewable_pct": "新能源占比(%)",
+                            "installed_capacity_gw": "总装机(GW)",
+                            "max_load_gw": "最大负荷(GW)",
+                            "market_participants_total": "市场主体(户)",
+                        }
+                        _a1 = [c for c in _emr_c1 if c in _emr_mdf.columns]
+                        st.dataframe(
+                            _emr_mdf[_a1].rename(columns=_emr_c1).set_index("省份"),
+                            use_container_width=True,
+                        )
+                        st.caption(f"{len(_emr_mrows)} provinces · {_emr_sel_month}")
+
+                    with _emr_t2:
+                        _emr_c2 = {
+                            "province": "省份",
+                            "contract_avg_price_yuan_mwh": "合约均价",
+                            "avg_price_yuan_mwh": "结算均价",
+                            "thermal_settlement_price_yuan_mwh": "火电",
+                            "wind_settlement_price_yuan_mwh": "风电",
+                            "solar_settlement_price_yuan_mwh": "光伏",
+                            "nuclear_settlement_price_yuan_mwh": "核电",
+                            "bess_settlement_price_yuan_mwh": "储能",
+                            "retailer_settlement_price_yuan_mwh": "售电公司均价",
+                            "spot_avg_price_yuan_mwh": "现货均价",
+                        }
+                        _a2 = [c for c in _emr_c2 if c in _emr_mdf.columns]
+                        st.dataframe(
+                            _emr_mdf[_a2].rename(columns=_emr_c2).set_index("省份"),
+                            use_container_width=True,
+                        )
+                        st.caption("单位: 元/MWh")
+
+                    with _emr_t3:
+                        _emr_c3 = {
+                            "province": "省份",
+                            "total_volume_gwh": "总成交量",
+                            "thermal_volume_gwh": "火电",
+                            "wind_volume_gwh": "风电",
+                            "solar_volume_gwh": "光伏",
+                            "hydro_volume_gwh": "水电",
+                            "nuclear_volume_gwh": "核电",
+                            "bess_traded_volume_gwh": "储能",
+                            "spot_volume_gwh": "现货量",
+                            "incoming_volume_gwh": "外来电",
+                            "outgoing_volume_gwh": "外送电",
+                        }
+                        _a3 = [c for c in _emr_c3 if c in _emr_mdf.columns]
+                        st.dataframe(
+                            _emr_mdf[_a3].rename(columns=_emr_c3).set_index("省份"),
+                            use_container_width=True,
+                        )
+                        st.caption("单位: 亿kWh")
+
+                    with _emr_t4:
+                        _emr_c4 = {
+                            "province": "省份",
+                            "installed_capacity_gw": "总装机(GW)",
+                            "wind_capacity_gw": "风电",
+                            "solar_capacity_gw": "光伏",
+                            "thermal_capacity_gw": "火电",
+                            "nuclear_capacity_gw": "核电",
+                            "bess_capacity_gw": "储能",
+                        }
+                        _a4 = [c for c in _emr_c4 if c in _emr_mdf.columns]
+                        st.dataframe(
+                            _emr_mdf[_a4].rename(columns=_emr_c4).set_index("省份"),
+                            use_container_width=True,
+                        )
+                        st.caption("单位: GW")
+
+                    with _emr_t5:
+                        _emr_c5 = {
+                            "province": "省份",
+                            "retailer_volume_gwh": "零售交易量(亿kWh)",
+                            "retailer_settlement_price_yuan_mwh": "零售结算均价(元/MWh)",
+                            "retailer_service_fee_million_yuan": "代理服务费(百万元)",
+                        }
+                        _a5 = [c for c in _emr_c5 if c in _emr_mdf.columns]
+                        st.dataframe(
+                            _emr_mdf[_a5].rename(columns=_emr_c5).set_index("省份"),
+                            use_container_width=True,
+                        )
 
                     # Highlights
                     _emr_hl = [(r["province"], r["key_highlights"]) for r in _emr_mrows if r.get("key_highlights")]
@@ -5501,6 +5577,99 @@ with tab_mgmt:
                             )
                         except Exception as _emr_pe:
                             st.error(f"PDF生成失败：{_emr_pe}")
+
+        elif _emr_view == "📈 趋势分析 Trends":
+            @st.cache_data(ttl=300, show_spinner=False)
+            def _emr_avail_provinces() -> list:
+                try:
+                    from services.exchange_reports.metrics_extractor import get_available_provinces
+                    return get_available_provinces(pg_url=_os.environ.get("PGURL"))
+                except Exception:
+                    return ["上海", "冀南", "安徽", "山东", "广东", "广西", "江苏", "浙江", "福建", "蒙西"]
+
+            _emr_trend_provs = _emr_avail_provinces()
+            _emr_trend_prov = st.selectbox(
+                "选择省份", _emr_trend_provs, key="emr_trend_prov",
+            )
+
+            @st.cache_data(ttl=300, show_spinner=False)
+            def _load_emr_ts(_prov: str) -> list:
+                try:
+                    from services.exchange_reports.metrics_extractor import get_metrics_timeseries
+                    return get_metrics_timeseries(_prov, report_type="monthly", pg_url=_os.environ.get("PGURL"))
+                except Exception:
+                    return []
+
+            _emr_ts_rows = _load_emr_ts(_emr_trend_prov)
+            if not _emr_ts_rows:
+                st.info(f"No monthly data for {_emr_trend_prov}.")
+            else:
+                import pandas as _pd_ts
+                _emr_tsdf = _pd_ts.DataFrame(_emr_ts_rows)
+                _emr_tsdf["month"] = _pd_ts.to_datetime(_emr_tsdf["report_month"]).dt.strftime("%Y-%m")
+                _emr_tsdf = _emr_tsdf.set_index("month")
+
+                _emr_trend_cat = st.radio(
+                    "指标类别",
+                    ["价格 Prices", "电量 Volumes", "装机 Capacity"],
+                    horizontal=True, key="emr_trend_cat",
+                )
+
+                if _emr_trend_cat == "价格 Prices":
+                    _px_cols = {
+                        "avg_price_yuan_mwh": "结算均价",
+                        "contract_avg_price_yuan_mwh": "合约均价",
+                        "spot_avg_price_yuan_mwh": "现货均价",
+                        "thermal_settlement_price_yuan_mwh": "火电",
+                        "wind_settlement_price_yuan_mwh": "风电",
+                        "solar_settlement_price_yuan_mwh": "光伏",
+                        "bess_settlement_price_yuan_mwh": "储能",
+                        "retailer_settlement_price_yuan_mwh": "售电公司",
+                    }
+                    _px_avail = {k: v for k, v in _px_cols.items() if k in _emr_tsdf.columns and _emr_tsdf[k].notna().any()}
+                    if _px_avail:
+                        _px_plot = _emr_tsdf[list(_px_avail.keys())].rename(columns=_px_avail)
+                        st.line_chart(_px_plot, use_container_width=True)
+                        st.caption(f"{_emr_trend_prov} 各类型结算价格趋势 (元/MWh)")
+                    else:
+                        st.info("No price data available.")
+
+                elif _emr_trend_cat == "电量 Volumes":
+                    _vol_cols = {
+                        "total_volume_gwh": "总成交量",
+                        "wind_volume_gwh": "风电",
+                        "solar_volume_gwh": "光伏",
+                        "thermal_volume_gwh": "火电",
+                        "hydro_volume_gwh": "水电",
+                        "nuclear_volume_gwh": "核电",
+                        "bess_traded_volume_gwh": "储能",
+                        "spot_volume_gwh": "现货量",
+                        "incoming_volume_gwh": "外来电",
+                    }
+                    _vol_avail = {k: v for k, v in _vol_cols.items() if k in _emr_tsdf.columns and _emr_tsdf[k].notna().any()}
+                    if _vol_avail:
+                        _vol_plot = _emr_tsdf[list(_vol_avail.keys())].rename(columns=_vol_avail)
+                        st.line_chart(_vol_plot, use_container_width=True)
+                        st.caption(f"{_emr_trend_prov} 各类型电量趋势 (亿kWh)")
+                    else:
+                        st.info("No volume data available.")
+
+                else:  # Capacity
+                    _cap_cols = {
+                        "installed_capacity_gw": "总装机",
+                        "wind_capacity_gw": "风电",
+                        "solar_capacity_gw": "光伏",
+                        "thermal_capacity_gw": "火电",
+                        "bess_capacity_gw": "储能",
+                        "nuclear_capacity_gw": "核电",
+                    }
+                    _cap_avail = {k: v for k, v in _cap_cols.items() if k in _emr_tsdf.columns and _emr_tsdf[k].notna().any()}
+                    if _cap_avail:
+                        _cap_plot = _emr_tsdf[list(_cap_avail.keys())].rename(columns=_cap_avail)
+                        st.line_chart(_cap_plot, use_container_width=True)
+                        st.caption(f"{_emr_trend_prov} 装机容量趋势 (GW)")
+                    else:
+                        st.info("No capacity data available.")
 
         else:
             # File list view
@@ -5529,3 +5698,306 @@ with tab_mgmt:
                 st.caption(f"{len(_emr_rows)} report(s) in KB.")
             else:
                 st.info("No exchange monthly reports ingested yet. Upload files above or run the backfill script.")
+
+        # ── Province Excel Data tab ────────────────────────────────────────────
+        if _emr_view == "🗺️ 省级Excel数据 Province Data":
+            st.caption("来自各省信息披露月报Excel数据库的结构化数据 | Structured data from vendor-curated Excel monthly reports")
+
+            # ── Helper ─────────────────────────────────────────────────────────
+            @st.cache_data(ttl=300, show_spinner=False)
+            def _excel_all_provinces():
+                try:
+                    import psycopg2 as _pg2
+                    conn = _pg2.connect(_os.environ.get("PGURL", ""))
+                    with conn.cursor() as _cur:
+                        _cur.execute(
+                            "SELECT DISTINCT province FROM staging.exchange_excel_metrics ORDER BY province"
+                        )
+                        return [r[0] for r in _cur.fetchall()]
+                except Exception:
+                    return []
+
+            @st.cache_data(ttl=300, show_spinner=False)
+            def _excel_latest_all():
+                try:
+                    import psycopg2 as _pg2
+                    conn = _pg2.connect(_os.environ.get("PGURL", ""))
+                    with conn.cursor() as _cur:
+                        _cur.execute("""
+                            SELECT DISTINCT ON (province)
+                                province, report_month, source_file,
+                                total_capacity_mw, wind_capacity_mw, solar_capacity_mw,
+                                thermal_capacity_mw, bess_capacity_mw,
+                                total_traded_gwh, spot_traded_gwh,
+                                avg_settlement_price, spot_avg_price,
+                                max_load_mw, market_participants_total, retailers,
+                                incoming_gwh, outgoing_gwh,
+                                fr_pool_million_yuan, total_ancillary_million_yuan
+                            FROM staging.exchange_excel_metrics
+                            ORDER BY province, report_month DESC
+                        """)
+                        cols = [d[0] for d in _cur.description]
+                        import pandas as _pd2
+                        return _pd2.DataFrame(_cur.fetchall(), columns=cols)
+                except Exception:
+                    import pandas as _pd2
+                    return _pd2.DataFrame()
+
+            @st.cache_data(ttl=300, show_spinner=False)
+            def _excel_timeseries_prov(_prov: str):
+                try:
+                    import psycopg2 as _pg2
+                    conn = _pg2.connect(_os.environ.get("PGURL", ""))
+                    with conn.cursor() as _cur:
+                        _cur.execute("""
+                            SELECT report_month, source_file,
+                                total_capacity_mw, wind_capacity_mw, solar_capacity_mw,
+                                thermal_capacity_mw, bess_capacity_mw,
+                                total_traded_gwh, spot_traded_gwh, contract_traded_gwh,
+                                avg_settlement_price, spot_avg_price, contract_avg_price,
+                                thermal_settlement_price, wind_settlement_price,
+                                solar_settlement_price, bess_settlement_price,
+                                max_load_mw, market_participants_total, retailers,
+                                incoming_gwh, outgoing_gwh,
+                                fr_pool_million_yuan, peak_shaving_million_yuan,
+                                renewable_deviation_million_yuan, total_ancillary_million_yuan,
+                                retailer_traded_gwh, retailer_settlement_price,
+                                retailer_service_fee_million_yuan
+                            FROM staging.exchange_excel_metrics
+                            WHERE province = %s
+                            ORDER BY report_month
+                        """, (_prov,))
+                        cols = [d[0] for d in _cur.description]
+                        import pandas as _pd2
+                        return _pd2.DataFrame(_cur.fetchall(), columns=cols)
+                except Exception:
+                    import pandas as _pd2
+                    return _pd2.DataFrame()
+
+            _ex_provinces = _excel_all_provinces()
+            _ex_latest_df = _excel_latest_all()
+
+            # ── Sub-tabs ────────────────────────────────────────────────────────
+            _ex_subtab_all, _ex_subtab_prov, _ex_subtab_bess, _ex_subtab_fr = st.tabs([
+                "📋 全省概览 All Provinces",
+                "📈 省份详情 Province Detail",
+                "🔋 储能装机 BESS Capacity",
+                "⚡ 辅助服务 Ancillary",
+            ])
+
+            # ── All Provinces overview ─────────────────────────────────────────
+            with _ex_subtab_all:
+                if _ex_latest_df.empty:
+                    st.info("No Excel data ingested. Run scripts/ingest_excel_reports.py.")
+                else:
+                    import pandas as _pd_ex
+                    _show_df = _ex_latest_df.copy()
+                    _show_df["report_month"] = _pd_ex.to_datetime(_show_df["report_month"]).dt.strftime("%Y-%m")
+                    _show_df["total_capacity_gw"] = (_show_df["total_capacity_mw"] / 1000).round(1)
+                    _show_df["bess_capacity_gw"]  = (_show_df["bess_capacity_mw"]  / 1000).round(2)
+                    _show_df["wind_capacity_gw"]  = (_show_df["wind_capacity_mw"]  / 1000).round(1)
+                    _show_df["solar_capacity_gw"] = (_show_df["solar_capacity_mw"] / 1000).round(1)
+
+                    _disp_cols = {
+                        "province":            "省份",
+                        "report_month":        "最新数据月份",
+                        "total_capacity_gw":   "总装机(GW)",
+                        "wind_capacity_gw":    "风电(GW)",
+                        "solar_capacity_gw":   "光伏(GW)",
+                        "bess_capacity_gw":    "储能(GW)",
+                        "total_traded_gwh":    "成交量(亿kWh)",
+                        "avg_settlement_price":"均价(元/MWh)",
+                        "max_load_mw":         "最大负荷(MW)",
+                        "market_participants_total": "市场主体(家)",
+                    }
+                    _disp_df = _show_df.rename(columns=_disp_cols)[list(_disp_cols.values())]
+                    st.dataframe(_disp_df, use_container_width=True, hide_index=True)
+                    st.caption(f"各省最新月度数据 — {len(_show_df)} 个省份")
+
+                    # Capacity bar chart comparing all provinces (plotly grouped bar)
+                    if "bess_capacity_gw" in _show_df.columns:
+                        _cap_chart_df = _show_df[
+                            _show_df["bess_capacity_gw"].notna()
+                        ][["province", "wind_capacity_gw", "solar_capacity_gw", "bess_capacity_gw"]].copy()
+                        _cap_chart_df = _cap_chart_df.sort_values("bess_capacity_gw", ascending=True)
+                        _cap_chart_df = _cap_chart_df.fillna(0)
+                        if not _cap_chart_df.empty:
+                            st.subheader("各省储能与新能源装机对比")
+                            try:
+                                import plotly.graph_objects as _go
+                                _fig = _go.Figure()
+                                for _col, _lbl, _color in [
+                                    ("wind_capacity_gw",  "风电",  "#4db8ff"),
+                                    ("solar_capacity_gw", "光伏",  "#ffd700"),
+                                    ("bess_capacity_gw",  "储能",  "#ff6b35"),
+                                ]:
+                                    _fig.add_trace(_go.Bar(
+                                        name=_lbl,
+                                        x=_cap_chart_df[_col],
+                                        y=_cap_chart_df["province"],
+                                        orientation="h",
+                                        marker_color=_color,
+                                    ))
+                                _fig.update_layout(
+                                    barmode="group",
+                                    height=max(300, len(_cap_chart_df) * 28),
+                                    xaxis_title="装机容量 (GW)",
+                                    margin=dict(l=60, r=20, t=20, b=40),
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+                                )
+                                st.plotly_chart(_fig, use_container_width=True)
+                            except ImportError:
+                                st.bar_chart(_cap_chart_df.set_index("province")[
+                                    ["wind_capacity_gw", "solar_capacity_gw", "bess_capacity_gw"]
+                                ])
+
+            # ── Province detail ────────────────────────────────────────────────
+            with _ex_subtab_prov:
+                if not _ex_provinces:
+                    st.info("No data.")
+                else:
+                    _ex_sel_prov = st.selectbox(
+                        "选择省份", _ex_provinces, key="ex_sel_prov",
+                    )
+                    _ex_ts = _excel_timeseries_prov(_ex_sel_prov)
+                    if _ex_ts.empty:
+                        st.info(f"No data for {_ex_sel_prov}.")
+                    else:
+                        import pandas as _pd_ex2
+                        _ex_ts["month"] = _pd_ex2.to_datetime(_ex_ts["report_month"]).dt.strftime("%Y-%m")
+                        _ex_ts_idx = _ex_ts.set_index("month")
+
+                        _ex_cat = st.radio(
+                            "指标", ["价格 Prices", "电量 Volumes", "装机 Capacity", "零售 Retail"],
+                            horizontal=True, key="ex_cat",
+                        )
+
+                        if _ex_cat == "价格 Prices":
+                            _px = {
+                                "avg_settlement_price":     "结算均价",
+                                "spot_avg_price":           "现货均价",
+                                "contract_avg_price":       "合约均价",
+                                "thermal_settlement_price": "火电结算",
+                                "wind_settlement_price":    "风电结算",
+                                "solar_settlement_price":   "光伏结算",
+                                "bess_settlement_price":    "储能结算",
+                                "retailer_settlement_price":"售电公司",
+                            }
+                            _px_av = {k: v for k, v in _px.items()
+                                      if k in _ex_ts_idx.columns and _ex_ts_idx[k].notna().any()}
+                            if _px_av:
+                                st.line_chart(_ex_ts_idx[list(_px_av.keys())].rename(columns=_px_av))
+                                st.caption(f"{_ex_sel_prov} 结算价格趋势 (元/MWh)")
+                            else:
+                                st.info("该省暂无价格数据。")
+
+                        elif _ex_cat == "电量 Volumes":
+                            _vl = {
+                                "total_traded_gwh":    "总成交",
+                                "spot_traded_gwh":     "现货",
+                                "contract_traded_gwh": "合约",
+                                "incoming_gwh":        "外来电",
+                                "outgoing_gwh":        "外送电",
+                            }
+                            _vl_av = {k: v for k, v in _vl.items()
+                                      if k in _ex_ts_idx.columns and _ex_ts_idx[k].notna().any()}
+                            if _vl_av:
+                                st.line_chart(_ex_ts_idx[list(_vl_av.keys())].rename(columns=_vl_av))
+                                st.caption(f"{_ex_sel_prov} 月度电量趋势 (亿kWh)")
+                            else:
+                                st.info("该省暂无电量数据。")
+
+                        elif _ex_cat == "装机 Capacity":
+                            _cp = {
+                                "total_capacity_mw":   "总装机",
+                                "wind_capacity_mw":    "风电",
+                                "solar_capacity_mw":   "光伏",
+                                "thermal_capacity_mw": "火电",
+                                "bess_capacity_mw":    "储能",
+                            }
+                            _cp_av = {k: v for k, v in _cp.items()
+                                      if k in _ex_ts_idx.columns and _ex_ts_idx[k].notna().any()}
+                            if _cp_av:
+                                st.line_chart(_ex_ts_idx[list(_cp_av.keys())].rename(columns=_cp_av))
+                                st.caption(f"{_ex_sel_prov} 装机容量趋势 (MW)")
+                            else:
+                                st.info("该省暂无装机数据。")
+
+                        else:  # Retail
+                            _rt = {
+                                "retailers":                        "售电公司数",
+                                "retailer_traded_gwh":              "售电量(亿kWh)",
+                                "retailer_settlement_price":        "售电均价(元/MWh)",
+                                "retailer_service_fee_million_yuan":"服务费(百万元)",
+                            }
+                            _rt_av = {k: v for k, v in _rt.items()
+                                      if k in _ex_ts_idx.columns and _ex_ts_idx[k].notna().any()}
+                            if _rt_av:
+                                # Show retailer count separately from price/volume
+                                _cnt_cols = [k for k in _rt_av if "数" in _rt_av[k] or "家" in _rt_av[k]]
+                                _val_cols = [k for k in _rt_av if k not in _cnt_cols]
+                                if _cnt_cols:
+                                    st.line_chart(_ex_ts_idx[_cnt_cols].rename(columns=_rt_av))
+                                if _val_cols:
+                                    st.line_chart(_ex_ts_idx[_val_cols].rename(columns=_rt_av))
+                                st.caption(f"{_ex_sel_prov} 零售市场趋势")
+                            else:
+                                st.info("该省暂无零售市场数据。")
+
+            # ── BESS capacity trend ────────────────────────────────────────────
+            with _ex_subtab_bess:
+                st.caption("各省储能装机容量历史走势（来自Excel数据库）")
+                if not _ex_provinces:
+                    st.info("No data.")
+                else:
+                    _bess_provs = st.multiselect(
+                        "选择省份（可多选）",
+                        _ex_provinces,
+                        default=[p for p in ["蒙西", "安徽", "广西", "山西", "宁夏"] if p in _ex_provinces],
+                        key="ex_bess_provs",
+                    )
+                    if _bess_provs:
+                        import pandas as _pd_bess
+                        _bess_frames = []
+                        for _bp in _bess_provs:
+                            _bt = _excel_timeseries_prov(_bp)
+                            if not _bt.empty and "bess_capacity_mw" in _bt.columns:
+                                _bt_filt = _bt[["report_month", "bess_capacity_mw"]].dropna()
+                                _bt_filt = _bt_filt.rename(columns={"bess_capacity_mw": _bp})
+                                _bt_filt = _bt_filt.set_index("report_month")
+                                _bess_frames.append(_bt_filt)
+                        if _bess_frames:
+                            _bess_merged = _pd_bess.concat(_bess_frames, axis=1).sort_index()
+                            _bess_merged.index = _pd_bess.to_datetime(_bess_merged.index).strftime("%Y-%m")
+                            _bess_merged /= 1000  # MW → GW
+                            st.line_chart(_bess_merged, use_container_width=True)
+                            st.caption("储能装机 (GW)")
+                        else:
+                            st.info("所选省份暂无储能装机数据。")
+
+            # ── Ancillary / FR costs ───────────────────────────────────────────
+            with _ex_subtab_fr:
+                st.caption("山东辅助服务费用月度数据（来自山东电力市场信息披露月报）")
+                _fr_ts = _excel_timeseries_prov("山东")
+                if _fr_ts.empty or "fr_pool_million_yuan" not in _fr_ts.columns:
+                    st.info("No ancillary cost data found.")
+                else:
+                    import pandas as _pd_fr
+                    _fr_ts["month"] = _pd_fr.to_datetime(_fr_ts["report_month"]).dt.strftime("%Y-%m")
+                    _fr_ts_idx = _fr_ts.set_index("month")
+                    _fr_cols = {
+                        "fr_pool_million_yuan":              "调频费用",
+                        "peak_shaving_million_yuan":         "调峰补贴",
+                        "renewable_deviation_million_yuan":  "新能源偏差",
+                        "total_ancillary_million_yuan":      "辅助服务合计",
+                    }
+                    _fr_av = {k: v for k, v in _fr_cols.items()
+                              if k in _fr_ts_idx.columns and _fr_ts_idx[k].notna().any()}
+                    if _fr_av:
+                        st.line_chart(_fr_ts_idx[list(_fr_av.keys())].rename(columns=_fr_av))
+                        st.caption("山东辅助服务费用趋势 (百万元/月)")
+                    # Summary table
+                    _fr_disp = _fr_ts[["month"] + [k for k in _fr_cols if k in _fr_ts.columns]].rename(
+                        columns={**{"month": "月份"}, **_fr_cols}
+                    )
+                    st.dataframe(_fr_disp.dropna(subset=["调频费用"]), use_container_width=True, hide_index=True)
