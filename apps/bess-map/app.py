@@ -302,6 +302,7 @@ _T: dict[str, dict[str, str]] = {
         "aux_confirm_btn":         "✅ Use this value",
         "aux_cap_rate":            "Cap Comp (¥/kW)",
         "aux_peak_hours":          "Peak Duration (h)",
+        "aux_notes":               "Scheme Notes",
         "aux_fr_price":            "FR Price (¥/kW·h)",
         "aux_fr_pool":             "FR Pool (亿¥/yr)",
         "aux_source":              "Source",
@@ -542,6 +543,7 @@ _T: dict[str, dict[str, str]] = {
         "aux_confirm_btn":         "✅ 使用此值",
         "aux_cap_rate":            "容量补偿（元/kW）",
         "aux_peak_hours":          "峰值时段（小时）",
+        "aux_notes":               "补偿机制说明",
         "aux_fr_price":            "调频价格（元/kW·h）",
         "aux_fr_pool":             "调频资金池（亿元/年）",
         "aux_source":              "来源",
@@ -1555,7 +1557,7 @@ def load_cap_comp(_eng_key):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, province, effective_date, cap_comp_yuan_kw,
-                       peak_duration_hours, source, status
+                       peak_duration_hours, source, status, notes
                 FROM marketdata.province_cap_comp
                 WHERE status IN ('confirmed', 'conflict')
                 ORDER BY province, effective_date DESC, ingested_at DESC
@@ -2706,13 +2708,15 @@ with tab_aux:
             st.info(_t("aux_no_data"))
         else:
             _cc_disp = _cc_show[["province", "cap_comp_yuan_kw", "peak_duration_hours",
-                                  "effective_date", "source", "status"]].copy()
+                                  "effective_date", "notes", "source", "status"]].copy()
             _cc_disp["source"] = _cc_disp["source"].apply(lambda s: str(s)[:60] if s else "")
+            _cc_disp["notes"] = _cc_disp["notes"].fillna("")
             _cc_disp = _cc_disp.rename(columns={
                 "province":            _t("rank_col_province"),
                 "cap_comp_yuan_kw":    _t("aux_cap_rate"),
                 "peak_duration_hours": _t("aux_peak_hours"),
                 "effective_date":      _t("aux_eff_date"),
+                "notes":               _t("aux_notes"),
                 "source":              _t("aux_source"),
                 "status":              _t("aux_status"),
             })

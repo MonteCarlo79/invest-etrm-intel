@@ -35,8 +35,10 @@ CREATE TABLE IF NOT EXISTS marketdata.province_cap_comp (
     peak_duration_hours NUMERIC,
     source              TEXT,
     status              TEXT        NOT NULL DEFAULT 'confirmed',
+    notes               TEXT,
     ingested_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE marketdata.province_cap_comp ADD COLUMN IF NOT EXISTS notes TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pcc_prov_date_src
     ON marketdata.province_cap_comp (province, effective_date, COALESCE(source, ''));
 CREATE INDEX IF NOT EXISTS idx_pcc_prov_date
