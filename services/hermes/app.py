@@ -2191,6 +2191,98 @@ def _handle_message(
             logger.error("Failed to reply lingfeng password ack: %s", _e)
         return True
 
+    # ── /backfill-daily — pre-LLM intercept (must be early or MARKET_AGENT catches it) ──
+    _bfd_early = _re.match(
+        r'^/?backfill[-_]daily(?:\s+(\d{4}-\d{2}-\d{2})(?:\s+(\d{4}-\d{2}-\d{2}))?)?',
+        msg.text.strip(), _re.I,
+    )
+    if _bfd_early:
+        import datetime as _dt_early
+        _bfd_e_start = _dt_early.date.fromisoformat(_bfd_early.group(1)) if _bfd_early.group(1) else _dt_early.date(2025, 1, 1)
+        _bfd_e_end   = _dt_early.date.fromisoformat(_bfd_early.group(2)) if _bfd_early.group(2) else _dt_early.date.today() - _dt_early.timedelta(days=1)
+
+        def _bfd_e_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("backfill-daily reply failed: %s", _e)
+
+        _pg_bfd = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        if not _pg_bfd:
+            _bfd_e_reply("⚠️ 数据库未配置。")
+            return True
+
+        _bfd_e_days = (_bfd_e_end - _bfd_e_start).days + 1
+        _bfd_e_reply(
+            f"⏳ 开始预计算节点PF日度数据 {_bfd_e_start} → {_bfd_e_end}（{_bfd_e_days} 天），稍候…\n"
+            f"每天约1秒，共约 {_bfd_e_days} 秒。完成后会通知。"
+        )
+
+        def _run_bfd_early():
+            import psycopg2 as _pg2_e
+            from services.hermes.mengxi_ranking_report import (
+                _read_station_master as _rsm_e,
+                compute_and_store_nodal_pf_daily as _do_daily_e,
+            )
+            try:
+                plants = _rsm_e(_pg_bfd)
+                plant_names = [p["plant_name"] for p in plants]
+            except Exception as _e:
+                _bfd_e_reply(f"⚠️ 读取电站列表失败：{_e}")
+                return
+
+            conn = _pg2_e.connect(_pg_bfd)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS reports.nodal_pf_daily (
+                            data_date   DATE        NOT NULL,
+                            plant_name  TEXT        NOT NULL,
+                            score_2h    FLOAT,
+                            score_4h    FLOAT,
+                            computed_at TIMESTAMPTZ DEFAULT NOW(),
+                            PRIMARY KEY (data_date, plant_name)
+                        )
+                    """)
+                    cur.execute(
+                        "SELECT data_date, COUNT(*) FROM reports.nodal_pf_daily "
+                        "WHERE data_date >= %s AND data_date <= %s "
+                        "GROUP BY data_date",
+                        (_bfd_e_start, _bfd_e_end),
+                    )
+                    done_counts = {r[0]: r[1] for r in cur.fetchall()}
+                conn.commit()
+            finally:
+                conn.close()
+
+            d = _bfd_e_start
+            ok = skipped = errors = 0
+            while d <= _bfd_e_end:
+                if done_counts.get(d, 0) >= 20:
+                    skipped += 1
+                    d += _dt_early.timedelta(days=1)
+                    continue
+                try:
+                    n = _do_daily_e(_pg_bfd, d, plant_names, milp_timeout_s=120.0)
+                    ok += 1 if n > 0 else 0
+                    skipped += 1 if n == 0 else 0
+                except Exception as _e:
+                    logger.warning("backfill-daily: %s failed: %s", d, _e)
+                    errors += 1
+                d += _dt_early.timedelta(days=1)
+
+            _bfd_e_reply(
+                f"✅ 节点PF日度预计算完成：{ok} 天已写入 / {skipped} 天无数据或已存在 / {errors} 天失败\n"
+                f"数据范围：{_bfd_e_start} → {_bfd_e_end}"
+            )
+
+        import threading as _threading_bfd
+        _threading_bfd.Thread(target=_run_bfd_early, daemon=True).start()
+        return True
+
     # ── "提供源文件 / 原文 / source file" — KB doc lookup by title ───────────────
     # Intercept before LLM so the agent can't fall back to ONEDRIVE_SEARCH.
     # Pattern: "提供源文件：XXX" / "给我看原文：XXX" / "找一下原文 XXX" / "source file: XXX"
