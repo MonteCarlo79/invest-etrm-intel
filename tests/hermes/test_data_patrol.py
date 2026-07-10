@@ -183,3 +183,25 @@ def test_run_patrol_returns_report(monkeypatch):
     monkeypatch.setattr(dp, "check_kb_activity", lambda pg: [])
     result = dp.run_patrol("postgresql://test", feishu=None, owner_open_id="", api_key="")
     assert isinstance(result, dp.PatrolReport)
+
+
+def test_extract_from_file_for_gap_txt(monkeypatch):
+    import anthropic as _ant
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"cap_comp_yuan_kw": 165.0, "peak_duration_hours": 6.0}')]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+    monkeypatch.setattr(_ant, "Anthropic", lambda api_key: mock_client)
+
+    from services.hermes.capcomp_manual_etl import extract_from_file_for_gap
+    txt_bytes = "广东省2026年容量补偿标准165元/kW，峰值6小时".encode("utf-8")
+    result = extract_from_file_for_gap(
+        file_bytes=txt_bytes,
+        filename="test.txt",
+        fill_table="province_cap_comp",
+        province="广东",
+        month="2026-06",
+        api_key="test-key",
+    )
+    assert result["extracted"] is True
+    assert result["values"]["cap_comp_yuan_kw"] == 165.0

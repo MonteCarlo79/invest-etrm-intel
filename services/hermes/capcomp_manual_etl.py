@@ -81,6 +81,31 @@ def _text_from_bytes(filename: str, file_bytes: bytes) -> str:
         return _text_from_pdf(file_bytes)
     if ext in ("xlsx", "xls", "xlsm"):
         return _text_from_excel(file_bytes)
+    if ext in ("docx", "doc"):
+        try:
+            import docx as _docx
+            doc = _docx.Document(io.BytesIO(file_bytes))
+            parts = [p.text for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+            return "\n".join(parts)
+        except Exception as exc:
+            logger.warning("DOCX text extraction failed: %s", exc)
+            return ""
+    if ext in ("pptx", "ppt"):
+        try:
+            from pptx import Presentation
+            prs = Presentation(io.BytesIO(file_bytes))
+            parts = []
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        parts.append(shape.text.strip())
+            return "\n".join(parts)
+        except Exception as exc:
+            logger.warning("PPTX text extraction failed: %s", exc)
+            return ""
     # TXT / CSV / other plain text
     for enc in ("utf-8", "gbk", "gb2312"):
         try:
@@ -467,3 +492,108 @@ def format_result_message(result: dict) -> str:
         lines.append(f"错误：{result['errors'][0]}")
 
     return "\n".join(lines)
+
+
+# ── Gap fill dispatcher ───────────────────────────────────────────────────────
+
+_GAP_FILL_PROMPTS = {
+    "province_cap_comp": (
+        "从以下文本中提取指定省份的储能容量补偿标准（元/kW·年）和年最高净负荷峰值时段（小时）。"
+        '以JSON回答: {"cap_comp_yuan_kw": <数值>, "peak_duration_hours": <数值或null>}'
+    ),
+    "province_fr_market": (
+        "从以下文本中提取指定省份的调频容量价格（元/kW·h）和全省调频资金池（亿元/年）。"
+        '以JSON回答: {"fr_price_yuan_kw_h": <数值>, "fr_pool_yi_yuan": <数值或null>}'
+    ),
+    "province_installed_monthly": (
+        "从以下文本中提取指定省份的储能装机容量（MW）。"
+        '以JSON回答: {"installed_mw": <数值>}'
+    ),
+    "province_sysopfee_monthly": (
+        "从以下文本中提取指定省份的系统运行费（元/kWh）。"
+        '以JSON回答: {"fee_yuan_kwh": <数值>}'
+    ),
+}
+
+
+def extract_from_file_for_gap(
+    file_bytes: bytes,
+    filename: str,
+    fill_table: str,
+    province: str,
+    month: str,
+    api_key: str,
+) -> dict:
+    """
+    Extract the relevant value(s) from a file for a specific gap fill target.
+    Supports PDF, Excel, JPG/PNG (vision), DOCX, PPTX, TXT.
+    Returns:
+        {"extracted": True, "values": {...field: value}, "summary": str}
+        {"extracted": False, "error": str}
+    """
+    import anthropic as _ant
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    prompt_template = _GAP_FILL_PROMPTS.get(fill_table)
+    if not prompt_template:
+        return {"extracted": False, "error": f"Unsupported fill_table: {fill_table}"}
+
+    client = _ant.Anthropic(api_key=api_key)
+
+    # Image path: use Claude vision
+    if ext in ("jpg", "jpeg", "png", "webp", "gif"):
+        _mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                 "webp": "image/webp", "gif": "image/gif"}
+        import base64 as _b64
+        b64 = _b64.standard_b64encode(file_bytes).decode()
+        vision_prompt = (
+            f"图片中包含电力市场数据。省份：{province}，月份：{month}。\n"
+            f"请先转录图片中的文字，然后{prompt_template}"
+        )
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=300,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64",
+                     "media_type": _mime.get(ext, "image/jpeg"), "data": b64}},
+                    {"type": "text", "text": vision_prompt},
+                ]}],
+            )
+            text = resp.content[0].text.strip()
+        except Exception as exc:
+            return {"extracted": False, "error": str(exc)}
+    else:
+        # Text-based extraction
+        raw_text = _text_from_bytes(filename, file_bytes)
+        if not raw_text.strip():
+            return {"extracted": False, "error": "无法从文件中提取文本"}
+        full_prompt = (
+            f"省份：{province}，月份/年份：{month}。\n"
+            f"{prompt_template}\n\n文本内容：\n{raw_text[:6000]}"
+        )
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=300,
+                messages=[{"role": "user", "content": full_prompt}],
+            )
+            text = resp.content[0].text.strip()
+        except Exception as exc:
+            return {"extracted": False, "error": str(exc)}
+
+    # Parse JSON from response
+    import json as _json, re as _re
+    match = _re.search(r'\{[^{}]+\}', text)
+    if not match:
+        return {"extracted": False, "error": f"AI未能返回JSON: {text[:200]}"}
+    try:
+        values = _json.loads(match.group())
+        values["fill_table"] = fill_table
+        values["fill_province"] = province
+        values["fill_month"] = month
+        summary = "\n".join(f"{k}: {v}" for k, v in values.items()
+                            if k not in ("fill_table", "fill_province", "fill_month"))
+        return {"extracted": True, "values": values, "summary": summary}
+    except Exception as exc:
+        return {"extracted": False, "error": f"JSON解析失败: {exc} — {text[:200]}"}
