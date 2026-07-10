@@ -1,6 +1,26 @@
 # tests/hermes/test_data_patrol.py
-from datetime import date
+from datetime import date, timedelta
+from unittest.mock import MagicMock, patch, call
+import psycopg2
+
 from services.hermes.data_patrol import SourceStatus, PatrolReport, _days_behind
+
+
+def _make_cursor(rows):
+    """Return a mock cursor whose fetchall() returns rows."""
+    cur = MagicMock()
+    cur.fetchall.return_value = rows
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    return cur
+
+
+def _make_conn(cursor):
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.__enter__ = lambda s: s
+    conn.__exit__ = MagicMock(return_value=False)
+    return conn
 
 
 def test_source_status_defaults():
@@ -44,3 +64,35 @@ def test_patrol_report_counts():
     assert r.count_by_status("fresh") == 1
     assert r.count_by_status("missing") == 1
     assert r.has_alerts is True
+
+
+def test_check_auto_pipelines_fresh(monkeypatch):
+    today = date.today()
+    # Return today's date for every query
+    cur = _make_cursor([(today,)])
+    conn = _make_conn(cur)
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+
+    from services.hermes.data_patrol import check_auto_pipelines
+    results = check_auto_pipelines("postgresql://test")
+    assert len(results) > 0
+    assert all(s.status == "fresh" for s in results)
+
+
+def test_check_auto_pipelines_stale(monkeypatch):
+    stale_date = date.today() - timedelta(days=5)
+    cur = _make_cursor([(stale_date,)])
+    conn = _make_conn(cur)
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+
+    from services.hermes.data_patrol import check_auto_pipelines
+    results = check_auto_pipelines("postgresql://test")
+    assert any(s.status == "stale" for s in results)
+
+
+def test_check_auto_pipelines_db_error(monkeypatch):
+    monkeypatch.setattr("psycopg2.connect", MagicMock(side_effect=psycopg2.OperationalError("down")))
+    from services.hermes.data_patrol import check_auto_pipelines
+    results = check_auto_pipelines("postgresql://test")
+    # DB error → all missing (graceful degradation)
+    assert all(s.status == "missing" for s in results)
