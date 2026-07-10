@@ -143,7 +143,7 @@ def check_auto_pipelines(pg_url: str) -> list[SourceStatus]:
                 for tbl in _MENGXI_HIST_TABLES:
                     d = _query_max(cur, f"public.{tbl}", "time::date")
                     mengxi_dates.append(d)
-                mengxi_last = max((d for d in mengxi_dates if d), default=None)
+                mengxi_last = min((d for d in mengxi_dates if d), default=None)  # worst case
                 days = _days_behind(mengxi_last)
                 results.append(SourceStatus(
                     name="蒙西 hist_* 实时数据", table="public.hist_mengxi_*",
