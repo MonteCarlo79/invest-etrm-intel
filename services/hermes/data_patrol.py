@@ -170,3 +170,131 @@ def check_auto_pipelines(pg_url: str) -> list[SourceStatus]:
                 days_behind=_MISSING_SENTINEL, status="missing", group="auto",
             ))
     return results
+
+
+# ── Group B: Manual upload checks ────────────────────────────────────────────
+
+def check_manual_uploads(pg_url: str) -> list[SourceStatus]:
+    """Check manually-uploaded daily data sources."""
+    import psycopg2
+    results: list[SourceStatus] = []
+    try:
+        conn = psycopg2.connect(pg_url)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT MAX(report_date) FROM spot_daily")
+                row = cur.fetchall()
+                last = row[0][0] if row and row[0][0] else None
+                if last and hasattr(last, "date"):
+                    last = last.date()
+                days = _days_behind(last)
+                today = datetime.now(_BJ).date()
+                reminder = (
+                    f"请上传 电力现货市场价格与运行日报-{today.strftime('%Y%m%d')}.pdf"
+                    if days > _DAILY_STALE_DAYS else ""
+                )
+                results.append(SourceStatus(
+                    name="现货日报 PDF",
+                    table="spot_daily",
+                    last_date=last,
+                    days_behind=days,
+                    status=_classify_daily(days),
+                    group="manual",
+                    reminder_text=reminder,
+                ))
+        conn.close()
+    except Exception as exc:
+        logger.error("check_manual_uploads: %s", exc)
+        results.append(SourceStatus(
+            name="现货日报 PDF", table="spot_daily",
+            last_date=None, days_behind=_MISSING_SENTINEL, status="missing", group="manual",
+            reminder_text="请上传 电力现货市场价格与运行日报.pdf",
+        ))
+    return results
+
+
+# ── Group C: Monthly data checks ─────────────────────────────────────────────
+
+_MONTHLY_FILL_SOURCES = [
+    # (display_name, table, year_month_expr, fill_table)
+    ("容量补偿", "marketdata.province_cap_comp",
+     "EXTRACT(year FROM effective_date)::int * 100 + EXTRACT(month FROM effective_date)::int",
+     "province_cap_comp"),
+    ("调频市场", "marketdata.province_fr_market",
+     "EXTRACT(year FROM effective_date)::int * 100 + EXTRACT(month FROM effective_date)::int",
+     "province_fr_market"),
+    ("储能装机容量", "province_installed_monthly", "year_month", "province_installed_monthly"),
+    ("系统运行费", "province_sysopfee_monthly", "year_month", "province_sysopfee_monthly"),
+]
+
+_EXCHANGE_REPORT_PROVINCES = 29
+
+
+def check_monthly_data(pg_url: str) -> list[SourceStatus]:
+    """Check monthly data tables for prior-month coverage."""
+    import psycopg2
+    results: list[SourceStatus] = []
+    now = datetime.now(_BJ)
+    today = now.date()
+
+    if today.month == 1:
+        target_year, target_month = today.year - 1, 12
+    else:
+        target_year, target_month = today.year, today.month - 1
+
+    flag_date = date(today.year, today.month, _MONTHLY_FLAG_DAY)
+    should_flag = today >= flag_date
+
+    try:
+        conn = psycopg2.connect(pg_url)
+        with conn:
+            with conn.cursor() as cur:
+                for name, table, ym_expr, fill_table in _MONTHLY_FILL_SOURCES:
+                    try:
+                        target_ym = target_year * 100 + target_month
+                        cur.execute(
+                            f"SELECT COUNT(*) FROM {table} WHERE {ym_expr} = %s",
+                            (target_ym,)
+                        )
+                        row = cur.fetchall()
+                        count = row[0][0] if row else 0
+                        status = "missing" if (count == 0 and should_flag) else "fresh"
+                        results.append(SourceStatus(
+                            name=f"{name} ({target_year}-{target_month:02d})",
+                            table=table,
+                            last_date=None if count == 0 else date(target_year, target_month, 1),
+                            days_behind=0 if status == "fresh" else 30,
+                            status=status,
+                            group="monthly",
+                            fill_table=fill_table if status == "missing" else "",
+                            fill_month=f"{target_year}-{target_month:02d}" if status == "missing" else "",
+                        ))
+                    except Exception as exc:
+                        logger.warning("monthly check failed for %s: %s", table, exc)
+
+                # Exchange monthly reports
+                try:
+                    target_ym_str = f"{target_year}-{target_month:02d}"
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT province) FROM staging.exchange_monthly_reports "
+                        "WHERE TO_CHAR(report_month, 'YYYY-MM') = %s",
+                        (target_ym_str,)
+                    )
+                    row = cur.fetchall()
+                    found = row[0][0] if row else 0
+                    missing = _EXCHANGE_REPORT_PROVINCES - found
+                    status = "missing" if (missing > 0 and should_flag) else "fresh"
+                    results.append(SourceStatus(
+                        name=f"交易所月报 ({target_ym_str}, {found}/{_EXCHANGE_REPORT_PROVINCES}省)",
+                        table="staging.exchange_monthly_reports",
+                        last_date=None if found == 0 else date(target_year, target_month, 1),
+                        days_behind=0 if status == "fresh" else 30,
+                        status=status,
+                        group="monthly",
+                    ))
+                except Exception as exc:
+                    logger.warning("exchange reports check failed: %s", exc)
+        conn.close()
+    except Exception as exc:
+        logger.error("check_monthly_data: DB unavailable: %s", exc)
+    return results

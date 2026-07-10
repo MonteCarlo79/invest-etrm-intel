@@ -96,3 +96,35 @@ def test_check_auto_pipelines_db_error(monkeypatch):
     results = check_auto_pipelines("postgresql://test")
     # DB error → all missing (graceful degradation)
     assert all(s.status == "missing" for s in results)
+
+
+def test_check_manual_uploads_stale(monkeypatch):
+    stale = date.today() - timedelta(days=4)
+    cur = _make_cursor([(stale,)])
+    conn = _make_conn(cur)
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+
+    from services.hermes.data_patrol import check_manual_uploads
+    results = check_manual_uploads("postgresql://test")
+    assert len(results) == 1
+    assert results[0].status == "stale"
+    assert "pdf" in results[0].reminder_text.lower()
+
+
+def test_check_monthly_data_missing_returns_fill_table(monkeypatch):
+    import services.hermes.data_patrol as dp
+    from unittest.mock import MagicMock
+    from datetime import datetime as real_dt, timezone, timedelta
+
+    _BJ = timezone(timedelta(hours=8))
+    # Fix "today" to 15th so should_flag=True (past 10th)
+    fixed_now = real_dt(2026, 7, 15, 10, 0, tzinfo=_BJ)
+    monkeypatch.setattr(dp, "datetime", MagicMock(now=MagicMock(return_value=fixed_now)))
+
+    cur = _make_cursor([])
+    conn = _make_conn(cur)
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+
+    results = dp.check_monthly_data("postgresql://test")
+    fill_targets = [s for s in results if s.fill_table]
+    assert len(fill_targets) > 0
