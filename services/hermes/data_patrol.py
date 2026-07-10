@@ -348,3 +348,232 @@ def check_kb_activity(pg_url: str) -> list[KBSummary]:
     except Exception as exc:
         logger.error("check_kb_activity: DB unavailable: %s", exc)
     return results
+
+
+# ── Feishu card builders ──────────────────────────────────────────────────────
+
+_STATUS_ICON = {"fresh": "✅", "stale": "⚠️", "missing": "🔴"}
+_WEEKDAYS_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def build_summary_card(report: PatrolReport) -> dict:
+    now = report.generated_at
+    date_str = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
+
+    auto_sources = report.by_group("auto")
+    manual_sources = report.by_group("manual")
+    monthly_sources = report.by_group("monthly")
+
+    auto_fresh = sum(1 for s in auto_sources if s.status == "fresh")
+    manual_issues = sum(1 for s in manual_sources if s.status != "fresh")
+    monthly_missing = sum(1 for s in monthly_sources if s.status == "missing")
+
+    kb_line = ""
+    if report.kb_summaries:
+        total_7d = sum(k.count_7d for k in report.kb_summaries)
+        now_bj = datetime.now(_BJ)
+        if now_bj.weekday() == 0:
+            kb_line = f"📊 知识库        本周新增 {total_7d} 篇"
+        elif now_bj.day == 1:
+            total_30d = sum(k.count_30d for k in report.kb_summaries)
+            kb_line = f"📊 知识库        本月新增 {total_30d} 篇"
+
+    lines = [
+        f"✅ 自动管道      {auto_fresh}/{len(auto_sources)} 正常",
+        f"{'⚠️' if manual_issues else '✅'} 手动上传      {'%d 项需关注' % manual_issues if manual_issues else '正常'}",
+        f"{'🔴' if monthly_missing else '✅'} 月度数据      {'%d 项缺失' % monthly_missing if monthly_missing else '正常'}",
+    ]
+    if kb_line:
+        lines.append(kb_line)
+
+    body = "\n".join(lines)
+    template = "orange" if report.has_alerts else "green"
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"content": f"📡 数据巡视报告 — {date_str}", "tag": "plain_text"},
+        },
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md", "content": body}},
+            {"tag": "hr"},
+            {"tag": "action", "actions": [
+                {"tag": "button", "text": {"tag": "plain_text", "content": "展开详情 ▼"},
+                 "type": "primary", "value": {"act": "patrol_expand"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "关闭"},
+                 "type": "default", "value": {"act": "patrol_close"}},
+            ]},
+        ],
+    }
+
+
+def _source_row(s: SourceStatus) -> dict:
+    """Build one div row for a SourceStatus, with optional 填入数据 button."""
+    icon = _STATUS_ICON.get(s.status, "❓")
+    last_str = str(s.last_date) if s.last_date else "—"
+    behind_str = f" · 落后 {s.days_behind} 天" if s.days_behind not in (0, _MISSING_SENTINEL) else ""
+    label = f"{icon} **{s.name}**  最后: {last_str}{behind_str}"
+    row: dict = {"tag": "div", "text": {"tag": "lark_md", "content": label}}
+    if s.fill_table:
+        row["extra"] = {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "填入数据"},
+            "type": "danger",
+            "value": {
+                "act": "patrol_fill_open",
+                "fill_table": s.fill_table,
+                "fill_province": s.fill_province,
+                "fill_month": s.fill_month,
+            },
+        }
+    elif s.reminder_text:
+        row["extra"] = {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "上传提醒"},
+            "type": "warning",
+            "value": {"act": "patrol_remind", "reminder": s.reminder_text},
+        }
+    return row
+
+
+def build_detail_card(report: PatrolReport) -> dict:
+    now = report.generated_at
+    date_str = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
+    elements: list[dict] = []
+
+    def _section(title: str, sources: list[SourceStatus]) -> None:
+        if not sources:
+            return
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**{title}**"}})
+        for s in sources:
+            elements.append(_source_row(s))
+        elements.append({"tag": "hr"})
+
+    _section("⚡ 自动管道", report.by_group("auto"))
+    _section("📤 手动上传", report.by_group("manual"))
+    _section("🗓 月度数据", report.by_group("monthly"))
+
+    if report.kb_summaries:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**📚 知识库活跃度**"}})
+        for k in report.kb_summaries:
+            last_str = str(k.last_ingested) if k.last_ingested else "—"
+            elements.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": f"• {k.name}  最后入库: {last_str} · 7天 {k.count_7d}篇 · 30天 {k.count_30d}篇"}})
+        elements.append({"tag": "hr"})
+
+    elements.append({"tag": "action", "actions": [
+        {"tag": "button", "text": {"tag": "plain_text", "content": "收起 ▲"},
+         "type": "default", "value": {"act": "patrol_collapse"}},
+    ]})
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "orange" if report.has_alerts else "green",
+            "title": {"content": f"📡 数据巡视详情 — {date_str}", "tag": "plain_text"},
+        },
+        "elements": elements,
+    }
+
+
+def build_fill_card(fill_table: str, fill_province: str, fill_month: str) -> dict:
+    """Interactive card for manually entering a missing monthly value."""
+    _TABLE_LABELS = {
+        "province_cap_comp":          ("容量补偿", "cap_comp_yuan_kw", "容量补偿标准 (¥/kW·年)", "peak_duration_hours", "年最高净负荷峰值时段 (h)"),
+        "province_fr_market":         ("调频市场", "fr_price_yuan_kw_h", "调频容量价格 (¥/kW·h)", "fr_pool_yi_yuan", "全省调频资金池 (亿元/年)"),
+        "province_installed_monthly": ("储能装机", "installed_mw", "储能装机 (MW)", None, None),
+        "province_sysopfee_monthly":  ("系统运行费", "fee_yuan_kwh", "系统运行费 (¥/kWh)", None, None),
+    }
+    label, field1, field1_label, field2, field2_label = _TABLE_LABELS.get(
+        fill_table, (fill_table, "value", "数值", None, None)
+    )
+    actions = [
+        {"tag": "input", "name": field1,
+         "placeholder": {"tag": "plain_text", "content": field1_label}, "width": "fill"},
+    ]
+    if field2:
+        actions.append(
+            {"tag": "input", "name": field2,
+             "placeholder": {"tag": "plain_text", "content": field2_label}, "width": "fill"}
+        )
+    actions.append({
+        "tag": "button", "text": {"tag": "plain_text", "content": "提交"},
+        "type": "primary",
+        "value": {"act": "patrol_fill_submit",
+                  "fill_table": fill_table, "fill_province": fill_province,
+                  "fill_month": fill_month, "field1": field1, "field2": field2 or ""},
+    })
+    actions.append({
+        "tag": "button", "text": {"tag": "plain_text", "content": "发文件给我，AI自动提取"},
+        "type": "default",
+        "value": {"act": "patrol_fill_file",
+                  "fill_table": fill_table, "fill_province": fill_province,
+                  "fill_month": fill_month},
+    })
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"content": f"填写缺失数据 — {label} / {fill_province or '(选省份)'} / {fill_month}", "tag": "plain_text"},
+        },
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md",
+                "content": f"省份: **{fill_province or '请输入'}**\n月份: **{fill_month}**"}},
+            {"tag": "hr"},
+            {"tag": "action", "actions": actions},
+        ],
+    }
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+# Cache last patrol result in memory so /hermes/patrol/status can return it
+_last_report: Optional[PatrolReport] = None
+
+
+def run_patrol(
+    pg_url: str,
+    feishu,
+    owner_open_id: str,
+    api_key: str = "",
+) -> PatrolReport:
+    """
+    Run all data checks, build and send the summary Feishu card,
+    and send separate upload reminder messages for stale manual items.
+    """
+    global _last_report
+
+    sources: list[SourceStatus] = []
+    sources.extend(check_auto_pipelines(pg_url))
+    sources.extend(check_manual_uploads(pg_url))
+    sources.extend(check_monthly_data(pg_url))
+    kb = check_kb_activity(pg_url)
+
+    report = PatrolReport(sources=sources, kb_summaries=kb)
+    _last_report = report
+
+    if feishu and owner_open_id:
+        try:
+            card = build_summary_card(report)
+            feishu.send_card(open_id=owner_open_id, card=card)
+        except Exception as exc:
+            logger.error("patrol: failed to send summary card: %s", exc)
+            try:
+                feishu.send_text(open_id=owner_open_id,
+                                 text=f"📡 数据巡视完成，{'存在异常' if report.has_alerts else '一切正常'}。")
+            except Exception:
+                pass
+
+        for s in sources:
+            if s.reminder_text and s.status != "fresh":
+                try:
+                    feishu.send_text(open_id=owner_open_id, text=f"📤 数据缺失提醒：\n{s.reminder_text}")
+                except Exception as exc:
+                    logger.warning("patrol: reminder send failed: %s", exc)
+
+    return report
+
+
+def get_last_report() -> Optional[PatrolReport]:
+    return _last_report

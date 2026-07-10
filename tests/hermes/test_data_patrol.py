@@ -144,3 +144,42 @@ def test_check_kb_activity_returns_summaries(monkeypatch):
     results = check_kb_activity("postgresql://test")
     assert len(results) > 0
     assert all(isinstance(r.count_7d, int) for r in results)
+
+
+def test_build_summary_card_green_when_all_fresh():
+    from services.hermes.data_patrol import build_summary_card, PatrolReport
+    s = SourceStatus(name="x", table="t", last_date=date.today(), days_behind=0, status="fresh", group="auto")
+    r = PatrolReport(sources=[s], kb_summaries=[])
+    card = build_summary_card(r)
+    assert card["header"]["template"] == "green"
+    assert "elements" in card
+
+
+def test_build_summary_card_orange_when_stale():
+    from services.hermes.data_patrol import build_summary_card, PatrolReport
+    s = SourceStatus(name="x", table="t", last_date=date.today() - timedelta(days=5),
+                     days_behind=5, status="stale", group="auto")
+    r = PatrolReport(sources=[s], kb_summaries=[])
+    card = build_summary_card(r)
+    assert card["header"]["template"] == "orange"
+
+
+def test_build_detail_card_contains_fill_button():
+    from services.hermes.data_patrol import build_detail_card, PatrolReport
+    s = SourceStatus(name="容量补偿 2026-06", table="province_cap_comp",
+                     last_date=None, days_behind=30, status="missing", group="monthly",
+                     fill_table="province_cap_comp", fill_month="2026-06")
+    r = PatrolReport(sources=[s], kb_summaries=[])
+    card = build_detail_card(r)
+    card_str = str(card)
+    assert "填入数据" in card_str
+
+
+def test_run_patrol_returns_report(monkeypatch):
+    import services.hermes.data_patrol as dp
+    monkeypatch.setattr(dp, "check_auto_pipelines", lambda pg: [])
+    monkeypatch.setattr(dp, "check_manual_uploads", lambda pg: [])
+    monkeypatch.setattr(dp, "check_monthly_data", lambda pg: [])
+    monkeypatch.setattr(dp, "check_kb_activity", lambda pg: [])
+    result = dp.run_patrol("postgresql://test", feishu=None, owner_open_id="", api_key="")
+    assert isinstance(result, dp.PatrolReport)
