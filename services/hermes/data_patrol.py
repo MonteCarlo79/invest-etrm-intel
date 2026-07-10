@@ -298,3 +298,53 @@ def check_monthly_data(pg_url: str) -> list[SourceStatus]:
     except Exception as exc:
         logger.error("check_monthly_data: DB unavailable: %s", exc)
     return results
+
+
+# ── Group D: KB activity ──────────────────────────────────────────────────────
+
+_KB_TABLES = [
+    ("Spot KB", "staging.spot_knowledge_docs", "created_at"),
+    ("GB KB", "intl_market.gb_knowledge_docs", "created_at"),
+    ("AU KB", "intl_market.au_knowledge_docs", "created_at"),
+    ("PH KB", "intl_market.ph_knowledge_docs", "created_at"),
+    ("PO KB", "intl_market.po_knowledge_docs", "created_at"),
+]
+
+
+def check_kb_activity(pg_url: str) -> list[KBSummary]:
+    """Count KB docs ingested in last 7 and 30 days."""
+    import psycopg2
+    results: list[KBSummary] = []
+    try:
+        conn = psycopg2.connect(pg_url)
+        with conn:
+            with conn.cursor() as cur:
+                for name, table, ts_col in _KB_TABLES:
+                    try:
+                        cur.execute(f"""
+                            SELECT
+                                MAX({ts_col})::date,
+                                COUNT(*) FILTER (WHERE {ts_col} >= NOW() - INTERVAL '7 days'),
+                                COUNT(*) FILTER (WHERE {ts_col} >= NOW() - INTERVAL '30 days')
+                            FROM {table}
+                        """)
+                        row = cur.fetchall()
+                        if row and row[0][0] is not None:
+                            last_raw = row[0][0]
+                            last = last_raw.date() if hasattr(last_raw, "date") else last_raw
+                            results.append(KBSummary(
+                                name=name, table=table, last_ingested=last,
+                                count_7d=int(row[0][1] or 0),
+                                count_30d=int(row[0][2] or 0),
+                            ))
+                        else:
+                            results.append(KBSummary(
+                                name=name, table=table, last_ingested=None,
+                                count_7d=0, count_30d=0,
+                            ))
+                    except Exception as exc:
+                        logger.warning("KB activity check failed for %s: %s", table, exc)
+        conn.close()
+    except Exception as exc:
+        logger.error("check_kb_activity: DB unavailable: %s", exc)
+    return results

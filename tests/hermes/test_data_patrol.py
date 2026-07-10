@@ -128,3 +128,19 @@ def test_check_monthly_data_missing_returns_fill_table(monkeypatch):
     results = dp.check_monthly_data("postgresql://test")
     fill_targets = [s for s in results if s.fill_table]
     assert len(fill_targets) > 0
+
+
+def test_check_kb_activity_returns_summaries(monkeypatch):
+    today = date.today()
+    # cursor returns (last_date, count_7d, count_30d) per query
+    cur = MagicMock()
+    cur.fetchall.return_value = [(today, 5, 12)]
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    conn = _make_conn(cur)
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+
+    from services.hermes.data_patrol import check_kb_activity
+    results = check_kb_activity("postgresql://test")
+    assert len(results) > 0
+    assert all(isinstance(r.count_7d, int) for r in results)
