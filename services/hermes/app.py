@@ -27,6 +27,8 @@ _pending_classify: dict[str, str] = {}
 _pending_kb_ingest: dict[str, tuple[str, str]] = {}
 # sender_id → remaining image count for capcomp image ingest (KB + province_cap_comp ETL)
 _pending_capcomp_ingest: dict[str, int] = {}
+# sender_id → {fill_table, fill_province, fill_month} — pending gap fill via file upload
+_pending_gap_fill: dict[str, dict] = {}
 # message_id → {sender_id, filename, file_key, resource_type, current_folder}
 # allows the post-upload routing card to re-route files to a different folder
 _pending_reroute: dict[str, dict] = {}
@@ -80,6 +82,12 @@ from services.hermes.capacity_manual_etl import (
     format_result_message as _capacity_fmt,
 )
 from services.hermes.thinking_agent import ThinkingAgent
+from services.hermes.data_patrol import (
+    run_patrol as _run_patrol,
+    build_detail_card as _patrol_detail_card,
+    build_fill_card as _patrol_fill_card,
+    get_last_report as _patrol_last_report,
+)
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -710,6 +718,19 @@ def create_app() -> FastAPI:
             },
         )
 
+        # Data patrol: daily 00:35 UTC (08:35 Beijing) — after health check
+        scheduler.add_job(
+            _run_patrol,
+            "cron",
+            hour=0, minute=35,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+            },
+        )
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
@@ -779,6 +800,58 @@ def create_app() -> FastAPI:
             logger.info("Daily nodal PF pre-compute: %d plants stored for %s", n, yesterday)
         except Exception as exc:
             logger.error("Daily nodal PF pre-compute failed for %s: %s", yesterday, exc)
+
+    def _upsert_gap_fill(body: dict, pg_url: str) -> None:
+        """Upsert one manually-entered gap fill row into the appropriate table."""
+        import psycopg2
+        fill_table = body.get("fill_table", "")
+        province   = body.get("fill_province", "")
+        fill_month = body.get("fill_month", "")      # YYYY-MM
+        if not fill_table or not fill_month:
+            raise ValueError("fill_table and fill_month are required")
+
+        year, month = map(int, fill_month.split("-"))
+
+        conn = psycopg2.connect(pg_url)
+        with conn:
+            with conn.cursor() as cur:
+                if fill_table == "province_cap_comp":
+                    from services.hermes.capcomp_etl import upsert_cap_rows
+                    upsert_cap_rows([{
+                        "province": province,
+                        "cap_comp_yuan_kw": float(body.get("cap_comp_yuan_kw", 0)),
+                        "peak_duration_hours": float(body["peak_duration_hours"]) if body.get("peak_duration_hours") else None,
+                        "effective_year": year,
+                        "source": "manual_patrol_fill",
+                    }], pg_url=pg_url, source="manual_patrol_fill")
+                elif fill_table == "province_fr_market":
+                    from services.hermes.capcomp_etl import upsert_fr_rows
+                    upsert_fr_rows([{
+                        "province": province,
+                        "fr_price_yuan_kw_h": float(body.get("fr_price_yuan_kw_h", 0)),
+                        "fr_pool_yi_yuan": float(body["fr_pool_yi_yuan"]) if body.get("fr_pool_yi_yuan") else None,
+                        "effective_year": year,
+                        "source": "manual_patrol_fill",
+                    }], pg_url=pg_url, source="manual_patrol_fill")
+                elif fill_table == "province_installed_monthly":
+                    cur.execute("""
+                        INSERT INTO province_installed_monthly (province, year_month, installed_mw, source_file)
+                        VALUES (%s, %s, %s, 'manual_patrol_fill')
+                        ON CONFLICT (province, year_month) DO UPDATE
+                          SET installed_mw = EXCLUDED.installed_mw,
+                              source_file  = EXCLUDED.source_file
+                    """, (province, year * 100 + month, float(body.get("installed_mw", 0))))
+                elif fill_table == "province_sysopfee_monthly":
+                    cur.execute("""
+                        INSERT INTO province_sysopfee_monthly (province, year_month, fee_yuan_kwh, source_file)
+                        VALUES (%s, %s, %s, 'manual_patrol_fill')
+                        ON CONFLICT (province, year_month) DO UPDATE
+                          SET fee_yuan_kwh = EXCLUDED.fee_yuan_kwh,
+                              source_file  = EXCLUDED.source_file
+                    """, (province, year * 100 + month, float(body.get("fee_yuan_kwh", 0))))
+                else:
+                    raise ValueError(f"Unsupported fill_table: {fill_table}")
+        conn.close()
 
     @app.post("/hermes/ranking/backfill-annual")
     async def backfill_annual_nodal(request: Request, background: BackgroundTasks):
@@ -949,6 +1022,41 @@ def create_app() -> FastAPI:
         background.add_task(_run_backfill)
         n_sources = len([s for s in _ns_get_sources(_pg, active_only=False) if not source_id or s["id"] == source_id])
         return {"status": "started", "sources": n_sources, "start_date": start_date_str}
+
+    @app.post("/hermes/patrol")
+    async def _patrol_trigger(background_tasks: BackgroundTasks):
+        """Trigger a patrol run immediately."""
+        pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        owner_open_id = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+        background_tasks.add_task(_run_patrol, pg_url, feishu, owner_open_id, api_key)
+        return {"status": "started"}
+
+    @app.get("/hermes/patrol/status")
+    async def _patrol_status():
+        report = _patrol_last_report()
+        if report is None:
+            return {"status": "no_report"}
+        return {
+            "status": "ok",
+            "generated_at": report.generated_at.isoformat(),
+            "has_alerts": report.has_alerts,
+            "fresh": report.count_by_status("fresh"),
+            "stale": report.count_by_status("stale"),
+            "missing": report.count_by_status("missing"),
+        }
+
+    @app.post("/hermes/patrol/fill")
+    async def _patrol_fill(request: Request):
+        """Upsert a manually entered gap fill row."""
+        body = await request.json()
+        pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        try:
+            _upsert_gap_fill(body, pg_url)
+            return {"status": "ok"}
+        except Exception as exc:
+            logger.error("patrol/fill failed: %s", exc)
+            return {"status": "error", "detail": str(exc)}
 
     @app.post("/hermes/reports/daily")
     async def trigger_daily_report(background: BackgroundTasks):
@@ -1414,6 +1522,75 @@ def create_app() -> FastAPI:
                     ))
             return {}
 
+        # Patrol card interactions
+        if act == "patrol_expand":
+            report = _patrol_last_report()
+            if report:
+                new_card = _patrol_detail_card(report)
+                try:
+                    return {"card": new_card}
+                except Exception as exc:
+                    logger.warning("patrol expand card update failed: %s", exc)
+            return Response(content="{}", media_type="application/json")
+
+        if act == "patrol_collapse":
+            report = _patrol_last_report()
+            if report:
+                from services.hermes.data_patrol import build_summary_card as _patrol_summary
+                new_card = _patrol_summary(report)
+                try:
+                    return {"card": new_card}
+                except Exception as exc:
+                    logger.warning("patrol collapse card update failed: %s", exc)
+            return Response(content="{}", media_type="application/json")
+
+        if act == "patrol_remind":
+            reminder = value.get("reminder", "")
+            if reminder and feishu and open_id:
+                feishu.send_text(open_id=open_id, text=f"📤 数据缺失提醒：\n{reminder}")
+            return Response(content="{}", media_type="application/json")
+
+        if act == "patrol_fill_open":
+            fill_table    = value.get("fill_table", "")
+            fill_province = value.get("fill_province", "")
+            fill_month    = value.get("fill_month", "")
+            fill_card = _patrol_fill_card(fill_table, fill_province, fill_month)
+            if feishu and open_id:
+                feishu.send_card(open_id=open_id, card=fill_card)
+            return Response(content="{}", media_type="application/json")
+
+        if act == "patrol_fill_submit":
+            pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+            try:
+                _upsert_gap_fill(value, pg_url)
+                if feishu and open_id:
+                    feishu.send_text(open_id=open_id, text="✅ 数据已提交并写入数据库。")
+            except Exception as exc:
+                if feishu and open_id:
+                    feishu.send_text(open_id=open_id, text=f"⚠️ 提交失败：{exc}")
+            return Response(content="{}", media_type="application/json")
+
+        if act == "patrol_fill_file":
+            fill_table    = value.get("fill_table", "")
+            fill_province = value.get("fill_province", "")
+            fill_month    = value.get("fill_month", "")
+            if open_id:
+                _pending_gap_fill[open_id] = {
+                    "fill_table": fill_table,
+                    "fill_province": fill_province,
+                    "fill_month": fill_month,
+                }
+                if feishu:
+                    feishu.send_text(
+                        open_id=open_id,
+                        text=(
+                            f"📎 好的，请发送文件（PDF、Excel、JPG、PNG、DOCX、PPT、TXT 均可）。\n"
+                            f"AI将自动提取 **{fill_table}** / **{fill_province}** / **{fill_month}** 的数据，"
+                            f"并显示供你确认。"
+                        ),
+                    )
+            return Response(content="{}", media_type="application/json")
+
         # ── Legacy category menu buttons ─────────────────────────────────────
         cat      = value.get("cat", "")
         question = _CALLBACK_MAP.get(f"cat:{cat}", "")
@@ -1753,6 +1930,49 @@ def _handle_file_message(
 
     if not _sent_card:
         feishu.send_text(open_id=sender_id, text=reply)
+
+    # Gap fill via file upload (patrol)
+    if sender_id in _pending_gap_fill:
+        ctx = _pending_gap_fill.pop(sender_id)
+        pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        try:
+            from services.hermes.capcomp_manual_etl import extract_from_file_for_gap
+            result = extract_from_file_for_gap(
+                file_bytes=file_bytes,
+                filename=filename,
+                fill_table=ctx["fill_table"],
+                province=ctx["fill_province"],
+                month=ctx["fill_month"],
+                api_key=api_key,
+            )
+            if result.get("extracted"):
+                confirm_card = {
+                    "config": {"wide_screen_mode": True},
+                    "header": {"template": "blue",
+                               "title": {"content": "AI提取结果 — 请确认", "tag": "plain_text"}},
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "lark_md",
+                            "content": f"从文件 **{filename}** 提取到以下数据：\n\n```\n{result['summary']}\n```"}},
+                        {"tag": "hr"},
+                        {"tag": "action", "actions": [
+                            {"tag": "button", "text": {"tag": "plain_text", "content": "✅ 确认提交"},
+                             "type": "primary",
+                             "value": {"act": "patrol_fill_submit", **ctx, **result["values"]}},
+                            {"tag": "button", "text": {"tag": "plain_text", "content": "❌ 取消"},
+                             "type": "default",
+                             "value": {"act": "patrol_close"}},
+                        ]},
+                    ],
+                }
+                feishu.send_card(open_id=sender_id, card=confirm_card)
+            else:
+                feishu.send_text(open_id=sender_id,
+                                 text=f"⚠️ AI未能从文件中提取到有效数据。请手动输入，或换一个文件。\n错误：{result.get('error','')}")
+        except Exception as exc:
+            logger.error("Gap fill file extraction failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 文件处理失败：{exc}")
+        return  # do not fall through to other handlers
 
     # Capcomp image ingest: KB + province_cap_comp ETL
     if sender_id in _pending_capcomp_ingest:
@@ -2972,6 +3192,23 @@ def _handle_message(
 
         import threading as _threading
         _threading.Thread(target=_run_capcomp, daemon=True).start()
+        return True
+
+    # ── /datacheck / /巡视 command — trigger data patrol ─────────────────────
+    if _re.match(r'^/?(?:datacheck|巡视)$', msg.text.strip(), _re.I):
+        pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if msg.source == "feishu" and feishu:
+            feishu.send_text(open_id=msg.sender_id, text="📡 正在巡视数据源，约15秒…")
+        def _run():
+            _run_patrol(
+                pg_url=pg_url,
+                feishu=feishu,
+                owner_open_id=msg.sender_id,
+                api_key=api_key,
+            )
+        import threading as _t
+        _t.Thread(target=_run, daemon=True).start()
         return True
 
     # ── /capcomp-add — manual cap comp / FR data entry (text or URL) ────────
