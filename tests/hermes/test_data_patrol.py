@@ -10,18 +10,31 @@ def test_source_status_defaults():
 
 
 def test_days_behind_fresh():
-    today = date.today()
-    assert _days_behind(today) == 0
+    from datetime import datetime, timezone, timedelta
+    _BJ = timezone(timedelta(hours=8))
+    today = datetime.now(_BJ).date()
+    assert _days_behind(today, today=today) == 0
 
 
 def test_days_behind_stale():
-    from datetime import timedelta
-    yesterday = date.today() - timedelta(days=3)
-    assert _days_behind(yesterday) == 3
+    from datetime import timedelta, datetime, timezone
+    _BJ = timezone(timedelta(hours=8))
+    today = datetime.now(_BJ).date()
+    three_days_ago = today - timedelta(days=3)
+    assert _days_behind(three_days_ago, today=today) == 3
 
 
 def test_days_behind_none():
     assert _days_behind(None) == 9999
+
+
+def test_classify_daily():
+    from services.hermes.data_patrol import _classify_daily, _MISSING_SENTINEL
+    assert _classify_daily(_MISSING_SENTINEL) == "missing"
+    assert _classify_daily(3) == "stale"
+    assert _classify_daily(0) == "fresh"
+    assert _classify_daily(2) == "fresh"
+    assert _classify_daily(9) == "stale"
 
 
 def test_patrol_report_counts():

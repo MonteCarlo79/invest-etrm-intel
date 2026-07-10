@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _BJ = timezone(timedelta(hours=8))
 _DAILY_STALE_DAYS = 2       # flag auto/manual daily data if > 2 days behind
 _MONTHLY_FLAG_DAY = 10      # flag missing monthly data after 10th of following month
+_MISSING_SENTINEL = 9999   # sentinel value for "no data at all"
 
 
 @dataclass
@@ -62,15 +63,16 @@ class PatrolReport:
         return any(s.status in ("stale", "missing") for s in self.sources)
 
 
-def _days_behind(last_date: Optional[date]) -> int:
+def _days_behind(last_date: Optional[date], today: Optional[date] = None) -> int:
     if last_date is None:
-        return 9999
-    today = datetime.now(_BJ).date()
+        return _MISSING_SENTINEL
+    if today is None:
+        today = datetime.now(_BJ).date()
     return max(0, (today - last_date).days)
 
 
 def _classify_daily(days: int) -> Literal["fresh", "stale", "missing"]:
-    if days == 9999:
+    if days == _MISSING_SENTINEL:
         return "missing"
     if days > _DAILY_STALE_DAYS:
         return "stale"
