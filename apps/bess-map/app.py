@@ -319,6 +319,14 @@ _T: dict[str, dict[str, str]] = {
         "demand_recommended":      "Recommended BESS (MW)",
         "demand_bess_installed":   "Existing BESS (MW)",
         "demand_bess_gap":         "Gap (Demand − Existing, MW)",
+        "demand_waterfall_p50_title": "③a BESS Demand Sizing — Arbitrage P50 + FR",
+        "demand_waterfall_p90_title": "③b BESS Demand Sizing — Arbitrage P90 + FR",
+        "demand_waterfall_cap":    "Stacked bars (left group per province): Arbitrage + FR requirement − Existing BESS. "
+                                   "Net ◆ marker = unmet demand after deducting existing BESS. "
+                                   "Thermal bar (right, grey) = reference: thermal plants can also meet the same demand, "
+                                   "benchmarking the real addressable market for new BESS.",
+        "demand_thermal_cap":      "Thermal Capacity (MW, ref)",
+        "demand_net_demand":       "Net New BESS Demand",
         "demand_no_fund":          "Market fundamentals not available — FR sizing unavailable.",
         "demand_no_hourly":        "No hourly fundamentals data for this province/period.",
         "demand_source_note":      "⚠️ FR capacity requirements from provincial/regional FM market rules and national standard GB/T 45905.6-2025. Formula: FR = pct_load × peak load + pct_renew × installed renewables + floor. 'Confirmed' = official documents; 'Estimate' = derived from regional rules or national baseline. Co-location mandates (配储比例) abolished by No. 136 policy and are NOT used here.",
@@ -515,6 +523,13 @@ _T: dict[str, dict[str, str]] = {
         "demand_recommended":      "建议储能容量（MW）",
         "demand_bess_installed":   "已有储能装机（MW）",
         "demand_bess_gap":         "缺口（需求-装机，MW）",
+        "demand_waterfall_p50_title": "③a 储能需求测算 — 套利P50 + 调频",
+        "demand_waterfall_p90_title": "③b 储能需求测算 — 套利P90 + 调频",
+        "demand_waterfall_cap":    "叠加柱（每省左组）：套利容量 + 调频需求 − 已有储能装机。"
+                                   "◆ 净需求 = 扣除已有储能后的未满足需求。"
+                                   "热电容量（右柱，灰色）= 参考值：热电机组同样可满足套利+调频需求，用于衡量储能的真实可寻址市场规模。",
+        "demand_thermal_cap":      "热电装机（MW，参考）",
+        "demand_net_demand":       "净新增储能需求",
         "demand_no_fund":          "市场基础数据不可用 — 无法计算调频需求。",
         "demand_no_hourly":        "该省份/时段无小时基础数据。",
         "demand_source_note":      "⚠️ 调频容量需求来源于各省/区域调频辅助服务市场实施细则及GB/T 45905.6-2025国家标准。公式：调频需求 = 最高负荷×比例 + 新能源装机×比例 + 兜底容量。[已确认]=来自官方文件；[估算]=参考区域规则或国家基准值。注：强制配储比例（配储比例）已由136号文废除，本处不适用。",
@@ -1622,6 +1637,79 @@ def load_installed_capacity(_eng_key):
         return _pd.DataFrame()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_monthly_gaps(_eng_key):
+    """
+    Return three DataFrames (capcomp, fr_market, installed) with
+    province × YYYY-MM coverage for the last 12 months.
+    Each df has columns: province, year_month (str), has_data (bool).
+    """
+    import pandas as _pd
+    import datetime as _dt
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        empty = _pd.DataFrame(columns=["province", "year_month", "has_data"])
+        return empty, empty, empty
+
+    today = _dt.date.today()
+    months = []
+    for i in range(12):
+        d = today.replace(day=1)
+        # subtract i months manually
+        m = today.month - i
+        y = today.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        months.append(f"{y:04d}-{m:02d}")
+
+    queries = {
+        "capcomp": """
+            SELECT province, TO_CHAR(effective_date, 'YYYY-MM') AS year_month
+            FROM marketdata.province_cap_comp
+            WHERE status IN ('confirmed', 'conflict')
+        """,
+        "fr_market": """
+            SELECT province, TO_CHAR(effective_date, 'YYYY-MM') AS year_month
+            FROM marketdata.province_fr_market
+            WHERE status IN ('confirmed', 'conflict')
+        """,
+        "installed": """
+            SELECT province,
+                   TO_CHAR(TO_DATE(year_month::text, 'YYYYMM'), 'YYYY-MM') AS year_month
+            FROM marketdata.province_installed_monthly
+            WHERE bess_mw IS NOT NULL
+        """,
+    }
+
+    results = {}
+    for key, sql in queries.items():
+        try:
+            import psycopg2 as _pg
+            conn = _pg.connect(dsn)
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description]
+            conn.close()
+            df = _pd.DataFrame(rows, columns=cols) if rows else _pd.DataFrame(columns=["province", "year_month"])
+            df["has_data"] = True
+            provinces = sorted(df["province"].unique()) if not df.empty else []
+            if provinces:
+                import itertools
+                grid = list(itertools.product(provinces, months))
+                full = _pd.DataFrame(grid, columns=["province", "year_month"])
+                full = full.merge(df[["province", "year_month", "has_data"]].drop_duplicates(),
+                                  on=["province", "year_month"], how="left")
+                full["has_data"] = full["has_data"].fillna(False)
+            else:
+                full = _pd.DataFrame(columns=["province", "year_month", "has_data"])
+            results[key] = full
+        except Exception:
+            results[key] = _pd.DataFrame(columns=["province", "year_month", "has_data"])
+    return results["capcomp"], results["fr_market"], results["installed"]
+
+
 # ── Tab 1: Province Ranking ───────────────────────────────────────────────────
 with tab_ranking:
     st.subheader(_t("rank_title"))
@@ -2381,6 +2469,11 @@ with tab_demand:
                 _, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
                 _fr_mw = max(_floor_mw, _peak_load_mw * _pct_load + _renew_mw * _pct_renew_inst)
 
+                # Thermal always from annual fundamentals (not in monthly data)
+                _cap_yr_fund = _pdata.get("capacity", {}).get(_fund_yr, {})
+                _thermal_wkw = (_cap_yr_fund.get("火电", {}) or {}).get("value") or 0.0
+                _thermal_mw  = _thermal_wkw * 10
+
                 _recommended = max(_arb_p90, _fr_mw)
                 _gap_mw = max(_recommended - _storage_mw, 0.0)
                 _cmp_rows.append({
@@ -2391,44 +2484,121 @@ with tab_demand:
                     _t("demand_recommended"):      round(_recommended,  0),
                     _t("demand_bess_installed"):   round(_storage_mw,   0),
                     _t("demand_bess_gap"):         round(_gap_mw,       0),
+                    _t("demand_thermal_cap"):      round(_thermal_mw,   0),
                 })
             if _cmp_rows:
                 _cmp_df = pd.DataFrame(_cmp_rows).set_index("Province")
-                # Grouped bar chart
-                fig_cmp = go.Figure()
-                fig_cmp.add_trace(go.Bar(
-                    name=_t("demand_arb_p50"),
-                    x=_cmp_df.index.tolist(),
-                    y=_cmp_df[_t("demand_arb_p50")].tolist(),
-                    marker_color="rgba(76,120,168,0.6)",
-                ))
-                fig_cmp.add_trace(go.Bar(
-                    name=_t("demand_arb_p90"),
-                    x=_cmp_df.index.tolist(),
-                    y=_cmp_df[_t("demand_arb_p90")].tolist(),
-                    marker_color="#4C78A8",
-                ))
-                fig_cmp.add_trace(go.Bar(
-                    name=_t("demand_fr_req_mw"),
-                    x=_cmp_df.index.tolist(),
-                    y=_cmp_df[_t("demand_fr_req_mw")].tolist(),
-                    marker_color="#F58518",
-                ))
-                fig_cmp.add_trace(go.Bar(
-                    name=_t("demand_bess_installed"),
-                    x=_cmp_df.index.tolist(),
-                    y=_cmp_df[_t("demand_bess_installed")].tolist(),
-                    marker_color="#4CAF50",
-                ))
-                fig_cmp.update_layout(
-                    title=_t("demand_compare_title"),
-                    barmode="group",
-                    xaxis_title=_t("demand_province"),
-                    yaxis_title="MW",
-                    height=380, margin=dict(t=40, b=80, l=50, r=10),
-                    legend=dict(orientation="h", y=-0.35),
+
+                _provs_list    = _cmp_df.index.tolist()
+                _arb_p50_vals  = _cmp_df[_t("demand_arb_p50")].tolist()
+                _arb_p90_vals  = _cmp_df[_t("demand_arb_p90")].tolist()
+                _fr_vals       = _cmp_df[_t("demand_fr_req_mw")].tolist()
+                _bess_vals     = _cmp_df[_t("demand_bess_installed")].tolist()
+                _thermal_vals  = _cmp_df[_t("demand_thermal_cap")].tolist()
+
+                def _waterfall_chart(arb_vals, arb_label, title, chart_key):
+                    """Waterfall-style chart: arb + FR stacked up, BESS deducted, thermal reference."""
+                    _bess_base  = [a + f for a, f in zip(arb_vals, _fr_vals)]
+                    _net_vals   = [max(a + f - s, 0.0) for a, f, s in zip(arb_vals, _fr_vals, _bess_vals)]
+
+                    fig = go.Figure()
+
+                    # ── Arbitrage (base layer) ───────────────────────────────
+                    fig.add_trace(go.Bar(
+                        name=arb_label,
+                        x=_provs_list,
+                        y=arb_vals,
+                        base=0,
+                        offsetgroup=0,
+                        marker_color="#4C78A8",
+                        text=[f"{v:,.0f}" if v >= 50 else "" for v in arb_vals],
+                        textposition="inside",
+                        insidetextanchor="middle",
+                        textfont=dict(size=10, color="white"),
+                    ))
+
+                    # ── FR requirement (stacked on top of arb) ───────────────
+                    fig.add_trace(go.Bar(
+                        name=_t("demand_fr_req_mw"),
+                        x=_provs_list,
+                        y=_fr_vals,
+                        base=arb_vals,
+                        offsetgroup=0,
+                        marker_color="#F58518",
+                        text=[f"{v:,.0f}" if v >= 50 else "" for v in _fr_vals],
+                        textposition="inside",
+                        insidetextanchor="middle",
+                        textfont=dict(size=10, color="white"),
+                    ))
+
+                    # ── Existing BESS deduction (green, going down from top) ─
+                    fig.add_trace(go.Bar(
+                        name=_t("demand_bess_installed"),
+                        x=_provs_list,
+                        y=[-s for s in _bess_vals],
+                        base=_bess_base,
+                        offsetgroup=0,
+                        marker_color="#54A24B",
+                        marker_line=dict(width=1, color="#2e7d32"),
+                        text=[f"−{s:,.0f}" if s >= 50 else "" for s in _bess_vals],
+                        textposition="inside",
+                        insidetextanchor="middle",
+                        textfont=dict(size=10, color="white"),
+                    ))
+
+                    # ── Thermal reference bar (separate group) ───────────────
+                    fig.add_trace(go.Bar(
+                        name=_t("demand_thermal_cap"),
+                        x=_provs_list,
+                        y=_thermal_vals,
+                        offsetgroup=1,
+                        marker_color="rgba(180,170,160,0.55)",
+                        marker_line=dict(width=1, color="#9E9E9E"),
+                    ))
+
+                    # ── Net demand diamond marker ────────────────────────────
+                    fig.add_trace(go.Scatter(
+                        name=_t("demand_net_demand"),
+                        x=_provs_list,
+                        y=_net_vals,
+                        mode="markers+text",
+                        marker=dict(symbol="diamond", size=9, color="#E45756",
+                                    line=dict(width=1.5, color="#b71c1c")),
+                        text=[f"{v:,.0f}" if v > 0 else "0" for v in _net_vals],
+                        textposition="top center",
+                        textfont=dict(size=10, color="#E45756"),
+                    ))
+
+                    fig.update_layout(
+                        title=dict(text=title, font=dict(size=14)),
+                        barmode="group",
+                        xaxis=dict(
+                            title=_t("demand_province"),
+                            tickangle=-35,
+                            tickfont=dict(size=11),
+                        ),
+                        yaxis=dict(title="MW", rangemode="tozero"),
+                        height=460,
+                        margin=dict(t=55, b=90, l=60, r=10),
+                        legend=dict(orientation="h", y=-0.35, font=dict(size=11)),
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig, use_container_width=True, key=chart_key)
+
+                st.caption(_t("demand_waterfall_cap"))
+                _waterfall_chart(
+                    _arb_p50_vals,
+                    _t("demand_arb_p50"),
+                    _t("demand_waterfall_p50_title"),
+                    "demand_wf_p50",
                 )
-                st.plotly_chart(fig_cmp, use_container_width=True, key="demand_cmp_bar")
+                _waterfall_chart(
+                    _arb_p90_vals,
+                    _t("demand_arb_p90"),
+                    _t("demand_waterfall_p90_title"),
+                    "demand_wf_p90",
+                )
                 st.dataframe(_cmp_df, use_container_width=True)
 
 # ── Tab 5: System Operation Fee ───────────────────────────────────────────────
@@ -2848,6 +3018,88 @@ with tab_aux:
                                             int(row["id"]), int(other_row["id"]),
                                             f"{row.get('fr_price_yuan_kw_h')} ¥/kW·h",
                                         )
+
+    # ── Data Gaps expander ────────────────────────────────────────────────────
+    with st.expander("📋 Data Gaps — 容量补偿 / 调频市场 / 装机容量", expanded=False):
+        import plotly.express as _px
+        import pandas as _gap_pd
+
+        _hermes_url_fill = os.environ.get("HERMES_URL", "").rstrip("/")
+
+        _gap_cc, _gap_fr, _gap_inst = load_monthly_gaps(_ENG_KEY)
+
+        _gap_tabs = st.tabs(["容量补偿", "调频市场", "装机容量"])
+        _gap_data = [
+            (_gap_tabs[0], _gap_cc,   "province_cap_comp",          "cap_comp_yuan_kw",   "容量补偿标准 (¥/kW·年)"),
+            (_gap_tabs[1], _gap_fr,   "province_fr_market",         "fr_price_yuan_kw_h", "调频容量价格 (¥/kW·h)"),
+            (_gap_tabs[2], _gap_inst, "province_installed_monthly", "installed_mw",       "储能装机 (MW)"),
+        ]
+
+        for _gap_tab, _df, _fill_table, _field1, _field1_label in _gap_data:
+            with _gap_tab:
+                if _df.empty:
+                    st.info("暂无数据")
+                    continue
+
+                _pivot = _df.pivot(index="province", columns="year_month", values="has_data").fillna(False)
+                _z = _pivot.values.astype(int)
+                _fig = _px.imshow(
+                    _z,
+                    x=list(_pivot.columns),
+                    y=list(_pivot.index),
+                    color_continuous_scale=[[0, "#ef4444"], [1, "#22c55e"]],
+                    zmin=0, zmax=1,
+                    aspect="auto",
+                    labels={"color": "有数据"},
+                )
+                _fig.update_layout(
+                    height=max(250, len(_pivot.index) * 22),
+                    margin=dict(t=10, b=40, l=140, r=10),
+                    coloraxis_showscale=False,
+                )
+                _fig.update_xaxes(tickangle=-45)
+                st.plotly_chart(_fig, use_container_width=True, key=f"gap_{_fill_table}")
+
+                _missing_rows = _df[~_df["has_data"]]
+                if not _missing_rows.empty and _hermes_url_fill:
+                    st.caption(f"🔴 {len(_missing_rows)} 条数据缺失。可在下方手动填写：")
+                    with st.form(key=f"fill_form_{_fill_table}"):
+                        _col1, _col2, _col3 = st.columns(3)
+                        _provs_missing = sorted(_missing_rows["province"].unique())
+                        _months_missing = sorted(_missing_rows["year_month"].unique(), reverse=True)
+                        with _col1:
+                            _sel_prov = st.selectbox("省份", _provs_missing, key=f"fp_{_fill_table}")
+                        with _col2:
+                            _sel_month = st.selectbox("月份", _months_missing, key=f"fm_{_fill_table}")
+                        with _col3:
+                            _val1 = st.number_input(_field1_label, min_value=0.0, step=0.01,
+                                                     key=f"fv1_{_fill_table}")
+                        _submitted = st.form_submit_button("提交")
+                        if _submitted:
+                            import requests as _rq
+                            try:
+                                _resp = _rq.post(
+                                    f"{_hermes_url_fill}/hermes/patrol/fill",
+                                    json={
+                                        "fill_table":    _fill_table,
+                                        "fill_province": _sel_prov,
+                                        "fill_month":    _sel_month,
+                                        _field1:         _val1,
+                                    },
+                                    timeout=10,
+                                )
+                                if _resp.status_code == 200 and _resp.json().get("status") == "ok":
+                                    st.success(f"✅ {_sel_prov} {_sel_month} 数据已提交。")
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                else:
+                                    st.warning(f"提交失败：{_resp.text[:100]}")
+                            except Exception as _fe:
+                                st.warning(f"无法连接到 Hermes：{_fe}")
+                elif _missing_rows.empty:
+                    st.success("✅ 所有数据均已覆盖（近12个月）")
+                else:
+                    st.caption("请通过 Feishu 的 `/datacheck` 命令填写缺失数据，或配置 HERMES_URL。")
 
 
 # ── Tab 7: Dispatch & Economics ──────────────────────────────────────────────
