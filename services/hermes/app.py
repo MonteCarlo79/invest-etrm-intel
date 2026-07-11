@@ -1340,7 +1340,10 @@ def create_app() -> FastAPI:
             task_id = value.get("task_id", "")
             title   = value.get("title", "任务")
             try:
-                agent.tasks.complete_card(title=title)
+                if task_id:
+                    agent.tasks.complete_card(card_id=task_id)
+                else:
+                    agent.tasks.complete_card(title=title)
             except Exception as exc:
                 logger.error("done_task callback failed: %s", exc)
                 return {"toast": {"type": "fail", "content": f"⚠️ 标记失败：{exc}"}}
