@@ -1035,6 +1035,19 @@ def create_app() -> FastAPI:
                     "kept": row_id_keep, "dropped": row_id_drop}
         return Response(content=result.get("error", "unknown error"), status_code=500)
 
+    @app.post("/hermes/knowledge/digest")
+    async def run_knowledge_digest(background: BackgroundTasks):
+        """Trigger synthesis + expert-insight digest on unprocessed KB docs.
+
+        Returns immediately with {"status": "started"}.
+        The job runs in the background and logs results to CloudWatch.
+        """
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _api_key:
+            return Response(content="ANTHROPIC_API_KEY not set", status_code=503)
+        background.add_task(_run_kb_digest, _api_key)
+        return {"status": "started"}
+
     @app.post("/hermes/news-screener/backfill")
     async def backfill_news_screener(request: Request, background: BackgroundTasks):
         """
