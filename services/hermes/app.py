@@ -690,6 +690,17 @@ def create_app() -> FastAPI:
             },
         )
 
+        # KB digest: 18:07 UTC (02:07 Beijing next day) — synthesize + digest all new docs
+        # Runs after news screener (06:00 UTC) and well before morning briefing (00:03 UTC)
+        scheduler.add_job(
+            lambda: _run_kb_digest(os.environ.get("ANTHROPIC_API_KEY", "")),
+            "cron",
+            hour=18, minute=7,
+            id="kb_digest_nightly",
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+
         # Daily market PDF report: 07:00 UTC (15:00 Beijing) — 60 min after screener
         scheduler.add_job(
             _send_daily_report,
