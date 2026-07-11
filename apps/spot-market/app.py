@@ -4007,7 +4007,7 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
 
         # ── Batch KB digest ────────────────────────────────────────────────────
         st.divider()
-        _col_dig1, _col_dig2 = st.columns([3, 1])
+        _col_dig1, _col_dig2, _col_dig3 = st.columns([3, 1, 2])
         with _col_dig1:
             st.caption(
                 "Extract expert insights from synthesized knowledge base documents "
@@ -4024,6 +4024,29 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                         st.success(f"{_n_batch} new insight{'s' if _n_batch != 1 else ''} extracted.")
                     except Exception as _de:
                         st.error(f"Digest failed: {_de}")
+        with _col_dig3:
+            st.caption(
+                "Trigger the full synthesis + digest pipeline via Hermes "
+                "(runs in background — check logs for results)."
+            )
+            if st.button("▶ Run Digest Now", key="kb_hermes_digest_btn"):
+                _hermes_url = _os.environ.get("HERMES_URL", "")
+                if not _hermes_url:
+                    st.warning("HERMES_URL not configured.")
+                else:
+                    try:
+                        import requests as _req
+                        _r = _req.post(
+                            _hermes_url.rstrip("/") + "/hermes/knowledge/digest",
+                            timeout=10,
+                            verify=False,
+                        )
+                        if _r.status_code == 200:
+                            st.success("Digest job started — insights available in ~5 min.")
+                        else:
+                            st.error(f"Hermes returned {_r.status_code}: {_r.text[:120]}")
+                    except Exception as _he:
+                        st.error(f"Could not reach Hermes: {_he}")
 
 
 # ── Tab 9 helpers — module-level so @st.cache_data can hash them stably ───────
