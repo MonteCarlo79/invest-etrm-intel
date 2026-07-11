@@ -90,6 +90,55 @@ from services.hermes.data_patrol import (
 )
 from datetime import datetime
 
+# ── KB digest pipeline shims (module-level so tests can patch them) ──────────
+def _synthesis_pipeline_cls(api_key: str, workers: int = 1):
+    from services.knowledge_pool.synthesis import SynthesisPipeline
+    return SynthesisPipeline(api_key, workers=workers)
+
+
+def _digest_spot_kb_docs(api_key: str, limit: int = 30) -> int:
+    from services.knowledge_pool.expert_memory import digest_spot_kb_docs
+    return digest_spot_kb_docs(api_key=api_key, limit=limit)
+
+
+def _run_kb_digest(api_key: str, limit: int = 30) -> dict:
+    """
+    Run the two-stage KB pipeline: synthesis then digest.
+
+    Stage 1 — SynthesisPipeline: processes undigested docs into
+        staging.kp_doc_summaries + staging.kp_qa_pairs.
+    Stage 2 — digest_spot_kb_docs: reads summaries, writes durable
+        insights to staging.kp_expert_insights.
+
+    Each stage is fully isolated — a failure in Stage 1 does not prevent
+    Stage 2 from running on already-synthesised docs.
+
+    Returns {"synthesized": int, "insights": int}.
+    """
+    _log = logging.getLogger(__name__)
+    result: dict = {"synthesized": 0, "insights": 0}
+
+    if not api_key:
+        _log.warning("[kb_digest] skipped — ANTHROPIC_API_KEY not set")
+        return result
+
+    try:
+        r = _synthesis_pipeline_cls(api_key, workers=1).run(limit=limit, verbose=False)
+        result["synthesized"] = r.get("ok", 0)
+        _log.info("[kb_digest] synthesis done: %s", r)
+    except Exception as exc:
+        _log.error("[kb_digest] synthesis failed: %s", exc)
+
+    try:
+        result["insights"] = _digest_spot_kb_docs(api_key=api_key, limit=limit)
+    except Exception as exc:
+        _log.error("[kb_digest] digest failed: %s", exc)
+
+    _log.info("[kb_digest] synthesized=%d insights=%d",
+              result["synthesized"], result["insights"])
+    return result
+
+
 logger = logging.getLogger(__name__)
 
 # ── In-process job progress registry ─────────────────────────────────────────
