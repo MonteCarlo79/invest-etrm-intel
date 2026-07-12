@@ -2020,11 +2020,16 @@ def _handle_jizhi_file(
     try:
         from services.knowledge_pool.knowledge_docs import _extract_pages
         from services.knowledge_pool.jizhi_extractor import (
-            extract_bids, save_bids, ensure_tables,
+            extract_bids, save_bids, ensure_tables, _extract_pptx_text,
         )
         ensure_tables(pg_url)
-        pages = _extract_pages(file_bytes, filename, api_key)
-        full_text = "\n\n".join(text for _, text in pages)
+        # For PPTX use the dedicated extractor that preserves chart category
+        # labels (province→price mapping). Other formats use _extract_pages.
+        if filename.lower().endswith((".pptx", ".ppt")):
+            full_text = _extract_pptx_text(file_bytes)
+        else:
+            pages = _extract_pages(file_bytes, filename, api_key)
+            full_text = "\n\n".join(text for _, text in pages)
         bids = extract_bids(full_text, api_key)
         saved = save_bids(bids, source_doc_id=doc_id, pg_url=pg_url)
     except Exception as exc:

@@ -4892,6 +4892,7 @@ with tab_jizhi:
                         )
                         from services.knowledge_pool.jizhi_extractor import (
                             extract_bids, save_bids, ensure_tables,
+                            _extract_pptx_text,
                         )
                         ensure_tables(_jz_pg_url)
 
@@ -4903,14 +4904,23 @@ with tab_jizhi:
                                 category_override="policy_doc", app="shared",
                                 api_key=_jz_api_key,
                             )
-                            _jz_pages = _extract_pages(_jz_fbytes, _jz_fname, _jz_api_key)
+                            # For PPTX: use dedicated extractor that preserves
+                            # chart category labels (province→price mapping).
+                            # For other formats: fall back to _extract_pages.
+                            if _jz_fname.lower().endswith((".pptx", ".ppt")):
+                                _jz_full_text = _extract_pptx_text(_jz_fbytes)
+                            else:
+                                _jz_pages = _extract_pages(
+                                    _jz_fbytes, _jz_fname, _jz_api_key
+                                )
+                                _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
                         else:
                             _jz_doc_id, _, _ = register_url(_jz_up_url, api_key=_jz_api_key)
                             _jz_pages = _extract_pages(
                                 b"", f"url_{_jz_up_url[-20:]}.txt", _jz_api_key
                             )
+                            _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
 
-                        _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
                         _jz_extracted = extract_bids(_jz_full_text, _jz_api_key)
                     except Exception as _e:
                         st.error(f"提取失败：{_e}")

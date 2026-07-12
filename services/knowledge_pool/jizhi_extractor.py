@@ -8,6 +8,7 @@ Tables managed:
   staging.jizhi_upcoming     — upcoming bid calendar
 
 Public API:
+  _extract_pptx_text(file_bytes) -> str
   ensure_tables(pg_url)
   extract_bids(text, api_key) -> list[dict]
   extract_upcoming(text, api_key) -> list[dict]
@@ -121,6 +122,128 @@ Normalisation rules:
 
 Document:
 {text}"""
+
+
+def _extract_pptx_text(file_bytes: bytes) -> str:
+    """Extract all text from a PPTX file as a single string.
+
+    Handles text shapes, tables, and charts with XML-parsed category labels
+    so that province→price associations are preserved for Claude extraction.
+    Does not require an API key — purely local, no vision calls.
+
+    Returns empty string if python-pptx is not installed or the file is invalid.
+    """
+    try:
+        from pptx import Presentation  # type: ignore
+        from io import BytesIO
+        from lxml import etree  # type: ignore
+    except ImportError:
+        logger.warning("[jizhi] python-pptx or lxml not installed; cannot extract PPTX")
+        return ""
+
+    _C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+
+    def _chart_text(shape) -> str:
+        """Return structured text for a chart shape using XML parsing."""
+        try:
+            root = etree.fromstring(shape.chart._element.xml.encode())
+            parts: list[str] = []
+            for ser in root.iter(f"{{{_C}}}ser"):
+                # Series name is the first <c:v> child (before cat/val)
+                ser_name = ""
+                for sv in ser.findall(f".//{{{_C}}}tx//{{{_C}}}v"):
+                    ser_name = sv.text or ""
+                    break
+
+                # Category labels: try <c:cat> then <c:xVal>
+                cats: list[str] = [
+                    v.text for v in ser.findall(f".//{{{_C}}}cat//{{{_C}}}v")
+                    if v.text
+                ]
+                if not cats:
+                    cats = [
+                        v.text for v in ser.findall(f".//{{{_C}}}xVal//{{{_C}}}v")
+                        if v.text
+                    ]
+
+                # Values: try <c:val> then <c:yVal>
+                vals: list[float | str] = []
+                for v in ser.findall(f".//{{{_C}}}val//{{{_C}}}v"):
+                    if v.text:
+                        try:
+                            vals.append(float(v.text))
+                        except ValueError:
+                            vals.append(v.text)
+                if not vals:
+                    for v in ser.findall(f".//{{{_C}}}yVal//{{{_C}}}v"):
+                        if v.text:
+                            try:
+                                vals.append(float(v.text))
+                            except ValueError:
+                                vals.append(v.text)
+
+                if not vals:
+                    continue
+                if cats and len(cats) == len(vals):
+                    pairs = ", ".join(
+                        f"{c}={round(v, 6) if isinstance(v, float) else v}"
+                        for c, v in zip(cats, vals)
+                    )
+                    parts.append(f"  {ser_name}: {pairs}" if ser_name else f"  {pairs}")
+                else:
+                    parts.append(
+                        f"  {ser_name}: {vals}" if ser_name else f"  {vals}"
+                    )
+            return "\n".join(parts)
+        except Exception as exc:
+            logger.debug("[jizhi] chart XML parse error: %s", exc)
+            return ""
+
+    try:
+        prs = Presentation(BytesIO(file_bytes))
+    except Exception as exc:
+        logger.error("[jizhi] PPTX open failed: %s", exc)
+        return ""
+
+    slide_texts: list[str] = []
+    for i, slide in enumerate(prs.slides, start=1):
+        parts: list[str] = []
+
+        for shape in slide.shapes:
+            # Text shapes (excluding chart labels handled separately)
+            if shape.has_text_frame and not shape.has_chart:
+                text = shape.text_frame.text.strip()
+                if text:
+                    parts.append(text)
+
+            # Tables
+            elif shape.has_table:
+                rows = []
+                for row in shape.table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        rows.append(" | ".join(cells))
+                if rows:
+                    parts.append("TABLE:\n" + "\n".join(rows))
+
+            # Charts
+            elif shape.has_chart:
+                try:
+                    title = (
+                        shape.chart.chart_title.text_frame.text.strip()
+                        if shape.chart.has_title else ""
+                    )
+                except Exception:
+                    title = ""
+                chart_body = _chart_text(shape)
+                if title or chart_body:
+                    header = f"[Chart: {title}]" if title else "[Chart]"
+                    parts.append(header + ("\n" + chart_body if chart_body else ""))
+
+        if parts:
+            slide_texts.append(f"=== Slide {i} ===\n" + "\n".join(parts))
+
+    return "\n\n".join(slide_texts)
 
 
 def ensure_tables(pg_url: str) -> None:
