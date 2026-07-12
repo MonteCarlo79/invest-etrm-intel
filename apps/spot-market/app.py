@@ -4869,8 +4869,125 @@ with tab_jizhi:
                 use_container_width=True, hide_index=True,
             )
 
+    # ── Sub-tab 3: 上传 & 录入 ─────────────────────────────────────────────────
     with _jz_tab_upload:
-        st.info("上传功能将在后续版本中实现。如需手动录入数据，请联系管理员。")
+        st.markdown("上传竞价结果文件（PPT/PDF/Excel）→ AI 自动提取结构化数据 → 预览确认 → 保存")
+
+        _jz_up_file = st.file_uploader(
+            "选择文件",
+            type=["pdf", "pptx", "ppt", "xlsx", "xls", "docx", "doc", "txt", "jpg", "jpeg", "png"],
+            key="jz_upload_file",
+        )
+        _jz_up_url = st.text_input("或输入 URL", placeholder="https://...", key="jz_upload_url")
+
+        if _jz_up_file is not None or (_jz_up_url and st.button("获取 URL", key="jz_fetch_url")):
+            _jz_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if not _jz_api_key:
+                st.error("ANTHROPIC_API_KEY 未配置，无法运行 AI 提取。")
+            else:
+                with st.spinner("正在提取竞价数据…"):
+                    try:
+                        from services.knowledge_pool.knowledge_docs import (
+                            register_and_ingest, register_url, _extract_pages,
+                        )
+                        from services.knowledge_pool.jizhi_extractor import (
+                            extract_bids, save_bids, ensure_tables,
+                        )
+                        ensure_tables(_jz_pg_url)
+
+                        if _jz_up_file is not None:
+                            _jz_fbytes = _jz_up_file.read()
+                            _jz_fname  = _jz_up_file.name
+                            _jz_doc_id, _, _ = register_and_ingest(
+                                file_bytes=_jz_fbytes, filename=_jz_fname,
+                                category_override="policy_doc", app="shared",
+                                api_key=_jz_api_key,
+                            )
+                            _jz_pages = _extract_pages(_jz_fbytes, _jz_fname, _jz_api_key)
+                        else:
+                            _jz_doc_id, _, _ = register_url(_jz_up_url, api_key=_jz_api_key)
+                            _jz_pages = _extract_pages(
+                                b"", f"url_{_jz_up_url[-20:]}.txt", _jz_api_key
+                            )
+
+                        _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
+                        _jz_extracted = extract_bids(_jz_full_text, _jz_api_key)
+                    except Exception as _e:
+                        st.error(f"提取失败：{_e}")
+                        _jz_extracted = []
+                        _jz_doc_id = None
+
+                if _jz_extracted:
+                    st.success(f"提取到 {len(_jz_extracted)} 条竞价记录，请确认后保存：")
+                    _jz_preview_df = _jz_pd.DataFrame(_jz_extracted)
+                    _jz_edited = st.data_editor(
+                        _jz_preview_df, use_container_width=True,
+                        num_rows="dynamic", key="jz_preview_editor",
+                    )
+                    if st.button("💾 保存到数据库", key="jz_save_btn"):
+                        _jz_n = save_bids(
+                            _jz_edited.to_dict("records"),
+                            source_doc_id=_jz_doc_id,
+                            pg_url=_jz_pg_url,
+                        )
+                        st.success(f"已保存 {_jz_n} 条记录（已存在且已验证的记录不会被覆盖）")
+                        _load_jizhi_bids.clear()
+                else:
+                    st.warning("未能从文件中提取结构化竞价数据。文件已存入知识库。")
+
+        st.divider()
+        with st.expander("✏️ 手动录入单条记录"):
+            _jz_m_col1, _jz_m_col2 = st.columns(2)
+            with _jz_m_col1:
+                _jz_m_prov  = st.text_input("省份", placeholder="广东", key="jz_m_prov")
+                _jz_m_year  = st.number_input("年份", min_value=2020, max_value=2035,
+                                               value=2025, step=1, key="jz_m_year")
+                _jz_m_batch = st.selectbox(
+                    "批次", ["存量", "增量_2025-12", "增量_2026-12", "增量_2027-12"],
+                    key="jz_m_batch"
+                )
+                _jz_m_tech  = st.selectbox(
+                    "技术类型", ["陆风", "海风", "光伏", "水电"], key="jz_m_tech"
+                )
+                _jz_m_pfloor = st.number_input("价格下限 (元/kWh)", min_value=0.0,
+                                                step=0.001, format="%.4f", key="jz_m_pfloor")
+                _jz_m_pcap   = st.number_input("价格上限 (元/kWh)", min_value=0.0,
+                                                step=0.001, format="%.4f", key="jz_m_pcap")
+            with _jz_m_col2:
+                _jz_m_mtype  = st.selectbox("机制类型", ["小时数", "电量", "比例"], key="jz_m_mtype")
+                _jz_m_mval   = st.number_input("机制量 (小时/GWh/%)", min_value=0.0,
+                                                step=1.0, key="jz_m_mval")
+                _jz_m_sdr    = st.number_input("供需比", min_value=0.0, step=0.01,
+                                                format="%.2f", key="jz_m_sdr")
+                _jz_m_cprice = st.number_input("中标价格 (元/kWh)", min_value=0.0,
+                                                step=0.001, format="%.4f", key="jz_m_cprice")
+                _jz_m_cvol   = st.number_input("中标量 (GWh)", min_value=0.0,
+                                                step=1.0, key="jz_m_cvol")
+                _jz_m_date   = st.date_input("竞价日期", key="jz_m_date")
+                _jz_m_notes  = st.text_input("备注", key="jz_m_notes")
+
+            if st.button("保存手动记录", key="jz_m_save"):
+                if not _jz_m_prov:
+                    st.error("省份不能为空。")
+                else:
+                    from services.knowledge_pool.jizhi_extractor import save_bids, ensure_tables
+                    ensure_tables(_jz_pg_url)
+                    _jz_manual_rec = [{
+                        "province": _jz_m_prov, "year": int(_jz_m_year),
+                        "batch": _jz_m_batch, "tech_type": _jz_m_tech,
+                        "price_floor": _jz_m_pfloor or None, "price_cap": _jz_m_pcap or None,
+                        "mechanism_type": _jz_m_mtype, "mechanism_value": _jz_m_mval or None,
+                        "supply_demand_ratio": _jz_m_sdr or None,
+                        "cleared_price": _jz_m_cprice or None,
+                        "cleared_volume_gwh": _jz_m_cvol or None,
+                        "bid_date": str(_jz_m_date), "notes": _jz_m_notes or None,
+                    }]
+                    _jz_n2 = save_bids(_jz_manual_rec, source_doc_id=None, pg_url=_jz_pg_url)
+                    if _jz_n2:
+                        st.success("已保存。（数据标记为未验证）")
+                        _load_jizhi_bids.clear()
+                    else:
+                        st.info("记录已存在且已验证，未覆盖。")
 
 # ── Tab 9: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
