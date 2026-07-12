@@ -1631,10 +1631,11 @@ st.divider()
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_overview, tab_spread, tab_heatmap, tab_intraday, tab_province, tab_dist, tab_geo, \
-tab_interprov, tab_fundamentals, tab_agent, tab_news, tab_library, tab_mgmt = st.tabs([
+tab_interprov, tab_fundamentals, tab_agent, tab_news, tab_library, tab_jizhi, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"), _t("tab_intraday"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
-    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_news"), "Library", _t("tab_mgmt"),
+    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_news"),
+    "Library", "机制竞价", _t("tab_mgmt"),
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -4628,6 +4629,248 @@ with tab_news:
 with tab_library:
     from services.common.report_library_ui import render_library_tab
     render_library_tab("spot", "China Spot Market", "spot")
+
+# ── 机制竞价 ──────────────────────────────────────────────────────────────────
+with tab_jizhi:
+    import psycopg2 as _jz_pg
+    import pandas as _jz_pd
+    import plotly.graph_objects as _jz_go
+    from datetime import date as _jz_date
+
+    _jz_pg_url = (
+        os.environ.get("PGURL")
+        or os.environ.get("DATABASE_URL")
+        or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
+    )
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_jizhi_bids(_pg: str) -> _jz_pd.DataFrame:
+        try:
+            conn = _jz_pg.connect(_pg)
+            df = _jz_pd.read_sql("""
+                SELECT id, province, year, batch, tech_type,
+                       price_floor, price_cap, mechanism_type, mechanism_value,
+                       supply_demand_ratio, cleared_price, cleared_volume_gwh,
+                       bid_date, verified, notes, source_doc_id
+                FROM staging.jizhi_bids
+                ORDER BY year DESC, province, batch, tech_type
+            """, conn)
+            conn.close()
+            return df
+        except Exception:
+            return _jz_pd.DataFrame()
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_jizhi_upcoming(_pg: str) -> _jz_pd.DataFrame:
+        try:
+            conn = _jz_pg.connect(_pg)
+            df = _jz_pd.read_sql("""
+                SELECT id, province, year, batch, tech_type,
+                       price_floor, price_cap, target_volume_gwh,
+                       supply_demand_ratio, bid_open_date, bid_close_date,
+                       source_url, announcement_date, verified, notes, created_at
+                FROM staging.jizhi_upcoming
+                ORDER BY bid_open_date ASC NULLS LAST
+            """, conn)
+            conn.close()
+            return df
+        except Exception:
+            return _jz_pd.DataFrame()
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_jizhi_winners(_bid_id: int, _pg: str) -> _jz_pd.DataFrame:
+        try:
+            conn = _jz_pg.connect(_pg)
+            df = _jz_pd.read_sql("""
+                SELECT project_name, operator, capacity_mw, cleared_price, tech_type
+                FROM staging.jizhi_bid_winners
+                WHERE bid_id = %s
+                ORDER BY capacity_mw DESC NULLS LAST
+            """, conn, params=[_bid_id])
+            conn.close()
+            return df
+        except Exception:
+            return _jz_pd.DataFrame()
+
+    _jz_tab_results, _jz_tab_upcoming, _jz_tab_upload = st.tabs(
+        ["📊 历史结果", "📅 即将竞价", "📂 上传 & 录入"]
+    )
+
+    # ── Sub-tab 1: 历史结果 ────────────────────────────────────────────────────
+    with _jz_tab_results:
+        _jz_bids_df = _load_jizhi_bids(_jz_pg_url)
+
+        if _jz_bids_df.empty:
+            st.info("暂无历史竞价数据。请在「上传 & 录入」标签中上传竞价文件。")
+        else:
+            # Filter row
+            _jz_col_prov, _jz_col_year, _jz_col_tech = st.columns([2, 2, 2])
+            with _jz_col_prov:
+                _jz_provs = st.multiselect(
+                    "省份", sorted(_jz_bids_df["province"].unique()), key="jz_prov_filter"
+                )
+            with _jz_col_year:
+                _jz_years = st.multiselect(
+                    "年份", sorted(_jz_bids_df["year"].unique(), reverse=True), key="jz_year_filter"
+                )
+            with _jz_col_tech:
+                _jz_techs = st.multiselect(
+                    "技术类型", sorted(_jz_bids_df["tech_type"].unique()), key="jz_tech_filter"
+                )
+
+            _jz_filtered = _jz_bids_df.copy()
+            if _jz_provs:
+                _jz_filtered = _jz_filtered[_jz_filtered["province"].isin(_jz_provs)]
+            if _jz_years:
+                _jz_filtered = _jz_filtered[_jz_filtered["year"].isin(_jz_years)]
+            if _jz_techs:
+                _jz_filtered = _jz_filtered[_jz_filtered["tech_type"].isin(_jz_techs)]
+
+            # Add ⚠️ badge for unverified rows
+            _jz_display = _jz_filtered.copy()
+            _jz_display["verified"] = _jz_display["verified"].apply(
+                lambda v: "✅" if v else "⚠️"
+            )
+            _jz_display = _jz_display.rename(columns={
+                "province": "省份", "year": "年份", "batch": "批次",
+                "tech_type": "技术", "price_floor": "价格下限", "price_cap": "价格上限",
+                "mechanism_type": "机制类型", "mechanism_value": "机制量",
+                "supply_demand_ratio": "供需比", "cleared_price": "中标价格",
+                "cleared_volume_gwh": "中标量(GWh)", "bid_date": "竞价日期", "verified": "验证",
+            })
+            _jz_show_cols = [
+                "省份", "年份", "批次", "技术", "价格下限", "价格上限",
+                "机制类型", "机制量", "供需比", "中标价格", "中标量(GWh)", "竞价日期", "验证"
+            ]
+            st.dataframe(
+                _jz_display[[c for c in _jz_show_cols if c in _jz_display.columns]],
+                use_container_width=True, hide_index=True,
+            )
+
+            # Winner list selector
+            if not _jz_filtered.empty:
+                with st.expander("🏆 查看中标清单 (选择竞价记录)"):
+                    _jz_opts = {
+                        f"{r['province']} {r['year']} {r['batch']} {r['tech_type']}": int(r["id"])
+                        for _, r in _jz_filtered.iterrows()
+                    }
+                    _jz_sel = st.selectbox("选择竞价记录", list(_jz_opts.keys()), key="jz_winner_sel")
+                    if _jz_sel:
+                        _jz_bid_id = _jz_opts[_jz_sel]
+                        _jz_winners_df = _load_jizhi_winners(_jz_bid_id, _jz_pg_url)
+                        if _jz_winners_df.empty:
+                            st.info("该竞价暂无中标清单数据。")
+                        else:
+                            st.dataframe(_jz_winners_df, use_container_width=True, hide_index=True)
+
+            # Charts
+            if len(_jz_filtered) >= 2:
+                st.divider()
+                _jz_chart_col1, _jz_chart_col2 = st.columns(2)
+                with _jz_chart_col1:
+                    _jz_avg = (
+                        _jz_filtered.dropna(subset=["cleared_price"])
+                        .groupby(["province", "tech_type"])["cleared_price"]
+                        .mean()
+                        .reset_index()
+                    )
+                    if not _jz_avg.empty:
+                        _jz_fig_bar = _jz_go.Figure()
+                        for _tech in _jz_avg["tech_type"].unique():
+                            _sub = _jz_avg[_jz_avg["tech_type"] == _tech]
+                            _jz_fig_bar.add_trace(_jz_go.Bar(
+                                x=_sub["province"], y=_sub["cleared_price"], name=_tech
+                            ))
+                        _jz_fig_bar.update_layout(
+                            title="各省平均中标价格 (元/kWh)",
+                            barmode="group", height=320,
+                            margin=dict(l=0, r=0, t=36, b=0),
+                            legend=dict(orientation="h", y=-0.2),
+                        )
+                        st.plotly_chart(_jz_fig_bar, use_container_width=True)
+
+                with _jz_chart_col2:
+                    _jz_sd = _jz_filtered.dropna(subset=["supply_demand_ratio", "year"])
+                    if not _jz_sd.empty:
+                        _jz_fig_sd = _jz_go.Figure()
+                        for _prov in _jz_sd["province"].unique():
+                            _sub = _jz_sd[_jz_sd["province"] == _prov].sort_values("year")
+                            _jz_fig_sd.add_trace(_jz_go.Scatter(
+                                x=_sub["year"], y=_sub["supply_demand_ratio"],
+                                name=_prov, mode="lines+markers"
+                            ))
+                        _jz_fig_sd.update_layout(
+                            title="供需比趋势",
+                            height=320, margin=dict(l=0, r=0, t=36, b=0),
+                            legend=dict(orientation="h", y=-0.2),
+                        )
+                        st.plotly_chart(_jz_fig_sd, use_container_width=True)
+
+    # ── Sub-tab 2: 即将竞价 ────────────────────────────────────────────────────
+    with _jz_tab_upcoming:
+        _jz_up_df = _load_jizhi_upcoming(_jz_pg_url)
+
+        # Last scan timestamp
+        _jz_last_scan = (
+            str(_jz_up_df["created_at"].max())[:16]
+            if not _jz_up_df.empty and "created_at" in _jz_up_df.columns
+            else "—"
+        )
+        st.caption(f"数据最后更新：{_jz_last_scan}  ·  每晚 18:07 (北京时间) 自动扫描")
+
+        if _jz_up_df.empty:
+            st.info("暂无即将竞价信息。数据将由 Hermes 每晚自动扫描更新。")
+        else:
+            _jz_up_col_prov, _jz_up_col_tech = st.columns(2)
+            with _jz_up_col_prov:
+                _jz_up_provs = st.multiselect(
+                    "省份", sorted(_jz_up_df["province"].unique()), key="jz_up_prov"
+                )
+            with _jz_up_col_tech:
+                _jz_up_techs = st.multiselect(
+                    "技术类型", sorted(_jz_up_df["tech_type"].unique()), key="jz_up_tech"
+                )
+
+            _jz_up_filtered = _jz_up_df.copy()
+            if _jz_up_provs:
+                _jz_up_filtered = _jz_up_filtered[
+                    _jz_up_filtered["province"].isin(_jz_up_provs)
+                ]
+            if _jz_up_techs:
+                _jz_up_filtered = _jz_up_filtered[
+                    _jz_up_filtered["tech_type"].isin(_jz_up_techs)
+                ]
+
+            # Compute days-until column
+            _today = _jz_date.today()
+            def _days_until(d):
+                if _jz_pd.isna(d):
+                    return None
+                return (d.date() if hasattr(d, "date") else d) - _today
+
+            _jz_up_filtered = _jz_up_filtered.copy()
+            _jz_up_filtered["距今"] = _jz_up_filtered["bid_open_date"].apply(
+                lambda d: f"{_days_until(d).days}天" if _days_until(d) is not None else "—"
+            )
+
+            _jz_up_display = _jz_up_filtered.rename(columns={
+                "province": "省份", "year": "年份", "batch": "批次",
+                "tech_type": "技术", "price_floor": "价格下限", "price_cap": "价格上限",
+                "target_volume_gwh": "目标量(GWh)", "supply_demand_ratio": "供需比",
+                "bid_open_date": "开始日期", "bid_close_date": "截止日期",
+                "verified": "已验证",
+            })
+            _jz_up_show = [
+                "省份", "年份", "批次", "技术", "价格下限", "价格上限",
+                "目标量(GWh)", "供需比", "开始日期", "截止日期", "距今", "已验证"
+            ]
+            st.dataframe(
+                _jz_up_display[[c for c in _jz_up_show if c in _jz_up_display.columns]],
+                use_container_width=True, hide_index=True,
+            )
+
+    with _jz_tab_upload:
+        st.info("上传功能将在后续版本中实现。如需手动录入数据，请联系管理员。")
 
 # ── Tab 9: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
