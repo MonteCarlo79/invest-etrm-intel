@@ -139,6 +139,95 @@ def _run_kb_digest(api_key: str, limit: int = 30) -> dict:
     return result
 
 
+# ── Jizhi scan pipeline shims (module-level so tests can patch them) ─────────
+def _jizhi_run_internet_query(question: str, api_key: str, pg_url: str) -> str:
+    from services.hermes.internet_agent import run_internet_query
+    return run_internet_query(question=question, api_key=api_key, pg_url=pg_url)
+
+
+def _jizhi_extract_upcoming(text: str, api_key: str) -> list[dict]:
+    from services.knowledge_pool.jizhi_extractor import extract_upcoming
+    return extract_upcoming(text=text, api_key=api_key)
+
+
+def _jizhi_save_upcoming(records: list[dict], pg_url: str) -> int:
+    from services.knowledge_pool.jizhi_extractor import save_upcoming
+    return save_upcoming(records=records, pg_url=pg_url)
+
+
+def _run_jizhi_scan(api_key: str, feishu=None) -> dict:
+    """
+    Nightly internet scan for 机制竞价 bid announcements.
+
+    Runs 3 broad web searches (via internet_agent) covering all key provinces,
+    extracts structured upcoming bid records, upserts to staging.jizhi_upcoming.
+    If new records found, sends a Feishu card notification.
+
+    Returns {"new_upcoming": int, "provinces": list[str]}.
+    """
+    import datetime as _dt
+    _log = logging.getLogger(__name__)
+
+    if not api_key:
+        _log.warning("[jizhi_scan] skipped — ANTHROPIC_API_KEY not set")
+        return {"new_upcoming": 0, "provinces": []}
+
+    pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+    year = _dt.datetime.now().year
+
+    # Three broad queries — avoids per-province timeout
+    _search_queries = [
+        f"各省新能源机制竞价{year}年公告 价格区间 陆风 海风 光伏 申报量 供需比",
+        f"广东 山东 浙江 江苏 湖南 机制竞价{year} 竞价结果 中标",
+        f"四川 广西 福建 贵州 云南 内蒙古 新疆 机制竞价{year} 公告",
+    ]
+
+    total_new = 0
+    new_provinces: list[str] = []
+
+    for query in _search_queries:
+        try:
+            result_text = _jizhi_run_internet_query(
+                question=query, api_key=api_key, pg_url=pg_url
+            )
+            records = _jizhi_extract_upcoming(result_text, api_key)
+            if records:
+                n = _jizhi_save_upcoming(records, pg_url)
+                total_new += n
+                for r in records:
+                    prov = r.get("province", "")
+                    if prov and prov not in new_provinces:
+                        new_provinces.append(prov)
+        except Exception as exc:
+            _log.error("[jizhi_scan] query failed — %s | %s", query[:40], exc)
+
+    if total_new > 0 and feishu:
+        _owner = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+        if _owner:
+            _provinces_str = "、".join(new_provinces[:8])
+            try:
+                feishu.send_card(open_id=_owner, card={
+                    "header": {
+                        "title": {"tag": "plain_text",
+                                  "content": f"⚡ 机制竞价新公告 ({total_new}条)"},
+                        "template": "orange",
+                    },
+                    "elements": [{
+                        "tag": "markdown",
+                        "content": (
+                            f"**省份：** {_provinces_str}\n"
+                            f"**新增：** {total_new} 条即将竞价记录\n\n"
+                            "在 Spot Markets → **机制竞价** → 即将竞价 查看详情"
+                        ),
+                    }],
+                })
+            except Exception as exc:
+                _log.error("[jizhi_scan] feishu notify failed: %s", exc)
+
+    _log.info("[jizhi_scan] new_upcoming=%d provinces=%s", total_new, new_provinces)
+    return {"new_upcoming": total_new, "provinces": new_provinces}
+
+
 logger = logging.getLogger(__name__)
 
 # ── In-process job progress registry ─────────────────────────────────────────
@@ -701,6 +790,19 @@ def create_app() -> FastAPI:
             misfire_grace_time=3600,
         )
 
+        # 机制竞价 scan: 10:07 UTC (18:07 Beijing) — search for new provincial notices
+        scheduler.add_job(
+            lambda: _run_jizhi_scan(
+                os.environ.get("ANTHROPIC_API_KEY", ""),
+                feishu=feishu,
+            ),
+            "cron",
+            hour=10, minute=7,
+            id="jizhi_scan_nightly",
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+
         # Daily market PDF report: 07:00 UTC (15:00 Beijing) — 60 min after screener
         scheduler.add_job(
             _send_daily_report,
@@ -1034,6 +1136,18 @@ def create_app() -> FastAPI:
             return {"status": "resolved", "table": table,
                     "kept": row_id_keep, "dropped": row_id_drop}
         return Response(content=result.get("error", "unknown error"), status_code=500)
+
+    @app.post("/hermes/jizhi/scan")
+    async def run_jizhi_scan_endpoint(background: BackgroundTasks):
+        """Trigger 机制竞价 internet scan on demand.
+
+        Returns immediately with {"status": "started"}.
+        """
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _api_key:
+            return Response(content="ANTHROPIC_API_KEY not set", status_code=503)
+        background.add_task(_run_jizhi_scan, _api_key)
+        return {"status": "started"}
 
     @app.post("/hermes/knowledge/digest")
     async def run_knowledge_digest(background: BackgroundTasks):
