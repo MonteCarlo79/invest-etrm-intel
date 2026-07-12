@@ -22,6 +22,32 @@ import psycopg2
 
 logger = logging.getLogger(__name__)
 
+_BEDROCK_MODEL = "anthropic.claude-haiku-4-5-20251001-v1:0"
+_BEDROCK_REGION = "ap-southeast-1"
+
+
+def _bedrock_tool_call(tool: dict, prompt: str) -> dict | None:
+    """Call Claude on AWS Bedrock with tool_choice=tool. Returns tool input dict or None."""
+    import boto3
+    client = boto3.client("bedrock-runtime", region_name=_BEDROCK_REGION)
+    response = client.converse(
+        modelId=_BEDROCK_MODEL,
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={"maxTokens": 4096},
+        toolConfig={
+            "tools": [{"toolSpec": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "inputSchema": {"json": tool["input_schema"]},
+            }}],
+            "toolChoice": {"tool": {"name": tool["name"]}},
+        },
+    )
+    for item in response.get("output", {}).get("message", {}).get("content", []):
+        if "toolUse" in item and item["toolUse"]["name"] == tool["name"]:
+            return item["toolUse"]["input"]
+    return None
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS staging.jizhi_bids (
     id                  SERIAL PRIMARY KEY,
@@ -258,14 +284,25 @@ def ensure_tables(pg_url: str) -> None:
         conn.close()
 
 
-def extract_bids(text: str, api_key: str) -> list[dict]:
+def extract_bids(text: str, api_key: str = "") -> list[dict]:
     """Extract structured bid results from document text via Claude tool-use.
 
-    Returns list of dicts with keys matching staging.jizhi_bids columns
-    (excluding id, source_doc_id, created_at).
+    Tries AWS Bedrock first (no API key needed, uses IAM role).
+    Falls back to direct Anthropic API if Bedrock fails and api_key is provided.
     Returns [] on failure or empty input.
     """
-    if not api_key or not text.strip():
+    if not text.strip():
+        return []
+    prompt = _BIDS_PROMPT.format(text=text[:15000])
+    # Try Bedrock first
+    try:
+        result = _bedrock_tool_call(_BIDS_TOOL, prompt)
+        if result is not None:
+            return result.get("bids", [])
+    except Exception as exc:
+        logger.warning("[jizhi] bedrock extract_bids failed, trying direct API: %s", exc)
+    # Fallback: direct Anthropic API
+    if not api_key:
         return []
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
@@ -275,10 +312,7 @@ def extract_bids(text: str, api_key: str) -> list[dict]:
             max_tokens=4096,
             tools=[_BIDS_TOOL],
             tool_choice={"type": "tool", "name": "save_bid_results"},
-            messages=[{
-                "role": "user",
-                "content": _BIDS_PROMPT.format(text=text[:15000]),
-            }],
+            messages=[{"role": "user", "content": prompt}],
         )
         for block in response.content:
             if block.type == "tool_use" and block.name == "save_bid_results":
@@ -332,13 +366,24 @@ Text:
 {text}"""
 
 
-def extract_upcoming(text: str, api_key: str) -> list[dict]:
+def extract_upcoming(text: str, api_key: str = "") -> list[dict]:
     """Extract upcoming bid announcements from text via Claude tool-use.
 
-    Returns list of dicts matching staging.jizhi_upcoming columns.
+    Tries AWS Bedrock first. Falls back to direct Anthropic API.
     Returns [] on failure or empty input.
     """
-    if not api_key or not text.strip():
+    if not text.strip():
+        return []
+    prompt = _UPCOMING_PROMPT.format(text=text[:12000])
+    # Try Bedrock first
+    try:
+        result = _bedrock_tool_call(_UPCOMING_TOOL, prompt)
+        if result is not None:
+            return result.get("upcoming", [])
+    except Exception as exc:
+        logger.warning("[jizhi] bedrock extract_upcoming failed, trying direct API: %s", exc)
+    # Fallback: direct Anthropic API
+    if not api_key:
         return []
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
@@ -348,10 +393,7 @@ def extract_upcoming(text: str, api_key: str) -> list[dict]:
             max_tokens=2048,
             tools=[_UPCOMING_TOOL],
             tool_choice={"type": "tool", "name": "save_upcoming_bids"},
-            messages=[{
-                "role": "user",
-                "content": _UPCOMING_PROMPT.format(text=text[:12000]),
-            }],
+            messages=[{"role": "user", "content": prompt}],
         )
         for block in response.content:
             if block.type == "tool_use" and block.name == "save_upcoming_bids":
