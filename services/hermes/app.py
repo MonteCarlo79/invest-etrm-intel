@@ -1989,6 +1989,75 @@ def _feishu_ws_thread(
             time.sleep(15)
 
 
+def _handle_jizhi_file(
+    file_bytes: bytes,
+    filename: str,
+    sender_id: str,
+    feishu,
+    api_key: str,
+) -> None:
+    """Ingest a 机制竞价 file to KB + extract structured bid data."""
+    _log = logging.getLogger(__name__)
+    pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+
+    # Stage 1: store in knowledge base
+    doc_id = None
+    try:
+        from services.knowledge_pool.knowledge_docs import register_and_ingest
+        doc_id, _, _ = register_and_ingest(
+            file_bytes=file_bytes,
+            filename=filename,
+            category_override="policy_doc",
+            app="shared",
+            api_key=api_key,
+        )
+    except Exception as exc:
+        _log.error("[jizhi_file] kb ingest failed: %s", exc)
+
+    # Stage 2: extract + save structured bids
+    bids: list[dict] = []
+    saved = 0
+    try:
+        from services.knowledge_pool.knowledge_docs import _extract_pages
+        from services.knowledge_pool.jizhi_extractor import (
+            extract_bids, save_bids, ensure_tables,
+        )
+        ensure_tables(pg_url)
+        pages = _extract_pages(file_bytes, filename, api_key)
+        full_text = "\n\n".join(text for _, text in pages)
+        bids = extract_bids(full_text, api_key)
+        saved = save_bids(bids, source_doc_id=doc_id, pg_url=pg_url)
+    except Exception as exc:
+        _log.error("[jizhi_file] extraction failed: %s", exc)
+
+    # Reply with summary card
+    if not feishu or not sender_id:
+        return
+    if bids:
+        provinces = list({b.get("province", "") for b in bids if b.get("province")})
+        feishu.send_card(open_id=sender_id, card={
+            "header": {
+                "title": {"tag": "plain_text", "content": "✅ 机制竞价提取完成"},
+                "template": "green",
+            },
+            "elements": [{
+                "tag": "markdown",
+                "content": (
+                    f"**文件：** {filename}\n"
+                    f"**提取记录：** {len(bids)} 条\n"
+                    f"**已保存：** {saved} 条\n"
+                    f"**涉及省份：** {'、'.join(provinces)}\n\n"
+                    "_数据未标记为已验证，请在 Spot Markets → 机制竞价 中核实_"
+                ),
+            }],
+        })
+    else:
+        feishu.send_text(
+            open_id=sender_id,
+            text=f"📄 {filename} 已存入知识库，未能提取机制竞价结构化数据。",
+        )
+
+
 def _handle_file_message(
     sender_id: str,
     message_id: str,
@@ -2061,6 +2130,18 @@ def _handle_file_message(
         reply = f"上传失败：{exc}"
         feishu.send_text(open_id=sender_id, text=reply)
         return False
+
+    # Route 机制竞价 files to dedicated handler
+    _filename_lower = filename.lower()
+    if any(_kw in _filename_lower for _kw in ("机制竞价", "136", "jizhi")):
+        _handle_jizhi_file(
+            file_bytes=file_bytes,
+            filename=filename,
+            sender_id=sender_id,
+            feishu=feishu,
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        )
+        return True
 
     # Cache file text for potential DRAFT_REPORT use (TTL 2h, keep last 5 per user)
     try:
@@ -3782,6 +3863,75 @@ def _handle_message(
                 avail_str = ", ".join(f"/model {m}" for m in [*avail, "auto"])
                 _send_model_reply(f"❌ {ve}\nAvailable: {avail_str}")
         return True
+    # ── /机制竞价 command — show upcoming auctions + recent results ──────────
+    if _re.match(r'^/?机制竞价$', msg.text.strip()):
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+
+        def _send_jizhi_card() -> None:
+            try:
+                import psycopg2 as _pg2
+                conn = _pg2.connect(_pg)
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT province, year, batch, tech_type,
+                           price_floor, price_cap, bid_open_date, bid_close_date
+                    FROM staging.jizhi_upcoming
+                    WHERE bid_open_date >= CURRENT_DATE
+                      AND bid_open_date <= CURRENT_DATE + INTERVAL '90 days'
+                    ORDER BY bid_open_date ASC
+                    LIMIT 8
+                """)
+                upcoming = cur.fetchall()
+                cur.execute("""
+                    SELECT province, year, batch, tech_type,
+                           cleared_price, cleared_volume_gwh
+                    FROM staging.jizhi_bids
+                    ORDER BY bid_date DESC NULLS LAST, created_at DESC
+                    LIMIT 5
+                """)
+                recent = cur.fetchall()
+                conn.close()
+
+                up_lines = "\n".join(
+                    f"• {r[0]} {r[1]} {r[2]} {r[3]}: "
+                    + (f"¥{r[4]}–{r[5]}/kWh " if r[4] else "价格待定 ")
+                    + (str(r[6]) if r[6] else "日期待定")
+                    for r in upcoming
+                ) or "（暂无近期公告）"
+                rec_lines = "\n".join(
+                    f"• {r[0]} {r[1]} {r[2]} {r[3]}: "
+                    + (f"¥{r[4]}/kWh" if r[4] else "价格未知")
+                    + (f", {r[5]} GWh" if r[5] else "")
+                    for r in recent
+                ) or "（暂无历史记录）"
+
+                card = {
+                    "header": {
+                        "title": {"tag": "plain_text", "content": "⚡ 机制竞价信息"},
+                        "template": "blue",
+                    },
+                    "elements": [
+                        {"tag": "markdown",
+                         "content": f"**📅 即将竞价（90天内）**\n{up_lines}"},
+                        {"tag": "hr"},
+                        {"tag": "markdown",
+                         "content": f"**📊 最近结果**\n{rec_lines}"},
+                    ],
+                }
+                if msg.source == "feishu" and feishu:
+                    feishu.send_card(open_id=msg.sender_id, card=card)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(
+                        chat_id=msg.sender_id,
+                        text=f"即将竞价：\n{up_lines}\n\n最近结果：\n{rec_lines}",
+                    )
+            except Exception as exc:
+                logger.error("[jizhi_cmd] failed: %s", exc)
+
+        import threading as _threading_jz
+        _threading_jz.Thread(target=_send_jizhi_card, daemon=True).start()
+        return True
+
     # ─────────────────────────────────────────────────────────────────────────
 
     try:
