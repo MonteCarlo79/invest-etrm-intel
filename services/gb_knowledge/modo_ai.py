@@ -227,10 +227,11 @@ class ModoAIConnector(BaseConnector):
     def _login(self, page) -> bool:
         """Navigate to Modo sign-in page and authenticate via email + password.
 
-        Flow (as of 2026-07):
-          1. Load /sign-in  →  email field + "Continue with email link" button
-          2. Fill email, then click "sign in with a password" link
-          3. Password-only screen appears  →  fill password + click "Continue"
+        Handles two known flows:
+          Flow A (original):  email field + "sign in with a password" link visible
+                              → click link → password field → Continue
+          Flow B (Auth0-style): email field + Continue button → password field → Continue
+          Flow C (single page): email + password both visible → fill both → Continue
         """
         try:
             page.goto(
@@ -265,47 +266,89 @@ class ModoAIConnector(BaseConnector):
             return False
         page.fill(email_sel, self._email)
         logger.info("[modo_ai] Email filled")
+        _save_screenshot(page, "02_email_filled")
 
-        # --- Step 2: click "sign in with a password" link ---
-        pw_link_sel = _first_visible(page, [
-            'a:has-text("sign in with a password")',
-            'button:has-text("sign in with a password")',
-            'span:has-text("sign in with a password")',
-            '*:has-text("sign in with a password")',
-        ])
-        if pw_link_sel:
-            page.click(pw_link_sel)
-            logger.info("[modo_ai] Clicked 'sign in with a password' link")
-        else:
-            logger.warning("[modo_ai] 'sign in with a password' link not found — will try JS click")
-            try:
-                page.evaluate("""() => {
-                    const links = Array.from(document.querySelectorAll('a, button, span'));
-                    const link = links.find(el => el.textContent.toLowerCase().includes('sign in with a password'));
-                    if (link) link.click();
-                }""")
-            except Exception as exc:
-                logger.error("[modo_ai] JS click failed: %s", exc)
-                _save_screenshot(page, "03_no_pw_link")
-                return False
-
-        page.wait_for_timeout(2_500)
-        _save_screenshot(page, "03_after_pw_link_click")
-
-        # --- Step 3: fill password and submit ---
+        # --- Step 2: get to the password field ---
+        # Check if password field is already visible (Flow C — single page form)
         pass_sel = _first_visible(page, [
             'input[type="password"]',
             'input[name="password"]',
             'input[id*="password" i]',
             'input[autocomplete*="password"]',
         ])
+
+        if pass_sel:
+            logger.info("[modo_ai] Password field already visible (single-page form)")
+        else:
+            # Try Flow A: "sign in with a password" link
+            pw_link_sel = _first_visible(page, [
+                'a:has-text("sign in with a password")',
+                'button:has-text("sign in with a password")',
+                'a:has-text("Use password")',
+                'button:has-text("Use password")',
+                'a:has-text("password")',
+            ])
+            if pw_link_sel:
+                page.click(pw_link_sel)
+                logger.info("[modo_ai] Clicked 'sign in with a password' link (Flow A)")
+                page.wait_for_timeout(2_500)
+                _save_screenshot(page, "03_after_pw_link_click")
+            else:
+                # Flow B: click Continue/Next to advance to password screen
+                logger.info("[modo_ai] No password link found — trying Continue button (Flow B)")
+                continue_sel = _first_visible(page, [
+                    'button:has-text("Continue")',
+                    'button:has-text("Next")',
+                    'button[type="submit"]',
+                    'button:has-text("Sign in")',
+                    'button:has-text("Sign In")',
+                    'button:has-text("Log in")',
+                ])
+                if continue_sel:
+                    page.click(continue_sel)
+                    logger.info("[modo_ai] Clicked Continue button")
+                else:
+                    page.keyboard.press("Enter")
+                    logger.info("[modo_ai] Pressed Enter to advance")
+                page.wait_for_timeout(2_500)
+                _save_screenshot(page, "03_after_continue")
+
+                # After advancing, check again for "sign in with a password" link
+                pw_link_sel2 = _first_visible(page, [
+                    'a:has-text("sign in with a password")',
+                    'button:has-text("sign in with a password")',
+                    'a:has-text("Use password")',
+                    'button:has-text("Use password")',
+                ])
+                if pw_link_sel2:
+                    page.click(pw_link_sel2)
+                    logger.info("[modo_ai] Clicked 'sign in with a password' link (after Continue)")
+                    page.wait_for_timeout(2_500)
+                    _save_screenshot(page, "03b_after_pw_link_click")
+
+            # Re-check for password field after navigation
+            pass_sel = _first_visible(page, [
+                'input[type="password"]',
+                'input[name="password"]',
+                'input[id*="password" i]',
+                'input[autocomplete*="password"]',
+            ])
+
         if not pass_sel:
-            logger.error("[modo_ai] Password input not found; see /tmp/modo_04_no_pass.png")
+            logger.error("[modo_ai] Password input not found after all flow attempts")
             _save_screenshot(page, "04_no_pass")
+            # Log page source snippet for debugging
+            try:
+                snippet = page.evaluate("() => document.body.innerText.slice(0, 800)")
+                logger.error("[modo_ai] Page text: %s", snippet)
+            except Exception:
+                pass
             return False
+
         page.fill(pass_sel, self._password)
         logger.info("[modo_ai] Password filled")
 
+        # --- Step 3: submit ---
         submit_sel = _first_visible(page, [
             'button:has-text("Continue")',
             'button[type="submit"]',
@@ -336,6 +379,12 @@ class ModoAIConnector(BaseConnector):
             return True
 
         logger.error("[modo_ai] Login failed; URL after submit: %s — see /tmp/modo_05_after_submit.png", page.url)
+        # Dump page text to help diagnose
+        try:
+            snippet = page.evaluate("() => document.body.innerText.slice(0, 800)")
+            logger.error("[modo_ai] Page text at failure: %s", snippet)
+        except Exception:
+            pass
         return False
 
     def _is_authenticated(self, page) -> bool:
