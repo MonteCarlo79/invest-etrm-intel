@@ -4921,11 +4921,31 @@ with tab_jizhi:
                             )
                             _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
 
-                        _jz_extracted = extract_bids(_jz_full_text, _jz_api_key)
+                        # Call Claude directly so errors surface to UI
+                        import anthropic as _jz_anthropic
+                        from services.knowledge_pool.jizhi_extractor import (
+                            _BIDS_TOOL, _BIDS_PROMPT,
+                        )
+                        _jz_client = _jz_anthropic.Anthropic(api_key=_jz_api_key)
+                        _jz_resp = _jz_client.messages.create(
+                            model="claude-haiku-4-5-20251001",
+                            max_tokens=4096,
+                            tools=[_BIDS_TOOL],
+                            tool_choice={"type": "tool", "name": "save_bid_results"},
+                            messages=[{"role": "user",
+                                       "content": _BIDS_PROMPT.format(text=_jz_full_text[:15000])}],
+                        )
+                        _jz_extracted = []
+                        for _blk in _jz_resp.content:
+                            if _blk.type == "tool_use" and _blk.name == "save_bid_results":
+                                _jz_extracted = _blk.input.get("bids", [])
                     except Exception as _e:
                         st.error(f"提取失败：{_e}")
                         _jz_extracted = []
                         _jz_doc_id = None
+
+                if not _jz_extracted:
+                    st.caption(f"文本长度：{len(_jz_full_text) if '_jz_full_text' in dir() else 0} 字符")
 
                 if _jz_extracted:
                     st.success(f"提取到 {len(_jz_extracted)} 条竞价记录，请确认后保存：")
