@@ -130,10 +130,37 @@ def _extract_pages_pptx(
                         if chart.has_title else "Chart"
                     )
                     parts.append(f"[Chart: {title}]")
+                    # Extract category labels (e.g. province names on x-axis)
+                    categories: list[str] = []
+                    try:
+                        xml = chart._element.xml
+                        cat_blocks = re.findall(
+                            r"<c:cat>.*?</c:cat>", xml, re.DOTALL
+                        ) or re.findall(
+                            r"<c:xVal>.*?</c:xVal>", xml, re.DOTALL
+                        )
+                        if cat_blocks:
+                            categories = re.findall(
+                                r"<c:v>([^<]+)</c:v>", cat_blocks[0]
+                            )
+                    except Exception:
+                        pass
                     for series in chart.series:
                         try:
                             vals = list(series.values)
-                            parts.append(f"  Series '{series.name}': {vals}")
+                            if categories and len(categories) == len(vals):
+                                pairs = [
+                                    f"{categories[j]}={vals[j]}"
+                                    for j in range(len(vals))
+                                    if vals[j] is not None
+                                ]
+                                parts.append(
+                                    f"  Series '{series.name}': {', '.join(pairs)}"
+                                )
+                            else:
+                                parts.append(
+                                    f"  Series '{series.name}': {vals}"
+                                )
                         except Exception:
                             parts.append(f"  Series '{series.name}'")
                 except Exception:
