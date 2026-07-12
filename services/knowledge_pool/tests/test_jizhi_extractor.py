@@ -72,3 +72,103 @@ class TestExtractBids:
             from services.knowledge_pool.jizhi_extractor import extract_bids
             result = extract_bids("text", "key")
         assert result == []
+
+
+class TestExtractUpcoming:
+    def _mock_response(self, upcoming: list) -> MagicMock:
+        block = MagicMock()
+        block.type = "tool_use"
+        block.name = "save_upcoming_bids"
+        block.input = {"upcoming": upcoming}
+        resp = MagicMock()
+        resp.content = [block]
+        return resp
+
+    def test_returns_upcoming_records(self):
+        upcoming = [
+            {"province": "山东", "year": 2026, "batch": "增量_2026-12",
+             "tech_type": "陆风", "bid_open_date": "2026-03-01", "price_cap": 0.40}
+        ]
+        with patch("anthropic.Anthropic") as mock_cls:
+            mock_cls.return_value.messages.create.return_value = self._mock_response(upcoming)
+            from services.knowledge_pool.jizhi_extractor import extract_upcoming
+            result = extract_upcoming("announcement text", "key")
+        assert len(result) == 1
+        assert result[0]["province"] == "山东"
+        assert result[0]["bid_open_date"] == "2026-03-01"
+
+    def test_empty_api_key_returns_empty(self):
+        from services.knowledge_pool.jizhi_extractor import extract_upcoming
+        assert extract_upcoming("text", "") == []
+
+    def test_api_failure_returns_empty(self):
+        with patch("anthropic.Anthropic") as mock_cls:
+            mock_cls.return_value.messages.create.side_effect = RuntimeError("boom")
+            from services.knowledge_pool.jizhi_extractor import extract_upcoming
+            result = extract_upcoming("text", "key")
+        assert result == []
+
+
+class TestSaveBids:
+    def _mock_conn(self, fetchone_return=(1,)):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = fetchone_return
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        return mock_conn, mock_cur
+
+    def test_inserts_record_and_returns_count(self):
+        mock_conn, mock_cur = self._mock_conn(fetchone_return=(42,))
+        records = [{"province": "广东", "year": 2025, "batch": "存量",
+                    "tech_type": "光伏", "cleared_price": 0.35, "cleared_volume_gwh": 100.0}]
+        with patch("psycopg2.connect", return_value=mock_conn):
+            from services.knowledge_pool.jizhi_extractor import save_bids
+            count = save_bids(records, source_doc_id=5, pg_url="postgresql://fake/db")
+        assert count == 1
+        mock_conn.commit.assert_called_once()
+
+    def test_no_conflict_upsert_not_counted(self):
+        mock_conn, mock_cur = self._mock_conn(fetchone_return=None)
+        records = [{"province": "广东", "year": 2025, "batch": "存量", "tech_type": "光伏"}]
+        with patch("psycopg2.connect", return_value=mock_conn):
+            from services.knowledge_pool.jizhi_extractor import save_bids
+            count = save_bids(records, source_doc_id=None, pg_url="postgresql://fake/db")
+        assert count == 0
+
+    def test_empty_records_returns_zero(self):
+        from services.knowledge_pool.jizhi_extractor import save_bids
+        assert save_bids([], None, "postgresql://fake/db") == 0
+
+    def test_db_failure_returns_zero_and_rollbacks(self):
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__ = MagicMock(
+            side_effect=Exception("DB error")
+        )
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        records = [{"province": "广东", "year": 2025, "batch": "存量", "tech_type": "光伏"}]
+        with patch("psycopg2.connect", return_value=mock_conn):
+            from services.knowledge_pool.jizhi_extractor import save_bids
+            count = save_bids(records, None, "postgresql://fake/db")
+        assert count == 0
+        mock_conn.rollback.assert_called_once()
+
+
+class TestSaveUpcoming:
+    def test_returns_zero_on_empty(self):
+        from services.knowledge_pool.jizhi_extractor import save_upcoming
+        assert save_upcoming([], "postgresql://fake/db") == 0
+
+    def test_inserts_and_returns_count(self):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (1,)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        records = [{"province": "浙江", "year": 2026, "batch": "增量_2026-12",
+                    "tech_type": "海风", "bid_open_date": "2026-02-01"}]
+        with patch("psycopg2.connect", return_value=mock_conn):
+            from services.knowledge_pool.jizhi_extractor import save_upcoming
+            count = save_upcoming(records, "postgresql://fake/db")
+        assert count == 1
+        mock_conn.commit.assert_called_once()
