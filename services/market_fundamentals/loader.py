@@ -273,13 +273,30 @@ def load_latest_installed_monthly(dsn: str) -> dict[str, dict]:
         }
     """
     import psycopg2
+    # Latest row per province for wind/solar/thermal/hydro/total (most recent month).
+    # bess_mw is fetched separately as the most recent NON-NULL row, because some
+    # months have data-quality issues (wrong column read → NULL'd out in DB).
     sql = """
-        SELECT DISTINCT ON (province)
-            province, year_month,
-            wind_mw, solar_mw, thermal_mw, hydro_mw, nuclear_mw, bess_mw,
-            total_mw, source_file
-        FROM marketdata.province_installed_monthly
-        ORDER BY province, year_month DESC
+        WITH latest AS (
+            SELECT DISTINCT ON (province)
+                province, year_month,
+                wind_mw, solar_mw, thermal_mw, hydro_mw, nuclear_mw,
+                total_mw, source_file
+            FROM marketdata.province_installed_monthly
+            ORDER BY province, year_month DESC
+        ),
+        latest_bess AS (
+            SELECT DISTINCT ON (province)
+                province, bess_mw
+            FROM marketdata.province_installed_monthly
+            WHERE bess_mw IS NOT NULL
+            ORDER BY province, year_month DESC
+        )
+        SELECT l.province, l.year_month,
+               l.wind_mw, l.solar_mw, l.thermal_mw, l.hydro_mw, l.nuclear_mw,
+               lb.bess_mw, l.total_mw, l.source_file
+        FROM latest l
+        LEFT JOIN latest_bess lb ON l.province = lb.province
     """
     result: dict[str, dict] = {}
     try:

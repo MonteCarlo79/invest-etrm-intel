@@ -502,6 +502,12 @@ def _parse_long(ws, province: str, source_file: str) -> list[dict]:
         if context_year:
             break
 
+    # Fallback: extract year from filename (e.g. "江苏-装机数据_2026年5月.xlsx")
+    if context_year is None:
+        m_fn = _RE_YYYY_MM.search(source_file)
+        if m_fn:
+            context_year = int(m_fn.group(1))
+
     last_date: Optional[dt.date] = None  # cascade for Yunnan-style None date rows
 
     for row in rows_cache[(header_row_idx or 0) + 1:]:
@@ -840,6 +846,51 @@ def main() -> None:
         logger.info("Dry-run complete — no DB changes made.")
     else:
         logger.info("Done. Total upserted: %d  |  files skipped: %d", total_upserted, total_skipped)
+
+
+def parse_and_upsert_bytes(file_bytes: bytes, filename: str, dsn: str) -> dict:
+    """Parse a province capacity Excel from raw bytes and upsert to DB.
+
+    Returns {"upserted": int, "provinces": list[str], "year_month": str, "errors": list[str]}
+    Compatible with capacity_etl.upsert_capacity() return format.
+
+    Province is extracted from the filename (e.g. "江苏-装机数据_2026年5月.xlsx" → 江苏).
+    Year is extracted from filename too (e.g. "_2026年5月" → context_year=2026).
+    """
+    import tempfile, os as _os
+
+    province = _province_from_filename(filename)
+    if province is None:
+        return {"upserted": 0, "provinces": [], "year_month": "", "errors": [f"Cannot determine province from filename: {filename}"]}
+
+    # Write bytes to a temp file so parse_file() can open it via openpyxl
+    suffix = ".xlsx" if filename.lower().endswith(".xlsx") else ".xls"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(file_bytes)
+        tmp.close()
+        records = parse_file(Path(tmp.name), province)
+    finally:
+        try:
+            _os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    if not records:
+        return {"upserted": 0, "provinces": [province], "year_month": "", "errors": ["No records extracted from file"]}
+
+    # Patch source_file to the original filename (not the temp path)
+    for r in records:
+        r["source_file"] = filename
+
+    errors: list[str] = []
+    try:
+        _ensure_table(dsn)
+        n = upsert_records(records, dsn)
+        year_months = sorted({str(r["year_month"]) for r in records})
+        return {"upserted": n, "provinces": [province], "year_month": year_months[-1] if year_months else "", "errors": errors}
+    except Exception as exc:
+        return {"upserted": 0, "provinces": [province], "year_month": "", "errors": [str(exc)]}
 
 
 if __name__ == "__main__":

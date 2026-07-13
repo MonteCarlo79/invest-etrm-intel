@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -45,7 +46,10 @@ class CredentialError(RuntimeError):
     Signals to the pipeline that it must halt immediately without retrying,
     to prevent the account-lock mechanism from triggering.
     """
-_DATA_URL  = "https://lingfeng-saas.tradingthink.cn/#/powerTrading/market"
+_DATA_URL  = os.environ.get(
+    "LINGFENG_DATA_URL",
+    "https://lingfeng-saas.tradingthink.cn/#/powerTrading/market",
+)
 
 # Element UI select option click timeout (ms)
 _TIMEOUT = 20_000
@@ -223,19 +227,25 @@ async def _collect_async(
         await page.wait_for_timeout(300)
         logger.info(f"Date range set: {start_str} → {end_str}")
 
-        # ── 6. Click 查询 to fetch data ───────────────────────────────────
-        # 查询 is the primary (green) button; text may include a space ("查 询")
-        # so we match by class rather than text to avoid encoding surprises.
-        logger.info("Clicking 查询 (ant-btn-primary) …")
-        await page.locator("button.ant-btn-primary").first.click()
-        await page.wait_for_timeout(1500)
-
-        # ── 7. Click 导出 and capture download ───────────────────────────
-        # 导出 is <span class="down-load-container"> (without mr-10).
-        # The .mr-10 sibling opens a data-comparison drawer — skip it.
-        logger.info("Clicking 导出 (span.down-load-container:not(.mr-10)) …")
-        async with page.expect_download(timeout=60_000) as dl_info:
-            await page.locator("span.down-load-container:not(.mr-10)").first.click()
+        # ── 6 + 7. Query + export ─────────────────────────────────────────
+        # New page (/powerTrading/market): two-step — click 查询, then click
+        #   span.down-load-container (not .mr-10 = comparison drawer)
+        # Old page (/sass/data-consultation): single 导出 button acts as both
+        #   query and download trigger — wrap it directly in expect_download.
+        _export_span = page.locator("span.down-load-container:not(.mr-10)")
+        _is_new_page = await _export_span.count() > 0
+        if _is_new_page:
+            logger.info("Clicking 查询 (ant-btn-primary) …")
+            await page.locator("button.ant-btn-primary").first.click()
+            await page.wait_for_timeout(1500)
+            logger.info("Clicking 导出 (span.down-load-container) …")
+            async with page.expect_download(timeout=60_000) as dl_info:
+                await _export_span.first.click()
+        else:
+            # Old page: 导出 is the only primary button; clicking it triggers download
+            logger.info("Old-page detected — clicking 导出 (button.ant-btn-primary) …")
+            async with page.expect_download(timeout=60_000) as dl_info:
+                await page.locator("button.ant-btn-primary").first.click()
         download = await dl_info.value
 
         suggested = download.suggested_filename or ""
@@ -423,14 +433,21 @@ async def _collect_province_async(
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(300)
 
-                # Click 查询 (primary/green button) to load data, then 导出 to download
-                logger.info(f"[{market}] Clicking 查询 (ant-btn-primary) …")
-                await page.locator("button.ant-btn-primary").first.click()
-                await page.wait_for_timeout(1500)
-
-                logger.info(f"[{market}] Clicking 导出 (span.down-load-container:not(.mr-10)) …")
-                async with page.expect_download(timeout=60_000) as dl_info:
-                    await page.locator("span.down-load-container:not(.mr-10)").first.click()
+                # New page: click 查询 then span.down-load-container
+                # Old page: single 导出 button — wrap directly in expect_download
+                _export_span = page.locator("span.down-load-container:not(.mr-10)")
+                _is_new_page = await _export_span.count() > 0
+                if _is_new_page:
+                    logger.info(f"[{market}] Clicking 查询 (ant-btn-primary) …")
+                    await page.locator("button.ant-btn-primary").first.click()
+                    await page.wait_for_timeout(1500)
+                    logger.info(f"[{market}] Clicking 导出 (span.down-load-container) …")
+                    async with page.expect_download(timeout=60_000) as dl_info:
+                        await _export_span.first.click()
+                else:
+                    logger.info(f"[{market}] Old-page detected — clicking 导出 (button.ant-btn-primary) …")
+                    async with page.expect_download(timeout=60_000) as dl_info:
+                        await page.locator("button.ant-btn-primary").first.click()
                 download = await dl_info.value
 
                 # Always include date range in filename to avoid collisions across chunks

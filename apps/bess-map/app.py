@@ -321,12 +321,12 @@ _T: dict[str, dict[str, str]] = {
         "demand_bess_gap":         "Gap (Demand − Existing, MW)",
         "demand_waterfall_p50_title": "③a BESS Demand Sizing — Arbitrage P50 + FR",
         "demand_waterfall_p90_title": "③b BESS Demand Sizing — Arbitrage P90 + FR",
-        "demand_waterfall_cap":    "Stacked bars (left group per province): Arbitrage + FR requirement − Existing BESS. "
-                                   "Net ◆ marker = unmet demand after deducting existing BESS. "
-                                   "Thermal bar (right, grey) = reference: thermal plants can also meet the same demand, "
-                                   "benchmarking the real addressable market for new BESS.",
-        "demand_thermal_cap":      "Thermal Capacity (MW, ref)",
-        "demand_net_demand":       "Net New BESS Demand",
+        "demand_waterfall_cap":    "Each province: [Arb → +FR → −BESS → Net demand]. "
+                                   "Flexible Thermal = total thermal capacity minus the average intraday minimum "
+                                   "bidding-space floor (must-run thermal). "
+                                   "It shows how much thermal can still be backed down — the real competition for BESS.",
+        "demand_flex_thermal":     "Flex Thermal (MW)",
+        "demand_net_demand":       "Net BESS Demand",
         "demand_no_fund":          "Market fundamentals not available — FR sizing unavailable.",
         "demand_no_hourly":        "No hourly fundamentals data for this province/period.",
         "demand_source_note":      "⚠️ FR capacity requirements from provincial/regional FM market rules and national standard GB/T 45905.6-2025. Formula: FR = pct_load × peak load + pct_renew × installed renewables + floor. 'Confirmed' = official documents; 'Estimate' = derived from regional rules or national baseline. Co-location mandates (配储比例) abolished by No. 136 policy and are NOT used here.",
@@ -525,11 +525,11 @@ _T: dict[str, dict[str, str]] = {
         "demand_bess_gap":         "缺口（需求-装机，MW）",
         "demand_waterfall_p50_title": "③a 储能需求测算 — 套利P50 + 调频",
         "demand_waterfall_p90_title": "③b 储能需求测算 — 套利P90 + 调频",
-        "demand_waterfall_cap":    "叠加柱（每省左组）：套利容量 + 调频需求 − 已有储能装机。"
-                                   "◆ 净需求 = 扣除已有储能后的未满足需求。"
-                                   "热电容量（右柱，灰色）= 参考值：热电机组同样可满足套利+调频需求，用于衡量储能的真实可寻址市场规模。",
-        "demand_thermal_cap":      "热电装机（MW，参考）",
-        "demand_net_demand":       "净新增储能需求",
+        "demand_waterfall_cap":    "每省：[套利 → +调频 → −已有储能 → 净需求]。"
+                                   "灵活热电容量 = 热电总装机 − 日内平均最低竞价空间（必开机组基准）。"
+                                   "反映热电可向下调节的空间，是储能的真实竞争来源。",
+        "demand_flex_thermal":     "灵活热电（MW）",
+        "demand_net_demand":       "净储能需求",
         "demand_no_fund":          "市场基础数据不可用 — 无法计算调频需求。",
         "demand_no_hourly":        "该省份/时段无小时基础数据。",
         "demand_source_note":      "⚠️ 调频容量需求来源于各省/区域调频辅助服务市场实施细则及GB/T 45905.6-2025国家标准。公式：调频需求 = 最高负荷×比例 + 新能源装机×比例 + 兜底容量。[已确认]=来自官方文件；[估算]=参考区域规则或国家基准值。注：强制配储比例（配储比例）已由136号文废除，本处不适用。",
@@ -1469,7 +1469,9 @@ def build_cashflows(
 # ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title(_t("app_title"))
-    lang = st.radio(_t("lang_label"), ["English", "中文"], key="lang_radio", horizontal=True)
+    if "lang_radio" not in st.session_state:
+        st.session_state["lang_radio"] = "中文"
+    lang = st.radio(_t("lang_label"), ["中文", "English"], key="lang_radio", horizontal=True)
     st.divider()
     st.subheader(_t("filters"))
     _today = dt.date.today()
@@ -1628,6 +1630,36 @@ def load_installed_capacity(_eng_key):
                 FROM marketdata.province_installed_monthly
                 WHERE bess_mw IS NOT NULL
                 ORDER BY province, year_month DESC
+            """)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        conn.close()
+        return _pd.DataFrame(rows, columns=cols) if rows else _pd.DataFrame(columns=cols)
+    except Exception:
+        return _pd.DataFrame()
+
+
+@st.cache_data(ttl=1800)
+def load_shandong_ancillary(_eng_key):
+    """Load 山东 monthly ancillary cost data from staging.exchange_excel_metrics."""
+    import pandas as _pd
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return _pd.DataFrame()
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT report_month,
+                       fr_pool_million_yuan,
+                       peak_shaving_million_yuan,
+                       renewable_deviation_million_yuan,
+                       total_ancillary_million_yuan
+                FROM staging.exchange_excel_metrics
+                WHERE province = '山东'
+                  AND total_ancillary_million_yuan IS NOT NULL
+                ORDER BY report_month
             """)
             rows = cur.fetchall()
             cols = [d[0] for d in cur.description]
@@ -2208,11 +2240,18 @@ with tab_demand:
     st.caption(_t("demand_caption"))
 
     _all_provs_d = load_province_list(_ENG_KEY)
+    # Provinces with LingFeng fundamentals data — used as the default selection.
+    # Excludes markets that have no spot_fundamentals_hourly rows (e.g. 冀北, 广州).
+    _DEFAULT_DEMAND_PROVS = [
+        "云南", "吉林", "四川", "宁夏", "安徽", "山东", "山西", "广东",
+        "广西", "新疆", "江苏", "江西", "河北南网", "河南", "浙江", "海南",
+        "湖北", "湖南", "甘肃", "福建",
+        "蒙东", "蒙西", "贵州", "辽宁", "陕西", "青海", "黑龙江",
+    ]
+    _default_d = [p for p in _DEFAULT_DEMAND_PROVS if p in _all_provs_d]
     if "demand_provinces" not in st.session_state:
         _dp_saved = [p for p in st.query_params.get("dp", "").split(",") if p in _all_provs_d]
-        st.session_state["demand_provinces"] = _dp_saved if _dp_saved else (
-            _all_provs_d[:6] if len(_all_provs_d) >= 6 else _all_provs_d
-        )
+        st.session_state["demand_provinces"] = _dp_saved if _dp_saved else _default_d
     _d_col_sel, _d_col_yr = st.columns([3, 1])
     with _d_col_sel:
         _d_provs = st.multiselect(
@@ -2474,119 +2513,146 @@ with tab_demand:
                 _thermal_wkw = (_cap_yr_fund.get("火电", {}) or {}).get("value") or 0.0
                 _thermal_mw  = _thermal_wkw * 10
 
+                # Flexible thermal = total thermal − avg daily min bidding-space
+                # (min bidding-space ≈ must-run thermal floor; what remains can be dispatched flexibly)
+                _prov_sf = _swing_df[_swing_df["province"] == _prov]
+                _avg_min_bs   = float(_prov_sf["min_bs"].mean()) if not _prov_sf.empty else 0.0
+                _flex_thermal = max(_thermal_mw - _avg_min_bs, 0.0)
+
                 _recommended = max(_arb_p90, _fr_mw)
                 _gap_mw = max(_recommended - _storage_mw, 0.0)
                 _cmp_rows.append({
                     "Province":                    _prov,
+                    "_sort_arb":                   _arb_p50,
                     _t("demand_arb_p50"):          round(_arb_p50,      0),
                     _t("demand_arb_p90"):          round(_arb_p90,      0),
                     _t("demand_fr_req_mw"):        round(_fr_mw,        0),
                     _t("demand_recommended"):      round(_recommended,  0),
                     _t("demand_bess_installed"):   round(_storage_mw,   0),
                     _t("demand_bess_gap"):         round(_gap_mw,       0),
-                    _t("demand_thermal_cap"):      round(_thermal_mw,   0),
+                    _t("demand_flex_thermal"):     round(_flex_thermal,  0),
                 })
             if _cmp_rows:
-                _cmp_df = pd.DataFrame(_cmp_rows).set_index("Province")
+                _cmp_df = (
+                    pd.DataFrame(_cmp_rows)
+                    .sort_values("_sort_arb", ascending=False)
+                    .drop(columns=["_sort_arb"])
+                    .set_index("Province")
+                )
 
-                _provs_list    = _cmp_df.index.tolist()
-                _arb_p50_vals  = _cmp_df[_t("demand_arb_p50")].tolist()
-                _arb_p90_vals  = _cmp_df[_t("demand_arb_p90")].tolist()
-                _fr_vals       = _cmp_df[_t("demand_fr_req_mw")].tolist()
-                _bess_vals     = _cmp_df[_t("demand_bess_installed")].tolist()
-                _thermal_vals  = _cmp_df[_t("demand_thermal_cap")].tolist()
+                _provs_list       = _cmp_df.index.tolist()
+                _arb_p50_vals     = _cmp_df[_t("demand_arb_p50")].tolist()
+                _arb_p90_vals     = _cmp_df[_t("demand_arb_p90")].tolist()
+                _fr_vals          = _cmp_df[_t("demand_fr_req_mw")].tolist()
+                _bess_vals        = _cmp_df[_t("demand_bess_installed")].tolist()
+                _flex_thermal_vals = _cmp_df[_t("demand_flex_thermal")].tolist()
+
+                # ── colour palette ─────────────────────────────────────────
+                _C_ARB     = "#4C78A8"   # blue  – arbitrage
+                _C_FR      = "#F58518"   # orange – FR requirement
+                _C_BESS    = "#E45756"   # red    – existing BESS deduction
+                _C_NET     = "#2c3e50"   # dark   – net demand total
+                _C_THERM   = "rgba(180,140,70,0.65)"  # amber – flexible thermal
 
                 def _waterfall_chart(arb_vals, arb_label, title, chart_key):
-                    """Waterfall-style chart: arb + FR stacked up, BESS deducted, thermal reference."""
-                    _bess_base  = [a + f for a, f in zip(arb_vals, _fr_vals)]
-                    _net_vals   = [max(a + f - s, 0.0) for a, f, s in zip(arb_vals, _fr_vals, _bess_vals)]
+                    """
+                    Waterfall-style chart built from individual go.Bar traces so each
+                    component gets its own distinct colour (go.Waterfall only supports
+                    increasing/decreasing/totals colouring which forces Arb and FR to share
+                    the same blue).
+
+                    Layout per province (5 sequential columns):
+                      Col 1  Arb   — blue,   base=0,          y=arb
+                      Col 2  +FR   — orange, base=arb,        y=fr
+                      Col 3  −BESS — red,    base=net,        y=min(bess, arb+fr)
+                      Col 4  Net   — dark,   base=0,          y=max(arb+fr−bess, 0)
+                      Col 5  Thml  — amber,  base=0,          y=flex_thermal
+                    """
+                    _n = len(_provs_list)
+                    _step_arb   = arb_label
+                    _step_fr    = f"+ {_t('demand_fr_req_mw')}"
+                    _step_bess  = f"− {_t('demand_bess_installed')}"
+                    _step_net   = _t("demand_net_demand")
+                    _step_therm = _t("demand_flex_thermal")
+
+                    # Pre-compute per-province positions for each Bar trace
+                    _net_vals   = []
+                    _fr_base    = []   # FR starts on top of Arb
+                    _bess_base  = []   # BESS bar starts at net (bottom of deduction)
+                    _bess_y     = []   # BESS bar height = amount deducted (capped at arb+fr)
+
+                    for arb, fr, bess in zip(arb_vals, _fr_vals, _bess_vals):
+                        net = max(arb + fr - bess, 0.0)
+                        _net_vals.append(net)
+                        _fr_base.append(arb)
+                        _bess_base.append(net)                      # bottom of red bar
+                        _bess_y.append(min(bess, arb + fr))         # height of red bar
+
+                    def _mx(step):
+                        """Multi-level x for a single-step Bar trace: all provinces."""
+                        return [_provs_list, [step] * _n]
 
                     fig = go.Figure()
 
-                    # ── Arbitrage (base layer) ───────────────────────────────
+                    # Col 1 — Arbitrage (blue, base=0)
                     fig.add_trace(go.Bar(
-                        name=arb_label,
-                        x=_provs_list,
-                        y=arb_vals,
-                        base=0,
-                        offsetgroup=0,
-                        marker_color="#4C78A8",
-                        text=[f"{v:,.0f}" if v >= 50 else "" for v in arb_vals],
-                        textposition="inside",
-                        insidetextanchor="middle",
-                        textfont=dict(size=10, color="white"),
+                        x=_mx(_step_arb), y=arb_vals, base=[0] * _n,
+                        name=arb_label, marker_color=_C_ARB,
+                        text=[f"{v:,.0f}" for v in arb_vals],
+                        textposition="outside", textfont=dict(size=9),
                     ))
 
-                    # ── FR requirement (stacked on top of arb) ───────────────
+                    # Col 2 — FR requirement (orange, stacks on Arb)
                     fig.add_trace(go.Bar(
-                        name=_t("demand_fr_req_mw"),
-                        x=_provs_list,
-                        y=_fr_vals,
-                        base=arb_vals,
-                        offsetgroup=0,
-                        marker_color="#F58518",
-                        text=[f"{v:,.0f}" if v >= 50 else "" for v in _fr_vals],
-                        textposition="inside",
-                        insidetextanchor="middle",
-                        textfont=dict(size=10, color="white"),
+                        x=_mx(_step_fr), y=_fr_vals, base=_fr_base,
+                        name=_step_fr, marker_color=_C_FR,
+                        text=[f"+{v:,.0f}" for v in _fr_vals],
+                        textposition="outside", textfont=dict(size=9),
                     ))
 
-                    # ── Existing BESS deduction (green, going down from top) ─
+                    # Col 3 — Existing BESS deduction (red, fills from net up to arb+fr)
                     fig.add_trace(go.Bar(
-                        name=_t("demand_bess_installed"),
-                        x=_provs_list,
-                        y=[-s for s in _bess_vals],
-                        base=_bess_base,
-                        offsetgroup=0,
-                        marker_color="#54A24B",
-                        marker_line=dict(width=1, color="#2e7d32"),
-                        text=[f"−{s:,.0f}" if s >= 50 else "" for s in _bess_vals],
-                        textposition="inside",
-                        insidetextanchor="middle",
-                        textfont=dict(size=10, color="white"),
+                        x=_mx(_step_bess), y=_bess_y, base=_bess_base,
+                        name=_step_bess, marker_color=_C_BESS,
+                        text=[f"−{v:,.0f}" if v > 0 else "0" for v in _bess_vals],
+                        textposition="outside", textfont=dict(size=9),
                     ))
 
-                    # ── Thermal reference bar (separate group) ───────────────
+                    # Col 4 — Net BESS demand (dark, standalone from 0)
                     fig.add_trace(go.Bar(
-                        name=_t("demand_thermal_cap"),
-                        x=_provs_list,
-                        y=_thermal_vals,
-                        offsetgroup=1,
-                        marker_color="rgba(180,170,160,0.55)",
-                        marker_line=dict(width=1, color="#9E9E9E"),
+                        x=_mx(_step_net), y=_net_vals, base=[0] * _n,
+                        name=_step_net, marker_color=_C_NET,
+                        text=[f"<b>{v:,.0f}</b>" for v in _net_vals],
+                        textposition="outside", textfont=dict(size=10),
                     ))
 
-                    # ── Net demand diamond marker ────────────────────────────
-                    fig.add_trace(go.Scatter(
-                        name=_t("demand_net_demand"),
-                        x=_provs_list,
-                        y=_net_vals,
-                        mode="markers+text",
-                        marker=dict(symbol="diamond", size=9, color="#E45756",
-                                    line=dict(width=1.5, color="#b71c1c")),
-                        text=[f"{v:,.0f}" if v > 0 else "0" for v in _net_vals],
-                        textposition="top center",
-                        textfont=dict(size=10, color="#E45756"),
-                    ))
+                    # Col 5 — Flexible thermal reference (amber, standalone from 0)
+                    if _show_thermal:
+                        fig.add_trace(go.Bar(
+                            x=_mx(_step_therm), y=_flex_thermal_vals, base=[0] * _n,
+                            name=_step_therm, marker_color=_C_THERM, opacity=0.70,
+                            text=[f"{v:,.0f}" for v in _flex_thermal_vals],
+                            textposition="outside", textfont=dict(size=9),
+                        ))
 
                     fig.update_layout(
                         title=dict(text=title, font=dict(size=14)),
-                        barmode="group",
-                        xaxis=dict(
-                            title=_t("demand_province"),
-                            tickangle=-35,
-                            tickfont=dict(size=11),
-                        ),
+                        xaxis=dict(tickangle=-40, tickfont=dict(size=10)),
                         yaxis=dict(title="MW", rangemode="tozero"),
-                        height=460,
-                        margin=dict(t=55, b=90, l=60, r=10),
-                        legend=dict(orientation="h", y=-0.35, font=dict(size=11)),
+                        height=520,
+                        margin=dict(t=60, b=120, l=65, r=15),
+                        legend=dict(orientation="h", y=-0.40, font=dict(size=11)),
                         plot_bgcolor="rgba(0,0,0,0)",
                         paper_bgcolor="rgba(0,0,0,0)",
                     )
                     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
                 st.caption(_t("demand_waterfall_cap"))
+                _show_thermal = st.checkbox(
+                    _t("demand_flex_thermal"),
+                    value=False,
+                    key="demand_show_thermal",
+                )
                 _waterfall_chart(
                     _arb_p50_vals,
                     _t("demand_arb_p50"),
@@ -2919,6 +2985,36 @@ with tab_aux:
             })
             st.dataframe(_style_conflicts(_fr_disp), use_container_width=True, hide_index=True)
 
+    # ── 山东 ancillary cost trend ─────────────────────────────────────────
+    _sd_anc_df = load_shandong_ancillary(_ENG_KEY)
+    if not _sd_anc_df.empty:
+        _sd_anc_df["month"] = _pd.to_datetime(_sd_anc_df["report_month"]).dt.strftime("%Y-%m")
+        _sd_anc_df = _sd_anc_df.set_index("month")
+        _fig_anc = go.Figure()
+        _anc_series = {
+            "fr_pool_million_yuan":               "调频 (M¥)",
+            "peak_shaving_million_yuan":          "调峰 (M¥)",
+            "renewable_deviation_million_yuan":   "偏差考核 (M¥)",
+            "total_ancillary_million_yuan":       "总辅助服务 (M¥)",
+        }
+        for _col, _label in _anc_series.items():
+            if _col in _sd_anc_df.columns and _sd_anc_df[_col].notna().any():
+                _fig_anc.add_trace(go.Scatter(
+                    x=list(_sd_anc_df.index),
+                    y=list(_sd_anc_df[_col]),
+                    name=_label,
+                    mode="lines+markers",
+                ))
+        _fig_anc.update_layout(
+            title="山东 月度辅助服务费用 (百万元/月)",
+            xaxis_title="月份",
+            yaxis_title="百万元 (M¥)",
+            height=320,
+            margin=dict(l=0, r=0, t=36, b=0),
+            legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(_fig_anc, use_container_width=True)
+
     # ── Section 3: BESS Installed Capacity ──────────────────────────────
     st.markdown(f"### {_t('aux_bess_section')}")
     if _inst_df.empty:
@@ -3060,7 +3156,7 @@ with tab_aux:
                 _fig.update_xaxes(tickangle=-45)
                 st.plotly_chart(_fig, use_container_width=True, key=f"gap_{_fill_table}")
 
-                _missing_rows = _df[~_df["has_data"]]
+                _missing_rows = _df[~_df["has_data"].astype(bool)]
                 if not _missing_rows.empty and _hermes_url_fill:
                     st.caption(f"🔴 {len(_missing_rows)} 条数据缺失。可在下方手动填写：")
                     with st.form(key=f"fill_form_{_fill_table}"):

@@ -81,9 +81,11 @@ services:
 
   bess-map:
     <<: *common
-    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-map:v48
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-map:v58
     # Uses default image CMD (run.sh baked in)
     ports: ["8503:8503"]
+    volumes:
+      - ./apps/bess-map/app.py:/app/apps/bess-map/app.py:ro
 
   inner-mongolia:
     <<: *common
@@ -93,9 +95,11 @@ services:
 
   mengxi-dashboard:
     <<: *common
-    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-mengxi-dashboard:v10
+    image: mengxi-dashboard-local:latest
     # Uses default image CMD (run.sh baked in)
     ports: ["8505:8505"]
+    volumes:
+      - ./data:/app/data  # live-mount local data/ so CSV/Excel files are visible without rebuild
 
   options-cockpit:
     <<: *common
