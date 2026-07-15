@@ -378,7 +378,10 @@ class ModoAIConnector(BaseConnector):
                 'button:has-text("sign in with a password")',
                 'a:has-text("Use password")',
                 'button:has-text("Use password")',
-                'a:has-text("password")',
+                'a:has-text("Sign in with password")',
+                'button:has-text("Sign in with password")',
+                # NOTE: do NOT add 'a:has-text("password")' — it matches "Forgot password?"
+                # which triggers a password-reset email instead of showing the password field.
             ])
             if pw_link_sel:
                 page.click(pw_link_sel)
