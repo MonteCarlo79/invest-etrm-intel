@@ -3810,11 +3810,32 @@ with tab_mgmt:
     _reauth_col1, _reauth_col2 = st.columns(2)
 
     with _reauth_col1:
-        st.markdown("**Step 1 — Request a fresh magic link**")
+        st.markdown("**Option A — Direct password auth (try first)**")
         st.caption(
-            f"Clicks 'Continue' on the Modo sign-in page for "
+            "Runs the full login flow including SSO detection. "
+            "If Modo shows an SSO page it will try to navigate back and use the password."
+        )
+        if st.button("Try Password Auth", type="primary", key="modo_pw_auth_btn"):
+            with st.spinner("Running headless login (30–60 s)…"):
+                try:
+                    from services.gb_knowledge.modo_ai import authenticate_with_password
+                    _pw_result = authenticate_with_password()
+                except Exception as _pw_exc:
+                    _pw_result = {"success": False, "message": str(_pw_exc), "page_dump": ""}
+            if _pw_result["success"]:
+                st.success(_pw_result["message"])
+            else:
+                st.error(_pw_result["message"])
+                if _pw_result.get("page_dump"):
+                    with st.expander("Page state at failure", expanded=True):
+                        st.code(_pw_result["page_dump"][:600])
+
+        st.divider()
+        st.markdown("**Option B — Magic link email**")
+        st.caption(
+            f"Submits the email on Modo sign-in for "
             f"`{os.environ.get('MODO_EMAIL', 'MODO_EMAIL not set')}`, "
-            "triggering an authorization email."
+            "triggering a magic link or SSO email."
         )
         if st.button("Send magic link email", key="modo_request_link_btn"):
             with st.spinner("Opening Modo sign-in page and submitting email…"):

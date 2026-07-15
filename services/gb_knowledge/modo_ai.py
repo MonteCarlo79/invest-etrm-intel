@@ -103,6 +103,8 @@ class ModoAIConnector(BaseConnector):
         # Set to True when _login() detects that Modo sent a magic link instead of
         # showing a password field — prevents pointless retries that spam more emails.
         self._magic_link_sent = False
+        # Set to True when Modo routes the corporate email to SSO (no retry either).
+        self._sso_detected = False
 
     # ------------------------------------------------------------------
     # BaseConnector interface
@@ -180,15 +182,21 @@ class ModoAIConnector(BaseConnector):
                 # ── 3. Fall back to password login ────────────────────────
                 if not logged_in:
                     self._magic_link_sent = False
+                    self._sso_detected = False
                     for _attempt in range(1, 3):   # max 2 attempts
                         logger.info("[modo_ai] Login attempt %d/2", _attempt)
                         logged_in = self._login(page)
                         if logged_in:
                             break
                         if self._magic_link_sent:
-                            # Modo sent an auth email — retrying will only send more emails
                             logger.error(
                                 "[modo_ai] Magic link auth detected — aborting without retry"
+                            )
+                            _notify_magic_link_required(page.url)
+                            break
+                        if self._sso_detected:
+                            logger.error(
+                                "[modo_ai] SSO auth detected — aborting without retry"
                             )
                             _notify_magic_link_required(page.url)
                             break
@@ -208,7 +216,7 @@ class ModoAIConnector(BaseConnector):
                                 pass
 
                 if not logged_in:
-                    if not self._magic_link_sent:
+                    if not self._magic_link_sent and not self._sso_detected:
                         logger.error("[modo_ai] Login failed after all attempts — aborting")
                         _notify_login_failure(2, page.url)
                     return
@@ -400,8 +408,27 @@ class ModoAIConnector(BaseConnector):
                 else:
                     page.keyboard.press("Enter")
                     logger.info("[modo_ai] Pressed Enter to advance")
-                page.wait_for_timeout(2_500)
+                page.wait_for_timeout(3_000)
                 _save_screenshot(page, "03_after_continue")
+
+                # --- Dump all visible elements for diagnosis (printed to stdout → CloudWatch) ---
+                try:
+                    _vis = page.evaluate("""() => Array.from(
+                        document.querySelectorAll('a,button,[role="button"]')
+                    ).filter(e=>e.offsetParent!==null&&e.innerText?.trim())
+                     .map(e=>e.tagName+':'+e.innerText.trim().slice(0,60))
+                     .slice(0,20)""")
+                    print(f"[modo_ai] visible_els after Continue: {_vis}", flush=True)
+                    logger.info("[modo_ai] Visible elements after Continue: %s", _vis)
+                except Exception:
+                    pass
+                try:
+                    _body = page.evaluate("() => document.body.innerText.slice(0,1500)")
+                    print(f"[modo_ai] page_text after Continue (url={page.url}): {_body[:500]!r}",
+                          flush=True)
+                    logger.info("[modo_ai] Page text after Continue (url=%s): %s", page.url, _body[:400])
+                except Exception:
+                    pass
 
                 # Flow D detection: Modo sent a magic link email — do NOT retry
                 if _is_magic_link_page(page):
@@ -414,16 +441,76 @@ class ModoAIConnector(BaseConnector):
                     self._magic_link_sent = True
                     return False
 
-                # After advancing, check again for "sign in with a password" link
+                # Flow E: SSO page — Modo routes corporate email domain to enterprise SSO
+                # which may not be configured, triggering "SSO Not Available" email.
+                # Try to find a "Continue with password" / "Back" path.
+                if _is_sso_page(page):
+                    logger.info("[modo_ai] SSO page detected (Flow E) — looking for password path")
+                    _save_screenshot(page, "03_sso_page")
+                    self._sso_detected = True
+
+                    sso_pw_sel = _first_visible(page, [
+                        'button:has-text("password")',
+                        'a:has-text("password")',
+                        'button:has-text("Password")',
+                        'a:has-text("Password")',
+                        'button:has-text("Back")',
+                        'a:has-text("Back")',
+                        'button:has-text("back")',
+                        'a:has-text("back")',
+                        '[data-action="back"]',
+                        'button:has-text("Continue with")',
+                        'a:has-text("Continue with")',
+                    ])
+                    if sso_pw_sel:
+                        page.click(sso_pw_sel)
+                        logger.info("[modo_ai] Clicked SSO back/password selector: %s", sso_pw_sel)
+                        page.wait_for_timeout(2_500)
+                        _save_screenshot(page, "03_after_sso_back")
+                    else:
+                        # Fall back to browser history navigation
+                        logger.info("[modo_ai] No back/password link found on SSO page — going back")
+                        try:
+                            page.go_back(timeout=10_000, wait_until="domcontentloaded")
+                        except Exception:
+                            page.goto(
+                                "https://modoenergy.com/sign-in",
+                                timeout=_NAV_TIMEOUT,
+                                wait_until="domcontentloaded",
+                            )
+                        page.wait_for_timeout(2_500)
+                        _save_screenshot(page, "03_after_sso_goback")
+
+                    # After returning from SSO page, dump what we see
+                    try:
+                        _vis2 = page.evaluate("""() => Array.from(
+                            document.querySelectorAll('a,button,[role="button"]')
+                        ).filter(e=>e.offsetParent!==null&&e.innerText?.trim())
+                         .map(e=>e.tagName+':'+e.innerText.trim().slice(0,60))
+                         .slice(0,20)""")
+                        print(f"[modo_ai] visible_els after SSO back: {_vis2}", flush=True)
+                        logger.info("[modo_ai] Visible elements after SSO back: %s", _vis2)
+                    except Exception:
+                        pass
+
+                # After advancing (Flow B / post-SSO), check for "sign in with a password" link
                 pw_link_sel2 = _first_visible(page, [
                     'a:has-text("sign in with a password")',
                     'button:has-text("sign in with a password")',
                     'a:has-text("Use password")',
                     'button:has-text("Use password")',
+                    'a:has-text("use password")',
+                    'button:has-text("use password")',
+                    'a:has-text("Continue with password")',
+                    'button:has-text("Continue with password")',
+                    'a:has-text("Sign in with password")',
+                    'button:has-text("Sign in with password")',
+                    'a:has-text("password")',
+                    'button:has-text("password")',
                 ])
                 if pw_link_sel2:
                     page.click(pw_link_sel2)
-                    logger.info("[modo_ai] Clicked 'sign in with a password' link (after Continue)")
+                    logger.info("[modo_ai] Clicked password link: %s", pw_link_sel2)
                     page.wait_for_timeout(2_500)
                     _save_screenshot(page, "03b_after_pw_link_click")
                     # Check again for magic link
@@ -690,14 +777,16 @@ class ModoAIConnector(BaseConnector):
                 # ── 3. Fall back to password login ────────────────────────
                 if not logged_in:
                     self._magic_link_sent = False
+                    self._sso_detected = False
                     for _attempt in range(1, 3):
                         logger.info("[modo_ai] Login attempt %d/2", _attempt)
                         logged_in = self._login(page)
                         if logged_in:
                             break
-                        if self._magic_link_sent:
+                        if self._magic_link_sent or self._sso_detected:
                             logger.error(
-                                "[modo_ai] Magic link auth detected — aborting without retry"
+                                "[modo_ai] %s detected — aborting without retry",
+                                "Magic link" if self._magic_link_sent else "SSO",
                             )
                             _notify_magic_link_required(page.url)
                             break
@@ -717,7 +806,7 @@ class ModoAIConnector(BaseConnector):
                                 pass
 
                 if not logged_in:
-                    if not self._magic_link_sent:
+                    if not self._magic_link_sent and not self._sso_detected:
                         logger.error("[modo_ai] Login failed after all attempts — aborting custom distillation")
                         _notify_login_failure(2, page.url)
                     return
@@ -957,6 +1046,23 @@ def _notify_magic_link_required(final_url: str) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _is_sso_page(page) -> bool:
+    """Return True if Modo is showing an SSO / enterprise login page."""
+    try:
+        text = page.evaluate("() => document.body.innerText.slice(0, 3000)").lower()
+        return any(phrase in text for phrase in [
+            "sso",
+            "single sign",
+            "enterprise login",
+            "not available for your company",
+            "work email",
+            "your organization",
+            "sign in with your password",   # SSO failure message
+        ])
+    except Exception:
+        return False
+
+
 def _is_magic_link_page(page) -> bool:
     """Return True if Modo is showing a 'check your email' magic link page."""
     try:
@@ -1163,6 +1269,103 @@ def request_magic_link_email(email: str | None = None) -> dict:
                     pass
     except Exception as exc:
         return {"success": False, "message": str(exc)}
+
+
+def authenticate_with_password() -> dict:
+    """Attempt full password-based authentication and save the session.
+
+    Runs the complete _login() flow (including SSO detection and back-navigation).
+    Call this from the Streamlit UI to authenticate without needing a magic link.
+    Returns {"success": bool, "message": str, "page_dump": str}.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"success": False, "message": "playwright not installed", "page_dump": ""}
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+            ctx = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                ),
+                locale="en-GB",
+                timezone_id="Asia/Singapore",
+            )
+            page = ctx.new_page()
+            page.on("console", lambda _: None)
+            try:
+                from playwright_stealth import stealth_sync
+                stealth_sync(page)
+            except ImportError:
+                pass
+
+            try:
+                connector = ModoAIConnector()
+                success = connector._login(page)
+                page_dump = ""
+                try:
+                    page_dump = page.evaluate("() => document.body.innerText.slice(0,800)")
+                except Exception:
+                    pass
+
+                if success:
+                    _save_session_state(ctx)
+                    return {
+                        "success": True,
+                        "message": (
+                            "Password authentication successful. Session saved to "
+                            f"{_SESSION_PATH} — tonight's nightly run will reuse it."
+                        ),
+                        "page_dump": page_dump,
+                    }
+
+                # Collect diagnostic info
+                vis_els = ""
+                try:
+                    vis = page.evaluate("""() => Array.from(
+                        document.querySelectorAll('a,button,[role="button"]')
+                    ).filter(e=>e.offsetParent!==null&&e.innerText?.trim())
+                     .map(e=>e.tagName+':'+e.innerText.trim().slice(0,50))
+                     .slice(0,20)""")
+                    vis_els = str(vis)
+                except Exception:
+                    pass
+
+                if connector._sso_detected:
+                    msg = (
+                        "Modo routed to SSO for this email domain. "
+                        "After the SSO page, the code tried to find a 'Continue with password' "
+                        "link but couldn't reach the password field. "
+                        f"Current URL: {page.url}\n"
+                        f"Visible elements: {vis_els[:300]}\n"
+                        f"Page text: {page_dump[:300]!r}"
+                    )
+                elif connector._magic_link_sent:
+                    msg = (
+                        "Modo sent a magic link email instead of showing the password field. "
+                        "Use 'Authenticate & Save Session' with the magic link URL from the email."
+                    )
+                else:
+                    msg = (
+                        f"Login failed (URL: {page.url}). "
+                        f"Visible elements: {vis_els[:300]}\n"
+                        f"Page text: {page_dump[:300]!r}"
+                    )
+                return {"success": False, "message": msg, "page_dump": page_dump}
+            finally:
+                try:
+                    ctx.close()
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as exc:
+        return {"success": False, "message": str(exc), "page_dump": ""}
 
 
 def authenticate_with_magic_link(url: str) -> dict:
