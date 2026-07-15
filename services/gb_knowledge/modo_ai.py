@@ -1041,6 +1041,182 @@ def distill_gap_questions(questions: list[str]) -> dict[str, str | None]:
     return results
 
 
+def request_magic_link_email(email: str | None = None) -> dict:
+    """Navigate to Modo sign-in and submit the email to trigger a magic link email.
+
+    Returns {"success": bool, "message": str}.
+    Call this from the Streamlit UI (Step 1 of re-authentication).
+    """
+    _email = email or os.environ.get("MODO_EMAIL", "")
+    if not _email:
+        return {"success": False, "message": "No email address set (MODO_EMAIL)"}
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"success": False, "message": "playwright not installed"}
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+            ctx = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                ),
+                locale="en-GB",
+                timezone_id="Asia/Singapore",
+            )
+            page = ctx.new_page()
+            page.on("console", lambda _: None)
+            try:
+                from playwright_stealth import stealth_sync
+                stealth_sync(page)
+            except ImportError:
+                pass
+
+            try:
+                page.goto(
+                    "https://modoenergy.com/sign-in",
+                    timeout=_NAV_TIMEOUT,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(3_000)
+
+                email_sel = _first_visible(page, [
+                    'input[type="email"]',
+                    'input[name="email"]',
+                    'input[id*="email" i]',
+                    'input[placeholder*="email" i]',
+                    'input[autocomplete="email"]',
+                ])
+                if not email_sel:
+                    _save_screenshot(page, "request_link_no_email_input")
+                    return {"success": False, "message": "Email input not found on sign-in page"}
+
+                page.fill(email_sel, _email)
+
+                # Click Continue to submit the email and trigger the magic link
+                continue_sel = _first_visible(page, [
+                    'button:has-text("Continue")',
+                    'button:has-text("Next")',
+                    'button[type="submit"]',
+                    'button:has-text("Sign in")',
+                    'button:has-text("Log in")',
+                ])
+                if continue_sel:
+                    page.click(continue_sel)
+                else:
+                    page.keyboard.press("Enter")
+
+                page.wait_for_timeout(3_000)
+                _save_screenshot(page, "request_link_after_submit")
+
+                if _is_magic_link_page(page):
+                    return {
+                        "success": True,
+                        "message": (
+                            f"Magic link email sent to {_email}. "
+                            "Check your inbox and paste the link URL below."
+                        ),
+                    }
+                # Could have logged in with an existing session, or got a password field
+                body_text = ""
+                try:
+                    body_text = page.evaluate("() => document.body.innerText.slice(0, 400)")
+                except Exception:
+                    pass
+                return {
+                    "success": False,
+                    "message": (
+                        f"Could not confirm magic link was sent. "
+                        f"Page text: {body_text[:200]!r}"
+                    ),
+                }
+            finally:
+                try:
+                    ctx.close()
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+
+
+def authenticate_with_magic_link(url: str) -> dict:
+    """Use a magic link URL to authenticate Playwright and save the session.
+
+    Returns {"success": bool, "message": str}.
+    Call this from the Streamlit UI (Step 2 of re-authentication).
+    After success, the saved session is used by all subsequent nightly runs
+    until the container restarts.
+    """
+    if not url or "modoenergy.com" not in url:
+        return {"success": False, "message": "Invalid URL — must be a modoenergy.com link"}
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"success": False, "message": "playwright not installed"}
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+            ctx = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                ),
+                locale="en-GB",
+                timezone_id="Asia/Singapore",
+            )
+            page = ctx.new_page()
+            page.on("console", lambda _: None)
+            try:
+                from playwright_stealth import stealth_sync
+                stealth_sync(page)
+            except ImportError:
+                pass
+
+            try:
+                connector = ModoAIConnector()
+                success = connector._login_via_magic_link(page, url)
+                if success:
+                    _save_session_state(ctx)
+                    return {
+                        "success": True,
+                        "message": (
+                            "Authenticated successfully. Session saved to "
+                            f"{_SESSION_PATH} — tonight's nightly run will reuse it."
+                        ),
+                    }
+                # Try to get some page context for diagnostics
+                body_text = ""
+                try:
+                    body_text = page.evaluate("() => document.body.innerText.slice(0, 300)")
+                except Exception:
+                    pass
+                return {
+                    "success": False,
+                    "message": (
+                        "Magic link authentication failed — the link may have expired "
+                        f"(URL: {page.url}). Page text: {body_text[:150]!r}"
+                    ),
+                }
+            finally:
+                try:
+                    ctx.close()
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+
+
 def _clean_response(text: str, pre_text: str) -> str:
     """Strip the pre-existing text (from previous messages) from the captured text."""
     if not text:

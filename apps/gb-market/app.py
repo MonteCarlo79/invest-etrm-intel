@@ -3802,6 +3802,59 @@ with tab_mgmt:
                 st.image(_shot_path)
 
     st.divider()
+    st.subheader("Modo Re-Authentication")
+    st.caption(
+        "Modo Energy now uses magic link (passwordless) authentication. "
+        "Use the two steps below whenever the session expires and nightly distillation fails."
+    )
+    _reauth_col1, _reauth_col2 = st.columns(2)
+
+    with _reauth_col1:
+        st.markdown("**Step 1 — Request a fresh magic link**")
+        st.caption(
+            f"Clicks 'Continue' on the Modo sign-in page for "
+            f"`{os.environ.get('MODO_EMAIL', 'MODO_EMAIL not set')}`, "
+            "triggering an authorization email."
+        )
+        if st.button("Send magic link email", key="modo_request_link_btn"):
+            with st.spinner("Opening Modo sign-in page and submitting email…"):
+                try:
+                    from services.gb_knowledge.modo_ai import request_magic_link_email
+                    _rl_result = request_magic_link_email()
+                except Exception as _rl_exc:
+                    _rl_result = {"success": False, "message": str(_rl_exc)}
+            if _rl_result["success"]:
+                st.success(_rl_result["message"])
+            else:
+                st.error(_rl_result["message"])
+
+    with _reauth_col2:
+        st.markdown("**Step 2 — Paste the link from the email**")
+        st.caption(
+            "Open the 'Your link for authorization' email from team@modoenergy.com, "
+            "copy the long URL shown at the bottom, and paste it here."
+        )
+        _magic_url = st.text_input(
+            "Magic link URL",
+            placeholder="https://modoenergy.com/sign-in/auth?authorization_code=…",
+            key="modo_magic_url_input",
+        )
+        if st.button("Authenticate & Save Session", type="primary", key="modo_auth_btn"):
+            if not _magic_url.strip():
+                st.warning("Paste the magic link URL first.")
+            else:
+                with st.spinner("Navigating to magic link and saving session…"):
+                    try:
+                        from services.gb_knowledge.modo_ai import authenticate_with_magic_link
+                        _ma_result = authenticate_with_magic_link(_magic_url.strip())
+                    except Exception as _ma_exc:
+                        _ma_result = {"success": False, "message": str(_ma_exc)}
+                if _ma_result["success"]:
+                    st.success(_ma_result["message"])
+                else:
+                    st.error(_ma_result["message"])
+
+    st.divider()
     st.subheader("Expert Memory — KB Digestion")
     st.caption(
         "Reads all undigested KB docs and uses Claude to extract durable market insights "
