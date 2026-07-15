@@ -36,11 +36,11 @@ _CAPACITY_KEYWORDS = [
 def is_capacity_file_extended(filename: str) -> bool:
     """
     Return True if filename suggests province capacity data.
-    Widens the existing is_capacity_file() to also match PDF/TXT (not just Excel).
+    Widens the existing is_capacity_file() to also match PDF/TXT/DOCX (not just Excel).
     """
     fn = filename.lower()
     ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
-    if ext not in ("xlsx", "xls", "xlsm", "pdf", "txt", "csv"):
+    if ext not in ("xlsx", "xls", "xlsm", "pdf", "txt", "csv", "docx", "doc"):
         return False
     return any(kw.lower() in fn for kw in _CAPACITY_KEYWORDS)
 
@@ -56,6 +56,25 @@ def _text_from_pdf(file_bytes: bytes) -> str:
             )
     except Exception as exc:
         logger.warning("PDF text extraction failed: %s", exc)
+        return ""
+
+
+def _text_from_docx(file_bytes: bytes) -> str:
+    try:
+        import docx
+        doc = docx.Document(io.BytesIO(file_bytes))
+        parts = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                parts.append(para.text)
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                if any(cells):
+                    parts.append("\t".join(cells))
+        return "\n".join(parts)
+    except Exception as exc:
+        logger.warning("DOCX text extraction failed: %s", exc)
         return ""
 
 
@@ -85,6 +104,8 @@ def _text_from_bytes(filename: str, file_bytes: bytes) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext == "pdf":
         return _text_from_pdf(file_bytes)
+    if ext in ("docx", "doc"):
+        return _text_from_docx(file_bytes)
     if ext in ("xlsx", "xls", "xlsm"):
         return _text_from_excel(file_bytes)
     for enc in ("utf-8", "gbk", "gb2312"):
@@ -213,16 +234,22 @@ def _upsert_records(records: list[dict], pg_url: str, source_name: str) -> dict:
     try:
         with conn.cursor() as cur:
             for rec in records:
-                province = str(rec.get("province", "")).strip()
-                if not province:
+                province_raw = str(rec.get("province", "")).strip()
+                if not province_raw:
                     continue
                 ym = _parse_year_month(rec.get("year_month", ""))
                 if ym is None:
-                    errors.append(f"{province}: invalid year_month '{rec.get('year_month')}'")
+                    errors.append(f"{province_raw}: invalid year_month '{rec.get('year_month')}'")
                     continue
                 # Skip totals
-                if any(kw in province for kw in ("合计", "小计", "全国", "total", "汇总")):
+                if any(kw in province_raw for kw in ("合计", "小计", "全国", "total", "汇总")):
                     continue
+                # Normalise province name to match capacity_etl canonical names
+                try:
+                    from services.hermes.capacity_etl import _normalise_province
+                    province = _normalise_province(province_raw)
+                except Exception:
+                    province = province_raw
                 try:
                     cur.execute(_UPSERT_SQL, (
                         province, ym,

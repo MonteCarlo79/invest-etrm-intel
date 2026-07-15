@@ -35,7 +35,8 @@ _PROVINCE_NORM: dict[str, str] = {
     "宁夏": "宁夏", "西藏": "西藏", "吉林": "吉林", "河北": "河北",
     # Aliases
     "新疆（疆内）": "新疆", "疆内": "新疆", "新疆疆内": "新疆",
-    "河北南网": "河北南部", "河北南部": "河北南部", "冀北": "冀北",
+    "河北南网": "河北南网", "河北南部": "河北南网", "冀南": "河北南网",
+    "冀北": "冀北", "冀北电网": "冀北", "国网冀北": "冀北",
     "蒙西": "蒙西", "蒙东": "蒙东",
     "南方电网": "南方电网", "华北": "华北",
 }
@@ -56,7 +57,19 @@ def _normalise_province(raw: str) -> Optional[str]:
 
 
 def _extract_year_month_from_filename(filename: str) -> date:
-    """Extract year-month from filename. Falls back to current month."""
+    """Extract year-month from filename. Falls back to current month.
+
+    Handles formats:
+    - YYYYMM or YYYYMMDD digits (e.g. 202605, 20260501)
+    - YYYY年M月 / YYYY年MM月 (e.g. 2026年5月, 2026年05月)
+    - YYYY-MM or YYYY/MM
+    """
+    # YYYY年M月 / YYYY年MM月 — must check before generic digit scan
+    m = re.search(r'(\d{4})[年/-](\d{1,2})[月/-]?', filename)
+    if m:
+        yr, mo = int(m.group(1)), int(m.group(2))
+        if 2000 <= yr <= 2100 and 1 <= mo <= 12:
+            return date(yr, mo, 1)
     # 6-digit YYYYMM or 8-digit YYYYMMDD
     m = re.search(r'(\d{4})(\d{2})(?:\d{2})?', filename)
     if m:
@@ -65,6 +78,25 @@ def _extract_year_month_from_filename(filename: str) -> date:
             return date(yr, mo, 1)
     today = date.today()
     return date(today.year, today.month, 1)
+
+
+# Province name patterns for detecting single-province files
+_PROVINCE_NAMES = [
+    "黑龙江", "内蒙古东", "内蒙古西", "蒙东", "蒙西",
+    "北京", "天津", "山西", "山东", "辽宁", "吉林", "上海",
+    "江苏", "浙江", "安徽", "福建", "江西", "河南", "湖北",
+    "湖南", "广东", "广西", "海南", "重庆", "四川", "贵州",
+    "云南", "陕西", "甘肃", "青海", "宁夏", "新疆", "西藏",
+    "冀北", "冀南", "河北",
+]
+
+
+def province_from_filename(filename: str) -> Optional[str]:
+    """Return the Chinese province name found in the filename, or None."""
+    for prov in _PROVINCE_NAMES:
+        if prov in filename:
+            return prov
+    return None
 
 
 def _excel_to_text(file_bytes: bytes, max_rows: int = 120) -> str:
@@ -85,11 +117,26 @@ def _excel_to_text(file_bytes: bytes, max_rows: int = 120) -> str:
     return "\n\n".join(parts)
 
 
-def _parse_with_llm(text: str, filename: str, api_key: str) -> list[dict]:
+def _parse_with_llm(text: str, filename: str, api_key: str,
+                    province_hint: Optional[str] = None,
+                    year_month_hint: Optional[date] = None) -> list[dict]:
     """Use Claude Haiku to extract structured capacity data from raw Excel text."""
     from anthropic import Anthropic
 
     client = Anthropic(api_key=api_key)
+
+    # Build context hints so LLM can resolve "5月" → correct year
+    hint_lines = []
+    if province_hint:
+        hint_lines.append(f"Province: {province_hint} (this is a single-province file)")
+    if year_month_hint:
+        hint_lines.append(
+            f"Target month from filename: {year_month_hint.strftime('%Y年%m月')} "
+            f"({year_month_hint.year}-{year_month_hint.month:02d}). "
+            f"Use this year when the file only shows a month number (e.g. '5月' means {year_month_hint.year}-{year_month_hint.month:02d})."
+        )
+    hint_block = "\n".join(hint_lines)
+
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1000,
@@ -100,15 +147,20 @@ Return ONLY a valid JSON array with this structure:
 [{"province": "省份", "bess_mw": 数值, "wind_mw": 数值或null, "solar_mw": 数值或null, "thermal_mw": 数值或null, "hydro_mw": 数值或null, "nuclear_mw": 数值或null, "total_mw": 数值或null}]
 
 Rules:
-- province: Chinese province/grid name as shown in the file
+- province: Chinese province/grid name as shown in the file (or from the hint if single-province)
 - All MW values: numeric. Convert units if needed: 万kW×10=MW, GW×1000=MW
 - Set missing columns to null (not 0)
 - SKIP rows that are subtotals, grand totals, headers (合计/小计/全国/total etc.)
 - SKIP rows where all capacity values are 0 or null
+- For single-province transposed format (rows = fuel types, one data column): extract all fuel types into one record for the target month
 - Return [] if no valid province data found""",
         messages=[{
             "role": "user",
-            "content": f"File: {filename}\n\nContent:\n{text[:5000]}",
+            "content": (
+                f"File: {filename}\n"
+                + (f"{hint_block}\n" if hint_block else "")
+                + f"\nContent:\n{text[:5000]}"
+            ),
         }],
     )
 
@@ -125,24 +177,24 @@ Rules:
 # ── DB upsert ─────────────────────────────────────────────────────────────────
 
 _UPSERT_SQL = """
-INSERT INTO province_installed_monthly
+INSERT INTO marketdata.province_installed_monthly
     (province, year_month, wind_mw, solar_mw, thermal_mw, hydro_mw,
      nuclear_mw, bess_mw, total_mw, source_file)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (province, year_month) DO UPDATE SET
-    wind_mw     = COALESCE(EXCLUDED.wind_mw,    province_installed_monthly.wind_mw),
-    solar_mw    = COALESCE(EXCLUDED.solar_mw,   province_installed_monthly.solar_mw),
-    thermal_mw  = COALESCE(EXCLUDED.thermal_mw, province_installed_monthly.thermal_mw),
-    hydro_mw    = COALESCE(EXCLUDED.hydro_mw,   province_installed_monthly.hydro_mw),
-    nuclear_mw  = COALESCE(EXCLUDED.nuclear_mw, province_installed_monthly.nuclear_mw),
-    bess_mw     = COALESCE(EXCLUDED.bess_mw,    province_installed_monthly.bess_mw),
-    total_mw    = COALESCE(EXCLUDED.total_mw,   province_installed_monthly.total_mw),
+    wind_mw     = COALESCE(EXCLUDED.wind_mw,    marketdata.province_installed_monthly.wind_mw),
+    solar_mw    = COALESCE(EXCLUDED.solar_mw,   marketdata.province_installed_monthly.solar_mw),
+    thermal_mw  = COALESCE(EXCLUDED.thermal_mw, marketdata.province_installed_monthly.thermal_mw),
+    hydro_mw    = COALESCE(EXCLUDED.hydro_mw,   marketdata.province_installed_monthly.hydro_mw),
+    nuclear_mw  = COALESCE(EXCLUDED.nuclear_mw, marketdata.province_installed_monthly.nuclear_mw),
+    bess_mw     = COALESCE(EXCLUDED.bess_mw,    marketdata.province_installed_monthly.bess_mw),
+    total_mw    = COALESCE(EXCLUDED.total_mw,   marketdata.province_installed_monthly.total_mw),
     source_file = EXCLUDED.source_file,
     ingested_at = NOW()
 """
 
 _ENSURE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS province_installed_monthly (
+CREATE TABLE IF NOT EXISTS marketdata.province_installed_monthly (
     id          SERIAL PRIMARY KEY,
     province    TEXT    NOT NULL,
     year_month  DATE    NOT NULL,
@@ -158,7 +210,7 @@ CREATE TABLE IF NOT EXISTS province_installed_monthly (
     UNIQUE (province, year_month)
 );
 CREATE INDEX IF NOT EXISTS idx_pim_province_ym
-    ON province_installed_monthly (province, year_month DESC);
+    ON marketdata.province_installed_monthly (province, year_month DESC);
 """
 
 
@@ -177,12 +229,16 @@ def upsert_capacity(
     if year_month is None:
         year_month = _extract_year_month_from_filename(filename)
 
+    province_hint = province_from_filename(filename)
+
     text = _excel_to_text(file_bytes)
     if not text.strip():
         return {"upserted": 0, "provinces": [], "year_month": str(year_month),
                 "errors": ["Could not read Excel content"]}
 
-    rows = _parse_with_llm(text, filename, api_key)
+    rows = _parse_with_llm(text, filename, api_key,
+                           province_hint=province_hint,
+                           year_month_hint=year_month)
     if not rows:
         return {"upserted": 0, "provinces": [], "year_month": str(year_month),
                 "errors": ["LLM extracted no province data from file"]}
@@ -308,6 +364,6 @@ def is_capacity_file(filename: str) -> bool:
     # Must be an Excel file — PDFs/Word docs with "装机" in name should not trigger ETL
     if not (name_lower.endswith(".xlsx") or name_lower.endswith(".xls")):
         return False
-    keywords = ["储能装机", "装机容量", "installed_cap", "installed_capacity",
+    keywords = ["储能装机", "装机容量", "装机数据", "installed_cap", "installed_capacity",
                 "各省装机", "province_cap", "capacity_scan"]
     return any(kw in name_lower for kw in keywords)

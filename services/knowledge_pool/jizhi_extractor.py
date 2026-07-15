@@ -22,31 +22,84 @@ import psycopg2
 
 logger = logging.getLogger(__name__)
 
-_BEDROCK_MODEL = "anthropic.claude-haiku-4-5-20251001-v1:0"
+# Amazon Nova Pro via APAC cross-region inference — plain text generation, no tool use
+# (avoids ModelErrorException that occurs with tool use + large documents)
+_BEDROCK_MODEL = "apac.amazon.nova-pro-v1:0"
 _BEDROCK_REGION = "ap-southeast-1"
+_MAX_RETRIES = 2
 
 
-def _bedrock_tool_call(tool: dict, prompt: str) -> dict | None:
-    """Call Claude on AWS Bedrock with tool_choice=tool. Returns tool input dict or None."""
-    import boto3
+def _bedrock_generate(prompt: str) -> str:
+    """Call Nova Pro on AWS Bedrock with plain text generation. Returns response text.
+
+    Retries up to _MAX_RETRIES times on transient errors.
+    """
+    import boto3, time
     client = boto3.client("bedrock-runtime", region_name=_BEDROCK_REGION)
-    response = client.converse(
-        modelId=_BEDROCK_MODEL,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"maxTokens": 4096},
-        toolConfig={
-            "tools": [{"toolSpec": {
-                "name": tool["name"],
-                "description": tool["description"],
-                "inputSchema": {"json": tool["input_schema"]},
-            }}],
-            "toolChoice": {"tool": {"name": tool["name"]}},
-        },
-    )
-    for item in response.get("output", {}).get("message", {}).get("content", []):
-        if "toolUse" in item and item["toolUse"]["name"] == tool["name"]:
-            return item["toolUse"]["input"]
-    return None
+    last_exc: Exception | None = None
+    for _attempt in range(_MAX_RETRIES + 1):
+        try:
+            response = client.converse(
+                modelId=_BEDROCK_MODEL,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={"maxTokens": 4096},
+            )
+            content = response.get("output", {}).get("message", {}).get("content", [])
+            for item in content:
+                if "text" in item:
+                    return item["text"]
+            raise RuntimeError(f"Bedrock returned no text (stopReason={response.get('stopReason')!r})")
+        except Exception as exc:
+            last_exc = exc
+            err_str = str(exc)
+            if _attempt < _MAX_RETRIES and (
+                "ThrottlingException" in err_str or "ServiceUnavailableException" in err_str
+            ):
+                time.sleep(2 ** _attempt)
+                logger.warning("[jizhi] bedrock attempt %d failed, retrying: %s", _attempt + 1, exc)
+                continue
+            raise
+    raise last_exc  # unreachable but satisfies type checker
+
+
+def _parse_json_from_text(text: str, key: str) -> list[dict]:
+    """Extract a JSON array from a fenced or bare JSON block in model output."""
+    import json, re
+    # Try ```json ... ``` fence first
+    m = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
+    if m:
+        try:
+            parsed = json.loads(m.group(1))
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, dict):
+                return parsed.get(key, [])
+        except json.JSONDecodeError:
+            pass
+    # Try to find the first { or [ and parse from there
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        idx = text.find(start_char)
+        if idx == -1:
+            continue
+        # Find matching closing bracket
+        depth = 0
+        for i, ch in enumerate(text[idx:], start=idx):
+            if ch == start_char:
+                depth += 1
+            elif ch == end_char:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = json.loads(text[idx:i+1])
+                        if isinstance(parsed, list):
+                            return parsed
+                        if isinstance(parsed, dict):
+                            return parsed.get(key, [])
+                    except json.JSONDecodeError:
+                        pass
+                    break
+    logger.warning("[jizhi] could not parse JSON from model response: %s", text[:300])
+    return []
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS staging.jizhi_bids (
@@ -119,9 +172,9 @@ _BIDS_TOOL = {
                         "tech_type":           {"type": "string",  "description": "One of: 陆风, 海风, 光伏, 水电"},
                         "price_floor":         {"type": "number",  "description": "Minimum bid price in 元/kWh"},
                         "price_cap":           {"type": "number",  "description": "Maximum bid price in 元/kWh"},
-                        "mechanism_type":      {"type": "string",  "description": "One of: 电量, 比例, 小时数"},
-                        "mechanism_value":     {"type": "number",  "description": "Value in GWh (电量), % (比例), or hours (小时数)"},
-                        "supply_demand_ratio": {"type": "number",  "description": "Supply-demand ratio, e.g. 1.35"},
+                        "mechanism_type":      {"type": "string",  "description": "One of: 电量, 比例, 小时数, 浮动. Use null if not specified."},
+                        "mechanism_value":     {"type": "number",  "description": "Value in GWh (电量), % (比例), or hours (小时数). Leave null for 浮动 type or if not explicitly stated in the document — do NOT copy price_floor or any price field here."},
+                        "supply_demand_ratio": {"type": "number",  "description": "Competitive supply-demand ratio (e.g. 1.35 means 135% subscribed vs capacity offered). Leave null if not stated in document — do NOT default to 1."},
                         "cleared_price":       {"type": "number",  "description": "Final cleared price in 元/kWh"},
                         "cleared_volume_gwh":  {"type": "number",  "description": "Total cleared volume in GWh"},
                         "bid_date":            {"type": "string",  "description": "Bid date as YYYY-MM-DD"},
@@ -137,14 +190,26 @@ _BIDS_TOOL = {
 
 _BIDS_PROMPT = """\
 Extract ALL 机制竞价 completed bid results from the document below.
+Return ONLY a JSON object with key "bids" containing an array. No explanation, no markdown prose — just the JSON.
 
 Normalisation rules:
-- batch: 存量 = grid-connected before 2025-05-31 \
-; 增量_2025-12 = before 2025-12-31; 增量_2026-12 = before 2026-12-31; 增量_2027-12 = before 2027-12-31
+- batch: 存量 = grid-connected before 2025-05-31; 增量_2025-12 = before 2025-12-31; 增量_2026-12 = before 2026-12-31; 增量_2027-12 = before 2027-12-31
 - tech_type: 陆风 / 海风 / 光伏 / 水电  (map 风电/wind → 陆风 unless specifically 海风)
 - prices in 元/kWh  (divide by 1000 if document uses 元/MWh)
 - cleared_volume_gwh in GWh  (divide by 1000 if document uses TWh)
 - bid_date as YYYY-MM-DD
+
+Critical field rules:
+- mechanism_type: use 电量/比例/小时数/浮动. Set to null if unknown.
+- mechanism_value: ONLY populate if the document explicitly states a separate mechanism quantity (e.g. "1000小时数", "20%", "500GWh"). NEVER copy price_floor or any price here. Leave null for 浮动 type.
+- supply_demand_ratio: ONLY populate if the document explicitly states a 供需比 or subscription ratio (e.g. "申报量是需求量的1.35倍"). Leave null if not stated — do NOT default to 1.
+- cleared_volume_gwh: total cleared capacity volume in GWh. Leave null if not stated.
+
+Each bid object must have: province (string), year (int), batch (string), tech_type (string).
+Optional: price_floor, price_cap, mechanism_type, mechanism_value, supply_demand_ratio, cleared_price, cleared_volume_gwh, bid_date (YYYY-MM-DD), notes.
+
+Example output format:
+{{"bids": [{{"province": "广东", "year": 2025, "batch": "存量", "tech_type": "光伏", "cleared_price": 0.35, "cleared_volume_gwh": 500}}]}}
 
 Document:
 {text}"""
@@ -293,16 +358,23 @@ def extract_bids(text: str, api_key: str = "") -> list[dict]:
     """
     if not text.strip():
         return []
-    prompt = _BIDS_PROMPT.format(text=text[:15000])
-    # Try Bedrock first
+    prompt = _BIDS_PROMPT.format(text=text[:12000])
+    # Try Bedrock first (plain text generation — no tool use)
+    _bedrock_exc: Exception | None = None
     try:
-        result = _bedrock_tool_call(_BIDS_TOOL, prompt)
-        if result is not None:
-            return result.get("bids", [])
+        raw = _bedrock_generate(prompt)
+        bids = _parse_json_from_text(raw, "bids")
+        if bids:
+            return bids
+        # Empty list is valid (document has no bid results)
+        return []
     except Exception as exc:
-        logger.warning("[jizhi] bedrock extract_bids failed, trying direct API: %s", exc)
+        logger.warning("[jizhi] bedrock extract_bids failed: %s", exc)
+        _bedrock_exc = exc
     # Fallback: direct Anthropic API
     if not api_key:
+        if _bedrock_exc is not None:
+            raise _bedrock_exc
         return []
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
@@ -357,10 +429,17 @@ _UPCOMING_TOOL = {
 
 _UPCOMING_PROMPT = """\
 Extract upcoming 机制竞价 bid announcements from the text below.
+Return ONLY a JSON object with key "upcoming" containing an array. No explanation — just the JSON.
+
 Focus on: province, bidding dates, price range (元/kWh), target volume (GWh), supply-demand ratio.
 batch values: 存量 / 增量_2025-12 / 增量_2026-12 / 增量_2027-12
 tech_type values: 陆风 / 海风 / 光伏 / 水电
 dates as YYYY-MM-DD
+
+Each item must have: province (string), year (int), batch (string), tech_type (string).
+Optional: price_floor, price_cap, target_volume_gwh, supply_demand_ratio, bid_open_date, bid_close_date, source_url, announcement_date, notes.
+
+Example: {{"upcoming": [{{"province": "广东", "year": 2025, "batch": "增量_2025-12", "tech_type": "光伏", "bid_open_date": "2025-09-01"}}]}}
 
 Text:
 {text}"""
@@ -375,15 +454,18 @@ def extract_upcoming(text: str, api_key: str = "") -> list[dict]:
     if not text.strip():
         return []
     prompt = _UPCOMING_PROMPT.format(text=text[:12000])
-    # Try Bedrock first
+    # Try Bedrock first (plain text generation — no tool use)
+    _bedrock_exc: Exception | None = None
     try:
-        result = _bedrock_tool_call(_UPCOMING_TOOL, prompt)
-        if result is not None:
-            return result.get("upcoming", [])
+        raw = _bedrock_generate(prompt)
+        return _parse_json_from_text(raw, "upcoming")
     except Exception as exc:
-        logger.warning("[jizhi] bedrock extract_upcoming failed, trying direct API: %s", exc)
+        logger.warning("[jizhi] bedrock extract_upcoming failed: %s", exc)
+        _bedrock_exc = exc
     # Fallback: direct Anthropic API
     if not api_key:
+        if _bedrock_exc is not None:
+            raise _bedrock_exc
         return []
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)

@@ -493,43 +493,51 @@ def _parse_shanxi(path: Path) -> list[dict]:
 
 
 def _parse_xinjiang(path: Path) -> list[dict]:
-    """新疆 — 新疆信息披露月报数据汇总."""
+    """新疆 — 新疆信息披露月报数据汇总.
+
+    Sheet[0] = 目录 (TOC) — skip.
+    Sheet[1] = 装机情况 (capacity in 千kW, header=0):
+        col[0]=月份, col[1]=总装机, col[3]=煤电, col[5]=水电, col[7]=风电, col[9]=光电
+    Sheet[5] = 省内交易 (volumes/prices, two-row header; use header=1):
+        col[0]=月份, col[1]=年度成交量(亿kWh), col[3]=均价(元/MWh)
+    """
     rows: dict[date, dict] = {}
     xl = pd.ExcelFile(path)
 
-    # Try each sheet to find capacity and volume data
-    for sheet_idx in range(min(5, len(xl.sheet_names))):
-        try:
-            df = xl.parse(sheet_idx, header=1)
-            if len(df.columns) < 3:
+    # ── Capacity (sheet 1, 千kW, header=0) ──────────────────────────────────
+    try:
+        df_cap = xl.parse(1, header=0)
+        for _, r in df_cap.iterrows():
+            d = _to_date(r.iloc[0])
+            if not d:
                 continue
-            cap_col = _find_col(df, ['装机']) or _find_col(df, ['容量'])
-            vol_col = _find_col(df, ['成交']) or _find_col(df, ['交易量'])
-            price_col = _find_col(df, ['均价']) or _find_col(df, ['结算价'])
-            for _, r in df.iterrows():
-                # Handle year+month or YYYY-MM format
-                d = None
-                if hasattr(r.iloc[0], 'year'):
-                    d = _to_date(r.iloc[0])
-                elif str(r.iloc[0]).isdigit() and len(df.columns) > 1:
-                    try:
-                        yr, mo = int(float(r.iloc[0])), int(float(str(r.iloc[1]).replace('月', '')))
-                        d = date(yr, mo, 1)
-                    except (ValueError, TypeError):
-                        pass
-                else:
-                    d = _to_date(r.iloc[0])
-                if not d:
-                    continue
-                rows.setdefault(d, {"province": "新疆", "report_month": d, "source_file": path.name})
-                if cap_col and not rows[d].get("total_capacity_mw"):
-                    rows[d]["total_capacity_mw"] = _wan_kw_to_mw(r[cap_col])
-                if vol_col and not rows[d].get("total_traded_gwh"):
-                    rows[d]["total_traded_gwh"] = _safe(r[vol_col])
-                if price_col and not rows[d].get("avg_settlement_price"):
-                    rows[d]["avg_settlement_price"] = _safe(r[price_col])
-        except Exception:
-            continue
+            rows.setdefault(d, {"province": "新疆", "report_month": d, "source_file": path.name})
+            rows[d].update({
+                "total_capacity_mw":   _qian_kw_to_mw(r.iloc[1]),
+                "thermal_capacity_mw": _qian_kw_to_mw(r.iloc[3]) if len(r) > 3 else None,
+                "hydro_capacity_mw":   _qian_kw_to_mw(r.iloc[5]) if len(r) > 5 else None,
+                "wind_capacity_mw":    _qian_kw_to_mw(r.iloc[7]) if len(r) > 7 else None,
+                "solar_capacity_mw":   _qian_kw_to_mw(r.iloc[9]) if len(r) > 9 else None,
+            })
+    except Exception as e:
+        logger.debug("新疆 cap error: %s", e)
+
+    # ── Provincial trading volumes + prices (sheet 5, header=1) ─────────────
+    # Row 0 is a merged header group; row 1 contains actual column names.
+    # After header=1: col[0]=月份, col[1]=年度成交量(亿kWh), col[3]=均价(元/MWh)
+    try:
+        df_vol = xl.parse(5, header=1)
+        for _, r in df_vol.iterrows():
+            d = _to_date(r.iloc[0])
+            if not d:
+                continue
+            rows.setdefault(d, {"province": "新疆", "report_month": d, "source_file": path.name})
+            if not rows[d].get("total_traded_gwh"):
+                rows[d]["total_traded_gwh"] = _safe(r.iloc[1])
+            if not rows[d].get("avg_settlement_price"):
+                rows[d]["avg_settlement_price"] = _safe(r.iloc[3]) if len(r) > 3 else None
+    except Exception as e:
+        logger.debug("新疆 vol error: %s", e)
 
     return list(rows.values())
 
@@ -715,6 +723,39 @@ def _parse_generic_info_monthly(path: Path, province: str) -> list[dict]:
     return list(rows.values())
 
 
+def _parse_jinan_info(path: Path) -> list[dict]:
+    """冀南 — 河北南网电力市场信息报告数据汇总 (综合概况 sheet).
+
+    Sheet[0] has two title/blank rows before the header:
+      row 0: title string
+      row 1: blank
+      row 2: 月份, 注册用量, 工商企业, 居民用户, 售电企业,
+              中长期合同量(亿kWh), 月度交易合计(亿kWh), 省内交易合计(亿kWh),
+              日前现货量(亿kWh), 实时现货量(亿kWh), 总结算量(亿kWh),
+              结算金额(亿元), 售电公司量(亿kWh), 售电公司价(亿元)
+    """
+    rows: dict[date, dict] = {}
+    try:
+        xl = pd.ExcelFile(path)
+        df = xl.parse(0, header=2)
+        for _, r in df.iterrows():
+            d = _to_date(r.iloc[0])
+            if not d:
+                continue
+            rows.setdefault(d, {"province": "冀南", "report_month": d, "source_file": path.name})
+            rows[d].update({
+                "market_participants_total": _safe_int(r.iloc[1]),
+                "retailers":                 _safe_int(r.iloc[4]) if len(r) > 4 else None,
+                "contract_traded_gwh":       _safe(r.iloc[5])  if len(r) > 5 else None,
+                "spot_traded_gwh":           _safe(r.iloc[8])  if len(r) > 8 else None,
+                "total_traded_gwh":          _safe(r.iloc[10]) if len(r) > 10 else None,
+                "retailer_traded_gwh":       _safe(r.iloc[12]) if len(r) > 12 else None,
+            })
+    except Exception as e:
+        logger.debug("冀南 info error: %s", e)
+    return list(rows.values())
+
+
 def _parse_guangdong(path: Path) -> list[dict]:
     """广东 — 广东电力市场结算数据_宽窄表 (wide format sheet 1 = 宽表)."""
     rows: dict[date, dict] = {}
@@ -840,6 +881,8 @@ _DISPATCH = [
     # 冀南 — uses jinan parser
     ("冀南月报", "河北南网-市场化交易结算",    "冀南",   lambda p: _parse_jinan(p, "冀南")),
     ("冀北月报", "冀北2024年以来电力市场",     "冀北",   lambda p: _parse_jinan(p, "冀北")),
+    # 冀南 综合概况 (info report summary — header at row 2)
+    ("冀南月报",  "河北南网-电力市场信息报告数据汇总", "冀南", _parse_jinan_info),
     # Generic info-monthly parser for remaining provinces
     ("冀北月报",  "冀北-信息披露月报",    "冀北",  lambda p: _parse_generic_info_monthly(p, "冀北")),
     ("冀南月报",  "河北南网-电力市场信息", "冀南",  lambda p: _parse_generic_info_monthly(p, "冀南")),

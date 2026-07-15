@@ -126,12 +126,19 @@ INGEST_URL — fetch a URL, add its content to the knowledge base, and return a 
   reply: short acknowledgment that you are fetching and summarising (in their language); the actual summary is appended automatically
 
 BAYESIAN_ANALYSIS — reason about a question using Prior → Evidence → Posterior thinking mode
-  params: {"question": "the full question to reason about"}
-  reply: brief acknowledgment that you are starting the analysis (in their language), mention ~30s wait
+  params: {"question": "the full question to reason about", "format": "text|pdf (default text; use pdf when user says 生成pdf/导出/报告/pdf)"}
+  reply: brief acknowledgment that you are starting the analysis (in their language), mention ~30s wait; if pdf, also mention a PDF will be sent
   note: use when user asks forward-looking, probabilistic, or analytical questions that benefit from
-        explicit uncertainty quantification and evidence gathering. Triggers: 预测/估计/可能性/判断/
-        你怎么看/你认为/概率/forecast/estimate/how likely/what do you think/odds/probability/
-        分析一下/贝叶斯/bayesian. Do NOT use for simple factual lookups — use MARKET_AGENT for those.
+        explicit uncertainty quantification and evidence gathering.
+        MANDATORY for: price outlook / forecast questions (e.g. "下半年电价是什么水平", "未来价格走势",
+        "H2 price level", "price forecast", "价格预测", "下半年...价格"), market outlook questions,
+        or any question about FUTURE price levels even if phrased as "你认为...水平/走势/趋势".
+        Also triggers on: 估计/可能性/判断/你怎么看/你认为/概率/forecast/estimate/how likely/
+        what do you think/odds/probability/分析一下/贝叶斯/bayesian.
+        IMPORTANT: When the user asks "你认为X下半年/未来/H2的价格/电价是什么水平", route to
+        BAYESIAN_ANALYSIS — NOT MARKET_AGENT. MARKET_AGENT only retrieves historical data;
+        BAYESIAN_ANALYSIS uses that data plus reasoning to produce an informed outlook.
+        Do NOT use for simple historical data lookups — use MARKET_AGENT for those.
 
 ADD_FILE_RULE — permanently remember to auto-route future files by filename pattern
   params: {"pattern": "partial filename to match (case-insensitive)", "folder_template": "etrm/bess-platform/data/spot reports/{year}", "auto_kb": false, "auto_digest": false, "auto_etl": false}
@@ -241,7 +248,7 @@ Rules:
 - When user says "meeting prep", "会议准备", "prepare me for a meeting about X", "briefing for X", use REPLY with KB context structured as: Background | Key Data Points | Talking Points | Questions to Prepare.
 - When user says "structuring", "term sheet", "market entry", "project financing", "条款", use REPLY drawing from KB context with: Market Context | Key Economics | Risk Factors | Recommendation.
 - When user says "Inner Mongolia", "内蒙古", "Mengxi", "蒙西" for operational data (P&L, dispatch), use MARKET_AGENT(bess-map) or REPLY with KB context if no specific data question.
-- When user asks about "装机容量", "installed capacity", "total MW", "total GW", "总容量", "总装机", "蒙西储能容量", use MARKET_AGENT(bess-map) — the bess-map agent has get_mengxi_capacity. EXCEPTION: if the message starts with "/capacity" or "/capacity-add" followed by actual province data (e.g. "/capacity 山东 9.7GW"), that is a WRITE command handled before the LLM — use REPLY and tell the user the data was accepted.
+- When user asks about "装机容量", "installed capacity", "total MW", "total GW", "总容量", "总装机", "储能装机", "独立储能" for ANY province (江苏, 山东, 广东, 湖北, 蒙西, etc.), use MARKET_AGENT(bess-map) — the bess-map agent has get_province_installed_capacity(province=<name>) which covers all provinces. For Mengxi-specific plant-level owner breakdown, it also has get_mengxi_capacity. EXCEPTION: if the message starts with "/capacity" or "/capacity-add" followed by actual province data (e.g. "/capacity 山东 9.7GW"), that is a WRITE command handled before the LLM — use REPLY and tell the user the data was accepted.
 - When user asks what you can do in a certain area (e.g. "what can you do for X?"), use REPLY and describe the relevant capabilities from the CAPABILITY AREAS section above, with concrete examples.
 - When user says "记录需求", "记录开发需求", "写需求文档", "save dev request", "development request", "dev request", use WRITE_DEV_REQUEST with the user's verbatim message in the message param.
 - Always match the user's language in the reply field. If the user writes in Chinese (Simplified), reply in Chinese (Simplified). If in English, reply in English.
@@ -601,7 +608,10 @@ class HermesAgent:
             elif action.action == "INGEST_URL":
                 return self._ingest_url(action.params.get("url", ""))
             elif action.action == "BAYESIAN_ANALYSIS":
-                return self._run_bayesian(action.params.get("question", ""))
+                return self._run_bayesian(
+                    action.params.get("question", ""),
+                    chat_id=action.params.get("_chat_id", ""),
+                )
             elif action.action == "MARKET_AGENT":
                 return self._run_market_agent(
                     market=action.params.get("market", ""),
@@ -696,17 +706,27 @@ class HermesAgent:
 
         return status
 
-    def _run_bayesian(self, question: str) -> str:
+    def _run_bayesian(self, question: str, chat_id: str = "") -> str:
         if not question:
             return "请告诉我你想分析的问题。"
         try:
             from services.hermes.bayesian_agent import BayesianAnalystAgent
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
-            agent = BayesianAnalystAgent(
+            # Resolve model preference to a concrete claude model ID
+            pref = self.get_model_pref(chat_id) if chat_id else "auto"
+            _CLAUDE_MODELS = {
+                "claude":   "claude-sonnet-4-6",
+                "opus":     "claude-opus-4-6",
+            }
+            # For Bayesian analysis always use Claude; pick opus if user chose claude explicitly
+            # (opus = more capable; sonnet = default/fast)
+            bay_model = "claude-opus-4-6" if pref == "claude" else "claude-sonnet-4-6"
+            bay_agent = BayesianAnalystAgent(
                 anthropic_api_key=self._api_key,
                 pg_url=pg_url,
+                model=bay_model,
             )
-            return agent.run(question)
+            return bay_agent.run(question)
         except Exception as exc:
             logger.error("BAYESIAN_ANALYSIS failed: %s", exc)
             return f"贝叶斯分析失败：{exc}"

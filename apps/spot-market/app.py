@@ -710,7 +710,7 @@ st.set_page_config(
 
 # ── DB connection ─────────────────────────────────────────────────────────────
 @st.cache_resource
-def _get_conn():
+def __conn():
     url = (
         os.environ.get("PGURL")
         or os.environ.get("DATABASE_URL")
@@ -721,17 +721,17 @@ def _get_conn():
                             keepalives_interval=10, keepalives_count=5)
 
 def _conn():
-    conn = _get_conn()
+    conn = __conn()
     try:
         conn.cursor().execute("SELECT 1")
     except Exception:
         _get_conn.clear()
-        conn = _get_conn()
+        conn = __conn()
     return conn
 
 
 # ── Process-level caches for knowledge-pool calls that open fresh connections ──
-# knowledge_pool/db.py's get_conn() opens a NEW TCP connection on every call.
+# knowledge_pool/db.py's _conn() opens a NEW TCP connection on every call.
 # These @st.cache_data wrappers limit that to once per 5 minutes per process,
 # regardless of how many Streamlit sessions are active.  Without this, each new
 # browser session triggered 2-3 fresh DB connections before tab_mgmt could render.
@@ -927,6 +927,76 @@ def _load_wap(_conn_fn, provinces: tuple, start: str, end: str):
         ORDER BY f.province
     """
     return pd.read_sql(sql, _conn_fn(), params=[list(provinces), start, end])
+
+
+# ── price forecast data loaders ───────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def _load_price_matrix(_conn_fn, province: str, start: str, end: str, price_col: str):
+    """Load hourly prices for a province, pivot to (date × 24h) matrix for PCA."""
+    sql = f"""
+        SELECT DATE(datetime) AS trade_date,
+               EXTRACT(hour FROM datetime)::int AS hour,
+               AVG({price_col}) AS avg_price
+        FROM marketdata.spot_prices_hourly
+        WHERE province = %s AND datetime BETWEEN %s AND %s
+        GROUP BY trade_date, hour
+        ORDER BY trade_date, hour
+    """
+    df = pd.read_sql(sql, _conn_fn(), params=[province, start, end])
+    if df.empty:
+        return pd.DataFrame()
+    pivot = df.pivot(index='trade_date', columns='hour', values='avg_price')
+    pivot.columns = [int(c) for c in pivot.columns]
+    # Keep only days with all 24 hours present
+    pivot = pivot.dropna(thresh=20)
+    return pivot.ffill(axis=1).bfill(axis=1)
+
+
+@st.cache_data(ttl=3600)
+def _load_forecast_fundamentals(_conn_fn, province: str, start: str, end: str):
+    """Load hourly load/wind/solar for stack model input."""
+    sql = """
+        SELECT EXTRACT(hour FROM datetime)::int AS hour,
+               AVG(load_mw) AS avg_load,
+               AVG(COALESCE(wind_mw, 0)) AS avg_wind,
+               AVG(COALESCE(solar_mw, 0)) AS avg_solar
+        FROM marketdata.spot_fundamentals_hourly
+        WHERE province = %s AND datetime BETWEEN %s AND %s
+          AND load_mw > 0
+        GROUP BY hour ORDER BY hour
+    """
+    return pd.read_sql(sql, _conn_fn(), params=[province, start, end])
+
+
+@st.cache_data(ttl=3600)
+def _load_price_holdout(_conn_fn, province: str, start: str, end: str, price_col: str):
+    """Load actual hourly prices for backtest evaluation window."""
+    sql = f"""
+        SELECT DATE(datetime) AS trade_date,
+               EXTRACT(hour FROM datetime)::int AS hour,
+               AVG({price_col}) AS actual_price
+        FROM marketdata.spot_prices_hourly
+        WHERE province = %s AND datetime BETWEEN %s AND %s
+          AND {price_col} IS NOT NULL
+        GROUP BY trade_date, hour
+        ORDER BY trade_date, hour
+    """
+    return pd.read_sql(sql, _conn_fn(), params=[province, start, end])
+
+
+@st.cache_data(ttl=3600)
+def _load_hourly_price_provinces(_conn_fn):
+    """Provinces that have at least 30 days of hourly price data (da_price or rt_price)."""
+    sql = """
+        SELECT DISTINCT province
+        FROM marketdata.spot_prices_hourly
+        WHERE da_price IS NOT NULL OR rt_price IS NOT NULL
+        GROUP BY province
+        HAVING COUNT(DISTINCT DATE(datetime)) >= 30
+        ORDER BY province
+    """
+    df = pd.read_sql(sql, _conn_fn())
+    return sorted(df['province'].tolist()) if not df.empty else []
 
 
 # ── data quality filter ───────────────────────────────────────────────────────
@@ -1631,11 +1701,12 @@ st.divider()
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_overview, tab_spread, tab_heatmap, tab_intraday, tab_province, tab_dist, tab_geo, \
-tab_interprov, tab_fundamentals, tab_agent, tab_news, tab_library, tab_jizhi, tab_mgmt = st.tabs([
+tab_interprov, tab_fundamentals, tab_agent, tab_news, tab_library, tab_jizhi, tab_supply, \
+tab_forecast, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"), _t("tab_intraday"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
     _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_news"),
-    "Library", "机制竞价", _t("tab_mgmt"),
+    "Library", "机制竞价", "供需结构", "价格预测", _t("tab_mgmt"),
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -4880,70 +4951,96 @@ with tab_jizhi:
         )
         _jz_up_url = st.text_input("或输入 URL", placeholder="https://...", key="jz_upload_url")
 
-        if _jz_up_file is not None or (_jz_up_url and st.button("获取 URL", key="jz_fetch_url")):
-            _jz_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            if not _jz_api_key:
-                st.error("ANTHROPIC_API_KEY 未配置，无法运行 AI 提取。")
-            else:
-                with st.spinner("正在提取竞价数据…"):
-                    try:
-                        from services.knowledge_pool.knowledge_docs import (
-                            register_and_ingest, register_url, _extract_pages,
-                        )
-                        from services.knowledge_pool.jizhi_extractor import (
-                            extract_bids, save_bids, ensure_tables,
-                            _extract_pptx_text,
-                        )
-                        ensure_tables(_jz_pg_url)
+        # Use session state to cache extraction results so clicking "保存" doesn't
+        # re-trigger a slow Bedrock API call (file still in uploader on each rerun).
+        _jz_ss_key  = "jz_extracted_records"
+        _jz_ss_id   = "jz_extracted_doc_id"
+        _jz_ss_file = "jz_extracted_filename"
 
-                        if _jz_up_file is not None:
-                            _jz_fbytes = _jz_up_file.read()
-                            _jz_fname  = _jz_up_file.name
-                            _jz_doc_id, _, _ = register_and_ingest(
-                                file_bytes=_jz_fbytes, filename=_jz_fname,
-                                category_override="policy_doc", app="shared",
-                                api_key=_jz_api_key,
-                            )
-                            # For PPTX: use dedicated extractor that preserves
-                            # chart category labels (province→price mapping).
-                            # For other formats: fall back to _extract_pages.
-                            if _jz_fname.lower().endswith((".pptx", ".ppt")):
-                                _jz_full_text = _extract_pptx_text(_jz_fbytes)
-                            else:
-                                _jz_pages = _extract_pages(
-                                    _jz_fbytes, _jz_fname, _jz_api_key
-                                )
-                                _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
+        _jz_trigger_extract = False
+        if _jz_up_file is not None:
+            # Only re-extract when a NEW file is uploaded (filename changed)
+            if st.session_state.get(_jz_ss_file) != _jz_up_file.name:
+                _jz_trigger_extract = True
+        elif _jz_up_url and st.button("获取 URL", key="jz_fetch_url"):
+            _jz_trigger_extract = True
+
+        if _jz_trigger_extract:
+            _jz_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            with st.spinner("正在提取竞价数据…"):
+                try:
+                    from services.knowledge_pool.knowledge_docs import (
+                        register_and_ingest, register_url, _extract_pages,
+                    )
+                    from services.knowledge_pool.jizhi_extractor import (
+                        extract_bids, save_bids, ensure_tables,
+                        _extract_pptx_text,
+                    )
+                    ensure_tables(_jz_pg_url)
+
+                    if _jz_up_file is not None:
+                        _jz_fbytes = _jz_up_file.read()
+                        _jz_fname  = _jz_up_file.name
+                        _jz_doc_id, _, _ = register_and_ingest(
+                            file_bytes=_jz_fbytes, filename=_jz_fname,
+                            category_override="policy_doc", app="shared",
+                            api_key=_jz_api_key,
+                        )
+                        if _jz_fname.lower().endswith((".pptx", ".ppt")):
+                            _jz_full_text = _extract_pptx_text(_jz_fbytes)
                         else:
-                            _jz_doc_id, _, _ = register_url(_jz_up_url, api_key=_jz_api_key)
                             _jz_pages = _extract_pages(
-                                b"", f"url_{_jz_up_url[-20:]}.txt", _jz_api_key
+                                _jz_fbytes, _jz_fname, _jz_api_key
                             )
                             _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
-
-                        _jz_extracted = extract_bids(_jz_full_text, _jz_api_key)
-                    except Exception as _e:
-                        st.error(f"提取失败：{_e}")
-                        _jz_extracted = []
-                        _jz_doc_id = None
-
-                if _jz_extracted:
-                    st.success(f"提取到 {len(_jz_extracted)} 条竞价记录，请确认后保存：")
-                    _jz_preview_df = _jz_pd.DataFrame(_jz_extracted)
-                    _jz_edited = st.data_editor(
-                        _jz_preview_df, use_container_width=True,
-                        num_rows="dynamic", key="jz_preview_editor",
-                    )
-                    if st.button("💾 保存到数据库", key="jz_save_btn"):
-                        _jz_n = save_bids(
-                            _jz_edited.to_dict("records"),
-                            source_doc_id=_jz_doc_id,
-                            pg_url=_jz_pg_url,
+                    else:
+                        _jz_doc_id, _, _ = register_url(_jz_up_url, api_key=_jz_api_key)
+                        _jz_pages = _extract_pages(
+                            b"", f"url_{_jz_up_url[-20:]}.txt", _jz_api_key
                         )
-                        st.success(f"已保存 {_jz_n} 条记录（已存在且已验证的记录不会被覆盖）")
-                        _load_jizhi_bids.clear()
-                else:
-                    st.warning("未能从文件中提取结构化竞价数据。文件已存入知识库。")
+                        _jz_full_text = "\n\n".join(t for _, t in _jz_pages)
+
+                    _jz_extracted = extract_bids(_jz_full_text, api_key="")
+                    # Cache results in session state
+                    st.session_state[_jz_ss_key]  = _jz_extracted
+                    st.session_state[_jz_ss_id]   = _jz_doc_id
+                    st.session_state[_jz_ss_file]  = getattr(_jz_up_file, "name", _jz_up_url)
+                except Exception as _e:
+                    st.error(f"提取失败：{_e}")
+                    st.session_state[_jz_ss_key]  = []
+                    st.session_state[_jz_ss_id]   = None
+                    st.session_state[_jz_ss_file]  = None
+
+        # Show preview from session state (persists across reruns without re-extraction)
+        _jz_extracted = st.session_state.get(_jz_ss_key, [])
+        _jz_doc_id    = st.session_state.get(_jz_ss_id)
+
+        if _jz_up_file is not None or _jz_up_url:
+            if _jz_extracted:
+                st.success(f"提取到 {len(_jz_extracted)} 条竞价记录，请确认后保存：")
+                _jz_preview_df = _jz_pd.DataFrame(_jz_extracted)
+                _jz_edited = st.data_editor(
+                    _jz_preview_df, use_container_width=True,
+                    num_rows="dynamic", key="jz_preview_editor",
+                )
+                if st.button("💾 保存到数据库", key="jz_save_btn"):
+                    from services.knowledge_pool.jizhi_extractor import save_bids, ensure_tables
+                    ensure_tables(_jz_pg_url)
+                    _jz_n = save_bids(
+                        _jz_edited.to_dict("records"),
+                        source_doc_id=_jz_doc_id,
+                        pg_url=_jz_pg_url,
+                    )
+                    st.success(f"已保存 {_jz_n} 条记录（已存在且已验证的记录不会被覆盖）")
+                    # Clear both the extraction cache and the query cache, then refresh
+                    st.session_state[_jz_ss_key]  = []
+                    st.session_state[_jz_ss_file]  = None
+                    _load_jizhi_bids.clear()
+                    st.rerun()
+            elif not _jz_trigger_extract and st.session_state.get(_jz_ss_file) is None:
+                pass  # No file processed yet, nothing to show
+            else:
+                st.warning("未能从文件中提取结构化竞价数据。文件已存入知识库。")
 
         st.divider()
         with st.expander("✏️ 手动录入单条记录"):
@@ -4998,6 +5095,1621 @@ with tab_jizhi:
                         _load_jizhi_bids.clear()
                     else:
                         st.info("记录已存在且已验证，未覆盖。")
+
+# ── Tab: 供需结构 (Supply Structure) ─────────────────────────────────────────
+with tab_supply:
+    import os as _os_sup
+    _sup_pg = _os_sup.environ.get("PGURL", "")
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_supply_data(_pg_key: str):
+        import psycopg2 as _psycopg2_sup, pandas as _pd_sup
+        try:
+            _conn_sup = _psycopg2_sup.connect(_pg_key)
+            with _conn_sup.cursor() as _cur_sup:
+                # ── Consolidated capacity from 3 sources ──────────────────────────
+                # Priority: province_installed_monthly > exchange_excel_metrics > province_fundamentals
+                # UNION of provinces so no source is dropped (fixes missing 广东 etc.)
+                _cur_sup.execute("""
+                    WITH cap_monthly AS (
+                        SELECT DISTINCT ON (province)
+                            province, year_month AS cap_month,
+                            wind_mw, solar_mw, thermal_mw, hydro_mw, nuclear_mw
+                        FROM marketdata.province_installed_monthly
+                        ORDER BY province, year_month DESC
+                    ),
+                    cap_exchange AS (
+                        SELECT DISTINCT ON (province)
+                            province,
+                            wind_capacity_mw    AS wind_mw,
+                            solar_capacity_mw   AS solar_mw,
+                            thermal_capacity_mw AS thermal_mw,
+                            hydro_capacity_mw   AS hydro_mw,
+                            nuclear_capacity_mw AS nuclear_mw
+                        FROM staging.exchange_excel_metrics
+                        ORDER BY province, report_month DESC
+                    ),
+                    cap_fundamentals AS (
+                        SELECT DISTINCT ON (province_cn)
+                            province_cn AS province,
+                            wind_cap_10kw   * 10 AS wind_mw,
+                            solar_cap_10kw  * 10 AS solar_mw,
+                            thermal_cap_10kw* 10 AS thermal_mw,
+                            hydro_cap_10kw  * 10 AS hydro_mw,
+                            nuclear_cap_10kw* 10 AS nuclear_mw
+                        FROM marketdata.province_fundamentals
+                        ORDER BY province_cn, year DESC
+                    ),
+                    all_provinces AS (
+                        SELECT province FROM cap_monthly
+                        UNION SELECT province FROM cap_exchange
+                        UNION SELECT province FROM cap_fundamentals
+                    )
+                    SELECT
+                        ap.province,
+                        cm.cap_month,
+                        COALESCE(NULLIF(cm.wind_mw,    0), NULLIF(ce.wind_mw,    0), cf.wind_mw,    0) AS wind_mw,
+                        COALESCE(NULLIF(cm.solar_mw,   0), NULLIF(ce.solar_mw,   0), cf.solar_mw,   0) AS solar_mw,
+                        -- province_fundamentals (full NEA stats) before exchange_excel_metrics (spot participants only)
+                        COALESCE(NULLIF(cm.thermal_mw, 0), NULLIF(cf.thermal_mw, 0), NULLIF(ce.thermal_mw, 0), 0) AS thermal_mw,
+                        COALESCE(NULLIF(cm.hydro_mw,   0), NULLIF(cf.hydro_mw,   0), NULLIF(ce.hydro_mw,   0), 0) AS hydro_mw,
+                        COALESCE(NULLIF(cm.nuclear_mw, 0), NULLIF(cf.nuclear_mw, 0), NULLIF(ce.nuclear_mw, 0), 0) AS nuclear_mw
+                    FROM all_provinces ap
+                    LEFT JOIN cap_monthly      cm ON ap.province = cm.province
+                    LEFT JOIN cap_exchange     ce ON ap.province = ce.province
+                    LEFT JOIN cap_fundamentals cf ON ap.province = cf.province
+                    ORDER BY ap.province
+                """)
+                _cap_df = _pd_sup.DataFrame(
+                    _cur_sup.fetchall(),
+                    columns=[d[0] for d in _cur_sup.description],
+                )
+                # ── Peak load: province_fundamentals primary, spot_fundamentals_hourly fallback ──
+                _cur_sup.execute("""
+                    WITH peak_fund AS (
+                        SELECT DISTINCT ON (province_cn)
+                            province_cn AS province,
+                            GREATEST(
+                                COALESCE(peak_summer_mw, 0),
+                                COALESCE(peak_winter_mw, 0)
+                            ) AS peak_load_mw
+                        FROM marketdata.province_fundamentals
+                        ORDER BY province_cn, year DESC
+                    ),
+                    peak_hourly AS (
+                        SELECT province, MAX(load_mw) AS peak_load_mw
+                        FROM marketdata.spot_fundamentals_hourly
+                        WHERE load_mw > 0
+                          AND datetime >= NOW() - INTERVAL '18 months'
+                        GROUP BY province
+                    )
+                    SELECT
+                        COALESCE(pf.province, ph.province) AS province,
+                        COALESCE(NULLIF(pf.peak_load_mw, 0), ph.peak_load_mw, 0) AS peak_load_mw
+                    FROM peak_fund pf
+                    FULL OUTER JOIN peak_hourly ph ON pf.province = ph.province
+                """)
+                _peak_df = _pd_sup.DataFrame(
+                    _cur_sup.fetchall(),
+                    columns=[d[0] for d in _cur_sup.description],
+                )
+                # ── Imports/exports from exchange excel metrics (limited provinces) ──
+                _cur_sup.execute("""
+                    SELECT DISTINCT ON (province)
+                        province,
+                        COALESCE(incoming_gwh, 0) AS incoming_gwh,
+                        COALESCE(outgoing_gwh, 0) AS outgoing_gwh
+                    FROM staging.exchange_excel_metrics
+                    ORDER BY province, report_month DESC
+                """)
+                _flow_df = _pd_sup.DataFrame(
+                    _cur_sup.fetchall(),
+                    columns=[d[0] for d in _cur_sup.description],
+                )
+            _conn_sup.close()
+
+            # Merge all sources on province
+            _df_sup = _cap_df.merge(_peak_df, on='province', how='left')
+            _df_sup = _df_sup.merge(_flow_df, on='province', how='left')
+            for _c in ['wind_mw', 'solar_mw', 'thermal_mw', 'hydro_mw', 'nuclear_mw',
+                       'peak_load_mw', 'incoming_gwh', 'outgoing_gwh']:
+                _df_sup[_c] = _pd_sup.to_numeric(_df_sup.get(_c, 0), errors='coerce').fillna(0)
+
+            # Convert monthly GWh → average MW (730 h/month)
+            _df_sup['import_mw'] = _df_sup['incoming_gwh'] * 1000 / 730
+            _df_sup['export_mw'] = _df_sup['outgoing_gwh'] * 1000 / 730
+            # 热电缺口 = peak − (wind + solar + hydro + nuclear) − import + export
+            # Negative = clean energy + imports exceed demand (structurally oversupplied)
+            _df_sup['net_residual'] = (
+                _df_sup['peak_load_mw']
+                - _df_sup['wind_mw']
+                - _df_sup['solar_mw']
+                - _df_sup['hydro_mw']
+                - _df_sup['nuclear_mw']
+                - _df_sup['import_mw']
+                + _df_sup['export_mw']
+            )
+            return _df_sup.dropna(subset=['province'])
+        except Exception:
+            return _pd_sup.DataFrame()
+
+    _sup_df = _load_supply_data(_sup_pg)
+    # Drop LingFeng metadata rows mistakenly ingested as province names
+    _sup_df = _sup_df[~_sup_df['province'].str.contains('运行数据|数据披露|披露', na=False)]
+
+    if _sup_df.empty:
+        st.info("暂无供需数据（需要 marketdata.province_installed_monthly 表）")
+    else:
+        import plotly.graph_objects as _pgo_sup
+
+        _latest_sup = pd.to_datetime(_sup_df['cap_month'], errors='coerce').max()
+        st.caption(
+            f"数据截至 {_latest_sup.strftime('%Y-%m') if hasattr(_latest_sup, 'strftime') else _latest_sup}"
+            f"  ·  省间受/送出已换算为月均功率（÷730 h）"
+        )
+
+        _sup_sorted = _sup_df.sort_values('net_residual', ascending=True).reset_index(drop=True)
+
+        # ── Province waterfall selector ────────────────────────────────────────
+        _sup_prov_sel = st.selectbox(
+            "选择省份查看瀑布图分解",
+            _sup_sorted['province'].tolist(),
+            key="sup_prov_sel",
+        )
+        _sup_row = _sup_df[_sup_df['province'] == _sup_prov_sel].iloc[0]
+
+        _col_wf, _col_th = st.columns(2)
+
+        with _col_wf:
+            st.subheader(f"{_sup_prov_sel}  供需余额分解")
+            _fig_wf = _pgo_sup.Figure(_pgo_sup.Waterfall(
+                orientation="v",
+                measure=["absolute", "relative", "relative", "relative", "relative", "relative", "relative", "total"],
+                x=["峰值负荷", "↓ 风电", "↓ 光伏", "↓ 水电", "↓ 核电", "↓ 省间受入", "↑ 省间送出", "热电缺口"],
+                y=[
+                    _sup_row['peak_load_mw'],
+                    -_sup_row['wind_mw'],
+                    -_sup_row['solar_mw'],
+                    -_sup_row['hydro_mw'],
+                    -_sup_row['nuclear_mw'],
+                    -_sup_row['import_mw'],
+                    _sup_row['export_mw'],
+                    0,
+                ],
+                text=[
+                    f"{_sup_row['peak_load_mw']:,.0f} MW",
+                    f"−{_sup_row['wind_mw']:,.0f} MW",
+                    f"−{_sup_row['solar_mw']:,.0f} MW",
+                    f"−{_sup_row['hydro_mw']:,.0f} MW",
+                    f"−{_sup_row['nuclear_mw']:,.0f} MW",
+                    f"−{_sup_row['import_mw']:,.0f} MW",
+                    f"+{_sup_row['export_mw']:,.0f} MW",
+                    f"{_sup_row['net_residual']:,.0f} MW",
+                ],
+                textposition="outside",
+                connector={"line": {"color": "#aaa", "width": 1, "dash": "dot"}},
+                increasing={"marker": {"color": "#E74C3C"}},
+                decreasing={"marker": {"color": "#27AE60"}},
+                totals={"marker": {"color": "#2980B9" if _sup_row['net_residual'] > 0 else "#27AE60"}},
+            ))
+            _fig_wf.update_layout(
+                yaxis_title="MW",
+                showlegend=False,
+                height=380,
+                margin=dict(t=20, b=20, l=60, r=40),
+            )
+            st.plotly_chart(_fig_wf, use_container_width=True)
+
+            # All-province net residual overview (horizontal bar)
+            st.markdown("**所有省份热电缺口** ─ 负值=清洁能源+受入 > 峰值负荷+送出（结构性过剩）；正值=需要火电补充")
+            _fig_net = _pgo_sup.Figure(_pgo_sup.Bar(
+                x=_sup_sorted['net_residual'],
+                y=_sup_sorted['province'],
+                orientation='h',
+                marker_color=[
+                    '#27AE60' if v < 0 else '#E74C3C'
+                    for v in _sup_sorted['net_residual']
+                ],
+                text=[f"{v:,.0f}" for v in _sup_sorted['net_residual']],
+                textposition='outside',
+            ))
+            _fig_net.add_vline(x=0, line_color='black', line_width=1)
+            _fig_net.update_layout(
+                xaxis_title="热电缺口 MW  (负=结构性过剩)",
+                height=max(380, len(_sup_sorted) * 22),
+                margin=dict(t=10, b=20, l=80, r=80),
+            )
+            st.plotly_chart(_fig_net, use_container_width=True)
+
+        with _col_th:
+            st.subheader("火电装机容量（MW）")
+            _sup_th_sorted = _sup_df.sort_values('thermal_mw', ascending=True)
+            _fig_th = _pgo_sup.Figure(_pgo_sup.Bar(
+                x=_sup_th_sorted['thermal_mw'],
+                y=_sup_th_sorted['province'],
+                orientation='h',
+                marker_color='#E67E22',
+                text=[f"{v:,.0f}" for v in _sup_th_sorted['thermal_mw']],
+                textposition='outside',
+            ))
+            _fig_th.update_layout(
+                xaxis_title="火电装机 MW",
+                height=max(380, len(_sup_th_sorted) * 22),
+                margin=dict(t=10, b=20, l=80, r=80),
+            )
+            st.plotly_chart(_fig_th, use_container_width=True)
+
+            # Summary table
+            _sup_tbl = _sup_sorted[[
+                'province', 'peak_load_mw', 'wind_mw', 'solar_mw', 'hydro_mw', 'nuclear_mw',
+                'import_mw', 'export_mw', 'net_residual', 'thermal_mw',
+            ]].copy()
+            _sup_tbl.columns = [
+                '省份', '峰值负荷', '风电', '光伏', '水电', '核电',
+                '受入均功率', '送出均功率', '热电缺口', '火电',
+            ]
+            for _c in _sup_tbl.columns[1:]:
+                _sup_tbl[_c] = _sup_tbl[_c].round(0).astype('int', errors='ignore')
+            st.dataframe(
+                _sup_tbl, use_container_width=True, hide_index=True,
+                column_config={
+                    '热电缺口': st.column_config.NumberColumn(
+                        '热电缺口 (MW)', format="%d",
+                        help="峰值负荷 − (风+光+水+核) − 受入 + 送出；负值=结构性过剩，正值=需要火电/储能补充",
+                    ),
+                },
+            )
+
+        # ── EOH / Thermal Load Factor Analysis ──────────────────────────────────
+        st.divider()
+        st.subheader("热电等效利用小时数（EOH）分析")
+        st.caption(
+            "净剩余负荷 = 实际负荷 − 风电 − 光伏 − 水电月均 − 核电基荷（容量×90%）；"
+            "水电与核电数据来自 exchange_excel_metrics。年度净剩余负荷累计 ÷ 火电装机 = 等效利用小时数（EOH）。"
+        )
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _load_eoh_profiles(_pg_key: str, _year: int):
+            import psycopg2 as _pg2, pandas as _pd2
+            try:
+                _c2 = _pg2.connect(_pg_key)
+                with _c2.cursor() as _cr2:
+                    # Join hourly load/wind/solar with monthly hydro+nuclear from exchange_excel_metrics.
+                    # hydro_avg_mw = monthly generation ÷ hours in month (flat baseload proxy).
+                    # nuclear_avg_mw = nuclear capacity × 90% CF (near-flat baseload).
+                    # avg_net_load = thermal-only demand after removing all non-thermal generation.
+                    _cr2.execute("""
+                        WITH hourly AS (
+                            SELECT
+                                province,
+                                EXTRACT(MONTH FROM datetime AT TIME ZONE 'Asia/Shanghai')::int AS month,
+                                EXTRACT(HOUR  FROM datetime AT TIME ZONE 'Asia/Shanghai')::int AS hour,
+                                AVG(load_mw)                  AS avg_load,
+                                AVG(COALESCE(wind_mw,  0))    AS avg_wind,
+                                AVG(COALESCE(solar_mw, 0))    AS avg_solar,
+                                -- net_export_mw > 0 means province exports (thermal must cover exports too);
+                                -- net_export_mw < 0 means province imports (reduces local thermal need).
+                                AVG(GREATEST(load_mw
+                                    - COALESCE(wind_mw,  0)
+                                    - COALESCE(solar_mw, 0)
+                                    + COALESCE(net_export_mw, 0), 0)) AS avg_raw_net
+                            FROM marketdata.spot_fundamentals_hourly
+                            WHERE load_mw > 0
+                              AND EXTRACT(YEAR FROM datetime AT TIME ZONE 'Asia/Shanghai') = %s
+                            GROUP BY province, month, hour
+                        ),
+                        -- Monthly hydro gen + nuclear from exchange_excel_metrics (spot market provinces)
+                        mc AS (
+                            SELECT DISTINCT ON (province, EXTRACT(MONTH FROM report_month)::int)
+                                province,
+                                EXTRACT(MONTH FROM report_month)::int AS month,
+                                COALESCE(hydro_generation_gwh, 0) * 1000.0 / 730.0 AS hydro_avg_mw,
+                                COALESCE(nuclear_capacity_mw, 0) * 0.90             AS nuclear_avg_mw
+                            FROM staging.exchange_excel_metrics
+                            WHERE EXTRACT(YEAR FROM report_month) = %s
+                            ORDER BY province, EXTRACT(MONTH FROM report_month)::int, report_month DESC
+                        ),
+                        -- Annual generation stats from province_fundamentals (fallback for all provinces)
+                        pf AS (
+                            SELECT DISTINCT ON (province_cn)
+                                province_cn AS province,
+                                COALESCE(hydro_gen_100gwh,   0) * 100000.0 / 8760.0 AS hydro_avg_mw,
+                                COALESCE(nuclear_gen_100gwh, 0) * 100000.0 / 8760.0 AS nuclear_avg_mw,
+                                -- Wind/solar carried as annual GWh totals for Python-side correction
+                                -- (not applied per-hour to avoid nighttime solar artefacts).
+                                COALESCE(wind_gen_100gwh,  0) * 100000.0 AS pf_wind_gwh,
+                                COALESCE(solar_gen_100gwh, 0) * 100000.0 AS pf_solar_gwh
+                            FROM marketdata.province_fundamentals
+                            ORDER BY province_cn, year DESC
+                        ),
+                        -- Nuclear capacity floor (MW) from NNSA 2024 report.
+                        -- Used as GREATEST floor so provinces where pf under-reports nuclear
+                        -- (e.g. 江苏 pf gives 5,900 MW but actual Tianwan output = 7,650 MW)
+                        -- still get the correct baseload deduction.
+                        nuclear_override (province, nuclear_cap_mw) AS (
+                            VALUES
+                                ('江苏',   8500.0),   -- Tianwan 1-6
+                                ('福建',  10000.0),   -- Ningde 1-4 + Fuqing 1-6
+                                ('广东',  20000.0),   -- Daya Bay + Lingao + Yangjiang + Taishan
+                                ('浙江',   6600.0),   -- Qinshan 1-3 + Haiyan
+                                ('辽宁',   6700.0),   -- Hongyanhe 1-6
+                                ('海南',   2200.0)    -- Changjiang 1-4
+                        )
+                        SELECT
+                            h.province, h.month, h.hour,
+                            h.avg_load, h.avg_wind, h.avg_solar,
+                            -- No floor at 0: negative values mean renewables exceed load (or large imports).
+                            -- Python layer uses these for annual EOH; chart clips display at 0.
+                            h.avg_raw_net
+                                - COALESCE(NULLIF(mc.hydro_avg_mw,   0), pf.hydro_avg_mw,   0)
+                                -- nuclear: use GREATEST so override acts as a floor, not just a fallback.
+                                - GREATEST(
+                                    COALESCE(NULLIF(mc.nuclear_avg_mw, 0), NULLIF(pf.nuclear_avg_mw, 0), 0),
+                                    COALESCE(no.nuclear_cap_mw * 0.90, 0)
+                                  ) AS avg_net_load,
+                            COALESCE(NULLIF(mc.hydro_avg_mw,   0), pf.hydro_avg_mw,   0) AS hydro_avg_mw,
+                            GREATEST(
+                                COALESCE(NULLIF(mc.nuclear_avg_mw, 0), NULLIF(pf.nuclear_avg_mw, 0), 0),
+                                COALESCE(no.nuclear_cap_mw * 0.90, 0)
+                            ) AS nuclear_avg_mw,
+                            -- Annual wind/solar generation (GWh) from pf for Python-side correction
+                            -- when hourly wind_mw/solar_mw were NULL for this province.
+                            COALESCE(pf.pf_wind_gwh,  0) AS pf_wind_gwh,
+                            COALESCE(pf.pf_solar_gwh, 0) AS pf_solar_gwh
+                        FROM hourly h
+                        LEFT JOIN mc ON h.province = mc.province AND h.month = mc.month
+                        LEFT JOIN pf ON h.province = pf.province
+                        LEFT JOIN nuclear_override no ON h.province = no.province
+                        ORDER BY h.province, h.month, h.hour
+                    """, (_year, _year))
+                    _eoh_raw = _pd2.DataFrame(
+                        _cr2.fetchall(), columns=[d[0] for d in _cr2.description]
+                    )
+                _c2.close()
+                return _eoh_raw
+            except Exception:
+                return _pd2.DataFrame()
+
+        _eoh_year = st.selectbox("分析年份", [2025, 2024, 2026], key="eoh_year")
+        _eoh_raw = _load_eoh_profiles(_sup_pg, _eoh_year)
+        # Drop metadata rows that got ingested as province names (LingFeng artefact)
+        _eoh_raw = _eoh_raw[~_eoh_raw['province'].str.contains('运行数据|数据披露|披露', na=False)]
+
+        if _eoh_raw.empty:
+            st.info("暂无小时级供需数据（需要 marketdata.spot_fundamentals_hourly）")
+        else:
+            import plotly.graph_objects as _pgo_eoh, numpy as _np_eoh
+            _days_pm = {1:31, 2:28 if _eoh_year % 4 != 0 else 29, 3:31, 4:30,
+                        5:31, 6:30, 7:31, 8:31, 9:30, 10:31, 11:30, 12:31}
+
+            # EOH method selector
+            _eoh_method = st.radio(
+                "计算方法",
+                ['实际发电量法（小时数据）', '装机利用小时法（风电2500h/光伏1800h）'],
+                horizontal=True, key="eoh_method",
+            )
+            _use_cap_factor = '装机' in _eoh_method
+
+            # Province → adcode mapping (for geo map)
+            _PROV_ADCODE = {
+                "北京": "110000", "天津": "120000", "河北": "130000", "冀北": "130000",
+                "河北南网": "130000", "山西": "140000", "蒙西": "150000", "内蒙古": "150000",
+                "辽宁": "210000", "吉林": "220000", "黑龙江": "230000",
+                "上海": "310000", "江苏": "320000", "浙江": "330000",
+                "安徽": "340000", "福建": "350000", "江西": "360000",
+                "山东": "370000", "河南": "410000", "湖北": "420000", "湖南": "430000",
+                "广东": "440000", "广西": "450000", "海南": "460000",
+                "重庆": "500000", "四川": "510000", "贵州": "520000", "云南": "530000",
+                "陕西": "610000", "甘肃": "620000", "青海": "630000",
+                "宁夏": "640000", "新疆": "650000",
+            }
+            _PROV_CENTROIDS_EOH = {
+                "110000": (39.90, 116.40), "120000": (39.13, 117.20),
+                "130000": (38.04, 114.47), "140000": (37.87, 112.56),
+                "150000": (44.09, 113.09), "210000": (41.80, 123.43),
+                "220000": (43.89, 125.32), "230000": (47.85, 127.57),
+                "310000": (31.23, 121.47), "320000": (32.06, 119.59),
+                "330000": (30.27, 120.15), "340000": (31.86, 117.29),
+                "350000": (26.10, 118.31), "360000": (27.62, 115.70),
+                "370000": (36.67, 117.02), "410000": (34.76, 113.75),
+                "420000": (30.60, 114.30), "430000": (28.23, 112.94),
+                "440000": (23.37, 113.50), "450000": (23.73, 108.38),
+                "460000": (20.02, 110.35), "500000": (29.56, 106.54),
+                "510000": (30.57, 103.99), "520000": (26.82, 106.83),
+                "530000": (25.05, 101.71), "610000": (34.27, 108.95),
+                "620000": (36.06, 103.83), "630000": (36.62, 101.74),
+                "640000": (38.47, 106.26), "650000": (41.17,  85.29),
+            }
+
+            # Compute annual EOH per province.
+            # EOH may be negative for provinces with large renewable surplus.
+            _eoh_rows = []
+            for _ep in sorted(_eoh_raw['province'].unique()):
+                _pdf = _eoh_raw[_eoh_raw['province'] == _ep]
+                _sup_row = _sup_df[_sup_df['province'] == _ep]
+                _th_cap = float(_sup_row['thermal_mw'].iloc[0]) if not _sup_row.empty else 0
+
+                if _use_cap_factor:
+                    # Method 2: annual_demand from hourly avg_load; wind/solar from installed cap × std hours
+                    _annual_demand = sum(
+                        _pdf[_pdf['month'] == _m]['avg_load'].sum() * _days_pm.get(_m, 30)
+                        for _m in range(1, 13)
+                    )  # MWh
+                    _wind_cap  = float(_sup_row['wind_mw'].iloc[0])  if (not _sup_row.empty and 'wind_mw'  in _sup_row.columns) else 0
+                    _solar_cap = float(_sup_row['solar_mw'].iloc[0]) if (not _sup_row.empty and 'solar_mw' in _sup_row.columns) else 0
+                    _annual_wind  = _wind_cap  * 2500.0   # MWh (2500 equivalent hours)
+                    _annual_solar = _solar_cap * 1800.0   # MWh (1800 equivalent hours)
+                    # Hydro + nuclear from pf column (already in MWh: 亿kWh × 100000)
+                    _pf_hydro  = float(_pdf['hydro_avg_mw'].iloc[0])  * 8760.0 if not _pdf.empty else 0
+                    _pf_nuc    = float(_pdf['nuclear_avg_mw'].iloc[0]) * 8760.0 if not _pdf.empty else 0
+                    _annual_gen = _annual_demand - _annual_wind - _annual_solar - _pf_hydro - _pf_nuc
+                else:
+                    # Method 1: thermal residual from hourly net load
+                    _annual_gen = sum(
+                        _pdf[_pdf['month'] == _m]['avg_net_load'].sum() * _days_pm.get(_m, 30)
+                        for _m in range(1, 13)
+                    )  # MWh
+                    # Correct for missing wind/solar hourly data (all-zero provinces).
+                    # pf_wind_gwh/pf_solar_gwh are in MWh (亿kWh × 100000 in SQL).
+                    _has_wind  = _pdf['avg_wind'].sum()  > 0
+                    _has_solar = _pdf['avg_solar'].sum() > 0
+                    if not _has_wind and 'pf_wind_gwh' in _pdf.columns:
+                        _annual_gen -= float(_pdf['pf_wind_gwh'].iloc[0])   # already MWh
+                    if not _has_solar and 'pf_solar_gwh' in _pdf.columns:
+                        _annual_gen -= float(_pdf['pf_solar_gwh'].iloc[0])  # already MWh
+
+                _eoh_val = round(_annual_gen / _th_cap) if _th_cap > 0 else 0
+                _eoh_rows.append({
+                    'province': _ep,
+                    'annual_gen_gwh': round(_annual_gen / 1000),
+                    'thermal_mw': round(_th_cap),
+                    'eoh': _eoh_val,
+                    'load_factor': round(_eoh_val / 8760, 3) if _eoh_val else 0,
+                    'adcode': _PROV_ADCODE.get(_ep),
+                })
+            _eoh_df = pd.DataFrame(_eoh_rows).sort_values('eoh', ascending=False)
+
+            _eoh_prov_list = sorted(_eoh_raw['province'].unique())
+            _eoh_prov = st.selectbox("选择省份查看日内热电需求分布", _eoh_prov_list, key="eoh_prov")
+            _epdf = _eoh_raw[_eoh_raw['province'] == _eoh_prov]
+
+            _col_e1, _col_e2 = st.columns(2)
+
+            with _col_e1:
+                # Heatmap: month (x) × hour (y), value = avg_net_load
+                _heat = _np_eoh.zeros((24, 12))
+                for _, _r in _epdf.iterrows():
+                    _h, _m = int(_r['hour']), int(_r['month']) - 1
+                    if 0 <= _h < 24 and 0 <= _m < 12:
+                        _heat[_h, _m] = _r['avg_net_load']
+                _fig_heat = _pgo_eoh.Figure(_pgo_eoh.Heatmap(
+                    z=_heat,
+                    x=[f"{i}月" for i in range(1, 13)],
+                    y=[f"{i:02d}:00" for i in range(24)],
+                    colorscale='Reds',
+                    colorbar=dict(title="MW"),
+                ))
+                _fig_heat.update_layout(
+                    title=f"{_eoh_prov}  净剩余负荷（MW）—— 月 × 时段",
+                    height=420,
+                    margin=dict(t=40, b=20, l=60, r=20),
+                    yaxis=dict(autorange='reversed'),
+                )
+                st.plotly_chart(_fig_heat, use_container_width=True)
+
+            with _col_e2:
+                # EOH bar chart — negative values allowed (surplus renewables or large net imports)
+                _eoh_sorted = _eoh_df.sort_values('eoh', ascending=True)
+                def _eoh_color(v):
+                    if v < 0:      return '#2980B9'   # blue = net surplus
+                    if v < 4000:   return '#27AE60'   # green = low utilisation
+                    if v < 5500:   return '#E67E22'   # orange = moderate
+                    return '#E74C3C'                   # red = high
+                _fig_eoh = _pgo_eoh.Figure(_pgo_eoh.Bar(
+                    x=_eoh_sorted['eoh'],
+                    y=_eoh_sorted['province'],
+                    orientation='h',
+                    marker_color=[_eoh_color(v) for v in _eoh_sorted['eoh']],
+                    text=[f"{v:,}" if v >= 0 else "" for v in _eoh_sorted['eoh']],
+                    textposition='outside',
+                ))
+                _fig_eoh.add_vline(x=5500, line_dash='dash', line_color='gray',
+                                   annotation_text='5500h')
+                _fig_eoh.add_vline(x=3500, line_dash='dot', line_color='#27AE60',
+                                   annotation_text='3500h')
+                _fig_eoh.add_vline(x=0, line_dash='solid', line_color='black', line_width=1)
+                _fig_eoh.update_layout(
+                    title=f"{_eoh_year}年 各省热电等效利用小时数（负值=可再生盈余）",
+                    xaxis_title="EOH（小时/年）",
+                    height=max(320, len(_eoh_sorted) * 26),
+                    margin=dict(t=40, b=20, l=80, r=80),
+                )
+                st.plotly_chart(_fig_eoh, use_container_width=True)
+                # Data quality caveat for large-import provinces
+                _high_eoh = _eoh_df[_eoh_df['eoh'] > 6000]['province'].tolist()
+                if _high_eoh:
+                    st.caption(
+                        f"[!] {', '.join(_high_eoh)} 等效利用小时偏高，可能原因：省内净外送（净购入）数据缺失。"
+                        "如 LingFeng 数据缺少净外送列，跨省购入电量未从热电需求中扣除。"
+                    )
+
+            # ── Geo map ──────────────────────────────────────────────────────
+            st.markdown("**热电等效利用小时数 — 省级地图**")
+            try:
+                import json as _json_eoh, matplotlib as _mpl_eoh
+                import matplotlib.pyplot as _mplt_eoh
+                from matplotlib.patches import Polygon as _MplPoly
+                import numpy as _np_eoh2
+
+                _geo_path = (
+                    __import__('pathlib').Path(__file__).resolve().parent / "data" / "china_provinces.geojson"
+                )
+                if _geo_path.exists():
+                    _geojson_eoh = _json_eoh.loads(_geo_path.read_text(encoding="utf-8"))
+                else:
+                    _geojson_eoh = None
+
+                if _geojson_eoh:
+                    # Build adcode (int) → EOH lookup
+                    _eoh_map = {
+                        int(row['adcode']): row['eoh']
+                        for _, row in _eoh_df.iterrows()
+                        if row['adcode'] is not None
+                    }
+                    # Color: blue (surplus) → green → yellow → orange → red
+                    def _eoh_geo_color(v):
+                        if v is None:      return "#d0d0d0"
+                        if v <= 0:         return "#2980B9"
+                        if v < 3000:       return "#27AE60"
+                        if v < 4500:       return "#F1C40F"
+                        if v < 6000:       return "#E67E22"
+                        return "#E74C3C"
+
+                    # Find CJK font for matplotlib titles
+                    _cjk_font = None
+                    try:
+                        import matplotlib.font_manager as _fmgr
+                        for _fp in _fmgr.findSystemFonts():
+                            if any(k in _fp.lower() for k in ("noto", "cjk", "chinese", "wqy", "simhei")):
+                                _cjk_font = _fmgr.FontProperties(fname=_fp)
+                                break
+                    except Exception:
+                        pass
+
+                    _fig_geo, _ax_geo = _mplt_eoh.subplots(figsize=(11, 7), facecolor="white")
+                    _ax_geo.set_facecolor("#c8daf4")
+                    _ax_geo.set_aspect("equal")
+                    _ax_geo.axis("off")
+
+                    for _feat in _geojson_eoh.get("features", []):
+                        _adc = _feat.get("properties", {}).get("adcode")
+                        _adc_int = int(_adc) if _adc is not None else None
+                        _eoh_v = _eoh_map.get(_adc_int) if _adc_int is not None else None
+                        _fc = _eoh_geo_color(_eoh_v)
+                        _geom = _feat.get("geometry", {})
+                        _rings = []
+                        if _geom.get("type") == "Polygon":
+                            _rings = [_geom["coordinates"][0]]
+                        elif _geom.get("type") == "MultiPolygon":
+                            _rings = [p[0] for p in _geom["coordinates"]]
+                        for _ring in _rings:
+                            _coords = _np_eoh2.array(_ring)
+                            _ax_geo.add_patch(_MplPoly(
+                                _coords, closed=True,
+                                facecolor=_fc, edgecolor="white", linewidth=0.6,
+                            ))
+
+                    # adcode → Chinese province name
+                    _ADCODE_TO_NAME = {
+                        110000:"北京", 120000:"天津", 130000:"河北", 140000:"山西",
+                        150000:"内蒙古", 210000:"辽宁", 220000:"吉林", 230000:"黑龙江",
+                        310000:"上海", 320000:"江苏", 330000:"浙江", 340000:"安徽",
+                        350000:"福建", 360000:"江西", 370000:"山东", 410000:"河南",
+                        420000:"湖北", 430000:"湖南", 440000:"广东", 450000:"广西",
+                        460000:"海南", 500000:"重庆", 510000:"四川", 520000:"贵州",
+                        530000:"云南", 610000:"陕西", 620000:"甘肃", 630000:"青海",
+                        640000:"宁夏", 650000:"新疆",
+                    }
+                    # Labels at province centroids: name + EOH
+                    for _adc_str, (_lat, _lon) in _PROV_CENTROIDS_EOH.items():
+                        _adc_int = int(_adc_str)
+                        _eoh_v = _eoh_map.get(_adc_int)
+                        _pname = _ADCODE_TO_NAME.get(_adc_int, "")
+                        if _eoh_v is not None:
+                            _eoh_lbl = f"{_eoh_v/1000:.1f}k" if abs(_eoh_v) >= 1000 else str(_eoh_v)
+                            _lbl = f"{_pname}\n{_eoh_lbl}" if _pname else _eoh_lbl
+                            _txt_kw = dict(ha="center", va="center", fontsize=5.5, fontweight="bold",
+                                           color="white" if _eoh_v > 4500 else "black")
+                            if _cjk_font:
+                                _txt_kw["fontproperties"] = _cjk_font
+                            _ax_geo.text(_lon, _lat, _lbl, **_txt_kw)
+
+                    _ax_geo.set_xlim(72, 136)
+                    _ax_geo.set_ylim(17, 54)
+                    _title_txt = (f"{_eoh_year}  Thermal EOH  "
+                                  "Blue=surplus | Green<3000 | Yellow3000-4500 | Orange4500-6000 | Red>6000")
+                    _ax_geo.set_title(_title_txt, fontsize=8, pad=8)
+                    st.pyplot(_fig_geo, use_container_width=True)
+                    _mplt_eoh.close(_fig_geo)
+                else:
+                    st.caption("地图文件未找到（data/china_provinces.geojson）")
+            except Exception as _egeo:
+                st.caption(f"地图加载失败: {_egeo}")
+
+            # Typical day by season — show full stack decomposition for one season
+            st.markdown(f"**{_eoh_prov} 典型日供需结构**")
+            _sel_season = st.radio(
+                "季节", ['春（3-5月）', '夏（6-8月）', '秋（9-11月）', '冬（12-2月）'],
+                horizontal=True, key="eoh_season",
+            )
+            _season_months_map = {
+                '春（3-5月）': [3,4,5], '夏（6-8月）': [6,7,8],
+                '秋（9-11月）': [9,10,11], '冬（12-2月）': [12,1,2],
+            }
+            _epdf_season = _epdf[_epdf['month'].isin(_season_months_map[_sel_season])]
+            _sd = _epdf_season.groupby('hour').mean(numeric_only=True).reset_index()
+            # hydro/nuclear are flat per month — take seasonal scalar average from raw data
+            _hydro_scalar = float(_epdf_season['hydro_avg_mw'].mean()) if 'hydro_avg_mw' in _epdf_season.columns else 0.0
+            _nuc_scalar   = float(_epdf_season['nuclear_avg_mw'].mean()) if 'nuclear_avg_mw' in _epdf_season.columns else 0.0
+            if not _sd.empty:
+                _hrs = _sd['hour'].tolist()
+                _fig_day = _pgo_eoh.Figure()
+                # Stacked area: solar, wind, hydro (flat), nuclear (flat), then load line + thermal top
+                _fig_day.add_trace(_pgo_eoh.Scatter(
+                    x=_hrs, y=_sd['avg_solar'].tolist(), mode='lines', name='光伏',
+                    fill='tozeroy', line=dict(color='#F1C40F', width=0), fillcolor='rgba(241,196,15,0.5)',
+                ))
+                _fig_day.add_trace(_pgo_eoh.Scatter(
+                    x=_hrs,
+                    y=(_sd['avg_solar'] + _sd['avg_wind']).tolist(),
+                    mode='lines', name='风电',
+                    fill='tonexty', line=dict(color='#27AE60', width=0), fillcolor='rgba(39,174,96,0.5)',
+                ))
+                _hydro_line = _sd['avg_solar'] + _sd['avg_wind'] + _hydro_scalar
+                _fig_day.add_trace(_pgo_eoh.Scatter(
+                    x=_hrs, y=_hydro_line.tolist(), mode='lines', name='水电',
+                    fill='tonexty', line=dict(color='#2980B9', width=0), fillcolor='rgba(41,128,185,0.4)',
+                ))
+                _nuc_line = _hydro_line + _nuc_scalar
+                _fig_day.add_trace(_pgo_eoh.Scatter(
+                    x=_hrs, y=_nuc_line.tolist(), mode='lines', name='核电',
+                    fill='tonexty', line=dict(color='#8E44AD', width=0), fillcolor='rgba(142,68,173,0.4)',
+                ))
+                _fig_day.add_trace(_pgo_eoh.Scatter(
+                    x=_hrs, y=_sd['avg_load'].tolist(), mode='lines', name='总负荷',
+                    line=dict(color='black', width=2.5),
+                ))
+                _fig_day.add_trace(_pgo_eoh.Scatter(
+                    x=_hrs, y=(_nuc_line + _sd['avg_net_load']).tolist(), mode='lines', name='火电需求上沿',
+                    line=dict(color='#E74C3C', width=1.5, dash='dot'),
+                ))
+                _fig_day.update_layout(
+                    xaxis=dict(title="时段", tickvals=list(range(0,24,2)), ticktext=[f"{h:02d}:00" for h in range(0,24,2)]),
+                    yaxis_title="MW",
+                    height=360, margin=dict(t=10, b=20, l=60, r=20),
+                    legend=dict(orientation='h', y=-0.3),
+                )
+                st.plotly_chart(_fig_day, use_container_width=True)
+
+            # Summary table
+            st.dataframe(
+                _eoh_df.rename(columns={
+                    'province': '省份', 'annual_gen_gwh': '年净剩余发电量(GWh)',
+                    'thermal_mw': '火电装机(MW)', 'eoh': 'EOH(小时)', 'load_factor': '利用率',
+                }),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    'EOH(小时)': st.column_config.NumberColumn(format="%d"),
+                    '利用率': st.column_config.NumberColumn(format="%.1%"),
+                },
+            )
+
+# ── Tab: 价格预测 (Price Forecasting) ─────────────────────────────────────────
+with tab_forecast:
+    import numpy as _np_fc
+    import pandas as _pd_fc
+    import plotly.graph_objects as _pgo_fc
+
+    st.subheader("价格预测 — 短中期混合模型")
+    st.caption("综合 PCA时序模型 · 边际成本模型 · 贝叶斯分布模型，预测 D+1 至 M+1 日前价格")
+
+    # ── Controls ─────────────────────────────────────────────────────────────
+    _fc_c1, _fc_c2, _fc_c3, _fc_c4 = st.columns([2, 1, 1, 1])
+    with _fc_c1:
+        _fc_zh_provs = _load_hourly_price_provinces(_conn) or (
+            sorted(df["province_cn"].dropna().unique()) if not df.empty else []
+        )
+        _fc_prov = st.selectbox(
+            "选择省份（仅显示有小时价格数据的省份）", _fc_zh_provs,
+            key="fc_province",
+        )
+    with _fc_c2:
+        _fc_price_type = st.radio("价格类型", ["DA (日前)", "RT (实时)"], horizontal=True, key="fc_pt")
+        _fc_pcol = "da_price" if "DA" in _fc_price_type else "rt_price"
+    with _fc_c3:
+        _fc_train_months = st.selectbox("训练数据", [6, 12, 24], index=1, key="fc_train",
+                                         format_func=lambda x: f"近{x}个月")
+    with _fc_c4:
+        _fc_days_eoy2027 = max(1, (_pd_fc.Timestamp('2027-12-31') - _pd_fc.Timestamp.today().normalize()).days)
+        _fc_horizon_opts = [1, 3, 7, 30, 90, 180, 365, _fc_days_eoy2027]
+        def _fc_hlabel(x):
+            if x == 1:   return "D+1"
+            if x <= 7:   return f"D+{x}"
+            if x <= 31:  return "M+1 (30天)"
+            if x <= 92:  return "近3个月"
+            if x <= 183: return "近6个月"
+            if x <= 366: return "Y+1 (12个月)"
+            return f"至2027年底 ({x}天)"
+        _fc_horizon = st.selectbox("预测范围", _fc_horizon_opts, index=0, key="fc_horizon",
+                                    format_func=_fc_hlabel)
+
+    _fc_run = st.button("运行预测", type="primary", key="fc_run")
+
+    if not _fc_run:
+        st.info("选择省份和参数后点击「运行预测」。模型将使用历史价格数据进行训练和预测。")
+    else:
+        _fc_end_dt   = _pd_fc.Timestamp.today().normalize()
+        _fc_start_dt = _fc_end_dt - _pd_fc.DateOffset(months=_fc_train_months)
+        _fc_start    = str(_fc_start_dt.date())
+        _fc_end      = str(_fc_end_dt.date())
+        # Recent 30 days for Bayesian likelihood
+        _fc_recent_start = str((_fc_end_dt - _pd_fc.DateOffset(days=30)).date())
+
+        with st.spinner("加载历史价格数据…"):
+            _fc_price_mat = _load_price_matrix(
+                _conn, _fc_prov, _fc_start, _fc_end, _fc_pcol)
+            _fc_fund_df   = _load_forecast_fundamentals(
+                _conn, _fc_prov, _fc_recent_start, _fc_end)
+            # Hourly price series for Bayesian
+            _fc_all_hourly = _load_intraday_shape(
+                _conn, (_fc_prov,), _fc_start, _fc_end, _fc_pcol)
+            _fc_recent_hourly = _load_intraday_shape(
+                _conn, (_fc_prov,), _fc_recent_start, _fc_end, _fc_pcol)
+
+        if _fc_price_mat.empty:
+            st.warning(f"{_fc_prov} 暂无小时价格数据（{_fc_pcol}）。")
+        else:
+            # ─────────────────────────────────────────────────────────────────
+            # MODEL 1: PCA + ARIMA
+            # ─────────────────────────────────────────────────────────────────
+            _fc_tab_pca, _fc_tab_stack, _fc_tab_bayes, _fc_tab_ensemble = st.tabs([
+                "PCA时序模型", "边际成本模型", "贝叶斯分布模型", "综合预测"
+            ])
+
+            # Shared: build price matrix and PCA results (used in PCA + Ensemble tabs)
+            _fc_mat = _fc_price_mat.values.astype(float)   # (n_days, 24)
+            _fc_mat = _np_fc.nan_to_num(_fc_mat, nan=_np_fc.nanmean(_fc_mat))
+            _fc_mean_24h = _fc_mat.mean(axis=0)            # (24,)
+            _fc_std_24h  = _fc_mat.std(axis=0)
+            _fc_std_24h  = _np_fc.where(_fc_std_24h < 1e-6, 1.0, _fc_std_24h)
+            _fc_mat_c    = (_fc_mat - _fc_mean_24h) / _fc_std_24h   # centered+scaled
+
+            # Initialise shared variables used across tabs (read in ensemble, set in inner tabs)
+            _fc_fund_df2  = _pd_fc.DataFrame()
+            _fc_post_mean = _np_fc.full(24, _fc_mean_24h.mean())   # fallback prior mean
+            _fc_post_lo90 = _fc_post_mean - 0.05
+            _fc_post_hi90 = _fc_post_mean + 0.05
+
+            # SVD
+            _fc_U, _fc_s, _fc_Vt = _np_fc.linalg.svd(_fc_mat_c, full_matrices=False)
+            _fc_n_pc  = min(4, _fc_U.shape[1])
+            _fc_var_exp = _fc_s**2 / (_fc_s**2).sum()
+            _fc_scores  = _fc_U[:, :_fc_n_pc] * _fc_s[:_fc_n_pc]   # (n_days, n_pc)
+            _fc_comps   = _fc_Vt[:_fc_n_pc, :]                       # (n_pc, 24)
+
+            # Seasonal monthly mean per PC from training data (for long-horizon extension)
+            _fc_score_months = _np_fc.array([
+                int(str(d)[5:7]) for d in _fc_price_mat.index
+            ])  # (n_days,) month integers
+            _fc_pc_monthly_mean = _np_fc.zeros((12, _fc_n_pc))  # (12 months, n_pc)
+            _fc_pc_monthly_std  = _np_fc.ones((12, _fc_n_pc))
+            for _fc_m in range(1, 13):
+                _fc_mask = _fc_score_months == _fc_m
+                if _fc_mask.sum() > 0:
+                    _fc_pc_monthly_mean[_fc_m - 1] = _fc_scores[_fc_mask].mean(axis=0)
+                    _fc_pc_monthly_std[_fc_m - 1]  = _fc_scores[_fc_mask].std(axis=0).clip(min=1e-6)
+
+            # ARIMA capped at 30 steps; long horizons extended with seasonal mean reversion
+            _fc_arima_steps = min(_fc_horizon, 30)
+            try:
+                from statsmodels.tsa.arima.model import ARIMA as _fc_ARIMA
+                _fc_pc_forecasts = []
+                _fc_pc_ci_lo = []
+                _fc_pc_ci_hi = []
+                for _fc_i in range(_fc_n_pc):
+                    _fc_series = _pd_fc.Series(_fc_scores[:, _fc_i])
+                    _fc_mdl = _fc_ARIMA(_fc_series, order=(1, 0, 1)).fit()
+                    _fc_res = _fc_mdl.get_forecast(steps=_fc_arima_steps)
+                    _fc_arima_fcast = _fc_res.predicted_mean.values
+                    _fc_arima_lo    = _fc_res.conf_int(alpha=0.1).iloc[:, 0].values
+                    _fc_arima_hi    = _fc_res.conf_int(alpha=0.1).iloc[:, 1].values
+                    if _fc_horizon > _fc_arima_steps:
+                        # Extend to full horizon using seasonal monthly means
+                        _fc_ext_fcast = []
+                        _fc_ext_lo    = []
+                        _fc_ext_hi    = []
+                        _fc_today_m   = int(str(_fc_end_dt.date())[5:7])
+                        for _fc_d in range(_fc_arima_steps, _fc_horizon):
+                            _fc_future_month = ((_fc_today_m - 1 + _fc_d) % 12)
+                            _fc_seas_mu  = _fc_pc_monthly_mean[_fc_future_month, _fc_i]
+                            _fc_seas_sig = _fc_pc_monthly_std[_fc_future_month, _fc_i]
+                            # Mean-revert toward seasonal mean with decay
+                            _fc_decay = 0.97 ** (_fc_d - _fc_arima_steps)
+                            _fc_last  = _fc_arima_fcast[-1]
+                            _fc_ext_v = _fc_seas_mu + (_fc_last - _fc_seas_mu) * _fc_decay
+                            _fc_ext_fcast.append(_fc_ext_v)
+                            _fc_ext_lo.append(_fc_ext_v - 1.645 * _fc_seas_sig)
+                            _fc_ext_hi.append(_fc_ext_v + 1.645 * _fc_seas_sig)
+                        _fc_pc_forecasts.append(_np_fc.concatenate([_fc_arima_fcast, _fc_ext_fcast]))
+                        _fc_pc_ci_lo.append(_np_fc.concatenate([_fc_arima_lo,    _fc_ext_lo]))
+                        _fc_pc_ci_hi.append(_np_fc.concatenate([_fc_arima_hi,    _fc_ext_hi]))
+                    else:
+                        _fc_pc_forecasts.append(_fc_arima_fcast)
+                        _fc_pc_ci_lo.append(_fc_arima_lo)
+                        _fc_pc_ci_hi.append(_fc_arima_hi)
+                _fc_pca_ok = True
+            except Exception as _fc_arima_err:
+                _fc_pca_ok = False
+                _fc_arima_err_msg = str(_fc_arima_err)
+                _fc_pc_forecasts = [_np_fc.zeros(_fc_horizon) for _ in range(_fc_n_pc)]
+                _fc_pc_ci_lo = _fc_pc_forecasts
+                _fc_pc_ci_hi = _fc_pc_forecasts
+
+            # Reconstruct 24h price profiles (horizon × 24)
+            _fc_pc_fcast_arr = _np_fc.array(_fc_pc_forecasts)   # (n_pc, horizon)
+            _fc_pca_pred = (_fc_pc_fcast_arr.T @ _fc_comps) * _fc_std_24h + _fc_mean_24h  # (horizon, 24)
+            _fc_pca_pred_lo = ((_np_fc.array(_fc_pc_ci_lo).T @ _fc_comps) * _fc_std_24h + _fc_mean_24h)
+            _fc_pca_pred_hi = ((_np_fc.array(_fc_pc_ci_hi).T @ _fc_comps) * _fc_std_24h + _fc_mean_24h)
+
+            with _fc_tab_pca:
+                st.markdown("**PCA + ARIMA 时序模型**")
+                st.caption(
+                    "将历史每日24小时价格曲线分解为4个主成分（PC），分别对每个PC序列拟合ARIMA(1,0,1)，"
+                    "再通过载荷矩阵重构预测价格曲线。"
+                )
+
+                # Show variance explained
+                _fc_ve_df = _pd_fc.DataFrame({
+                    '主成分': [f"PC{i+1}" for i in range(_fc_n_pc)],
+                    '方差解释率': [f"{_fc_var_exp[i]:.1%}" for i in range(_fc_n_pc)],
+                    '累计解释率': [f"{_fc_var_exp[:i+1].sum():.1%}" for i in range(_fc_n_pc)],
+                })
+                st.dataframe(_fc_ve_df, hide_index=True, use_container_width=False)
+
+                if not _fc_pca_ok:
+                    st.warning(f"ARIMA拟合失败: {_fc_arima_err_msg}")
+
+                # Show PC shapes (loadings)
+                _fc_hours = list(range(24))
+                _fc_fig_pca = _pgo_fc.Figure()
+                for _fc_i in range(_fc_n_pc):
+                    _fc_fig_pca.add_trace(_pgo_fc.Scatter(
+                        x=_fc_hours, y=_fc_comps[_fc_i, :],
+                        name=f"PC{_fc_i+1} ({_fc_var_exp[_fc_i]:.1%})",
+                        line=dict(width=2),
+                    ))
+                _fc_fig_pca.update_layout(
+                    title="主成分载荷向量（24h价格曲线形态）",
+                    xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                               ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                    yaxis_title="载荷", height=300,
+                    margin=dict(t=40, b=20, l=50, r=20),
+                    legend=dict(orientation='h', y=-0.3),
+                )
+                st.plotly_chart(_fc_fig_pca, use_container_width=True)
+
+                # Show forecast
+                _fc_fig_pred = _pgo_fc.Figure()
+                _fc_colors = ['#E74C3C', '#E67E22', '#F1C40F', '#2ECC71']
+                for _fc_d in range(min(_fc_horizon, 7)):
+                    _fc_day_lbl = f"D+{_fc_d+1}"
+                    _fc_fig_pred.add_trace(_pgo_fc.Scatter(
+                        x=_fc_hours, y=_fc_pca_pred[_fc_d, :],
+                        name=_fc_day_lbl,
+                        line=dict(width=2, color=_fc_colors[_fc_d % len(_fc_colors)]),
+                    ))
+                    if _fc_horizon == 1:  # show CI for single-day forecast
+                        _fc_fig_pred.add_trace(_pgo_fc.Scatter(
+                            x=_fc_hours + _fc_hours[::-1],
+                            y=list(_fc_pca_pred_hi[_fc_d, :]) + list(_fc_pca_pred_lo[_fc_d, ::-1]),
+                            fill='toself', fillcolor='rgba(231,76,60,0.15)',
+                            line=dict(color='rgba(255,255,255,0)'),
+                            showlegend=False, name='90% CI',
+                        ))
+                # Add recent actuals (last 5 days average by hour)
+                if not _fc_all_hourly.empty:
+                    _fc_fig_pred.add_trace(_pgo_fc.Scatter(
+                        x=_fc_all_hourly['hour'].tolist(),
+                        y=_fc_all_hourly['avg_price'].tolist(),
+                        name='历史均值(训练期)',
+                        line=dict(dash='dot', color='#7F8C8D', width=1.5),
+                    ))
+                _fc_fig_pred.update_layout(
+                    title=f"{_fc_prov} — PCA预测日前价格曲线（¥/kWh）",
+                    xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                               ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                    yaxis_title="¥/kWh", height=380,
+                    margin=dict(t=40, b=20, l=60, r=20),
+                    legend=dict(orientation='h', y=-0.3),
+                )
+                st.plotly_chart(_fc_fig_pred, use_container_width=True)
+
+                # Long-horizon monthly time-series view
+                if _fc_horizon > 30:
+                    st.markdown("**长期预测 — 月度日均价格走势**")
+                    st.caption(
+                        "前30天采用 ARIMA 动态预测，之后按季节性月均值均值回归延伸。"
+                        "横轴为预测日期，纵轴为该日24小时均价（¥/kWh）。"
+                    )
+                    _fc_daily_mean     = _fc_pca_pred.mean(axis=1)    # (horizon,)
+                    _fc_daily_mean_lo  = _fc_pca_pred_lo.mean(axis=1)
+                    _fc_daily_mean_hi  = _fc_pca_pred_hi.mean(axis=1)
+                    _fc_future_dates   = [
+                        (_fc_end_dt + _pd_fc.DateOffset(days=d+1)).date()
+                        for d in range(_fc_horizon)
+                    ]
+                    # Aggregate to monthly for cleaner chart
+                    _fc_lt_df = _pd_fc.DataFrame({
+                        'date':  _fc_future_dates,
+                        'mean':  _fc_daily_mean,
+                        'lo90':  _fc_daily_mean_lo,
+                        'hi90':  _fc_daily_mean_hi,
+                    })
+                    _fc_lt_df['ym'] = _pd_fc.to_datetime(_fc_lt_df['date']).dt.to_period('M')
+                    _fc_lt_mo = _fc_lt_df.groupby('ym').agg(
+                        mean=('mean', 'mean'), lo90=('lo90', 'mean'), hi90=('hi90', 'mean')
+                    ).reset_index()
+                    _fc_lt_mo['ym_str'] = _fc_lt_mo['ym'].astype(str)
+                    _fc_fig_lt = _pgo_fc.Figure()
+                    _fc_fig_lt.add_trace(_pgo_fc.Scatter(
+                        x=list(_fc_lt_mo['ym_str']) + list(_fc_lt_mo['ym_str'])[::-1],
+                        y=list(_fc_lt_mo['hi90']) + list(_fc_lt_mo['lo90'])[::-1],
+                        fill='toself', fillcolor='rgba(231,76,60,0.12)',
+                        line=dict(color='rgba(255,255,255,0)'), name='90% 区间',
+                    ))
+                    _fc_fig_lt.add_trace(_pgo_fc.Scatter(
+                        x=list(_fc_lt_mo['ym_str']), y=list(_fc_lt_mo['mean']),
+                        name='月均预测价格', line=dict(color='#E74C3C', width=2.5),
+                        mode='lines+markers',
+                    ))
+                    # Add vertical line at ARIMA/seasonal boundary
+                    _fc_arima_cutoff_dt = (_fc_end_dt + _pd_fc.DateOffset(days=_fc_arima_steps)).strftime('%Y-%m')
+                    _fc_fig_lt.add_vline(x=_fc_arima_cutoff_dt, line_dash='dot', line_color='gray',
+                                         annotation_text='ARIMA→季节均值')
+                    _fc_fig_lt.update_layout(
+                        title=f"{_fc_prov} — 长期月度均价预测（{_fc_end_dt.date()} ~ {_fc_future_dates[-1]}）",
+                        xaxis_title="月份", yaxis_title="¥/kWh",
+                        height=380, margin=dict(t=40, b=60, l=60, r=20),
+                        xaxis_tickangle=-45,
+                        legend=dict(orientation='h', y=-0.4),
+                    )
+                    st.plotly_chart(_fc_fig_lt, use_container_width=True)
+
+                # PC score time series
+                st.markdown("**主成分得分历史序列（最近60天）**")
+                _fc_fig_scores = _pgo_fc.Figure()
+                _fc_dates = _fc_price_mat.index[-60:]
+                for _fc_i in range(_fc_n_pc):
+                    _fc_fig_scores.add_trace(_pgo_fc.Scatter(
+                        x=list(_fc_dates),
+                        y=list(_fc_scores[-60:, _fc_i]),
+                        name=f"PC{_fc_i+1}", line=dict(width=1.5),
+                    ))
+                _fc_fig_scores.update_layout(
+                    xaxis_title="日期", yaxis_title="PC得分",
+                    height=280, margin=dict(t=10, b=20, l=50, r=20),
+                    legend=dict(orientation='h', y=-0.3),
+                )
+                st.plotly_chart(_fc_fig_scores, use_container_width=True)
+
+            # ─────────────────────────────────────────────────────────────────
+            # MODEL 2: Stack / Marginal Cost
+            # ─────────────────────────────────────────────────────────────────
+            with _fc_tab_stack:
+                st.markdown("**边际成本（价格堆栈）模型**")
+                st.caption(
+                    "依据装机结构和发电边际成本构建供给侧报价堆栈，以残差负荷（负荷−可再生能源）"
+                    "在堆栈曲线上的交叉点估算出清价格。"
+                )
+                _fc_s1, _fc_s2, _fc_s3 = st.columns(3)
+                with _fc_s1:
+                    _fc_coal_price = st.slider(
+                        "动力煤价格 (元/吨SCE)", 500, 1200, 750, 50, key="fc_coal")
+                with _fc_s2:
+                    _fc_gas_markup = st.slider(
+                        "气电溢价 (元/MWh)", 0, 200, 80, 20, key="fc_gas")
+                with _fc_s3:
+                    _fc_cap_premium = st.slider(
+                        "尖峰容量溢价 (元/MWh)", 0, 300, 100, 25, key="fc_cap_prem")
+
+                # Marginal costs (¥/MWh)
+                _fc_mc_re      = 0.0          # wind, solar
+                _fc_mc_nuclear = 25.0         # nuclear O&M only (fuel in fixed cost)
+                _fc_mc_hydro   = 15.0         # water resource fee
+                # Coal: heat rate ≈ 310 g SCE/kWh = 0.31 ton/MWh
+                _fc_mc_coal_base = _fc_coal_price * 0.31 + 18.0  # fuel + variable O&M
+                _fc_mc_coal_peak = _fc_mc_coal_base * 1.18       # peaking units, higher heat rate
+
+                # Province installed capacity (use supply data already loaded in EOH tab)
+                # Nuclear capacity override for provinces with known nuclear fleets (MW installed)
+                _fc_nuclear_override = {
+                    '江苏': 8500, '福建': 10000, '广东': 20000,
+                    '浙江': 6600, '辽宁': 6700, '海南': 2200,
+                    '山东': 2500, '广西': 2200,
+                }
+                _fc_sup_row = _sup_df[_sup_df['province'] == _fc_prov] if '_sup_df' in dir() else _pd_fc.DataFrame()
+                if _fc_sup_row.empty:
+                    st.warning("装机数据加载中 — 请先访问「供需结构」标签页。如已访问，重新点击「运行预测」。")
+                    _fc_th_mw    = 30000.0
+                    _fc_wind_mw  = 5000.0
+                    _fc_solar_mw = 5000.0
+                    _fc_hydro_mw = 0.0
+                    _fc_nuc_mw   = float(_fc_nuclear_override.get(_fc_prov, 0))
+                else:
+                    _fc_th_mw    = float(_fc_sup_row['thermal_mw'].iloc[0])
+                    _fc_wind_mw  = float(_fc_sup_row['wind_mw'].iloc[0]) if 'wind_mw' in _fc_sup_row.columns else 0.0
+                    _fc_solar_mw = float(_fc_sup_row['solar_mw'].iloc[0]) if 'solar_mw' in _fc_sup_row.columns else 0.0
+                    _fc_hydro_mw = float(_fc_sup_row['hydro_mw'].iloc[0]) if 'hydro_mw' in _fc_sup_row.columns else 0.0
+                    _fc_nuc_db   = float(_fc_sup_row['nuclear_mw'].iloc[0]) if 'nuclear_mw' in _fc_sup_row.columns else 0.0
+                    # Use GREATEST of DB value and known override (same logic as EOH tab)
+                    _fc_nuc_mw   = max(_fc_nuc_db, float(_fc_nuclear_override.get(_fc_prov, 0)))
+
+                # Merit order stack (cumulative MW → marginal cost)
+                _fc_stack_blocks = [
+                    ("风电",   _fc_wind_mw  * 0.28,  _fc_mc_re),       # avg capacity factor 28%
+                    ("光伏",   _fc_solar_mw * 0.15,  _fc_mc_re),       # avg daytime CF 15%
+                    ("核电",   _fc_nuc_mw   * 0.88,  _fc_mc_nuclear),  # 88% CF
+                    ("水电",   _fc_hydro_mw * 0.40,  _fc_mc_hydro),    # dispatchable portion
+                    ("基荷煤电", _fc_th_mw * 0.40,   _fc_mc_coal_base),
+                    ("调峰煤电", _fc_th_mw * 0.30,   _fc_mc_coal_peak),
+                    ("尖峰",   _fc_th_mw  * 0.10,   _fc_mc_coal_peak + _fc_cap_premium),
+                ]
+                # Draw merit order curve
+                _fc_cum_mw = [0.0]
+                _fc_mc_steps = []
+                for _, _fc_cap, _fc_mc in _fc_stack_blocks:
+                    _fc_cum_mw.append(_fc_cum_mw[-1])
+                    _fc_cum_mw.append(_fc_cum_mw[-1] + _fc_cap)
+                    _fc_mc_steps.append(_fc_mc)
+                    _fc_mc_steps.append(_fc_mc)
+
+                _fc_fig_stack = _pgo_fc.Figure()
+                _fc_fig_stack.add_trace(_pgo_fc.Scatter(
+                    x=_fc_cum_mw, y=_fc_mc_steps,
+                    fill='tozeroy', fillcolor='rgba(52,152,219,0.2)',
+                    line=dict(color='#2980B9', width=2),
+                    name='供给曲线',
+                ))
+                # Plot hourly residual demand lines from fundamentals
+                if not _fc_fund_df.empty:
+                    _fc_peak_res  = max(0, _fc_fund_df['avg_load'].max()
+                                        - _fc_fund_df['avg_wind'].min()
+                                        - _fc_fund_df['avg_solar'].min())
+                    _fc_off_res   = max(0, _fc_fund_df['avg_load'].min()
+                                        - _fc_fund_df['avg_wind'].max()
+                                        - _fc_fund_df['avg_solar'].max())
+                    _fc_avg_res   = max(0, _fc_fund_df['avg_load'].mean()
+                                        - _fc_fund_df['avg_wind'].mean()
+                                        - _fc_fund_df['avg_solar'].mean())
+                    for _fc_res_val, _fc_res_name, _fc_res_col in [
+                        (_fc_peak_res,  "峰时残差负荷",  '#E74C3C'),
+                        (_fc_avg_res,   "均值残差负荷",  '#E67E22'),
+                        (_fc_off_res,   "谷时残差负荷",  '#27AE60'),
+                    ]:
+                        _fc_fig_stack.add_vline(
+                            x=_fc_res_val, line_dash='dash', line_color=_fc_res_col,
+                            annotation_text=_fc_res_name,
+                            annotation_position="top right",
+                        )
+                _fc_fig_stack.update_layout(
+                    title=f"{_fc_prov} — 供给堆栈曲线与残差负荷",
+                    xaxis_title="累计装机容量 (MW)",
+                    yaxis_title="边际成本 (¥/MWh)",
+                    height=380, margin=dict(t=40, b=20, l=60, r=20),
+                )
+                st.plotly_chart(_fc_fig_stack, use_container_width=True)
+
+                # Estimate hourly clearing price from fundamentals
+                if not _fc_fund_df.empty:
+                    def _fc_clearing_price(residual_mw):
+                        _fc_cum = 0.0
+                        for _, _fc_cap, _fc_mc in _fc_stack_blocks:
+                            _fc_cum += _fc_cap
+                            if residual_mw <= _fc_cum:
+                                return _fc_mc
+                        return _fc_mc_coal_peak + _fc_cap_premium
+
+                    _fc_fund_df2 = _fc_fund_df.copy()
+                    _fc_fund_df2['residual_mw'] = (
+                        _fc_fund_df2['avg_load']
+                        - _fc_fund_df2['avg_wind']
+                        - _fc_fund_df2['avg_solar']
+                    ).clip(lower=0)
+                    _fc_fund_df2['stack_price_rmb_mwh'] = _fc_fund_df2['residual_mw'].apply(_fc_clearing_price)
+                    _fc_fund_df2['stack_price_yuan_kwh'] = _fc_fund_df2['stack_price_rmb_mwh'] / 1000.0
+
+                    _fc_fig_hourly_stack = _pgo_fc.Figure()
+                    _fc_fig_hourly_stack.add_trace(_pgo_fc.Scatter(
+                        x=_fc_fund_df2['hour'].tolist(),
+                        y=_fc_fund_df2['stack_price_yuan_kwh'].tolist(),
+                        name='边际成本预测价格', line=dict(color='#E74C3C', width=2),
+                    ))
+                    if not _fc_all_hourly.empty:
+                        _fc_fig_hourly_stack.add_trace(_pgo_fc.Scatter(
+                            x=_fc_all_hourly['hour'].tolist(),
+                            y=_fc_all_hourly['avg_price'].tolist(),
+                            name='历史均值(训练期)', line=dict(dash='dot', color='#7F8C8D', width=1.5),
+                        ))
+                    _fc_fig_hourly_stack.update_layout(
+                        title=f"{_fc_prov} — 边际成本模型预测日内价格曲线（¥/kWh）",
+                        xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                                   ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                        yaxis_title="¥/kWh", height=320,
+                        margin=dict(t=40, b=20, l=60, r=20),
+                        legend=dict(orientation='h', y=-0.3),
+                    )
+                    st.plotly_chart(_fc_fig_hourly_stack, use_container_width=True)
+
+                    # Summary stats
+                    st.markdown("**边际成本模型预测摘要**")
+                    _fc_stack_cols = st.columns(4)
+                    _fc_stack_cols[0].metric("峰时预测价格",
+                        f"{_fc_fund_df2['stack_price_yuan_kwh'].max():.4f} ¥/kWh")
+                    _fc_stack_cols[1].metric("谷时预测价格",
+                        f"{_fc_fund_df2['stack_price_yuan_kwh'].min():.4f} ¥/kWh")
+                    _fc_stack_cols[2].metric("日均预测价格",
+                        f"{_fc_fund_df2['stack_price_yuan_kwh'].mean():.4f} ¥/kWh")
+                    _fc_stack_cols[3].metric("峰谷价差",
+                        f"{((_fc_fund_df2['stack_price_yuan_kwh'].max() - _fc_fund_df2['stack_price_yuan_kwh'].min()) * 1000):.1f} ¥/MWh")
+                else:
+                    st.info(f"{_fc_prov} 暂无小时基本面数据，无法推算时段残差负荷。")
+
+                # Marginal cost assumptions table
+                with st.expander("边际成本假设"):
+                    st.table(_pd_fc.DataFrame([
+                        {"电源类型": "风电/光伏", "边际成本(¥/MWh)": f"{_fc_mc_re:.0f}",
+                         "说明": "燃料为零，仅运行维护"},
+                        {"电源类型": "核电", "边际成本(¥/MWh)": f"{_fc_mc_nuclear:.0f}",
+                         "说明": "固定成本已摊销，可变运行约25元"},
+                        {"电源类型": "水电", "边际成本(¥/MWh)": f"{_fc_mc_hydro:.0f}",
+                         "说明": "水资源费+运行维护"},
+                        {"电源类型": "基荷煤电", "边际成本(¥/MWh)": f"{_fc_mc_coal_base:.0f}",
+                         "说明": f"煤价{_fc_coal_price}元/吨×0.31 ton/MWh + O&M"},
+                        {"电源类型": "调峰煤电", "边际成本(¥/MWh)": f"{_fc_mc_coal_peak:.0f}",
+                         "说明": "调峰机组效率低，热耗率+18%"},
+                        {"电源类型": "尖峰", "边际成本(¥/MWh)": f"{_fc_mc_coal_peak + _fc_cap_premium:.0f}",
+                         "说明": f"调峰煤电 + 尖峰容量溢价{_fc_cap_premium}元/MWh"},
+                    ]))
+
+            # ─────────────────────────────────────────────────────────────────
+            # MODEL 3: Bayesian
+            # ─────────────────────────────────────────────────────────────────
+            with _fc_tab_bayes:
+                st.markdown("**贝叶斯分布模型**")
+                st.caption(
+                    "以训练期小时价格分布作为先验（Prior），以近30天为似然（Likelihood）进行贝叶斯更新，"
+                    "输出各时段价格的后验分布（均值 ± 置信区间）。"
+                )
+
+                # Load per-date/hour granularity for Bayesian update
+                _fc_bayes_sql = f"""
+                    SELECT EXTRACT(hour FROM datetime)::int AS hour,
+                           {_fc_pcol} AS price
+                    FROM marketdata.spot_prices_hourly
+                    WHERE province = %s AND datetime BETWEEN %s AND %s
+                      AND {_fc_pcol} IS NOT NULL
+                """
+                with st.spinner("加载小时价格分布…"):
+                    _fc_prior_raw  = _pd_fc.read_sql(_fc_bayes_sql, _conn(),
+                                                      params=[_fc_prov, _fc_start, _fc_end])
+                    _fc_recent_raw = _pd_fc.read_sql(_fc_bayes_sql, _conn(),
+                                                      params=[_fc_prov, _fc_recent_start, _fc_end])
+
+                _fc_post_mean = _np_fc.zeros(24)
+                _fc_post_lo90 = _np_fc.zeros(24)
+                _fc_post_hi90 = _np_fc.zeros(24)
+                _fc_prior_mu  = _np_fc.zeros(24)
+                _fc_prior_sig = _np_fc.zeros(24)
+
+                for _fc_h in range(24):
+                    _fc_p_h = _fc_prior_raw[_fc_prior_raw['hour'] == _fc_h]['price'].dropna()
+                    _fc_r_h = _fc_recent_raw[_fc_recent_raw['hour'] == _fc_h]['price'].dropna()
+
+                    if len(_fc_p_h) < 2:
+                        continue
+                    _fc_mu0 = float(_fc_p_h.mean())
+                    _fc_sig0 = max(float(_fc_p_h.std()), 1e-6)
+                    _fc_n0   = len(_fc_p_h)
+                    _fc_prior_mu[_fc_h]  = _fc_mu0
+                    _fc_prior_sig[_fc_h] = _fc_sig0
+
+                    if len(_fc_r_h) >= 2:
+                        _fc_mu1  = float(_fc_r_h.mean())
+                        _fc_sig1 = max(float(_fc_r_h.std()), 1e-6)
+                        _fc_n1   = len(_fc_r_h)
+                        # Conjugate Gaussian update (known variance)
+                        _fc_post_prec = _fc_n0 / _fc_sig0**2 + _fc_n1 / _fc_sig1**2
+                        _fc_post_mu   = (_fc_n0 * _fc_mu0 / _fc_sig0**2
+                                         + _fc_n1 * _fc_mu1 / _fc_sig1**2) / _fc_post_prec
+                        _fc_post_std  = 1.0 / _np_fc.sqrt(_fc_post_prec)
+                    else:
+                        _fc_post_mu  = _fc_mu0
+                        _fc_post_std = _fc_sig0
+
+                    _fc_post_mean[_fc_h] = _fc_post_mu
+                    _fc_post_lo90[_fc_h] = _fc_post_mu - 1.645 * _fc_post_std
+                    _fc_post_hi90[_fc_h] = _fc_post_mu + 1.645 * _fc_post_std
+
+                _fc_hours = list(range(24))
+                _fc_fig_bayes = _pgo_fc.Figure()
+                # 90% CI band
+                _fc_fig_bayes.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours + _fc_hours[::-1],
+                    y=list(_fc_post_hi90) + list(_fc_post_lo90[::-1]),
+                    fill='toself', fillcolor='rgba(231,76,60,0.15)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    name='90% 置信区间',
+                ))
+                # Posterior mean
+                _fc_fig_bayes.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_post_mean),
+                    name='后验均值', line=dict(color='#E74C3C', width=2.5),
+                ))
+                # Prior mean
+                _fc_fig_bayes.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_prior_mu),
+                    name=f'先验均值（训练期{_fc_train_months}个月）',
+                    line=dict(dash='dot', color='#7F8C8D', width=1.5),
+                ))
+                if not _fc_recent_hourly.empty:
+                    _fc_fig_bayes.add_trace(_pgo_fc.Scatter(
+                        x=_fc_recent_hourly['hour'].tolist(),
+                        y=_fc_recent_hourly['avg_price'].tolist(),
+                        name='近30天均值（似然）',
+                        line=dict(dash='dash', color='#2980B9', width=1.5),
+                    ))
+                _fc_fig_bayes.update_layout(
+                    title=f"{_fc_prov} — 贝叶斯后验价格分布（¥/kWh，90%置信区间）",
+                    xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                               ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                    yaxis_title="¥/kWh", height=400,
+                    margin=dict(t=40, b=20, l=60, r=20),
+                    legend=dict(orientation='h', y=-0.3),
+                )
+                st.plotly_chart(_fc_fig_bayes, use_container_width=True)
+
+                # Price distribution violin for peak/off-peak hours
+                st.markdown("**典型时段价格分布（先验 vs 近30天）**")
+                _fc_b1, _fc_b2 = st.columns(2)
+                for _fc_col_widget, _fc_h_label, _fc_h_range in [
+                    (_fc_b1, "峰时 (08-12 & 18-22)", list(range(8, 12)) + list(range(18, 22))),
+                    (_fc_b2, "谷时 (00-06)",          list(range(0, 6))),
+                ]:
+                    _fc_p_sel  = _fc_prior_raw[_fc_prior_raw['hour'].isin(_fc_h_range)]['price'].dropna()
+                    _fc_r_sel  = _fc_recent_raw[_fc_recent_raw['hour'].isin(_fc_h_range)]['price'].dropna()
+                    _fc_fig_vio = _pgo_fc.Figure()
+                    if len(_fc_p_sel) > 0:
+                        _fc_fig_vio.add_trace(_pgo_fc.Violin(
+                            y=_fc_p_sel.tolist(), name=f'先验({_fc_train_months}m)',
+                            box_visible=True, meanline_visible=True,
+                            fillcolor='rgba(127,140,141,0.4)', line_color='#7F8C8D',
+                        ))
+                    if len(_fc_r_sel) > 0:
+                        _fc_fig_vio.add_trace(_pgo_fc.Violin(
+                            y=_fc_r_sel.tolist(), name='近30天',
+                            box_visible=True, meanline_visible=True,
+                            fillcolor='rgba(41,128,185,0.4)', line_color='#2980B9',
+                        ))
+                    _fc_fig_vio.update_layout(
+                        title=_fc_h_label, yaxis_title="¥/kWh",
+                        height=280, margin=dict(t=40, b=10, l=50, r=10),
+                        showlegend=True,
+                    )
+                    with _fc_col_widget:
+                        st.plotly_chart(_fc_fig_vio, use_container_width=True)
+
+            # ─────────────────────────────────────────────────────────────────
+            # ENSEMBLE
+            # ─────────────────────────────────────────────────────────────────
+            with _fc_tab_ensemble:
+                st.markdown("**综合预测 — 三模型加权集成**")
+                st.caption("PCA × 权重₁ + 边际成本 × 权重₂ + 贝叶斯 × 权重₃，调整各模型权重以反映对不同信号的置信度。")
+
+                _fc_e1, _fc_e2, _fc_e3 = st.columns(3)
+                with _fc_e1:
+                    _fc_w_pca   = st.slider("PCA权重",   0.0, 1.0, 0.40, 0.05, key="fc_w_pca")
+                with _fc_e2:
+                    _fc_w_stack = st.slider("边际成本权重", 0.0, 1.0, 0.30, 0.05, key="fc_w_stack")
+                with _fc_e3:
+                    _fc_w_bayes = st.slider("贝叶斯权重", 0.0, 1.0, 0.30, 0.05, key="fc_w_bayes")
+                _fc_w_total = _fc_w_pca + _fc_w_stack + _fc_w_bayes
+                if abs(_fc_w_total - 1.0) > 0.01:
+                    st.warning(f"权重之和 = {_fc_w_total:.2f}，建议调整至1.0。当前将自动归一化。")
+                _fc_w_total = max(_fc_w_total, 1e-6)
+
+                _fc_hours = list(range(24))
+                # PCA D+1 forecast (first day)
+                _fc_pca_d1 = _fc_pca_pred[0, :]  # (24,), already in ¥/kWh
+
+                # Stack price (24h)
+                if not _fc_fund_df.empty and 'stack_price_yuan_kwh' in _fc_fund_df2.columns:
+                    _fc_stack_h24 = _np_fc.array([
+                        float(_fc_fund_df2[_fc_fund_df2['hour'] == h]['stack_price_yuan_kwh'].iloc[0])
+                        if not _fc_fund_df2[_fc_fund_df2['hour'] == h].empty else float(_fc_post_mean[h])
+                        for h in _fc_hours
+                    ])
+                else:
+                    # Fallback: use historical mean
+                    _fc_stack_h24 = _np_fc.array([
+                        float(_fc_all_hourly[_fc_all_hourly['hour'] == h]['avg_price'].iloc[0])
+                        if not _fc_all_hourly[_fc_all_hourly['hour'] == h].empty else 0.3
+                        for h in _fc_hours
+                    ])
+
+                # Ensemble (weighted)
+                _fc_ensemble = (
+                    _fc_w_pca   / _fc_w_total * _fc_pca_d1
+                    + _fc_w_stack / _fc_w_total * _fc_stack_h24
+                    + _fc_w_bayes / _fc_w_total * _fc_post_mean
+                )
+                # Uncertainty: weighted CI from PCA and Bayesian
+                _fc_ens_lo = (
+                    _fc_w_pca   / _fc_w_total * _fc_pca_pred_lo[0, :]
+                    + _fc_w_stack / _fc_w_total * _fc_stack_h24 * 0.93
+                    + _fc_w_bayes / _fc_w_total * _fc_post_lo90
+                )
+                _fc_ens_hi = (
+                    _fc_w_pca   / _fc_w_total * _fc_pca_pred_hi[0, :]
+                    + _fc_w_stack / _fc_w_total * _fc_stack_h24 * 1.07
+                    + _fc_w_bayes / _fc_w_total * _fc_post_hi90
+                )
+
+                _fc_fig_ens = _pgo_fc.Figure()
+                _fc_fig_ens.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours + _fc_hours[::-1],
+                    y=list(_fc_ens_hi) + list(_fc_ens_lo[::-1]),
+                    fill='toself', fillcolor='rgba(231,76,60,0.15)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    name='90% 置信区间',
+                ))
+                _fc_fig_ens.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_ensemble),
+                    name='综合预测', line=dict(color='#E74C3C', width=3),
+                ))
+                _fc_fig_ens.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_pca_d1),
+                    name=f'PCA(w={_fc_w_pca:.2f})', line=dict(dash='dot', color='#9B59B6', width=1.5),
+                ))
+                _fc_fig_ens.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_stack_h24),
+                    name=f'边际成本(w={_fc_w_stack:.2f})', line=dict(dash='dot', color='#2980B9', width=1.5),
+                ))
+                _fc_fig_ens.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_post_mean),
+                    name=f'贝叶斯(w={_fc_w_bayes:.2f})', line=dict(dash='dot', color='#27AE60', width=1.5),
+                ))
+                if not _fc_all_hourly.empty:
+                    _fc_fig_ens.add_trace(_pgo_fc.Scatter(
+                        x=_fc_all_hourly['hour'].tolist(),
+                        y=_fc_all_hourly['avg_price'].tolist(),
+                        name='历史均值', line=dict(dash='dash', color='#7F8C8D', width=1),
+                    ))
+                _fc_fig_ens.update_layout(
+                    title=f"{_fc_prov} — D+1 综合价格预测（¥/kWh）",
+                    xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                               ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                    yaxis_title="¥/kWh", height=440,
+                    margin=dict(t=40, b=20, l=60, r=20),
+                    legend=dict(orientation='h', y=-0.32),
+                )
+                st.plotly_chart(_fc_fig_ens, use_container_width=True)
+
+                # Summary metrics
+                st.markdown("**综合预测关键指标**")
+                _fc_m1, _fc_m2, _fc_m3, _fc_m4, _fc_m5 = st.columns(5)
+                _fc_m1.metric("日均预测",   f"{_fc_ensemble.mean():.4f} ¥/kWh")
+                _fc_m2.metric("峰时均值",   f"{_fc_ensemble[list(range(8,12))+list(range(18,22))].mean():.4f} ¥/kWh")
+                _fc_m3.metric("谷时均值",   f"{_fc_ensemble[list(range(0,6))].mean():.4f} ¥/kWh")
+                _fc_m4.metric("峰谷价差",   f"{((_fc_ens_hi.max() - _fc_ens_lo.min()) * 1000):.1f} ¥/MWh")
+                _fc_m5.metric("预测不确定性(σ)",
+                              f"{((_fc_ens_hi - _fc_ens_lo).mean() / 2 / 1.645 * 1000):.1f} ¥/MWh")
+
+                # Downloadable forecast table
+                _fc_out_df = _pd_fc.DataFrame({
+                    '时段': [f"{h:02d}:00" for h in _fc_hours],
+                    'PCA预测(¥/kWh)':     [round(float(v), 4) for v in _fc_pca_d1],
+                    '边际成本(¥/kWh)':   [round(float(v), 4) for v in _fc_stack_h24],
+                    '贝叶斯均值(¥/kWh)': [round(float(v), 4) for v in _fc_post_mean],
+                    '综合预测(¥/kWh)':   [round(float(v), 4) for v in _fc_ensemble],
+                    '90%区间下限(¥/kWh)':[round(float(v), 4) for v in _fc_ens_lo],
+                    '90%区间上限(¥/kWh)':[round(float(v), 4) for v in _fc_ens_hi],
+                })
+                st.dataframe(_fc_out_df, hide_index=True, use_container_width=True)
+                st.download_button(
+                    "下载预测结果 CSV",
+                    _fc_out_df.to_csv(index=False, encoding='utf-8-sig'),
+                    file_name=f"price_forecast_{_fc_prov}_D+1.csv",
+                    mime="text/csv",
+                    key="fc_download",
+                )
+
+            # ─────────────────────────────────────────────────────────────────
+            # BACKTEST — evaluate model accuracy on last 14-day holdout
+            # ─────────────────────────────────────────────────────────────────
+            st.divider()
+            st.markdown("### 模型回测验证（样本外14天）")
+            st.caption(
+                "以训练期之前14天作为验证集（holdout），用相同训练数据拟合的贝叶斯后验均值 "
+                "与 PCA 历史均值和 Bayesian 后验均值进行比较，计算 MAE / RMSE / MAPE。"
+            )
+
+            _fc_holdout_end   = _fc_start_dt - _pd_fc.DateOffset(days=1)
+            _fc_holdout_start = _fc_holdout_end - _pd_fc.DateOffset(days=13)
+            with st.spinner("加载回测数据…"):
+                _fc_holdout_df = _load_price_holdout(
+                    _conn, _fc_prov,
+                    str(_fc_holdout_start.date()), str(_fc_holdout_end.date()),
+                    _fc_pcol,
+                )
+
+            if _fc_holdout_df.empty:
+                st.caption("无法获取验证期数据（可能超出历史范围）。")
+            else:
+                # Group holdout by hour, compute actual average per hour
+                _fc_ho_hourly = _fc_holdout_df.groupby('hour')['actual_price'].mean().reset_index()
+                _fc_ho_mean   = _np_fc.zeros(24)
+                for _, _hrow in _fc_ho_hourly.iterrows():
+                    _fc_ho_mean[int(_hrow['hour'])] = float(_hrow['actual_price'])
+
+                # PCA backtest: use historical mean from training window
+                _fc_bt_pca    = _fc_mean_24h   # training period hourly mean, ¥/kWh
+                _fc_bt_bayes  = _fc_post_mean  # Bayesian posterior mean
+                _fc_bt_ens    = (_fc_w_pca / _fc_w_total * _fc_bt_pca
+                                 + _fc_w_bayes / _fc_w_total * _fc_bt_bayes
+                                 + _fc_w_stack / _fc_w_total * _fc_stack_h24)
+
+                def _fc_metrics(pred, actual):
+                    mask = actual > 0
+                    if mask.sum() == 0:
+                        return 0, 0, 0
+                    mae  = _np_fc.abs(pred[mask] - actual[mask]).mean()
+                    rmse = _np_fc.sqrt(((pred[mask] - actual[mask])**2).mean())
+                    mape = (_np_fc.abs((pred[mask] - actual[mask]) / actual[mask])).mean() * 100
+                    return float(mae), float(rmse), float(mape)
+
+                _fc_bt_cols = st.columns(3)
+                for _fc_bt_lbl, _fc_bt_pred, _fc_bt_col in [
+                    ("历史均值(PCA基准)", _fc_bt_pca,   _fc_bt_cols[0]),
+                    ("贝叶斯后验均值",   _fc_bt_bayes, _fc_bt_cols[1]),
+                    ("综合预测",         _fc_bt_ens,   _fc_bt_cols[2]),
+                ]:
+                    _fc_mae, _fc_rmse, _fc_mape = _fc_metrics(_fc_bt_pred, _fc_ho_mean)
+                    with _fc_bt_col:
+                        st.markdown(f"**{_fc_bt_lbl}**")
+                        st.metric("MAE",  f"{_fc_mae*1000:.2f} ¥/MWh")
+                        st.metric("RMSE", f"{_fc_rmse*1000:.2f} ¥/MWh")
+                        st.metric("MAPE", f"{_fc_mape:.1f}%")
+
+                _fc_fig_bt = _pgo_fc.Figure()
+                _fc_fig_bt.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_ho_mean),
+                    name="验证期实际均值", line=dict(color='#2C3E50', width=2.5),
+                ))
+                _fc_fig_bt.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_bt_bayes),
+                    name="贝叶斯后验均值", line=dict(color='#E74C3C', width=2, dash='dot'),
+                ))
+                _fc_fig_bt.add_trace(_pgo_fc.Scatter(
+                    x=_fc_hours, y=list(_fc_bt_pca),
+                    name="PCA历史均值", line=dict(color='#9B59B6', width=2, dash='dot'),
+                ))
+                _fc_fig_bt.update_layout(
+                    title=f"{_fc_prov} — 模型回测（验证期 {_fc_holdout_start.date()} ~ {_fc_holdout_end.date()}）",
+                    xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                               ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                    yaxis_title="¥/kWh", height=320,
+                    margin=dict(t=40, b=20, l=60, r=20),
+                    legend=dict(orientation='h', y=-0.3),
+                )
+                st.plotly_chart(_fc_fig_bt, use_container_width=True)
+
+            # ─────────────────────────────────────────────────────────────────
+            # MONTHLY AGGREGATE VIEW (horizon >= 30)
+            # ─────────────────────────────────────────────────────────────────
+            if _fc_horizon >= 30:
+                st.divider()
+                _fc_mo_title = "### M+1 月度价格分布预测" if _fc_horizon <= 31 else f"### 月度价格分布预测（未来{_fc_horizon}天）"
+                st.markdown(_fc_mo_title)
+                st.caption(
+                    "基于贝叶斯后验分布，展示下月各时段价格的期望区间。"
+                    "箱线图为后验分布（均值 ± 1σ / 2σ）在月内的变化范围。"
+                )
+                # Seasonal adjustment: split training data by month to estimate seasonal σ
+                _fc_monthly_sql = f"""
+                    SELECT EXTRACT(month FROM datetime)::int AS month,
+                           EXTRACT(hour  FROM datetime)::int AS hour,
+                           AVG({_fc_pcol}) AS avg_price,
+                           STDDEV({_fc_pcol}) AS std_price
+                    FROM marketdata.spot_prices_hourly
+                    WHERE province = %s AND datetime BETWEEN %s AND %s
+                      AND {_fc_pcol} IS NOT NULL
+                    GROUP BY month, hour
+                    ORDER BY month, hour
+                """
+                with st.spinner("加载月度分布数据…"):
+                    _fc_monthly_df = _pd_fc.read_sql(
+                        _fc_monthly_sql, _conn(),
+                        params=[_fc_prov, _fc_start, _fc_end]
+                    )
+
+                # Next calendar month
+                _fc_next_month = (_fc_end_dt + _pd_fc.DateOffset(months=1)).month
+                _fc_month_data = _fc_monthly_df[_fc_monthly_df['month'] == _fc_next_month]
+                if _fc_month_data.empty:
+                    # Fallback: use all months average
+                    _fc_month_data = _fc_monthly_df.groupby('hour').agg(
+                        avg_price=('avg_price', 'mean'),
+                        std_price=('std_price', 'mean')
+                    ).reset_index()
+                    _fc_month_data['month'] = _fc_next_month
+
+                _fc_month_data = _fc_month_data.sort_values('hour')
+                _fc_m_hours = _fc_month_data['hour'].tolist()
+                _fc_m_mean  = _fc_month_data['avg_price'].fillna(0).tolist()
+                _fc_m_std   = _fc_month_data['std_price'].fillna(0.02).tolist()
+
+                _fc_fig_monthly = _pgo_fc.Figure()
+                _fc_m_mean_arr = _np_fc.array(_fc_m_mean)
+                _fc_m_std_arr  = _np_fc.array(_fc_m_std)
+                # 2σ band
+                _fc_fig_monthly.add_trace(_pgo_fc.Scatter(
+                    x=_fc_m_hours + _fc_m_hours[::-1],
+                    y=list(_fc_m_mean_arr + 2*_fc_m_std_arr) + list((_fc_m_mean_arr - 2*_fc_m_std_arr)[::-1]),
+                    fill='toself', fillcolor='rgba(231,76,60,0.08)',
+                    line=dict(color='rgba(255,255,255,0)'), name='±2σ (95%)',
+                ))
+                # 1σ band
+                _fc_fig_monthly.add_trace(_pgo_fc.Scatter(
+                    x=_fc_m_hours + _fc_m_hours[::-1],
+                    y=list(_fc_m_mean_arr + _fc_m_std_arr) + list((_fc_m_mean_arr - _fc_m_std_arr)[::-1]),
+                    fill='toself', fillcolor='rgba(231,76,60,0.20)',
+                    line=dict(color='rgba(255,255,255,0)'), name='±1σ (68%)',
+                ))
+                _fc_fig_monthly.add_trace(_pgo_fc.Scatter(
+                    x=_fc_m_hours, y=_fc_m_mean,
+                    name=f'{_fc_next_month}月 历史同期均值',
+                    line=dict(color='#E74C3C', width=2.5),
+                ))
+                # Overlay Bayesian posterior mean
+                _fc_fig_monthly.add_trace(_pgo_fc.Scatter(
+                    x=list(range(24)), y=list(_fc_post_mean),
+                    name='贝叶斯后验均值(综合调整)',
+                    line=dict(color='#2980B9', width=2, dash='dot'),
+                ))
+                _fc_fig_monthly.update_layout(
+                    title=f"{_fc_prov} — {_fc_next_month}月 日前价格分布预测（历史同期 ± σ）",
+                    xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                               ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                    yaxis_title="¥/kWh", height=380,
+                    margin=dict(t=40, b=20, l=60, r=20),
+                    legend=dict(orientation='h', y=-0.3),
+                )
+                st.plotly_chart(_fc_fig_monthly, use_container_width=True)
+
+                # Monthly summary table
+                _fc_monthly_summary = _pd_fc.DataFrame({
+                    '指标': ['月均价 (¥/kWh)', '峰时均价 (¥/kWh)', '谷时均价 (¥/kWh)',
+                             '峰谷差 (¥/MWh)', '价格波动率 (1σ, ¥/MWh)'],
+                    '预测值': [
+                        f"{_fc_m_mean_arr.mean():.4f}",
+                        f"{_fc_m_mean_arr[list(range(8,12))+list(range(18,22))].mean():.4f}",
+                        f"{_fc_m_mean_arr[list(range(0,6))].mean():.4f}",
+                        f"{(_fc_m_mean_arr.max() - _fc_m_mean_arr.min()) * 1000:.1f}",
+                        f"{_fc_m_std_arr.mean() * 1000:.1f}",
+                    ],
+                })
+                st.dataframe(_fc_monthly_summary, hide_index=True, use_container_width=False)
+
 
 # ── Tab 9: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:

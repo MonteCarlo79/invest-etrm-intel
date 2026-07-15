@@ -6,7 +6,7 @@ in a given market from the LingFeng SaaS REST API and upserts into:
     marketdata.md_shanxi_nodal_price_96
 
 API reference: data/nodal/实时节点电价接口使用说明文档_V1.1.pdf
-  Endpoint  : POST https://lingfengsaas.tradingthink.cn/api/open/v1/ods/data/query
+  Endpoint  : POST https://lingfeng-saas.tradingthink.cn/api/open/v1/ods/data/query
   Auth      : X-API-KEY-SECRET  request header
   Request   : {"marketName": "山东", "date": "YYYY-MM-DD"}
   Response  : {"code": 200, "data": [{"nodeName": "…", "date": "…",
@@ -42,7 +42,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
-_ENDPOINT = "https://lingfengsaas.tradingthink.cn/api/open/v1/ods/data/query"
+_ENDPOINT = "https://lingfeng-saas.tradingthink.cn/api/open/v1/ods/data/query"
 
 # Per-request timeouts: (connect_timeout_s, read_timeout_s)
 _TIMEOUT = (10, 120)

@@ -500,6 +500,52 @@ def _build_save_picker_card() -> dict:
     }
 
 
+def _build_llm_selector_card(current: str, available: list[str]) -> dict:
+    """Feishu card for tapping to select the active LLM model."""
+    _labels = {
+        "gpt":      ("🟢", "GPT-4o", "Azure OpenAI — 速度快，日常首选"),
+        "deepseek": ("🔵", "DeepSeek", "中文优化，性价比高"),
+        "claude":   ("🟣", "Claude Sonnet", "Anthropic — 分析推理强"),
+        "auto":     ("🔄", "Auto", "自动降级：GPT → DeepSeek → Claude"),
+    }
+    current_label = _labels.get(current, ("⬜", current, ""))[1]
+
+    def _btn(alias: str) -> dict:
+        icon, name, desc = _labels.get(alias, ("⬜", alias, ""))
+        is_current = alias == current
+        return {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": f"{icon} {name}" + (" ✓" if is_current else "")},
+            "type": "primary" if is_current else "default",
+            "value": {"act": "set_llm", "model": alias},
+        }
+
+    model_buttons = [_btn(m) for m in available if m != "auto"] + [_btn("auto")]
+    rows = [model_buttons[i:i+3] for i in range(0, len(model_buttons), 3)]
+
+    desc_lines = "\n".join(
+        f"**{_labels[m][0]} {_labels[m][1]}** — {_labels[m][2]}"
+        for m in [*[m for m in available if m != "auto"], "auto"]
+        if m in _labels
+    )
+
+    elements = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": f"当前模型：**{current_label}**\n\n{desc_lines}"}},
+        {"tag": "hr"},
+    ]
+    for row in rows:
+        elements.append({"tag": "action", "actions": row})
+    elements.append({"tag": "note", "elements": [
+        {"tag": "plain_text", "content": "所选模型对所有分析任务（包括贝叶斯分析）生效。设置持久保存。"}
+    ]})
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {"template": "indigo", "title": {"content": "🤖 LLM 模型选择", "tag": "plain_text"}},
+        "elements": elements,
+    }
+
+
 def _build_survey_card(mode: str) -> dict:
     """Region picker for 调研报告 (mode='report') or 资产调研 (mode='asset')."""
     def _btn(label: str, region: str) -> dict:
@@ -1688,6 +1734,22 @@ def create_app() -> FastAPI:
                     feishu.send_text(open_id=open_id, text=f"📁 已设置存档位置：{short}\n请依次发送文件，发送文字消息可取消。")
             return {}
 
+        if act == "set_llm":
+            model_alias = value.get("model", "auto")
+            if open_id:
+                try:
+                    canon = agent.set_model_pref(open_id, model_alias)
+                    label = agent._MODEL_LABELS.get(canon, canon)
+                    if feishu:
+                        feishu.send_text(open_id=open_id, text=f"✅ 模型已切换：{label}")
+                        # Refresh the card to show updated selection
+                        _avail = agent.available_models() + ["auto"]
+                        feishu.send_card(open_id=open_id, card=_build_llm_selector_card(canon, _avail))
+                except Exception as _me:
+                    if feishu:
+                        feishu.send_text(open_id=open_id, text=f"❌ 模型切换失败：{_me}")
+            return {}
+
         if act == "survey_region":
             survey_mode = value.get("mode", "report")
             region = value.get("region", "")
@@ -2870,6 +2932,114 @@ def _handle_message(
         )
         return True
 
+    # ── /guide — send full command reference ─────────────────────────────────
+    if _re.match(r'^/?(?:guide|命令|指南|commands?|command.list|帮助)$', msg.text.strip(), _re.I):
+        _GUIDE = """📖 Hermes Command Reference
+
+━━━━━━━━━━━━━━━━━━━━
+🔧 SETTINGS
+━━━━━━━━━━━━━━━━━━━━
+/menu — show interactive menu (also 菜单)
+/model — show / switch chat LLM
+  /model claude | gpt | deepseek | auto
+/setllm — set LLM for market reports (Feishu card)
+/progress — check background job status
+
+━━━━━━━━━━━━━━━━━━━━
+💬 NATURAL LANGUAGE (no slash needed)
+━━━━━━━━━━━━━━━━━━━━
+Ask anything directly:
+  江苏有多大储能装机？
+  山东昨天现货价格？
+  蒙西最新套利空间？
+  搜索 储能政策最新动态   ← internet search
+  你认为 [question]       ← Bayesian reasoning
+
+━━━━━━━━━━━━━━━━━━━━
+📊 REPORTS
+━━━━━━━━━━━━━━━━━━━━
+/report mengxi — re-send Mengxi BESS daily
+/report ranking — re-send province ranking report
+/dailyreport (电力日报) — generate market daily
+/monthlyreport (电力月报) — generate market monthly
+/sendwecom — push last monthly report to WeCom groups
+调研报告 — market survey (pick region, Feishu)
+资产调研 — asset research (pick region, Feishu)
+帮我起草深度报告 — start deep-report drafting mode
+取消报告模式 — exit report drafting mode
+
+━━━━━━━━━━━━━━━━━━━━
+📁 FILE MANAGEMENT
+━━━━━━━━━━━━━━━━━━━━
+/save — folder picker for next upload
+/save -1 — unlimited mode (all uploads → same folder until next text msg)
+/save kb — ingest next uploaded file into KB
+Upload any file — auto-routed to KB / capcomp / capacity
+提供源文件：[title] — retrieve KB doc by title
+
+━━━━━━━━━━━━━━━━━━━━
+🔍 DATA SCREENERS
+━━━━━━━━━━━━━━━━━━━━
+/capacity — scan KB for 装机容量 files, upsert to DB
+/capacity-add 广东 2026-05 储能2000MW 风电5000MW 光伏8000MW
+/capacity-add https://example.gov.cn/cap202605.pdf
+
+/capcomp — scan KB for 容量补偿+调频 (~10-15 min)
+/capcomp-add 广东 容量补偿 165元/kW 净负荷峰值6小时
+/capcomp-add 山东165元/kW 山西160元/kW 甘肃165元/kW  ← multi-province text
+/capcomp-add https://example.gov.cn/policy.pdf
+帮我存这几张容量补偿截图 — batch OCR mode for screenshots
+
+/sysopfee — scan for 系统运行费 (also 系统运行费)
+/daili — scan for 代理购电价格
+/news — run news screener (also 新闻)
+机制竞价 — upcoming auctions + recent results
+
+/exchange-report — list ingested exchange monthly reports
+/exchange-summary — PDF summary of latest exchange metrics
+/exchange-summary 2026-05 — specific month
+
+━━━━━━━━━━━━━━━━━━━━
+📈 NODAL PRICE BACKFILL
+━━━━━━━━━━━━━━━━━━━━
+/backfill-annual 2025 — compute annual nodal PF rankings
+/backfill-daily — recompute 2025-01-01 → yesterday
+/backfill-daily 2026-01-01 — from date → yesterday
+/backfill-daily 2026-06-01 2026-07-08 — explicit range
+/scrape-nodal — scrape yesterday's nodal prices
+/scrape-nodal 2026-07-04 — specific date
+/scrape-nodal 2026-07-01 2026-07-04 — date range
+
+━━━━━━━━━━━━━━━━━━━━
+🌐 LINGFENG (29-province prices)
+━━━━━━━━━━━━━━━━━━━━
+lingfeng run — collect today's data (/lf_run)
+/lf_run 2026-05-01 — backfill from date
+/lf_run 2026-05-01:2026-07-09 — explicit range
+lingfeng password: NEW_PW — update login password
+
+━━━━━━━━━━━━━━━━━━━━
+⏰ AUTO SCHEDULE (Beijing time)
+━━━━━━━━━━━━━━━━━━━━
+08:35 — morning briefing (weather + news + market)
+14:00 — news screener
+Daily — Mengxi BESS daily report
+Daily — Province BESS ranking report"""
+
+        def _guide_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=text)
+            except Exception as _ge:
+                logger.error("/guide reply failed: %s", _ge)
+
+        _guide_reply(_GUIDE)
+        return True
+
     # ── /progress — show status of long-running background jobs ─────────────────
     if _re.match(r'^/?progress$', msg.text.strip(), _re.I):
         import datetime as _pdt
@@ -3732,8 +3902,18 @@ def _handle_message(
     # ── Survey mode — 调研报告 / 资产调研 ────────────────────────────────────
     _txt = msg.text.strip()
 
-    # Show region picker cards
-    if _txt in ("调研报告", "市场调研") and msg.source == "feishu" and feishu:
+    # LLM selector card (formerly "市场调研" shortcut button)
+    if _txt in ("LLM选择", "llm选择", "模型选择", "市场调研") and msg.source == "feishu" and feishu:
+        try:
+            _cur = agent.get_model_pref(msg.sender_id)
+            _avail = agent.available_models() + ["auto"]
+            feishu.send_card(open_id=msg.sender_id, card=_build_llm_selector_card(_cur, _avail))
+        except Exception as _se:
+            logger.error("llm selector card failed: %s", _se)
+        return True
+
+    # Show region picker card for 调研报告
+    if _txt in ("调研报告",) and msg.source == "feishu" and feishu:
         try:
             feishu.send_card(open_id=msg.sender_id, card=_build_survey_card("report"))
         except Exception as _se:
@@ -3991,7 +4171,13 @@ def _handle_message(
             from datetime import datetime as _dt, timezone as _tz, timedelta as _td
             _bj_now = _dt.now(tz=_tz(_td(hours=8)))
             _bj_str = _bj_now.strftime('%Y-%m-%d %H:%M')
-            ack = action.reply or "🧠 正在进行贝叶斯推理分析（先验 → 证据 → 后验），约30秒…"
+            _bay_fmt = action.params.get("format", "text").lower()
+            _bay_as_pdf = _bay_fmt == "pdf"
+            ack = action.reply or (
+                "🧠 正在进行贝叶斯推理分析（先验 → 证据 → 后验），约45秒…稍后发送PDF报告。"
+                if _bay_as_pdf else
+                "🧠 正在进行贝叶斯推理分析（先验 → 证据 → 后验），约30秒…"
+            )
             _ack_full = f"{ack}\n─\n[{_bj_str} 北京时间]"
             if msg.source == "feishu" and feishu:
                 feishu.send_text(open_id=msg.sender_id, text=_ack_full)
@@ -4000,21 +4186,42 @@ def _handle_message(
             elif msg.source == "telegram" and telegram:
                 telegram.send_text(chat_id=msg.sender_id, text=_ack_full)
             _bay_question = action.params.get("question", msg.text)
+            # Inject sender_id so Bayesian agent can pick up model preference
+            action.params["_chat_id"] = msg.sender_id
             try:
                 _bay_result = agent.execute(action)
                 _bj_now2 = _dt.now(tz=_tz(_td(hours=8)))
-                _bay_full = f"{_bay_result}\n─\n[{_bj_now2.strftime('%Y-%m-%d %H:%M')} 北京时间]"
-                if msg.source == "feishu" and feishu:
+                _bj_str2 = _bj_now2.strftime('%Y-%m-%d %H:%M')
+                if _bay_as_pdf and msg.source == "feishu" and feishu:
+                    # Send text summary + PDF file
+                    _bay_full = f"{_bay_result}\n─\n[{_bj_str2} 北京时间]"
                     feishu.send_text(open_id=msg.sender_id, text=_bay_full)
-                elif msg.source == "wecom" and wecom:
-                    wecom.send_text(user_id=msg.sender_id, text=_bay_full)
-                elif msg.source == "telegram" and telegram:
-                    telegram.send_text(chat_id=msg.sender_id, text=_bay_full)
+                    try:
+                        from services.hermes.bayesian_agent import _render_pdf
+                        _pdf_bytes = _render_pdf(_bay_question, _bay_result)
+                        _pdf_filename = f"hermes_analysis_{_bj_now2.strftime('%Y%m%d_%H%M')}.pdf"
+                        _file_key = feishu.upload_file(_pdf_bytes, _pdf_filename, file_type="pdf")
+                        feishu.send_file(open_id=msg.sender_id, file_key=_file_key)
+                    except Exception as _pdf_err:
+                        logger.error("PDF generation/send failed: %s", _pdf_err, exc_info=True)
+                        feishu.send_text(open_id=msg.sender_id, text=f"（PDF生成失败：{_pdf_err}）")
+                else:
+                    _bay_full = f"{_bay_result}\n─\n[{_bj_str2} 北京时间]"
+                    if msg.source == "feishu" and feishu:
+                        feishu.send_text(open_id=msg.sender_id, text=_bay_full)
+                    elif msg.source == "wecom" and wecom:
+                        wecom.send_text(user_id=msg.sender_id, text=_bay_full)
+                    elif msg.source == "telegram" and telegram:
+                        telegram.send_text(chat_id=msg.sender_id, text=_bay_full)
             except Exception as _bay_err:
                 logger.error("BAYESIAN_ANALYSIS failed: %s", _bay_err, exc_info=True)
                 _err = f"贝叶斯分析失败：{_bay_err}"
                 if msg.source == "feishu" and feishu:
                     feishu.send_text(open_id=msg.sender_id, text=_err)
+                elif msg.source == "wecom" and wecom:
+                    wecom.send_text(user_id=msg.sender_id, text=_err)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=_err)
             reply = ""  # already sent above
         elif action.action == "DRAFT_REPORT":
             # Send ack immediately (report generation takes 1-2 min)

@@ -144,14 +144,23 @@ def infer_report_year(filename: str) -> Optional[int]:
 
 # ── Text extraction ────────────────────────────────────────────────────────────
 
-def _render_pdf_page_to_png(file_bytes: bytes, page_index: int) -> bytes:
-    """Render a single PDF page to PNG bytes at 2× zoom using PyMuPDF."""
+def _render_pdf_page_to_png(file_bytes: bytes, page_index: int, max_bytes: int = 4_500_000) -> bytes:
+    """Render a single PDF page to PNG bytes at 2× zoom using PyMuPDF.
+
+    If the resulting PNG exceeds *max_bytes* (default 4.5 MB, just under
+    Textract's 5 MB limit), the scale is halved until it fits.
+    """
     import fitz  # pymupdf
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     page = doc[page_index]
-    mat = fitz.Matrix(2.0, 2.0)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-    return pix.tobytes("png")
+    scale = 2.0
+    while scale >= 0.5:
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        png = pix.tobytes("png")
+        if len(png) <= max_bytes or scale <= 0.5:
+            return png
+        scale /= 2
 
 
 def _ocr_page_with_vision(image_bytes: bytes, api_key: str) -> str:

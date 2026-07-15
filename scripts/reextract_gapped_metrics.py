@@ -45,6 +45,14 @@ def main() -> None:
         "--dry-run", action="store_true",
         help="Print what would be processed without running extraction",
     )
+    parser.add_argument(
+        "--include-anhui", action="store_true",
+        help="Include 安徽 (scanned PDFs — requires Textract/Vision OCR)",
+    )
+    parser.add_argument(
+        "--force-all", action="store_true",
+        help="Re-extract ALL ingested reports (not just gapped ones). Use after schema changes.",
+    )
     args = parser.parse_args()
 
     pg_url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
@@ -73,9 +81,14 @@ def main() -> None:
     conn = psycopg2.connect(pg_url)
     try:
         with conn.cursor() as cur:
-            # Find metrics rows where at least 2 of the 3 key price/volume fields are NULL
-            # (excluding 安徽 which is scanned — would just waste API calls)
             province_filter = "AND m.province = %s" if args.province else ""
+            anhui_exclude = "" if args.include_anhui else "AND m.province NOT LIKE '%%安徽%%'"
+            gap_filter = "" if args.force_all else """
+                  AND (
+                      CASE WHEN m.avg_price_yuan_mwh IS NULL THEN 1 ELSE 0 END +
+                      CASE WHEN m.spot_volume_gwh IS NULL THEN 1 ELSE 0 END +
+                      CASE WHEN m.spot_avg_price_yuan_mwh IS NULL THEN 1 ELSE 0 END
+                  ) >= 2"""
             cur.execute(
                 f"""
                 SELECT m.id, m.province, m.report_month, m.report_type,
@@ -84,12 +97,8 @@ def main() -> None:
                 FROM staging.exchange_monthly_metrics m
                 JOIN staging.exchange_monthly_reports r ON r.id = m.exchange_report_id
                 WHERE r.ingest_status = 'ingested'
-                  AND m.province NOT LIKE '%%安徽%%'
-                  AND (
-                      CASE WHEN m.avg_price_yuan_mwh IS NULL THEN 1 ELSE 0 END +
-                      CASE WHEN m.spot_volume_gwh IS NULL THEN 1 ELSE 0 END +
-                      CASE WHEN m.spot_avg_price_yuan_mwh IS NULL THEN 1 ELSE 0 END
-                  ) >= 2
+                  {anhui_exclude}
+                  {gap_filter}
                 {province_filter}
                 ORDER BY m.province, m.report_month
                 """,

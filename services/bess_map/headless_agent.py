@@ -178,6 +178,35 @@ def _build_cashflows(
     return cfs
 
 
+def _load_province_installed_capacity(engine, province: str | None = None) -> list[dict]:
+    """Return monthly BESS/wind/solar installed capacity from province_installed_monthly.
+
+    province: Chinese province name (e.g. '江苏', '山东') or None for all provinces.
+    Returns list of {province, year_month, bess_mw, wind_mw, solar_mw} sorted by province, year_month.
+    """
+    if province:
+        sql = sql_text("""
+            SELECT province, year_month, bess_mw, wind_mw, solar_mw
+            FROM marketdata.province_installed_monthly
+            WHERE province = :prov
+            ORDER BY year_month DESC
+            LIMIT 24
+        """)
+        params = {"prov": province}
+    else:
+        sql = sql_text("""
+            SELECT province, year_month, bess_mw, wind_mw, solar_mw
+            FROM marketdata.province_installed_monthly
+            ORDER BY province, year_month DESC
+        """)
+        params = {}
+    try:
+        df = pd.read_sql(sql, engine, params=params)
+        return df.to_dict(orient="records") if not df.empty else []
+    except Exception:
+        return []
+
+
 def _load_mengxi_capacity(engine) -> dict:
     """Return total installed capacity and per-owner breakdown from marketdata.station_master."""
     sql = sql_text("""
@@ -236,10 +265,30 @@ _TOOLS = [
     },
     {
         "name": "get_mengxi_capacity",
-        "description": "Total installed BESS capacity in Mengxi (Inner Mongolia West) market. Returns total MW, GW, GWh (assuming 4h duration), plant count, and breakdown by owner (业主).",
+        "description": "Total installed BESS capacity in Mengxi (Inner Mongolia West) market. Returns total MW, GW, GWh (assuming 4h duration), plant count, and breakdown by owner (业主). Use this for Mengxi plant-level ownership breakdown.",
         "input_schema": {
             "type": "object",
             "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_province_installed_capacity",
+        "description": (
+            "Monthly installed BESS, wind, and solar capacity (MW) for any Chinese province "
+            "from marketdata.province_installed_monthly. Covers all provinces including 江苏, 山东, "
+            "广东, 湖北, 河南, 浙江, 蒙西, 蒙东, 甘肃, etc. Use this when user asks about "
+            "province-level 储能装机/独立储能/installed capacity/BESS capacity for any province. "
+            "Returns latest 24 months if province is specified, or latest snapshot for all provinces."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "province": {
+                    "type": "string",
+                    "description": "Chinese province name e.g. '江苏', '山东'. Omit for all provinces.",
+                },
+            },
             "required": [],
         },
     },
@@ -291,7 +340,11 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
         "3. Financial case → call get_irr_estimate (always use default use_realised=true; "
         "IRR < 8% = marginal, 8-20% = normal range, > 20% = strong, > 30% = flag as exceptional "
         "and state the data window and revenue basis explicitly in your answer)\n"
-        "4. Mengxi installed capacity / plant list / 装机容量 → call get_mengxi_capacity\n"
+        "4. Mengxi installed capacity / plant list / 业主分布 → call get_mengxi_capacity\n"
+        "5. Any province installed capacity / 储能装机 / 独立储能容量 → call get_province_installed_capacity(province=<name>)\n"
+        "   Returns monthly MW data from province_installed_monthly. Latest row = current installed.\n"
+        "   For 蒙西 capacity questions about specific owners, use get_mengxi_capacity instead.\n"
+
     )
 
     def dispatch(name: str, inp: dict) -> str:
@@ -315,6 +368,13 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
                 result = _load_mengxi_capacity(engine)
                 import json as _json
                 return _json.dumps(result, ensure_ascii=False, default=str) if result else "No capacity data found."
+
+            elif name == "get_province_installed_capacity":
+                import json as _json
+                rows = _load_province_installed_capacity(engine, inp.get("province"))
+                if not rows:
+                    return "No installed capacity data found for the requested province."
+                return _json.dumps(rows, ensure_ascii=False, default=str)
 
             elif name == "get_irr_estimate":
                 econ = _load_avg_economics(engine, inp["province"], float(inp.get("duration_h", 4.0)))
