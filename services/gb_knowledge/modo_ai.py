@@ -22,6 +22,10 @@ from services.gb_knowledge.base import BaseConnector
 
 logger = logging.getLogger(__name__)
 
+# Path where the Playwright browser session (cookies + localStorage) is persisted
+# between container runs.  Override via MODO_SESSION_PATH env var.
+_SESSION_PATH = os.environ.get("MODO_SESSION_PATH", "/tmp/modo_session.json")
+
 # ---------------------------------------------------------------------------
 # Standard questions sent to Modo AI each night
 # ---------------------------------------------------------------------------
@@ -96,6 +100,9 @@ class ModoAIConnector(BaseConnector):
     def __init__(self, email: str | None = None, password: str | None = None):
         self._email    = email    or os.environ.get("MODO_EMAIL",    "")
         self._password = password or os.environ.get("MODO_PASSWORD", "")
+        # Set to True when _login() detects that Modo sent a magic link instead of
+        # showing a password field — prevents pointless retries that spam more emails.
+        self._magic_link_sent = False
 
     # ------------------------------------------------------------------
     # BaseConnector interface
@@ -119,7 +126,11 @@ class ModoAIConnector(BaseConnector):
                 headless=True,
                 args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
+
+            # Load persisted session so we can skip login on re-runs
+            saved_state = _load_session_state()
             ctx = browser.new_context(
+                storage_state=saved_state,   # None = fresh context
                 viewport={"width": 1280, "height": 900},
                 user_agent=(
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -143,26 +154,67 @@ class ModoAIConnector(BaseConnector):
 
             try:
                 logged_in = False
-                for _attempt in range(1, 3):   # max 2 attempts
-                    logger.info("[modo_ai] Login attempt %d/2", _attempt)
-                    logged_in = self._login(page)
-                    if logged_in:
-                        break
-                    if _attempt < 2:
-                        logger.warning("[modo_ai] Login attempt %d failed — retrying in 10s", _attempt)
-                        time.sleep(10)
-                        # Reload the sign-in page fresh before retrying
-                        try:
-                            page.goto("https://modoenergy.com/sign-in", timeout=_NAV_TIMEOUT,
-                                      wait_until="domcontentloaded")
-                            page.wait_for_timeout(2_000)
-                        except Exception:
-                            pass
+
+                # ── 1. Try restored session ───────────────────────────────
+                if saved_state:
+                    logger.info("[modo_ai] Checking restored session from %s", _SESSION_PATH)
+                    try:
+                        page.goto(
+                            "https://modoenergy.com/home",
+                            timeout=_NAV_TIMEOUT,
+                            wait_until="domcontentloaded",
+                        )
+                        page.wait_for_timeout(2_000)
+                        if self._is_authenticated(page):
+                            logged_in = True
+                            logger.info("[modo_ai] Saved session is valid — login skipped")
+                    except Exception as exc:
+                        logger.warning("[modo_ai] Session restore check failed: %s", exc)
+
+                # ── 2. Try magic link URL (set once via env var) ──────────
+                if not logged_in:
+                    magic_link_url = os.environ.get("MODO_MAGIC_LINK_URL", "").strip()
+                    if magic_link_url:
+                        logged_in = self._login_via_magic_link(page, magic_link_url)
+
+                # ── 3. Fall back to password login ────────────────────────
+                if not logged_in:
+                    self._magic_link_sent = False
+                    for _attempt in range(1, 3):   # max 2 attempts
+                        logger.info("[modo_ai] Login attempt %d/2", _attempt)
+                        logged_in = self._login(page)
+                        if logged_in:
+                            break
+                        if self._magic_link_sent:
+                            # Modo sent an auth email — retrying will only send more emails
+                            logger.error(
+                                "[modo_ai] Magic link auth detected — aborting without retry"
+                            )
+                            _notify_magic_link_required(page.url)
+                            break
+                        if _attempt < 2:
+                            logger.warning(
+                                "[modo_ai] Login attempt %d failed — retrying in 10s", _attempt
+                            )
+                            time.sleep(10)
+                            try:
+                                page.goto(
+                                    "https://modoenergy.com/sign-in",
+                                    timeout=_NAV_TIMEOUT,
+                                    wait_until="domcontentloaded",
+                                )
+                                page.wait_for_timeout(2_000)
+                            except Exception:
+                                pass
 
                 if not logged_in:
-                    logger.error("[modo_ai] Login failed after 2 attempts — aborting distillation")
-                    _notify_login_failure(2, page.url)
+                    if not self._magic_link_sent:
+                        logger.error("[modo_ai] Login failed after all attempts — aborting")
+                        _notify_login_failure(2, page.url)
                     return
+
+                # Persist session so tomorrow's run (same container) skips login
+                _save_session_state(ctx)
 
                 all_questions = [
                     # (question_text, url, is_last)
@@ -224,14 +276,46 @@ class ModoAIConnector(BaseConnector):
     # Login
     # ------------------------------------------------------------------
 
+    def _login_via_magic_link(self, page, url: str) -> bool:
+        """Navigate to a Modo magic link URL to authenticate.
+
+        Set MODO_MAGIC_LINK_URL=<url from email> in ECS env vars to use this.
+        The session is saved after success so future runs reuse it.
+        """
+        try:
+            logger.info("[modo_ai] Authenticating via MODO_MAGIC_LINK_URL")
+            page.goto(url, timeout=_NAV_TIMEOUT, wait_until="domcontentloaded")
+            page.wait_for_timeout(3_000)
+            _save_screenshot(page, "magic_link_after_nav")
+            try:
+                page.wait_for_url(
+                    lambda u: "modoenergy.com/home" in u,
+                    timeout=15_000,
+                )
+            except Exception:
+                pass
+            page.wait_for_timeout(2_000)
+            self._dismiss_cookie_banner(page)
+            if self._is_authenticated(page):
+                logger.info("[modo_ai] Magic link authentication successful")
+                return True
+            logger.error("[modo_ai] Magic link auth failed; URL after nav: %s", page.url)
+            _save_screenshot(page, "magic_link_failed")
+            return False
+        except Exception as exc:
+            logger.error("[modo_ai] Magic link nav error: %s", exc)
+            return False
+
     def _login(self, page) -> bool:
         """Navigate to Modo sign-in page and authenticate via email + password.
 
-        Handles two known flows:
+        Handles known login flows:
           Flow A (original):  email field + "sign in with a password" link visible
                               → click link → password field → Continue
           Flow B (Auth0-style): email field + Continue button → password field → Continue
           Flow C (single page): email + password both visible → fill both → Continue
+          Flow D (magic link):  after Continue Modo sends an auth email instead of
+                              showing a password field → sets self._magic_link_sent
         """
         try:
             page.goto(
@@ -293,6 +377,12 @@ class ModoAIConnector(BaseConnector):
                 logger.info("[modo_ai] Clicked 'sign in with a password' link (Flow A)")
                 page.wait_for_timeout(2_500)
                 _save_screenshot(page, "03_after_pw_link_click")
+                # Check for magic link page even after Flow A click
+                if _is_magic_link_page(page):
+                    logger.error("[modo_ai] Magic link page detected after pw-link click (Flow D)")
+                    _save_screenshot(page, "03_magic_link_sent")
+                    self._magic_link_sent = True
+                    return False
             else:
                 # Flow B: click Continue/Next to advance to password screen
                 logger.info("[modo_ai] No password link found — trying Continue button (Flow B)")
@@ -313,6 +403,17 @@ class ModoAIConnector(BaseConnector):
                 page.wait_for_timeout(2_500)
                 _save_screenshot(page, "03_after_continue")
 
+                # Flow D detection: Modo sent a magic link email — do NOT retry
+                if _is_magic_link_page(page):
+                    logger.error(
+                        "[modo_ai] Magic link / passwordless auth page detected (Flow D) — "
+                        "Modo sent an authorization email. Set MODO_MAGIC_LINK_URL to "
+                        "authenticate, or use the Streamlit app's Manual Auth page."
+                    )
+                    _save_screenshot(page, "03_magic_link_sent")
+                    self._magic_link_sent = True
+                    return False
+
                 # After advancing, check again for "sign in with a password" link
                 pw_link_sel2 = _first_visible(page, [
                     'a:has-text("sign in with a password")',
@@ -325,6 +426,12 @@ class ModoAIConnector(BaseConnector):
                     logger.info("[modo_ai] Clicked 'sign in with a password' link (after Continue)")
                     page.wait_for_timeout(2_500)
                     _save_screenshot(page, "03b_after_pw_link_click")
+                    # Check again for magic link
+                    if _is_magic_link_page(page):
+                        logger.error("[modo_ai] Magic link page detected after pw-link click (Flow D)")
+                        _save_screenshot(page, "03b_magic_link_sent")
+                        self._magic_link_sent = True
+                        return False
 
             # Re-check for password field after navigation
             pass_sel = _first_visible(page, [
@@ -536,7 +643,10 @@ class ModoAIConnector(BaseConnector):
                 headless=True,
                 args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
+
+            saved_state = _load_session_state()
             ctx = browser.new_context(
+                storage_state=saved_state,
                 viewport={"width": 1280, "height": 900},
                 user_agent=(
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -555,25 +665,64 @@ class ModoAIConnector(BaseConnector):
 
             try:
                 logged_in = False
-                for _attempt in range(1, 3):
-                    logger.info("[modo_ai] Login attempt %d/2", _attempt)
-                    logged_in = self._login(page)
-                    if logged_in:
-                        break
-                    if _attempt < 2:
-                        logger.warning("[modo_ai] Login attempt %d failed — retrying in 10s", _attempt)
-                        time.sleep(10)
-                        try:
-                            page.goto("https://modoenergy.com/sign-in", timeout=_NAV_TIMEOUT,
-                                      wait_until="domcontentloaded")
-                            page.wait_for_timeout(2_000)
-                        except Exception:
-                            pass
+
+                # ── 1. Try restored session ───────────────────────────────
+                if saved_state:
+                    try:
+                        page.goto(
+                            "https://modoenergy.com/home",
+                            timeout=_NAV_TIMEOUT,
+                            wait_until="domcontentloaded",
+                        )
+                        page.wait_for_timeout(2_000)
+                        if self._is_authenticated(page):
+                            logged_in = True
+                            logger.info("[modo_ai] Saved session is valid — login skipped")
+                    except Exception as exc:
+                        logger.warning("[modo_ai] Session restore check failed: %s", exc)
+
+                # ── 2. Try magic link URL ─────────────────────────────────
+                if not logged_in:
+                    magic_link_url = os.environ.get("MODO_MAGIC_LINK_URL", "").strip()
+                    if magic_link_url:
+                        logged_in = self._login_via_magic_link(page, magic_link_url)
+
+                # ── 3. Fall back to password login ────────────────────────
+                if not logged_in:
+                    self._magic_link_sent = False
+                    for _attempt in range(1, 3):
+                        logger.info("[modo_ai] Login attempt %d/2", _attempt)
+                        logged_in = self._login(page)
+                        if logged_in:
+                            break
+                        if self._magic_link_sent:
+                            logger.error(
+                                "[modo_ai] Magic link auth detected — aborting without retry"
+                            )
+                            _notify_magic_link_required(page.url)
+                            break
+                        if _attempt < 2:
+                            logger.warning(
+                                "[modo_ai] Login attempt %d failed — retrying in 10s", _attempt
+                            )
+                            time.sleep(10)
+                            try:
+                                page.goto(
+                                    "https://modoenergy.com/sign-in",
+                                    timeout=_NAV_TIMEOUT,
+                                    wait_until="domcontentloaded",
+                                )
+                                page.wait_for_timeout(2_000)
+                            except Exception:
+                                pass
 
                 if not logged_in:
-                    logger.error("[modo_ai] Login failed after 2 attempts — aborting custom distillation")
-                    _notify_login_failure(2, page.url)
+                    if not self._magic_link_sent:
+                        logger.error("[modo_ai] Login failed after all attempts — aborting custom distillation")
+                        _notify_login_failure(2, page.url)
                     return
+
+                _save_session_state(ctx)
 
                 for i, question in enumerate(questions):
                     url = f"modo_ai://{url_prefix}/{today.isoformat()}/q{i:02d}"
@@ -714,7 +863,38 @@ class ModoAIConnector(BaseConnector):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Session persistence helpers
+# ---------------------------------------------------------------------------
+
+def _load_session_state() -> dict | None:
+    """Load Playwright storage state (cookies + localStorage) from disk.
+
+    Returns the state dict, or None if the file doesn't exist or is unreadable.
+    """
+    import json as _json
+    if not os.path.exists(_SESSION_PATH):
+        return None
+    try:
+        with open(_SESSION_PATH) as f:
+            state = _json.load(f)
+        logger.info("[modo_ai] Loaded browser session from %s", _SESSION_PATH)
+        return state
+    except Exception as exc:
+        logger.warning("[modo_ai] Could not load session state from %s: %s", _SESSION_PATH, exc)
+        return None
+
+
+def _save_session_state(ctx) -> None:
+    """Persist Playwright storage state to disk after a successful login."""
+    try:
+        ctx.storage_state(path=_SESSION_PATH)
+        logger.info("[modo_ai] Browser session saved to %s", _SESSION_PATH)
+    except Exception as exc:
+        logger.warning("[modo_ai] Could not save session state: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Alert helpers
 # ---------------------------------------------------------------------------
 
 def _notify_login_failure(attempt: int, final_url: str) -> None:
@@ -740,6 +920,59 @@ def _notify_login_failure(attempt: int, final_url: str) -> None:
             logger.info("[modo_ai] Login-failure alert sent to WeCom")
         except Exception as exc:
             logger.warning("[modo_ai] Could not send WeCom alert: %s", exc)
+
+
+def _notify_magic_link_required(final_url: str) -> None:
+    """Send a WeCom alert when Modo requires magic link authentication."""
+    webhook_url = os.environ.get("WECOM_WEBHOOK_URL", "")
+    if not webhook_url:
+        logger.warning("[modo_ai] WECOM_WEBHOOK_URL not set — cannot send magic-link alert")
+        return
+    import requests as _req
+    msg = (
+        "⚠️ Modo AI login requires magic link (passwordless auth).\n"
+        "Modo sent an authorization email — password login is unavailable.\n\n"
+        "To re-authenticate:\n"
+        "1. Open the authorization email from team@modoenergy.com\n"
+        "2. Copy the magic link URL (the long https://modoenergy.com/sign-in/auth?... URL)\n"
+        "3. Set MODO_MAGIC_LINK_URL=<paste URL> in the ECS task environment variables\n"
+        "4. Redeploy the bess-gb-market task\n"
+        "5. Once authenticated the session is saved — subsequent nightly runs will work automatically\n\n"
+        f"Final URL at failure: {final_url}"
+    )
+    for url in [u.strip() for u in webhook_url.split(",") if u.strip()]:
+        try:
+            resp = _req.post(
+                url,
+                json={"msgtype": "text", "text": {"content": msg}},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            logger.info("[modo_ai] Magic-link alert sent to WeCom")
+        except Exception as exc:
+            logger.warning("[modo_ai] Could not send WeCom alert: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _is_magic_link_page(page) -> bool:
+    """Return True if Modo is showing a 'check your email' magic link page."""
+    try:
+        text = page.evaluate("() => document.body.innerText.slice(0, 2000)").lower()
+        return any(phrase in text for phrase in [
+            "check your email",
+            "magic link",
+            "link has been sent",
+            "we've sent you",
+            "authorization link",
+            "check your inbox",
+            "email has been sent",
+            "sent you a link",
+        ])
+    except Exception:
+        return False
 
 
 def _first_visible(page, selectors: list[str]) -> str | None:
