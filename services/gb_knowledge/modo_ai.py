@@ -1077,6 +1077,8 @@ def request_magic_link_email(email: str | None = None) -> dict:
             except ImportError:
                 pass
 
+            # Use a connector instance so we can call _dismiss_cookie_banner
+            connector = ModoAIConnector(email=_email)
             try:
                 page.goto(
                     "https://modoenergy.com/sign-in",
@@ -1084,6 +1086,9 @@ def request_magic_link_email(email: str | None = None) -> dict:
                     wait_until="domcontentloaded",
                 )
                 page.wait_for_timeout(3_000)
+                # Dismiss cookie banner immediately — it can block button clicks
+                connector._dismiss_cookie_banner(page)
+                page.wait_for_timeout(500)
 
                 email_sel = _first_visible(page, [
                     'input[type="email"]',
@@ -1097,6 +1102,7 @@ def request_magic_link_email(email: str | None = None) -> dict:
                     return {"success": False, "message": "Email input not found on sign-in page"}
 
                 page.fill(email_sel, _email)
+                page.wait_for_timeout(500)
 
                 # Click Continue to submit the email and trigger the magic link
                 continue_sel = _first_visible(page, [
@@ -1112,6 +1118,9 @@ def request_magic_link_email(email: str | None = None) -> dict:
                     page.keyboard.press("Enter")
 
                 page.wait_for_timeout(3_000)
+                # Dismiss cookie banner again — it often reappears after navigation
+                connector._dismiss_cookie_banner(page)
+                page.wait_for_timeout(500)
                 _save_screenshot(page, "request_link_after_submit")
 
                 if _is_magic_link_page(page):
@@ -1122,17 +1131,28 @@ def request_magic_link_email(email: str | None = None) -> dict:
                             "Check your inbox and paste the link URL below."
                         ),
                     }
-                # Could have logged in with an existing session, or got a password field
+
+                # Also check for a password field — could mean password auth is still available
+                pass_sel = _first_visible(page, ['input[type="password"]', 'input[name="password"]'])
+                if pass_sel:
+                    return {
+                        "success": False,
+                        "message": (
+                            "Modo showed a password field instead of sending a magic link. "
+                            "Password auth may still work — try 'Run Modo AI Distillation Now' instead."
+                        ),
+                    }
+
                 body_text = ""
                 try:
-                    body_text = page.evaluate("() => document.body.innerText.slice(0, 400)")
+                    body_text = page.evaluate("() => document.body.innerText.slice(0, 600)")
                 except Exception:
                     pass
                 return {
                     "success": False,
                     "message": (
                         f"Could not confirm magic link was sent. "
-                        f"Page text: {body_text[:200]!r}"
+                        f"Page text: {body_text[:300]!r}"
                     ),
                 }
             finally:
