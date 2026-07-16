@@ -91,7 +91,7 @@ def compute_cashflow(financials: ProjectFinancials) -> CashFlowResult:
     avg_net_income = sum(r.net_income for r in rows) / n
     roace = avg_net_income / total_capex
 
-    dscr_vals = [r.ebitda / r.debt_service for r in rows if r.debt_service > 1.0]
+    dscr_vals = [r.ebitda / r.debt_service for r in rows if r.debt_service > 1e-6]
     dscr_min = min(dscr_vals) if dscr_vals else float("nan")
     dscr_avg = sum(dscr_vals) / len(dscr_vals) if dscr_vals else float("nan")
 
