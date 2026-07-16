@@ -128,6 +128,15 @@ SERVICES: dict[str, dict[str, Any]] = {
         "web_url": "/spot-markets/",
         "label": "Spot Markets",
     },
+    "deal-structurer": {
+        "svc": "bess-platform-deal-structurer-svc",
+        "family": "bess-platform-deal-structurer",
+        "container": "deal-structurer",
+        "has_scheduler": False,
+        "scheduler_cmd": [],
+        "web_url": "/deal-structurer/",
+        "label": "Deal Structurer",
+    },
 }
 
 

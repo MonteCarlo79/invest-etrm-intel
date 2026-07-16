@@ -690,8 +690,8 @@ if CAN_MANAGE_USERS:
 
 st.subheader("Your Intelligence Team")
 st.caption(
-    "Five specialist agents covering the full investment lifecycle. "
-    "Open an app for deep analysis, or Quick Ask for instant answers."
+    "Four specialist agents covering the full China investment lifecycle: "
+    "market intelligence → quant screening → trading operations → deal structuring."
 )
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -799,12 +799,12 @@ with col_deal:
         available=True,
     )
 
+st.markdown("### International Markets")
+st.caption("Live BESS market intelligence across global electricity markets.")
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Row 3: GB Analyst (full width) ───────────────────────────────────────────
-col_gb, _ = st.columns(2)
-
-with col_gb:
+intl_row1 = st.columns(2)
+with intl_row1[0]:
     _render_agent_section(
         icon='<img src="https://flagcdn.com/w40/gb.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
         name="GB Analyst",
@@ -828,11 +828,7 @@ with col_gb:
         agent_key="gb_analyst",
         available=True,
     )
-
-
-st.markdown("### International Markets")
-intl_cols = st.columns(2)
-with intl_cols[0]:
+with intl_row1[1]:
     _render_agent_section(
         icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
         name="Australia (NEM) Market Intelligence",
@@ -854,7 +850,10 @@ with intl_cols[0]:
         agent_key="au_analyst",
         available=True,
     )
-with intl_cols[1]:
+
+st.markdown("<br>", unsafe_allow_html=True)
+intl_row2 = st.columns(2)
+with intl_row2[0]:
     _render_agent_section(
         icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
         name="ERCOT (Texas) Market Intelligence",
@@ -875,9 +874,7 @@ with intl_cols[1]:
         agent_key="ercot_analyst",
         available=True,
     )
-
-intl_cols2 = st.columns(2)
-with intl_cols2[0]:
+with intl_row2[1]:
     _render_agent_section(
         icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
         name="PJM (US East) Market Intelligence",
@@ -898,7 +895,10 @@ with intl_cols2[0]:
         agent_key="pjm_analyst",
         available=True,
     )
-with intl_cols2[1]:
+
+st.markdown("<br>", unsafe_allow_html=True)
+intl_row3 = st.columns(2)
+with intl_row3[0]:
     _render_agent_section(
         icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
         name="CAISO (California) Market Intelligence",
