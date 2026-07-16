@@ -31,6 +31,7 @@ for k, v in _DEFAULTS.items():
 with st.sidebar:
     st.title("📊 Deal Structurer")
     st.caption("Quant deal pricing platform")
+    st.link_button("← Portal", "https://pjh-etrm.ai/portal/", use_container_width=True)
     st.divider()
     tab_choice = st.radio(
         "Navigate",

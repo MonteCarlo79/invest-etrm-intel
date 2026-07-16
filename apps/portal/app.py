@@ -374,6 +374,7 @@ _DEV_PORTS = {
     "ercot-market":     "8510",
     "pjm-market":       "8511",
     "caiso-market":     "8512",
+    "deal-structurer":  "8513",
 }
 
 
@@ -778,24 +779,24 @@ with col_deal:
     _render_agent_section(
         icon="🏦",
         name="Deal Structurer",
-        subtitle="Investment Committee · Pillar 5",
+        subtitle="Quant Deal Pricing Platform · Pillar 5",
         description=(
-            "Orchestrates the investment committee process — aggregating market signals "
-            "from the Strategist, economics from the Quant, and ops benchmarks from the "
-            "Trader into a structured investment recommendation. Quick Ask available now; "
-            "full app coming in the next build."
+            "Probabilistic deal-structuring platform replacing Excel valuation models. "
+            "Simulates spot price uncertainty, values BESS/wind dispatch revenue, projects "
+            "full project IRR/DSCR/NPV, and prices structured deals (floor, collar, swap, PPA) "
+            "via Monte Carlo. Includes a Claude Strategist for quantitative deal questions."
         ),
         capabilities=[
-            "Market screen: province attractiveness assessment",
-            "Economics case: IRR vs hurdle rate (target: >12% equity IRR)",
-            "Ops benchmark: realisation rate vs IM asset portfolio",
-            "Risk factors: regulatory, curtailment, counterparty, grid access",
-            "Deal structure: equity/debt split, duration, subsidy, exit horizon",
-            "Investment memorandum drafting (full app TBD)",
+            "Price simulation: OU and PCA models with @Risk-style parameter sliders",
+            "Dispatch valuation: BESS arbitrage, wind energy, wind+BESS (spread call strip)",
+            "Project cashflow: equity IRR, ROACE, DSCR, NPV — replicates Excel .xlsm structure",
+            "Monte Carlo: 500–5000 paths, P10/P50/P90, VaR, CVaR, tornado sensitivity",
+            "Deal pricing: revenue floor, cap, collar, swap, tolling, fixed-price PPA",
+            "Claude Strategist: 'What floor guarantees 8% equity IRR at P90?'",
         ],
-        app_slug=None,
+        app_slug="deal-structurer",
         agent_key="deal_structurer",
-        available=False,
+        available=True,
     )
 
 st.markdown("<br>", unsafe_allow_html=True)
