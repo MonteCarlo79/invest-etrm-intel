@@ -162,16 +162,30 @@ CREATE TABLE rm_settlements (
   raw_data         JSONB
 );
 
+-- Settlement item categories derived from actual Trade Capture ledger (Trades sheet):
+-- China BESS: charge_energy, discharge_energy, capacity_compensation, transmission,
+--             govt_surcharges, system_operation, coal_capacity_charge, basic_fee, penalty, subsidy
+-- GB BESS:    energy_trades, flex_fees, imbalance, market_redistribution, rule_charges,
+--             transmission, capacity (payable/receivable), frequency (payable/receivable)
 CREATE TABLE rm_settlement_items (
   id               SERIAL PRIMARY KEY,
   settlement_id    INTEGER NOT NULL REFERENCES rm_settlements(id),
   category         TEXT NOT NULL CHECK (category IN (
-                     'spot_energy','bilateral_energy','ancillary','capacity',
-                     'transmission','tax','penalty','rebate','other')),
+                     'charge_energy','discharge_energy',
+                     'capacity_compensation','bilateral_energy',
+                     'transmission','govt_surcharges','system_operation',
+                     'coal_capacity_charge','basic_fee',
+                     'flex_fees','imbalance','market_redistribution',
+                     'rule_charges','frequency',
+                     'penalty','rebate','subsidy','other')),
+  peak_period      TEXT CHECK (peak_period IN ('peak','valley','flat','super_peak')),  -- China TOU periods
   delivery_date    DATE,
   volume_mwh       NUMERIC(14,4),
   price_cny_kwh    NUMERIC(10,6),
   amount_cny       NUMERIC(16,2) NOT NULL,
+  amount_receivable_cny NUMERIC(16,2),   -- 应收: entitlement per contract/formula
+  amount_settled_cny    NUMERIC(16,2),   -- 实际结算: actual amount paid by grid/exchange
+  amount_diff_cny       NUMERIC(16,2),   -- 差异: receivable − settled (reconciliation gap)
   counterparty     TEXT,
   notes            TEXT
 );
@@ -236,18 +250,33 @@ Creating an asset auto-creates a linked `rm_books` record (book_type='asset'). A
 
 ### Tab 2 — Settlement
 
+**Reference data model:** The existing `Trade Capture.xlsx` (Trades sheet) is the current manual ETRM — it contains the canonical settlement ledger structure: Date, Market, Station Name, Capacity, Size, Buy/Sell, Transaction, Transactions Type, Volume (MWh), Price (¥/MWh), Total (¥). The app replicates and automates this.
+
+**Three source file formats for China BESS:**
+
+| Format | Source | Content |
+|---|---|---|
+| PDF 上网电费结算单 | Grid company (one per station per month) | Charge/discharge energy by TOU period, T&D fees, surcharges |
+| 容量补偿数据.xlsx | Provincial exchange | Capacity compensation: multi-station × multi-month, 应收/实际结算/差异 columns |
+| 补贴.xlsx | Provincial government | Subsidy: station × month, same 应收/实际结算/差异 structure |
+
 **Upload panel:**
 - Drag-and-drop file upload (PDF, Excel, CSV)
 - Book selector + settlement month picker
-- Parser (`libs/settlement/parser.py`) auto-detects province exchange format by filename pattern and header signature
-- Fallback: manual column mapping UI with field→category assignment
-- Validation: checks for required fields before writing to DB
+- Parser auto-detects format by file type + header signature:
+  - PDF → extract table via pdfplumber, map to canonical schema
+  - 容量补偿 Excel → multi-station wide-format → melt to long format per station
+  - 补贴 Excel → same wide→long transform
+  - Trade Capture Trades sheet → direct row-level import (migration path)
+- Fallback: manual column mapping UI
+- Validation: required fields present, amounts balance, no duplicate station×month
 
 **Analytics panel** (post-processing):
-- Settlement statement summary: total amount, total volume, implied average price
-- Line items table grouped by `category`, sortable and filterable
-- Month-over-month delta per category (vs prior settlement period)
-- Anomaly flags: price > 2σ from category average, volume deviation > 20% vs prior month
+- Settlement summary: total amount, total volume, implied average price
+- Line items table grouped by `category` and `peak_period`, sortable and filterable
+- **Reconciliation view:** 应收 vs 实际结算 vs 差异 per category — highlights underpayment/overpayment by grid
+- Month-over-month delta per category
+- Anomaly flags: amount diff > 5% of receivable, volume deviation > 20% vs prior month
 
 ---
 
@@ -257,14 +286,20 @@ Creating an asset auto-creates a linked `rm_books` record (book_type='asset'). A
 
 **P&L waterfall chart (Plotly bar waterfall):**
 ```
-Spot energy (DA + RT)
+Discharge energy revenue  (by TOU period: peak / valley / flat / super-peak)
+− Charge energy cost      (by TOU period)
++ Capacity compensation   (容量补偿)
 + Bilateral contracts
-+ Ancillary / capacity
-− Transmission / fees
-− Tax
-− Deviation penalties (equipment, sysop, grid flow)
++ Subsidy / rebate
+− Transmission            (输电费)
+− Govt surcharges         (政府性基金及附加)
+− System operation fee    (系统运行费)
+− Coal capacity charge    (煤电容量电价)
+− Basic fee               (基本电费)
+− Deviation penalties     (equipment, sysop, grid flow)
 = Realised P&L
-  [Unsuccessful bid opportunity cost shown as grey bar below zero line]
+  [Unsuccessful bid opportunity cost shown as grey bar — opportunity loss]
+  [Settlement reconciliation gap: 应收 − 实际结算]
 ```
 
 **Volume deviation table:** Per-period (daily/monthly toggle) view of:

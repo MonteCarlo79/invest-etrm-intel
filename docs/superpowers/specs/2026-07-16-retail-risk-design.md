@@ -172,16 +172,20 @@ Upload Excel → detect sheets (each sheet = one province)
 
 Same upload/analytics structure as App 1 Tab 2, with retail-specific categories:
 
-**Line item categories for load books:**
-- `energy_procurement` — wholesale energy cost
-- `retail_revenue` — billed revenue from customers
+**Line item categories for load books** (retail-specific, separate from asset settlement categories):
+- `retail_revenue` — billed revenue from customers (metered × retail tariff)
+- `energy_procurement` — wholesale energy procurement cost (charge: peak/valley/flat/super-peak)
+- `capacity_compensation` — capacity compensation pass-through to customers
 - `transmission_uos` — transmission use-of-system charge
-- `distribution_charge` — distribution network charge
-- `ancillary_allocation` — system ancillary cost pass-through
-- `tax` — value-added tax, surcharges
-- `penalty` — deviation penalties
+- `govt_surcharges` — government funds and surcharges pass-through
+- `system_operation` — system operation fee allocation
+- `coal_capacity_charge` — coal capacity charge pass-through
+- `basic_fee` — basic power fee
+- `penalty` — deviation penalties from load forecast error
 - `rebate` — government subsidies, policy rebates
 - `other`
+
+**Settlement reconciliation:** Same 应收/实际结算/差异 three-column structure applies — `amount_receivable_cny`, `amount_settled_cny`, `amount_diff_cny` fields shared from `rm_settlement_items` (App 1 schema).
 
 **Retail-specific reconciliation panel:**
 Three-way match per customer per settlement period:
