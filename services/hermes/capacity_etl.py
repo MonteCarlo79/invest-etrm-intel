@@ -366,4 +366,9 @@ def is_capacity_file(filename: str) -> bool:
         return False
     keywords = ["储能装机", "装机容量", "装机数据", "installed_cap", "installed_capacity",
                 "各省装机", "province_cap", "capacity_scan"]
-    return any(kw in name_lower for kw in keywords)
+    if any(kw in name_lower for kw in keywords):
+        return True
+    # Also match single-province files like "重庆装机-gpt-20260716.xlsx"
+    if "装机" in filename and province_from_filename(filename) is not None:
+        return True
+    return False

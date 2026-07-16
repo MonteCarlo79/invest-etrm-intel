@@ -725,7 +725,7 @@ def _conn():
     try:
         conn.cursor().execute("SELECT 1")
     except Exception:
-        _get_conn.clear()
+        __conn.clear()
         conn = __conn()
     return conn
 
@@ -977,7 +977,7 @@ def _load_price_holdout(_conn_fn, province: str, start: str, end: str, price_col
                AVG({price_col}) AS actual_price
         FROM marketdata.spot_prices_hourly
         WHERE province = %s AND datetime BETWEEN %s AND %s
-          AND {price_col} IS NOT NULL
+          AND {price_col} IS NOT NULL AND {price_col} > 0
         GROUP BY trade_date, hour
         ORDER BY trade_date, hour
     """
@@ -5237,6 +5237,24 @@ with tab_supply:
     # Drop LingFeng metadata rows mistakenly ingested as province names
     _sup_df = _sup_df[~_sup_df['province'].str.contains('运行数据|数据披露|披露', na=False)]
 
+    # Normalise province aliases → canonical names, then deduplicate by keeping the
+    # row with the highest thermal_mw (most data) per canonical province.
+    _SUP_PROV_NORM = {
+        '河北南网': '冀南', '冀南网': '冀南', '河北南部': '冀南',
+        '冀北电网': '冀北', '国网冀北': '冀北',
+        '内蒙古东': '蒙东', '内蒙古西': '蒙西',
+    }
+    _DROP_ALIASES = {'中长期', '河北'}   # generic entries subsumed by 冀南/冀北
+    _sup_df = _sup_df[~_sup_df['province'].isin(_DROP_ALIASES)]
+    _sup_df = _sup_df.copy()
+    _sup_df['province'] = _sup_df['province'].map(lambda p: _SUP_PROV_NORM.get(p, p))
+    # Where both alias and canonical exist, keep the row with more thermal capacity
+    _sup_df = (
+        _sup_df.sort_values('thermal_mw', ascending=False)
+               .drop_duplicates(subset=['province'], keep='first')
+               .reset_index(drop=True)
+    )
+
     if _sup_df.empty:
         st.info("暂无供需数据（需要 marketdata.province_installed_monthly 表）")
     else:
@@ -5492,8 +5510,10 @@ with tab_supply:
 
             # Province → adcode mapping (for geo map)
             _PROV_ADCODE = {
-                "北京": "110000", "天津": "120000", "河北": "130000", "冀北": "130000",
-                "河北南网": "130000", "山西": "140000", "蒙西": "150000", "内蒙古": "150000",
+                "北京": "110000", "天津": "120000", "河北": "130098", "山西": "140000",
+                # 冀北=130099 (north of ~39.5°N), 冀南/河北南网=130098 (south)
+                "冀北": "130099", "冀南": "130098", "河北南网": "130098",
+                "蒙西": "150000", "蒙东": "150000", "内蒙古": "150000", "西藏": "540000",
                 "辽宁": "210000", "吉林": "220000", "黑龙江": "230000",
                 "上海": "310000", "江苏": "320000", "浙江": "330000",
                 "安徽": "340000", "福建": "350000", "江西": "360000",
@@ -5505,7 +5525,8 @@ with tab_supply:
             }
             _PROV_CENTROIDS_EOH = {
                 "110000": (39.90, 116.40), "120000": (39.13, 117.20),
-                "130000": (38.04, 114.47), "140000": (37.87, 112.56),
+                "130099": (41.20, 117.00), "130098": (38.04, 114.47),  # 冀北, 冀南
+                "140000": (37.87, 112.56),
                 "150000": (44.09, 113.09), "210000": (41.80, 123.43),
                 "220000": (43.89, 125.32), "230000": (47.85, 127.57),
                 "310000": (31.23, 121.47), "320000": (32.06, 119.59),
@@ -5516,10 +5537,34 @@ with tab_supply:
                 "440000": (23.37, 113.50), "450000": (23.73, 108.38),
                 "460000": (20.02, 110.35), "500000": (29.56, 106.54),
                 "510000": (30.57, 103.99), "520000": (26.82, 106.83),
-                "530000": (25.05, 101.71), "610000": (34.27, 108.95),
+                "530000": (25.05, 101.71), "540000": (29.65,  91.11),
+                "610000": (34.27, 108.95),
                 "620000": (36.06, 103.83), "630000": (36.62, 101.74),
                 "640000": (38.47, 106.26), "650000": (41.17,  85.29),
             }
+
+            # Province aliases: spot_fundamentals uses 河北南网 but province_fundamentals
+            # stores the same grid's data as 冀南. Map for thermal capacity lookup.
+            _THERMAL_ALIAS = {'河北南网': '冀南', '冀南': '河北南网'}
+
+            # Thermal capacity from province_fundamentals directly (most reliable source).
+            # Used as fallback when province_installed_monthly has bad/missing thermal data.
+            _pf_thermal_cache: dict = {}
+            try:
+                import psycopg2 as _pg2_th
+                _conn_th = _pg2_th.connect(_sup_pg)
+                with _conn_th.cursor() as _cr_th:
+                    _yr_th = _eoh_year if _eoh_year in [2024, 2025] else 2025
+                    _cr_th.execute(
+                        "SELECT province_cn, thermal_cap_10kw * 10 FROM marketdata.province_fundamentals WHERE year = %s",
+                        (_yr_th,)
+                    )
+                    for _pf_pn, _pf_tc in _cr_th.fetchall():
+                        if _pf_tc:
+                            _pf_thermal_cache[_pf_pn] = float(_pf_tc)
+                _conn_th.close()
+            except Exception:
+                pass
 
             # Compute annual EOH per province.
             # EOH may be negative for provinces with large renewable surplus.
@@ -5528,6 +5573,13 @@ with tab_supply:
                 _pdf = _eoh_raw[_eoh_raw['province'] == _ep]
                 _sup_row = _sup_df[_sup_df['province'] == _ep]
                 _th_cap = float(_sup_row['thermal_mw'].iloc[0]) if not _sup_row.empty else 0
+                # Use province_fundamentals thermal as authoritative source when available.
+                # province_installed_monthly thermal can be wrong (bad LLM extraction).
+                # Resolve alias: 河北南网 → 冀南 in province_fundamentals.
+                _pf_alias = _THERMAL_ALIAS.get(_ep, _ep)
+                _pf_th = _pf_thermal_cache.get(_ep) or _pf_thermal_cache.get(_pf_alias, 0)
+                if _pf_th > 0:
+                    _th_cap = _pf_th
 
                 if _use_cap_factor:
                     # Method 2: annual_demand from hourly avg_load; wind/solar from installed cap × std hours
@@ -5559,6 +5611,9 @@ with tab_supply:
                         _annual_gen -= float(_pdf['pf_solar_gwh'].iloc[0])  # already MWh
 
                 _eoh_val = round(_annual_gen / _th_cap) if _th_cap > 0 else 0
+                # Sanity: EOH > 8760h/yr is impossible — flag as 0 (bad hourly data)
+                if _eoh_val > 8760:
+                    _eoh_val = 0
                 _eoh_rows.append({
                     'province': _ep,
                     'annual_gen_gwh': round(_annual_gen / 1000),
@@ -5567,6 +5622,43 @@ with tab_supply:
                     'load_factor': round(_eoh_val / 8760, 3) if _eoh_val else 0,
                     'adcode': _PROV_ADCODE.get(_ep),
                 })
+            # Add provinces that have province_fundamentals data but NO hourly spot data
+            # (e.g. 冀北). EOH computed from annual thermal generation ÷ thermal capacity.
+            _hourly_provs = set(_eoh_raw['province'].unique())
+            _fund_year_sel = _eoh_year if _eoh_year in [2024, 2025] else 2025
+            try:
+                import psycopg2 as _pg2_fund
+                _conn_fund = _pg2_fund.connect(_sup_pg)
+                with _conn_fund.cursor() as _cr_fund:
+                    _cr_fund.execute("""
+                        SELECT province_cn,
+                               COALESCE(thermal_gen_100gwh, 0) * 100000.0 AS thermal_gen_mwh,
+                               COALESCE(thermal_cap_10kw,   0) * 10        AS thermal_mw
+                        FROM marketdata.province_fundamentals
+                        WHERE year = %s
+                          AND thermal_cap_10kw > 0
+                          AND thermal_gen_100gwh > 0
+                    """, (_fund_year_sel,))
+                    _pf_gen_rows = _cr_fund.fetchall()
+                _conn_fund.close()
+                for _pfp, _pfgen, _pfcap in _pf_gen_rows:
+                    if _pfp in _hourly_provs:
+                        continue  # already covered by hourly loop
+                    # Skip if alias already covered (e.g. 冀南 covered via 河北南网)
+                    if _THERMAL_ALIAS.get(_pfp) in _hourly_provs:
+                        continue
+                    _eoh_val = round(_pfgen / _pfcap) if _pfcap > 0 else 0
+                    _eoh_rows.append({
+                        'province': _pfp,
+                        'annual_gen_gwh': round(_pfgen / 1000),
+                        'thermal_mw': round(_pfcap),
+                        'eoh': _eoh_val,
+                        'load_factor': round(_eoh_val / 8760, 3) if _eoh_val else 0,
+                        'adcode': _PROV_ADCODE.get(_pfp),
+                    })
+            except Exception:
+                pass
+
             _eoh_df = pd.DataFrame(_eoh_rows).sort_values('eoh', ascending=False)
 
             _eoh_prov_list = sorted(_eoh_raw['province'].unique())
@@ -5651,10 +5743,11 @@ with tab_supply:
 
                 if _geojson_eoh:
                     # Build adcode (int) → EOH lookup
+                    # Use pd.notna to guard against both None and float NaN
                     _eoh_map = {
                         int(row['adcode']): row['eoh']
                         for _, row in _eoh_df.iterrows()
-                        if row['adcode'] is not None
+                        if pd.notna(row['adcode'])
                     }
                     # Color: blue (surplus) → green → yellow → orange → red
                     def _eoh_geo_color(v):
@@ -5701,14 +5794,16 @@ with tab_supply:
 
                     # adcode → Chinese province name
                     _ADCODE_TO_NAME = {
-                        110000:"北京", 120000:"天津", 130000:"河北", 140000:"山西",
+                        110000:"北京", 120000:"天津",
+                        130099:"冀北", 130098:"冀南",  # split from Hebei 130000
+                        140000:"山西",
                         150000:"内蒙古", 210000:"辽宁", 220000:"吉林", 230000:"黑龙江",
                         310000:"上海", 320000:"江苏", 330000:"浙江", 340000:"安徽",
                         350000:"福建", 360000:"江西", 370000:"山东", 410000:"河南",
                         420000:"湖北", 430000:"湖南", 440000:"广东", 450000:"广西",
                         460000:"海南", 500000:"重庆", 510000:"四川", 520000:"贵州",
-                        530000:"云南", 610000:"陕西", 620000:"甘肃", 630000:"青海",
-                        640000:"宁夏", 650000:"新疆",
+                        530000:"云南", 540000:"西藏", 610000:"陕西", 620000:"甘肃",
+                        630000:"青海", 640000:"宁夏", 650000:"新疆",
                     }
                     # Labels at province centroids: name + EOH
                     for _adc_str, (_lat, _lon) in _PROV_CENTROIDS_EOH.items():
@@ -5879,7 +5974,13 @@ with tab_forecast:
             # Shared: build price matrix and PCA results (used in PCA + Ensemble tabs)
             _fc_mat = _fc_price_mat.values.astype(float)   # (n_days, 24)
             _fc_mat = _np_fc.nan_to_num(_fc_mat, nan=_np_fc.nanmean(_fc_mat))
-            _fc_mean_24h = _fc_mat.mean(axis=0)            # (24,)
+            # Normalise to ¥/kWh: spot_prices_hourly may store ¥/MWh (>5) depending on
+            # ingestion pipeline version. Median > 5 ¥/kWh is physically impossible →
+            # values must be in ¥/MWh; divide by 1000 so all downstream code stays in ¥/kWh.
+            _fc_unit_factor = 1000.0 if float(_np_fc.nanmedian(_fc_mat)) > 5 else 1.0
+            if _fc_unit_factor != 1.0:
+                _fc_mat /= _fc_unit_factor
+            _fc_mean_24h = _fc_mat.mean(axis=0)            # (24,), ¥/kWh
             _fc_std_24h  = _fc_mat.std(axis=0)
             _fc_std_24h  = _np_fc.where(_fc_std_24h < 1e-6, 1.0, _fc_std_24h)
             _fc_mat_c    = (_fc_mat - _fc_mean_24h) / _fc_std_24h   # centered+scaled
@@ -6072,9 +6173,16 @@ with tab_forecast:
                         name='月均预测价格', line=dict(color='#E74C3C', width=2.5),
                         mode='lines+markers',
                     ))
-                    # Add vertical line at ARIMA/seasonal boundary
+                    # Add vertical line at ARIMA/seasonal boundary.
+                    # x-axis is categorical strings — add_vline needs the integer
+                    # index, not the string itself (Plotly crashes on str+int arithmetic).
                     _fc_arima_cutoff_dt = (_fc_end_dt + _pd_fc.DateOffset(days=_fc_arima_steps)).strftime('%Y-%m')
-                    _fc_fig_lt.add_vline(x=_fc_arima_cutoff_dt, line_dash='dot', line_color='gray',
+                    _fc_ym_list = list(_fc_lt_mo['ym_str'])
+                    _fc_cutoff_idx = next(
+                        (i for i, s in enumerate(_fc_ym_list) if s >= _fc_arima_cutoff_dt),
+                        len(_fc_ym_list) - 1,
+                    )
+                    _fc_fig_lt.add_vline(x=_fc_cutoff_idx, line_dash='dot', line_color='gray',
                                          annotation_text='ARIMA→季节均值')
                     _fc_fig_lt.update_layout(
                         title=f"{_fc_prov} — 长期月度均价预测（{_fc_end_dt.date()} ~ {_fc_future_dates[-1]}）",
@@ -6304,6 +6412,11 @@ with tab_forecast:
                                                       params=[_fc_prov, _fc_start, _fc_end])
                     _fc_recent_raw = _pd_fc.read_sql(_fc_bayes_sql, _conn(),
                                                       params=[_fc_prov, _fc_recent_start, _fc_end])
+
+                # Normalise to ¥/kWh (same logic as training matrix)
+                if not _fc_prior_raw.empty and float(_fc_prior_raw['price'].median()) > 5:
+                    _fc_prior_raw  = _fc_prior_raw.copy();  _fc_prior_raw['price']  /= 1000.0
+                    _fc_recent_raw = _fc_recent_raw.copy(); _fc_recent_raw['price'] /= 1000.0
 
                 _fc_post_mean = _np_fc.zeros(24)
                 _fc_post_lo90 = _np_fc.zeros(24)
@@ -6560,6 +6673,15 @@ with tab_forecast:
                 _fc_ho_mean   = _np_fc.zeros(24)
                 for _, _hrow in _fc_ho_hourly.iterrows():
                     _fc_ho_mean[int(_hrow['hour'])] = float(_hrow['actual_price'])
+                # Normalise holdout to ¥/kWh (holdout period may have been ingested
+                # in a different unit than the training period)
+                if _fc_ho_mean.max() > 5:
+                    _fc_ho_mean /= 1000.0
+
+                # Treat holdout as invalid if max price < 0.05 ¥/kWh (= 50 ¥/MWh).
+                # Old ingestion pipeline stored tiny non-zero garbage values;
+                # the > 0 SQL filter is not sufficient to exclude them.
+                _fc_ho_valid = _fc_ho_mean.max() >= 0.05
 
                 # PCA backtest: use historical mean from training window
                 _fc_bt_pca    = _fc_mean_24h   # training period hourly mean, ¥/kWh
@@ -6577,41 +6699,44 @@ with tab_forecast:
                     mape = (_np_fc.abs((pred[mask] - actual[mask]) / actual[mask])).mean() * 100
                     return float(mae), float(rmse), float(mape)
 
-                _fc_bt_cols = st.columns(3)
-                for _fc_bt_lbl, _fc_bt_pred, _fc_bt_col in [
-                    ("历史均值(PCA基准)", _fc_bt_pca,   _fc_bt_cols[0]),
-                    ("贝叶斯后验均值",   _fc_bt_bayes, _fc_bt_cols[1]),
-                    ("综合预测",         _fc_bt_ens,   _fc_bt_cols[2]),
-                ]:
-                    _fc_mae, _fc_rmse, _fc_mape = _fc_metrics(_fc_bt_pred, _fc_ho_mean)
-                    with _fc_bt_col:
-                        st.markdown(f"**{_fc_bt_lbl}**")
-                        st.metric("MAE",  f"{_fc_mae*1000:.2f} ¥/MWh")
-                        st.metric("RMSE", f"{_fc_rmse*1000:.2f} ¥/MWh")
-                        st.metric("MAPE", f"{_fc_mape:.1f}%")
+                if not _fc_ho_valid:
+                    st.caption("验证期无有效价格数据（数据库存储为零值占位），跳过回测。")
+                else:
+                    _fc_bt_cols = st.columns(3)
+                    for _fc_bt_lbl, _fc_bt_pred, _fc_bt_col in [
+                        ("历史均值(PCA基准)", _fc_bt_pca,   _fc_bt_cols[0]),
+                        ("贝叶斯后验均值",   _fc_bt_bayes, _fc_bt_cols[1]),
+                        ("综合预测",         _fc_bt_ens,   _fc_bt_cols[2]),
+                    ]:
+                        _fc_mae, _fc_rmse, _fc_mape = _fc_metrics(_fc_bt_pred, _fc_ho_mean)
+                        with _fc_bt_col:
+                            st.markdown(f"**{_fc_bt_lbl}**")
+                            st.metric("MAE",  f"{_fc_mae*1000:.2f} ¥/MWh")
+                            st.metric("RMSE", f"{_fc_rmse*1000:.2f} ¥/MWh")
+                            st.metric("MAPE", f"{_fc_mape:.1f}%")
 
-                _fc_fig_bt = _pgo_fc.Figure()
-                _fc_fig_bt.add_trace(_pgo_fc.Scatter(
-                    x=_fc_hours, y=list(_fc_ho_mean),
-                    name="验证期实际均值", line=dict(color='#2C3E50', width=2.5),
-                ))
-                _fc_fig_bt.add_trace(_pgo_fc.Scatter(
-                    x=_fc_hours, y=list(_fc_bt_bayes),
-                    name="贝叶斯后验均值", line=dict(color='#E74C3C', width=2, dash='dot'),
-                ))
-                _fc_fig_bt.add_trace(_pgo_fc.Scatter(
-                    x=_fc_hours, y=list(_fc_bt_pca),
-                    name="PCA历史均值", line=dict(color='#9B59B6', width=2, dash='dot'),
-                ))
-                _fc_fig_bt.update_layout(
-                    title=f"{_fc_prov} — 模型回测（验证期 {_fc_holdout_start.date()} ~ {_fc_holdout_end.date()}）",
-                    xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
-                               ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
-                    yaxis_title="¥/kWh", height=320,
-                    margin=dict(t=40, b=20, l=60, r=20),
-                    legend=dict(orientation='h', y=-0.3),
-                )
-                st.plotly_chart(_fc_fig_bt, use_container_width=True)
+                    _fc_fig_bt = _pgo_fc.Figure()
+                    _fc_fig_bt.add_trace(_pgo_fc.Scatter(
+                        x=_fc_hours, y=list(_fc_ho_mean),
+                        name="验证期实际均值", line=dict(color='#2C3E50', width=2.5),
+                    ))
+                    _fc_fig_bt.add_trace(_pgo_fc.Scatter(
+                        x=_fc_hours, y=list(_fc_bt_bayes),
+                        name="贝叶斯后验均值", line=dict(color='#E74C3C', width=2, dash='dot'),
+                    ))
+                    _fc_fig_bt.add_trace(_pgo_fc.Scatter(
+                        x=_fc_hours, y=list(_fc_bt_pca),
+                        name="PCA历史均值", line=dict(color='#9B59B6', width=2, dash='dot'),
+                    ))
+                    _fc_fig_bt.update_layout(
+                        title=f"{_fc_prov} — 模型回测（验证期 {_fc_holdout_start.date()} ~ {_fc_holdout_end.date()}）",
+                        xaxis=dict(title="时段", tickvals=list(range(0, 24, 4)),
+                                   ticktext=[f"{h:02d}:00" for h in range(0, 24, 4)]),
+                        yaxis_title="¥/kWh", height=320,
+                        margin=dict(t=40, b=20, l=60, r=20),
+                        legend=dict(orientation='h', y=-0.3),
+                    )
+                    st.plotly_chart(_fc_fig_bt, use_container_width=True)
 
             # ─────────────────────────────────────────────────────────────────
             # MONTHLY AGGREGATE VIEW (horizon >= 30)

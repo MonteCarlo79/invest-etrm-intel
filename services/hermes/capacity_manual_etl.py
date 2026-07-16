@@ -38,11 +38,17 @@ def is_capacity_file_extended(filename: str) -> bool:
     Return True if filename suggests province capacity data.
     Widens the existing is_capacity_file() to also match PDF/TXT/DOCX (not just Excel).
     """
+    from services.hermes.capacity_etl import province_from_filename as _pff
     fn = filename.lower()
     ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
     if ext not in ("xlsx", "xls", "xlsm", "pdf", "txt", "csv", "docx", "doc"):
         return False
-    return any(kw.lower() in fn for kw in _CAPACITY_KEYWORDS)
+    if any(kw.lower() in fn for kw in _CAPACITY_KEYWORDS):
+        return True
+    # Match single-province files like "重庆装机-gpt-20260716.xlsx"
+    if "装机" in filename and _pff(filename) is not None:
+        return True
+    return False
 
 
 # ── Text extraction from bytes ─────────────────────────────────────────────────

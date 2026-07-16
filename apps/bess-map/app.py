@@ -2415,14 +2415,15 @@ with tab_demand:
                 _src_label = f"Annual {_fund_yr} fundamentals"
             st.caption(f"Installed capacity source: **{_src_label}**")
 
+            _FR_FUND_ALIAS = {"河北南网": "冀南", "冀南": "河北南网"}
             _fr_rows = []
             for _prov in _d_provs:
-                _pdata = _fund_all.get(_prov, {})
+                _pdata = _fund_all.get(_prov) or _fund_all.get(_FR_FUND_ALIAS.get(_prov, ""), {})
                 # Peak load always comes from annual fundamentals (not in monthly files)
                 _pl = _pdata.get("peak_load", {}).get(_fund_yr, {})
                 _peak_load_mw = max((_pl.get("summer") or 0), (_pl.get("winter") or 0))
 
-                _mon = _monthly_all.get(_prov)
+                _mon = _monthly_all.get(_prov) or _monthly_all.get(_FR_FUND_ALIAS.get(_prov, ""))
                 if _mon:
                     # Monthly data in MW directly
                     _wind_mw     = _mon.get("wind_mw")    or 0.0
@@ -2491,10 +2492,13 @@ with tab_demand:
                 _arb_p50 = float(_pdf.quantile(0.50)) if not _pdf.empty else 0.0
                 _arb_p90 = float(_pdf.quantile(0.90)) if not _pdf.empty else 0.0
 
-                _pdata = _fund_all.get(_prov, {})
+                # province_fundamentals uses 冀南, but spot_prices_hourly/demand uses 河北南网.
+                # Resolve alias so thermal/peak data is found for both names.
+                _FUND_ALIAS = {"河北南网": "冀南", "冀南": "河北南网"}
+                _pdata = _fund_all.get(_prov) or _fund_all.get(_FUND_ALIAS.get(_prov, ""), {})
                 _pl = _pdata.get("peak_load", {}).get(_fund_yr, {})
                 _peak_load_mw = max((_pl.get("summer") or 0), (_pl.get("winter") or 0))
-                _mon = _monthly_all.get(_prov)
+                _mon = _monthly_all.get(_prov) or _monthly_all.get(_FUND_ALIAS.get(_prov, ""))
                 if _mon:
                     _renew_mw   = _mon.get("renew_mw")  or 0.0
                     _storage_mw = _mon.get("bess_mw")   or 0.0
@@ -2508,10 +2512,12 @@ with tab_demand:
                 _, _pct_load, _pct_renew_inst, _floor_mw = _FR_RULES.get(_prov, _FR_DEFAULT)
                 _fr_mw = max(_floor_mw, _peak_load_mw * _pct_load + _renew_mw * _pct_renew_inst)
 
-                # Thermal always from annual fundamentals (not in monthly data)
+                # Thermal: annual fundamentals first (most reliable), fall back to monthly installed data
                 _cap_yr_fund = _pdata.get("capacity", {}).get(_fund_yr, {})
                 _thermal_wkw = (_cap_yr_fund.get("火电", {}) or {}).get("value") or 0.0
                 _thermal_mw  = _thermal_wkw * 10
+                if _thermal_mw == 0 and _mon and _mon.get("thermal_mw"):
+                    _thermal_mw = float(_mon["thermal_mw"])
 
                 # Flexible thermal = total thermal − avg daily min bidding-space
                 # (min bidding-space ≈ must-run thermal floor; what remains can be dispatched flexibly)
