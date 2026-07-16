@@ -67,12 +67,9 @@ def run_knowledge_ingest(only: list[str] | None = None, verbose: bool = True) ->
         if verbose:
             print(f"  [skip] meteologica: {e}")
 
-    try:
-        from services.gb_knowledge.modo_ai import ModoAIConnector
-        connectors.append(("modo_ai", "Modo Energy AI (distillation)", ModoAIConnector()))
-    except ImportError as e:
-        if verbose:
-            print(f"  [skip] modo_ai: {e}")
+    # NOTE: modo_ai (Playwright distillation) runs as a dedicated job at 04:00 SGT
+    # via scheduler_service.py::_modo_ai_job(). It is intentionally excluded here
+    # to avoid double-running the Playwright login flow (which spams magic-link emails).
 
     results = {}
     for key, label, connector in connectors:

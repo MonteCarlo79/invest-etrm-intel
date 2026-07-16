@@ -387,6 +387,8 @@ class ModoAIConnector(BaseConnector):
                 page.click(pw_link_sel)
                 logger.info("[modo_ai] Clicked 'sign in with a password' link (Flow A)")
                 page.wait_for_timeout(2_500)
+                self._dismiss_cookie_banner(page)
+                page.wait_for_timeout(500)
                 _save_screenshot(page, "03_after_pw_link_click")
                 # Check for magic link page even after Flow A click
                 if _is_magic_link_page(page):
@@ -412,6 +414,9 @@ class ModoAIConnector(BaseConnector):
                     page.keyboard.press("Enter")
                     logger.info("[modo_ai] Pressed Enter to advance")
                 page.wait_for_timeout(3_000)
+                # Dismiss cookie banner before checking page state — it can mask body text
+                self._dismiss_cookie_banner(page)
+                page.wait_for_timeout(500)
                 _save_screenshot(page, "03_after_continue")
 
                 # --- Dump all visible elements for diagnosis (printed to stdout → CloudWatch) ---
@@ -515,6 +520,8 @@ class ModoAIConnector(BaseConnector):
                     page.click(pw_link_sel2)
                     logger.info("[modo_ai] Clicked password link: %s", pw_link_sel2)
                     page.wait_for_timeout(2_500)
+                    self._dismiss_cookie_banner(page)
+                    page.wait_for_timeout(500)
                     _save_screenshot(page, "03b_after_pw_link_click")
                     # Check again for magic link
                     if _is_magic_link_page(page):
@@ -1067,9 +1074,18 @@ def _is_sso_page(page) -> bool:
 
 
 def _is_magic_link_page(page) -> bool:
-    """Return True if Modo is showing a 'check your email' magic link page."""
+    """Return True if Modo is showing a 'check your email' magic link page.
+
+    Also matches the URL pattern used by Modo's passwordless auth flow.
+    """
     try:
-        text = page.evaluate("() => document.body.innerText.slice(0, 2000)").lower()
+        url = page.url.lower()
+        if any(p in url for p in ["magic", "passwordless", "check-email", "link-sent"]):
+            return True
+    except Exception:
+        pass
+    try:
+        text = page.evaluate("() => document.body.innerText.slice(0, 3000)").lower()
         return any(phrase in text for phrase in [
             "check your email",
             "magic link",
@@ -1079,6 +1095,13 @@ def _is_magic_link_page(page) -> bool:
             "check your inbox",
             "email has been sent",
             "sent you a link",
+            "link for authorization",   # matches Modo email subject text on the page
+            "sent a link",
+            "sent an email",
+            "log in to my account",     # text on the magic link button in the sent email
+            "verify your email",
+            "confirm your email",
+            "open your email",
         ])
     except Exception:
         return False
