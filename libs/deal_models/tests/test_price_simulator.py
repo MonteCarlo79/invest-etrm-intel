@@ -79,3 +79,21 @@ def test_simulate_prices_pca_dispatch():
     )
     paths = simulate_prices(req, seed=42)
     assert paths.shape == (20, 8760)
+
+
+def test_simulate_prices_ou_raises_without_params_or_history():
+    from libs.deal_models.price_simulator import simulate_prices
+    from libs.deal_models.contracts import PriceSimRequest
+    req = PriceSimRequest(province="蒙西", n_simulations=10, model="ou")
+    # Neither ou_params nor price_history_yuan_mwh provided
+    with pytest.raises(ValueError, match="ou_params or price_history_yuan_mwh"):
+        simulate_prices(req, seed=42)
+
+
+def test_simulate_prices_pca_raises_without_params_or_history():
+    from libs.deal_models.price_simulator import simulate_prices
+    from libs.deal_models.contracts import PriceSimRequest
+    req = PriceSimRequest(province="蒙西", n_simulations=10, model="pca")
+    # Neither pca_params nor price_history_yuan_mwh provided
+    with pytest.raises(ValueError, match="pca_params or price_history_yuan_mwh"):
+        simulate_prices(req, seed=42)
