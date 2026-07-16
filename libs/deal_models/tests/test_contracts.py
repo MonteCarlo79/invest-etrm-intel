@@ -32,6 +32,30 @@ def test_dispatch_request_asset_type_literal():
         DispatchRequest(asset_type="gas_turbine")
 
 
+def test_project_financials_revenue_length_mismatch():
+    from libs.deal_models.contracts import ProjectFinancials
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="annual_revenue_yuan"):
+        ProjectFinancials(
+            capex_total_yuan=1e8,
+            annual_revenue_yuan=[2e7] * 5,   # wrong: 5 entries for 20-year project
+            annual_om_yuan=3e6,
+            project_life_years=20,
+        )
+
+
+def test_pca_model_params_shape_validation():
+    from libs.deal_models.contracts import PCAModelParams, PCScoreParams
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        PCAModelParams(
+            n_components=3,
+            pc_params=[PCScoreParams(pc_index=i) for i in range(3)],
+            loadings=[[1.0] * 24, [1.0] * 24],  # only 2 rows, but n_components=3
+            mean_profile=[1.0] * 24,
+        )
+
+
 def test_mc_request_valid():
     from libs.deal_models.contracts import MCRequest, PriceSimRequest, OUParams, DispatchRequest, ProjectFinancials
     req = MCRequest(

@@ -1,8 +1,8 @@
 """libs/deal_models/contracts.py — Input schemas (Pydantic) + result types (dataclasses)."""
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── Input schemas (validated) ─────────────────────────────────────────────────
@@ -24,6 +24,17 @@ class PCAModelParams(BaseModel):
     pc_params: List[PCScoreParams]
     loadings: List[List[float]]   # shape (n_components, 24)
     mean_profile: List[float]     # len=24, yuan/MWh
+
+    @model_validator(mode="after")
+    def _validate_shapes(self) -> "PCAModelParams":
+        if len(self.loadings) != self.n_components:
+            raise ValueError(f"loadings must have {self.n_components} rows, got {len(self.loadings)}")
+        for i, row in enumerate(self.loadings):
+            if len(row) != 24:
+                raise ValueError(f"loadings[{i}] must have 24 columns, got {len(row)}")
+        if len(self.mean_profile) != 24:
+            raise ValueError(f"mean_profile must have 24 entries, got {len(self.mean_profile)}")
+        return self
 
 
 class PriceSimRequest(BaseModel):
@@ -65,8 +76,22 @@ class ProjectFinancials(BaseModel):
     residual_value_ratio: float = Field(0.05, ge=0.0, le=0.30)
     hurdle_rate: float = Field(0.08, ge=0.0)
 
+    @model_validator(mode="after")
+    def _revenue_list_length(self) -> "ProjectFinancials":
+        if len(self.annual_revenue_yuan) != self.project_life_years:
+            raise ValueError(
+                f"annual_revenue_yuan must have {self.project_life_years} entries "
+                f"(project_life_years), got {len(self.annual_revenue_yuan)}"
+            )
+        return self
+
 
 class MCRequest(BaseModel):
+    """
+    Full Monte Carlo request.
+    n_simulations here is authoritative — the MC runner overrides price_sim.n_simulations
+    with this value so simulation count is consistent across price/dispatch/cashflow.
+    """
     price_sim: PriceSimRequest
     dispatch: DispatchRequest
     financials: ProjectFinancials

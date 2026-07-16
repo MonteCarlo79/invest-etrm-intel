@@ -16,6 +16,8 @@ class DealStructureSpec:
 
 
 def register(spec: DealStructureSpec) -> DealStructureSpec:
+    if spec.name in _REGISTRY:
+        raise ValueError(f"{spec.name!r} is already registered. Use a different name.")
     _REGISTRY[spec.name] = spec
     return spec
 
