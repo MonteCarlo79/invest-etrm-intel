@@ -14,16 +14,24 @@ def _irr(cashflows: list[float], guess: float = 0.10, max_iter: int = 500, tol: 
     if not any(cf > 0 for cf in cashflows[1:]):
         return -0.9999
 
+    # If NPV at rate=0 (undiscounted sum) is non-positive, no real positive IRR exists.
+    if sum(cashflows) <= 0.0:
+        return -0.9999
+
     rate = guess
     for _ in range(max_iter):
-        npv = sum(cf / (1.0 + rate) ** t for t, cf in enumerate(cashflows))
-        d_npv = sum(-t * cf / (1.0 + rate) ** (t + 1) for t, cf in enumerate(cashflows))
+        try:
+            npv = sum(cf / (1.0 + rate) ** t for t, cf in enumerate(cashflows))
+            d_npv = sum(-t * cf / (1.0 + rate) ** (t + 1) for t, cf in enumerate(cashflows))
+        except (OverflowError, ZeroDivisionError):
+            return -0.9999
         if abs(d_npv) < 1e-12:
             break
         new_rate = rate - npv / d_npv
         if abs(new_rate - rate) < tol:
             return float(new_rate)
-        rate = max(new_rate, -0.9999)   # guard against divergence
+        # Guard against divergence in both directions
+        rate = max(min(new_rate, 100.0), -0.9999)
     return float(rate)
 
 
