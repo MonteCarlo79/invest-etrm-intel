@@ -11,7 +11,7 @@
 
 | Service | Image | ECS Task Def | Cluster |
 |---|---|---|---|
-| spot-markets | `bess-spot-markets:v83` | `bess-platform-spot-markets:115` | `bess-platform-cluster` |
+| spot-markets | `bess-spot-markets:v86` | `bess-platform-spot-markets:118` | `bess-platform-cluster` |
 | hermes | `bess-platform-hermes:latest` | `bess-platform-hermes:156` | `bess-platform-cluster` |
 
 **How to deploy a new spot-market version** (Windows — no jq/node/python3, use `py`):
@@ -174,6 +174,8 @@ text=[f"{v:,}" if v >= 0 else "" for v in _eoh_sorted['eoh']]
 ## Known Issues / Potential Follow-ups
 
 1. **价格预测 tab** — the Bayesian and stack models are scaffolded but the fundamentals loader (`_load_forecast_fundamentals`) may need tuning depending on data availability per province.
+   - **Backtest actual price = 0 (FIXED v86)**: Old ingestion pipeline stored `da_price = 0` (not NULL) for missing periods. Fix: `_load_price_holdout` now filters `AND {price_col} > 0`. If all holdout values are still zero, backtest section shows "验证期无有效价格数据" and skips metrics/chart.
+   - **Unit mismatch (FIXED v84/v85)**: Recent data in ¥/MWh, older data in ¥/kWh. Fix: `nanmedian > 5` → divide by 1000 applied to training, Bayesian, and holdout arrays.
 2. **机制竞价 extraction quality** — Nova Pro plain-text JSON output is less structured than tool-use; edge cases like multi-page charts in PPTX may need prompt tuning in `_BIDS_PROMPT` / `_UPCOMING_PROMPT` in `jizhi_extractor.py`.
 3. **即将竞价** — the Hermes internet scan (`_run_jizhi_scan`) runs every 6 hours via APScheduler in `services/hermes/app.py`. Check `staging.jizhi_upcoming` for scan results.
 4. **`infra/terraform/terraform.tfvars`** — `image_spot_markets` still shows an old tag (`v31`). This file is NOT used for spot-markets deployment (ECS task def is updated directly). Do not confuse it with the actual running version.

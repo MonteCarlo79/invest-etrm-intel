@@ -1583,9 +1583,10 @@ def create_app() -> FastAPI:
             # Rebuild card in-place so completed task disappears immediately
             try:
                 from datetime import timezone as _tz, timedelta as _td
-                from services.hermes.scheduler import build_task_card, _retry_list_open_cards
+                from services.hermes.scheduler import build_task_card
                 _now = datetime.now(tz=_tz(_td(hours=8)))
-                _fresh = _retry_list_open_cards(agent.tasks)
+                # Direct call — no retry/sleep; Feishu card callbacks have ~3s timeout
+                _fresh = agent.tasks.list_open_cards()
                 _new_card = build_task_card(_fresh, _now)
                 return {"card": _new_card, "toast": {"type": "success", "content": f"✅ 已完成：{title}"}}
             except Exception as exc:
