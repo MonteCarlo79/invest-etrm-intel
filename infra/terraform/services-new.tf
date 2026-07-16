@@ -254,6 +254,115 @@ import {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Deal Structurer  (port 8522, Cognito-protected)
+# ─────────────────────────────────────────────────────────────────────────────
+resource "aws_ecr_repository" "deal_structurer" {
+  name                 = "bess-platform-deal-structurer"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration { scan_on_push = false }
+  tags = local.tags
+}
+
+resource "aws_lb_target_group" "deal_structurer" {
+  name        = "bess-platform-deal-structurer"
+  port        = 8522
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  lifecycle { create_before_destroy = true }
+  health_check {
+    path                = "/deal-structurer/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "deal_structurer_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 56
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.deal_structurer.arn
+  }
+
+  condition {
+    path_pattern { values = ["/deal-structurer", "/deal-structurer/", "/deal-structurer/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "deal_structurer" {
+  family                   = "${var.name}-deal-structurer"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([{
+    name      = "deal-structurer"
+    image     = var.image_deal_structurer
+    essential = true
+    portMappings = [{ containerPort = 8522, protocol = "tcp" }]
+    environment = [
+      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = local.log_group
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "deal-structurer"
+      }
+    }
+  }])
+
+  lifecycle { ignore_changes = [container_definitions] }
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "deal_structurer" {
+  name            = "${var.name}-deal-structurer-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.deal_structurer.arn
+  desired_count   = var.desired_count_deal_structurer
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.deal_structurer.arn
+    container_name   = "deal-structurer"
+    container_port   = 8522
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+
+  lifecycle { ignore_changes = [task_definition] }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Crystal Ball Client Terminal  (port 8521, simple forward)
 # ─────────────────────────────────────────────────────────────────────────────
 resource "aws_ecr_repository" "crystal_ball_client" {

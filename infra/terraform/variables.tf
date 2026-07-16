@@ -763,6 +763,21 @@ variable "planka_base_url" {
   default     = ""
 }
 
+#################################################
+# Deal Structurer
+#################################################
+variable "image_deal_structurer" {
+  description = "Docker image for Deal Structurer Streamlit app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_deal_structurer" {
+  description = "Desired task count for the deal-structurer ECS service."
+  type        = number
+  default     = 1
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DeepTutor
 # ─────────────────────────────────────────────────────────────────────────────
