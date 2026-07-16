@@ -137,23 +137,39 @@ CREATE TABLE rm_dispatch_daily (
   UNIQUE (asset_id, dispatch_date)
 );
 
+-- 15-min dispatch plan: source = 电力交易调度计划表 Excel (one sheet per day)
+-- Columns: 时间, SOC(%), 操作员申报计划(MW), 当前预测(MW), 实时调度出力(MW), 实际执行功率(MW)
+-- Positive MW = discharge (放电), Negative MW = charge (充电)
+CREATE TABLE rm_dispatch_plan (
+  id                    SERIAL PRIMARY KEY,
+  asset_id              INTEGER NOT NULL REFERENCES rm_assets(id),
+  interval_start        TIMESTAMPTZ NOT NULL,        -- e.g. 2026-07-01 00:00, 00:15, 00:30 ...
+  soc_pct               NUMERIC(6,2),               -- SOC (%)
+  nominated_mw          NUMERIC(10,4),              -- 操作员申报计划
+  forecast_mw           NUMERIC(10,4),              -- 当前预测
+  dispatched_mw         NUMERIC(10,4),              -- 实时调度出力 (cleared by grid)
+  actual_mw             NUMERIC(10,4),              -- 实际执行功率
+  upload_batch_id       TEXT,
+  UNIQUE (asset_id, interval_start)
+);
+
 -- Hourly position volumes for settlement reconciliation and MtM
--- Populated by: (a) expanding dispatch_daily time windows, or (b) direct hourly file upload
+-- Populated by aggregating rm_dispatch_plan (15-min → hourly) or direct upload
 CREATE TABLE rm_position_volumes (
   id                    SERIAL PRIMARY KEY,
   position_id           INTEGER NOT NULL REFERENCES rm_positions(id),
   delivery_date         DATE NOT NULL,
   hour                  SMALLINT NOT NULL CHECK (hour BETWEEN 0 AND 23),
-  -- three-layer volume waterfall
+  -- three-layer volume waterfall (MWh = sum of 4 × 15-min intervals)
   nominated_mwh         NUMERIC(10,4),
   cleared_mwh           NUMERIC(10,4),
   settled_mwh           NUMERIC(10,4),
   -- deviation attribution (nomination → cleared)
-  deviation_bid_mwh     NUMERIC(10,4) DEFAULT 0,  -- unsuccessful bidding
+  deviation_bid_mwh     NUMERIC(10,4) DEFAULT 0,
   -- deviation attribution (cleared → settled)
-  deviation_equipment_mwh  NUMERIC(10,4) DEFAULT 0,  -- equipment/system failure
-  deviation_sysop_mwh      NUMERIC(10,4) DEFAULT 0,  -- system operator modification
-  deviation_grid_flow_mwh  NUMERIC(10,4) DEFAULT 0,  -- grid power flow adjustment
+  deviation_equipment_mwh  NUMERIC(10,4) DEFAULT 0,
+  deviation_sysop_mwh      NUMERIC(10,4) DEFAULT 0,
+  deviation_grid_flow_mwh  NUMERIC(10,4) DEFAULT 0,
   -- prices
   da_price_cny_kwh      NUMERIC(10,6),
   rt_price_cny_kwh      NUMERIC(10,6),
@@ -163,11 +179,40 @@ CREATE TABLE rm_position_volumes (
 );
 ```
 
-**Volume ingestion path:**
-- Daily 运营统计 Excel → `rm_dispatch_daily` (primary source; charge/discharge windows stored as text arrays)
-- Time windows expanded to hourly slots on demand: e.g., charge "09:46–14:33" → hours 9, 10, 11, 12, 13, 14 (partial hours prorated by minutes)
-- When hourly PDF/Excel is available (from exchange), it writes directly to `rm_position_volumes` with full nomination/cleared/settled waterfall
-- Monthly P&L KPIs cross-referenced between `rm_dispatch_daily` (operational) and `rm_settlement_items` (financial settlement)
+**Ingestion pipeline:** `services/operating_assets/`
+
+Two ingestion paths — both write to the same tables:
+
+*Path A — WeCom auto-download (production):*
+```
+Operator posts file to 康富资产管理-储能场站日报群 (WeCom enterprise group, 38 members)
+  → WeCom self-built app receives webhook (message_type=file)
+  → wecom_receiver.py downloads file via GET /cgi-bin/media/get → S3
+  → ingest.py triggered: filename_mapper.py resolves station → asset_id
+  → 运营统计 → rm_dispatch_daily
+  → 调度计划表 → rm_dispatch_plan (15-min intervals, all sheets in file)
+```
+
+*Path B — folder watcher (short-term, while WeCom app is pending approval):*
+```
+Windows Task Scheduler (08:00 daily) runs services/operating_assets/ingest.py
+  → scans assets/operating/ for files modified since last run
+  → same parsing + DB write logic as Path A
+```
+
+**Filename → asset_id mapping** (config file, not hardcoded):
+
+| Filename pattern | Asset |
+|---|---|
+| 裕昭沙子坝 / 220kV裕昭 | 裕昭沙子坝 BESS |
+| 远景乌拉特 | 远景乌拉特 BESS |
+| 景怡查干哈达 | 景怡查干哈达 BESS |
+| 景通四益堂 | 景通四益堂 BESS |
+| 四子王旗 | 四子王旗 BESS |
+| 悦杭独贵 | 悦杭独贵 BESS |
+| 景蓝乌尔图 | 景蓝乌尔图 BESS |
+
+WeCom app credentials required: `corpid`, `corpsecret`, `token`, `encoding_aes_key` (from WeCom admin console → 自建应用).
 
 ### 3.3 Forward curves
 
