@@ -106,6 +106,39 @@ CREATE TABLE rm_positions (
   upload_batch_id  TEXT
 );
 
+-- Daily operational dispatch: one row per asset per day (from 运营统计 daily report)
+-- Source: 【日期】内蒙储能电站运营统计.xlsx — one sheet per station
+CREATE TABLE rm_dispatch_daily (
+  id                       SERIAL PRIMARY KEY,
+  asset_id                 INTEGER NOT NULL REFERENCES rm_assets(id),
+  dispatch_date            DATE NOT NULL,
+  operator_name            TEXT,
+  -- volumes (MWh)
+  charge_mwh               NUMERIC(10,4),    -- 日充电量
+  discharge_mwh            NUMERIC(10,4),    -- 日放电量
+  auxiliary_consumption_mwh NUMERIC(10,4),   -- 综合站用电
+  cumulative_charge_mwh    NUMERIC(12,4),    -- 累计充电量 (month-to-date)
+  cumulative_discharge_mwh NUMERIC(12,4),    -- 累计放电量
+  -- cycle metrics
+  cycle_count_day          NUMERIC(6,2),     -- 日充放次数
+  cycle_count_month        NUMERIC(8,2),     -- 月累计充放次数
+  conversion_ratio         NUMERIC(6,4),     -- 日充放转化率 = discharge/charge
+  -- charge/discharge time windows (stored as text arrays; expanded to hourly on query)
+  charge_windows           TEXT[],           -- e.g. ['09:46-14:33']
+  discharge_windows        TEXT[],           -- e.g. ['00:00-00:15','05:16-05:53','19:01-23:59']
+  -- financial (from 电价日报)
+  discharge_revenue_cny    NUMERIC(14,2),    -- 放电收入
+  charge_cost_cny          NUMERIC(14,2),    -- 充电费用 (negative)
+  system_op_fee_cny        NUMERIC(14,2),    -- 系统运营费
+  net_margin_cny           NUMERIC(14,2),    -- 站点毛利
+  -- anomalies
+  anomaly_notes            TEXT,
+  upload_batch_id          TEXT,
+  UNIQUE (asset_id, dispatch_date)
+);
+
+-- Hourly position volumes for settlement reconciliation and MtM
+-- Populated by: (a) expanding dispatch_daily time windows, or (b) direct hourly file upload
 CREATE TABLE rm_position_volumes (
   id                    SERIAL PRIMARY KEY,
   position_id           INTEGER NOT NULL REFERENCES rm_positions(id),
@@ -129,6 +162,12 @@ CREATE TABLE rm_position_volumes (
   UNIQUE (position_id, delivery_date, hour)
 );
 ```
+
+**Volume ingestion path:**
+- Daily 运营统计 Excel → `rm_dispatch_daily` (primary source; charge/discharge windows stored as text arrays)
+- Time windows expanded to hourly slots on demand: e.g., charge "09:46–14:33" → hours 9, 10, 11, 12, 13, 14 (partial hours prorated by minutes)
+- When hourly PDF/Excel is available (from exchange), it writes directly to `rm_position_volumes` with full nomination/cleared/settled waterfall
+- Monthly P&L KPIs cross-referenced between `rm_dispatch_daily` (operational) and `rm_settlement_items` (financial settlement)
 
 ### 3.3 Forward curves
 
@@ -302,12 +341,18 @@ Discharge energy revenue  (by TOU period: peak / valley / flat / super-peak)
   [Settlement reconciliation gap: 应收 − 实际结算]
 ```
 
+**Operational KPI panel** (from `rm_dispatch_daily`):
+- Daily/monthly: charge MWh, discharge MWh, conversion ratio, cycle count
+- Average discharge per cycle, average daily cycles
+- Auxiliary consumption (站用电)
+- Dispatch time windows visualised as Gantt-style bars (charge/discharge windows per day)
+
 **Volume deviation table:** Per-period (daily/monthly toggle) view of:
 - Nominated → Cleared → Settled volumes
 - Deviation split: bid / equipment / sysop / grid flow (MWh and ¥)
 
 **Comparison views:**
-- Book vs book
+- Asset vs asset (same province)
 - Month vs month
 - Actual vs prior year same period
 
@@ -315,11 +360,17 @@ Discharge energy revenue  (by TOU period: peak / valley / flat / super-peak)
 
 ### Tab 4 — Positions & MtM
 
-**Position upload:**
-- Template download button (CSV with required columns)
-- Upload accepts PDF or Excel (nomination, cleared, settlement volume files from exchange/grid)
+**Daily ops upload (primary input):**
+- Upload 运营统计 Excel (【日期】内蒙储能电站运营统计.xlsx format)
+- Parser detects station sheets, extracts: date, volumes, time windows, financial summary
+- Writes to `rm_dispatch_daily`; time windows stored raw, expanded to hourly on demand
+- Also accepts 电价日报 Excel for cross-referencing daily revenue vs cost
+
+**Hourly position upload (when available from exchange):**
+- Upload accepts PDF or Excel (nomination, cleared, settlement volume files from exchange)
 - `libs/settlement/parser.py` handles format detection and column mapping
-- Validation: no negative volumes, settlement within tolerance of cleared; sysop can increase cleared above nominated (deviation_sysop_mwh may be positive)
+- Writes to `rm_position_volumes` with full nomination/cleared/settled waterfall
+- Validation: settlement within tolerance of cleared; sysop modifications may increase cleared above nominated
 - Batch ID assigned per upload for traceability
 
 **Forward curve panel:**
