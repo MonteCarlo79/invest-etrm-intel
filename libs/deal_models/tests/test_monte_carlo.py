@@ -6,19 +6,23 @@ from libs.deal_models.contracts import (
 )
 
 
+
 def _small_mc_request(n: int = 50) -> MCRequest:
+    # Use wind asset so dispatch revenue always has meaningful variance with OU sigma=60.
+    # BESS arbitrage breaks even only when daily spread exceeds roundtrip-eff penalty;
+    # with sigma=60 the intraday spread is too tight (~15 yuan) to clear that threshold.
+    # Wind revenue = price × CF × MW, which varies directly with the price path mean.
     return MCRequest(
         price_sim=PriceSimRequest(
             province="蒙西", n_simulations=n, n_years=1, model="ou",
             ou_params=OUParams(kappa=2.0, mu=300.0, sigma=60.0),
         ),
         dispatch=DispatchRequest(
-            asset_type="bess", capacity_mwh=100.0, power_mw=50.0,
-            roundtrip_eff=0.85, cycles_per_day=1.0,
+            asset_type="wind", installed_mw=100.0,
         ),
         financials=ProjectFinancials(
             capex_total_yuan=1e8, project_life_years=20,
-            annual_revenue_yuan=[2e7] * 20, annual_om_yuan=3e6,
+            annual_revenue_yuan=[7e7] * 20, annual_om_yuan=3e6,
         ),
         n_simulations=n,
     )

@@ -2,45 +2,11 @@
 from __future__ import annotations
 
 import numpy as np
-from libs.deal_models.contracts import DispatchRequest, MCRequest, MCResult, ProjectFinancials
+from libs.deal_models.contracts import MCRequest, MCResult, ProjectFinancials
 from libs.deal_models.price_simulator import simulate_prices
 from libs.deal_models.dispatch_valuation import dispatch_annual
 from libs.deal_models.project_cashflow import compute_cashflow
 
-
-def _price_index(price_paths: np.ndarray) -> np.ndarray:
-    """
-    Return per-path price index = mean_price_per_path / overall_mean_price.
-    Used to scale base revenue by the simulated price scenario.
-    """
-    overall_mean = price_paths.mean()
-    if overall_mean < 1e-6:
-        return np.ones(price_paths.shape[0])
-    return price_paths.mean(axis=1) / overall_mean
-
-
-def _annual_revenue_paths(
-    price_paths: np.ndarray,
-    req: DispatchRequest,
-    base_annual_revenue: float,
-) -> np.ndarray:
-    """
-    Compute annual revenue per simulation path.
-
-    Primary: greedy spread dispatch via dispatch_annual.
-    Fallback (when dispatch yields near-zero variance, e.g. tight OU spread):
-      scale base_annual_revenue by per-path price index — the standard project-finance
-      approach where a base-case revenue is stressed by simulated price scenarios.
-    """
-    dispatch_result = dispatch_annual(price_paths, req)
-    revenue_paths = dispatch_result.revenue_paths
-
-    # If dispatch yields zero variance (e.g. tight OU spread < roundtrip efficiency penalty),
-    # fall back to base_revenue × price_index for each path
-    if revenue_paths.std() < 1.0:
-        revenue_paths = base_annual_revenue * _price_index(price_paths)
-
-    return revenue_paths
 
 
 def _tornado(financials: ProjectFinancials, base_rev: float) -> list[dict]:
@@ -88,10 +54,8 @@ def run_monte_carlo(req: MCRequest) -> MCResult:
     # 1. Price paths
     price_paths = simulate_prices(price_sim, seed=req.random_seed)  # (n_sim, 8760)
 
-    # 2. Annual dispatch revenue per path
-    # Base revenue = median of the financials annual_revenue_yuan (base-case expectation)
-    base_rev = float(np.median(req.financials.annual_revenue_yuan))
-    revenue_paths = _annual_revenue_paths(price_paths, req.dispatch, base_rev)  # (n_sim,)
+    # 2. Annual dispatch revenue per path — direct from dispatch_annual, no fallback
+    revenue_paths = dispatch_annual(price_paths, req.dispatch).revenue_paths  # (n_sim,)
 
     # 3. Project cashflow per path
     n = req.financials.project_life_years
