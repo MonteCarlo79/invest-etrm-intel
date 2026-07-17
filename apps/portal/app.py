@@ -374,7 +374,7 @@ _DEV_PORTS = {
     "ercot-market":     "8510",
     "pjm-market":       "8511",
     "caiso-market":     "8512",
-    "deal-structurer":  "8513",
+    "deal-structurer":  "8522",
 }
 
 
