@@ -9,7 +9,7 @@ Jobs (all times Asia/Singapore):
   03:00  Daily market data ingestion  (Modo Energy API → RDS)
   03:30  Knowledge-base ingestion
   03:45  KB digest → expert insights
-  04:00  Modo AI distillation
+  20:00  Modo AI distillation
   04:30  Pricing batch
   06:00  Daily report → email + WeCom
   09:15  Elexon ops ingest (settlement system prices + wind forecast)
@@ -245,7 +245,7 @@ def start_scheduler():
                       id="gb_daily_knowledge", misfire_grace_time=3600)
     scheduler.add_job(_kb_digest_job,       "cron", hour=3, minute=45,
                       id="gb_kb_digest",       misfire_grace_time=3600)
-    scheduler.add_job(_modo_ai_job,         "cron", hour=4, minute=0,
+    scheduler.add_job(_modo_ai_job,         "cron", hour=20, minute=0,
                       id="gb_modo_ai",         misfire_grace_time=3600)
     scheduler.add_job(_pricing_batch_job,   "cron", hour=4, minute=30,
                       id="gb_pricing_batch",   misfire_grace_time=3600)
