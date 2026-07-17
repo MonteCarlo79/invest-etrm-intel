@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Optional
 import pandas as pd
+from sqlalchemy import text
 from services.common.db_utils import get_engine
 
 
@@ -21,14 +22,14 @@ def fetch_price_history(
                "rt_price" uses real-time clearing price.
     """
     engine = get_engine()
-    sql = f"""
+    sql = text(f"""
         SELECT datetime, {price_col} AS price
         FROM marketdata.spot_prices_hourly
         WHERE province = :province
           AND datetime >= :start_date
           AND datetime <  :end_date
         ORDER BY datetime
-    """
+    """)
     df = pd.read_sql(sql, engine, params={"province": province, "start_date": start_date, "end_date": end_date})
     if df.empty:
         raise ValueError(f"No price data for province={province!r} between {start_date} and {end_date}")
