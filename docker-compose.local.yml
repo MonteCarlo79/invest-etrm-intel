@@ -25,6 +25,7 @@
 #   ph-market:        http://localhost:8513
 #   po-market:        http://localhost:8514
 #   spot-markets:     http://localhost:8515
+#   deal-structurer:  http://localhost:8522/deal-structurer/
 #
 # To link Portal "Open App →" buttons to local instances, set in config/.env:
 #   APP_URL_MAP=gb-market=http://localhost:8508/gb-market,au-market=http://localhost:8509/au-market,...
@@ -107,6 +108,11 @@ services:
     # Uses default image CMD (run.sh baked in)
     ports: ["8507:8507"]
 
+  deal-structurer:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-deal-structurer:v5
+    ports: ["8522:8522"]
+
   spot-markets:
     <<: *common
     image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-spot-markets:v32
@@ -123,7 +129,7 @@ services:
   #   APP_URL_MAP=gb-market=http://localhost:8508/gb-market,...
   portal:
     <<: *common
-    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-portal:v14
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-portal:v9
     command: ["streamlit", "run", "apps/portal/app.py",
               "--server.port=8500", "--server.address=0.0.0.0",
               "--server.enableCORS=false", "--server.enableXsrfProtection=false",
