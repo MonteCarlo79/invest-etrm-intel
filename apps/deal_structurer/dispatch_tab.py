@@ -25,7 +25,7 @@ def render() -> None:
             cycles = st.slider("Cycles/day", 0.5, 2.0, 1.0, 0.5, key="dr_cycles")
             om = st.number_input("O&M ¥/MWh discharged", 0.0, 50.0, 10.0, key="dr_om")
         else:
-            power_mw = capacity_mwh = roundtrip_eff = om = 0.0; cycles = 1.0
+            power_mw = capacity_mwh = om = 0.0; roundtrip_eff = 0.85; cycles = 1.0
         if asset_type in ("wind", "wind_bess"):
             st.subheader("Wind Parameters")
             installed_mw = st.number_input("Installed MW", 1.0, 2000.0, 100.0, key="dr_wind_mw")
