@@ -27,6 +27,7 @@ def render() -> None:
             kappa = st.number_input("Mean-reversion κ", 0.1, 20.0, 2.0, key="ou_kappa")
             sigma = st.number_input("Volatility σ (¥/MWh ann.)", 10.0, 300.0, 80.0, key="ou_sigma")
         else:
+            price_type = st.radio("Price type", ["DA (day-ahead)", "RT (real-time)"], horizontal=True, key="ps_price_type")
             lookback = st.slider("History window (months)", 3, 24, 12, key="ps_lookback")
             with st.expander("Paste custom data instead"):
                 history_text = st.text_area("Hourly prices (one per line, ¥/MWh)", height=100, key="ps_history")
@@ -50,8 +51,9 @@ def render() -> None:
                         else:
                             end_dt = date.today()
                             start_dt = end_dt - timedelta(days=lookback * 30)
+                            price_col = "rt_price" if st.session_state.get("ps_price_type", "").startswith("RT") else "da_price"
                             raw = fetch_price_history(
-                                province, str(start_dt), str(end_dt)
+                                province, str(start_dt), str(end_dt), price_col=price_col
                             )
                         if len(raw) < 168:
                             st.error("Need at least 168 hours of history for PCA fitting.")
