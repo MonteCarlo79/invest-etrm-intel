@@ -100,6 +100,20 @@ class FeishuClient:
         if data.get("code", 0) != 0:
             logger.warning("Feishu send_card non-zero code: %s", data)
 
+    def update_card(self, message_id: str, card: dict) -> None:
+        """Update an existing interactive card message in-place (PATCH)."""
+        resp = self._request_with_token_retry(
+            "PATCH", f"{_API}/im/v1/messages/{message_id}",
+            json={"content": json.dumps(card)},
+            timeout=15,
+        )
+        if not resp.ok:
+            logger.error("Feishu update_card HTTP %s: %s", resp.status_code, resp.text[:300])
+            return
+        data = resp.json()
+        if data.get("code", 0) != 0:
+            logger.warning("Feishu update_card non-zero code: %s", data)
+
     def upload_file(self, file_bytes: bytes, filename: str, file_type: str = "pdf") -> str:
         """Upload a file to Feishu and return file_key."""
         resp = self._request_with_token_retry(

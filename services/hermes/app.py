@@ -1570,28 +1570,35 @@ def create_app() -> FastAPI:
 
         # ── Routing-card actions ──────────────────────────────────────────────
         if act == "done_task":
-            task_id = value.get("task_id", "")
-            title   = value.get("title", "任务")
-            try:
-                if task_id:
-                    agent.tasks.complete_card(card_id=task_id)
-                else:
-                    agent.tasks.complete_card(title=title)
-            except Exception as exc:
-                logger.error("done_task callback failed: %s", exc)
-                return {"toast": {"type": "fail", "content": f"⚠️ 标记失败：{exc}"}}
-            # Rebuild card in-place so completed task disappears immediately
-            try:
-                from datetime import timezone as _tz, timedelta as _td
-                from services.hermes.scheduler import build_task_card
-                _now = datetime.now(tz=_tz(_td(hours=8)))
-                # Direct call — no retry/sleep; Feishu card callbacks have ~3s timeout
-                _fresh = agent.tasks.list_open_cards()
-                _new_card = build_task_card(_fresh, _now)
-                return {"card": _new_card, "toast": {"type": "success", "content": f"✅ 已完成：{title}"}}
-            except Exception as exc:
-                logger.error("Card rebuild after done_task failed: %s", exc)
-                return {"toast": {"type": "success", "content": f"✅ 已完成：{title}"}}
+            task_id    = value.get("task_id", "")
+            title      = value.get("title", "任务")
+            message_id = payload.get("open_message_id", "")
+
+            async def _bg_done_task(
+                _task_id=task_id, _title=title, _message_id=message_id
+            ):
+                try:
+                    if _task_id:
+                        agent.tasks.complete_card(card_id=_task_id)
+                    else:
+                        agent.tasks.complete_card(title=_title)
+                except Exception as exc:
+                    logger.error("done_task bg: complete failed: %s", exc)
+                    return
+                if not _message_id:
+                    return
+                try:
+                    from datetime import timezone as _tz, timedelta as _td
+                    from services.hermes.scheduler import build_task_card
+                    _now = datetime.now(tz=_tz(_td(hours=8)))
+                    _fresh = agent.tasks.list_open_cards()
+                    _new_card = build_task_card(_fresh, _now)
+                    feishu.update_card(_message_id, _new_card)
+                except Exception as exc:
+                    logger.error("done_task bg: card update failed: %s", exc)
+
+            background.add_task(_bg_done_task)
+            return {"toast": {"type": "success", "content": f"✅ 已完成：{title}"}}
 
         if act == "confirm":
             # User confirmed the auto-detected folder — collapse card, remove buttons
