@@ -144,7 +144,7 @@ _PROMPT = """\
   "fr_rows": [
     {{
       "province": "省份名称",
-      "fr_price_yuan_kw_h": <调频容量价格，元/kW/h，数字>,
+      "fr_price_yuan_kw_h": <调频容量价格，元/kW/h，数字或null（若仅知资金池总量可填null）>,
       "fr_pool_billion_yuan": <全省调频总资金池，亿元（该月或该年），数字或null>,
       "effective_year_month": "<数据所属年月，格式YYYY-MM，如2026-04>",
       "source": "<来源说明>"
@@ -179,7 +179,14 @@ def _call_claude(context: str, api_key: str, year: int) -> Optional[dict]:
         # Strip markdown code fences if present
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Model returned prose + JSON — find the outermost {...} block
+            match = re.search(r'\{[\s\S]*\}', text)
+            if match:
+                return json.loads(match.group())
+            raise
     except Exception as exc:
         logger.error("Claude cap comp extraction failed: %s", exc)
         return None
@@ -259,15 +266,17 @@ def _build_fr_row(raw: dict, default_year: int, default_source: str) -> Optional
     if not province:
         return None
     fr_price = _safe_float(raw.get("fr_price_yuan_kw_h"))
-    if fr_price is None or fr_price <= 0:
+    fr_pool  = _safe_float(raw.get("fr_pool_billion_yuan"))
+    # Require at least one of unit price or total pool size
+    if (fr_price is None or fr_price <= 0) and (fr_pool is None or fr_pool <= 0):
         return None
     # Support monthly granularity via effective_year_month ("YYYY-MM") or fallback to effective_year
     eff_ym = raw.get("effective_year_month") or raw.get("effective_year")
     return {
         "province": province,
         "effective_date": _parse_year_month_field(eff_ym, default_year),
-        "fr_price_yuan_kw_h": fr_price,
-        "fr_pool_billion_yuan": _safe_float(raw.get("fr_pool_billion_yuan")),
+        "fr_price_yuan_kw_h": fr_price if (fr_price and fr_price > 0) else None,
+        "fr_pool_billion_yuan": fr_pool,
         "source": str(raw.get("source") or default_source)[:500],
     }
 

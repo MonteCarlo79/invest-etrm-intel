@@ -237,34 +237,37 @@ def upsert_fr_rows(rows: list[dict], pg_url: str, source: str) -> dict:
                     errors.append(f"{province}: invalid effective_date {row.get('effective_date')}")
                     continue
                 fr_price = row.get("fr_price_yuan_kw_h")
-                if fr_price is None:
-                    errors.append(f"{province}: missing fr_price_yuan_kw_h")
-                    continue
-                try:
-                    fr_price = float(fr_price)
-                except (TypeError, ValueError):
-                    errors.append(f"{province}: non-numeric fr_price_yuan_kw_h={fr_price}")
-                    continue
+                if fr_price is not None:
+                    try:
+                        fr_price = float(fr_price)
+                    except (TypeError, ValueError):
+                        errors.append(f"{province}: non-numeric fr_price_yuan_kw_h={fr_price}")
+                        continue
                 fr_pool = row.get("fr_pool_billion_yuan")
                 if fr_pool is not None:
                     try:
                         fr_pool = float(fr_pool)
                     except (TypeError, ValueError):
                         fr_pool = None
+                # Require at least unit price or total pool
+                if fr_price is None and fr_pool is None:
+                    errors.append(f"{province}: missing fr_price_yuan_kw_h and fr_pool_billion_yuan")
+                    continue
 
-                # Conflict detection
+                # Conflict detection (only when unit price is present)
                 status = "confirmed"
-                cur.execute(_FETCH_CONFIRMED_FR_SQL, (province, eff_date))
-                existing_row = cur.fetchone()
-                if existing_row and _values_conflict(float(existing_row[1]), fr_price):
-                    cur.execute(_SET_CONFLICT_SQL.format(table="marketdata.province_fr_market"),
-                                (existing_row[0],))
-                    status = "conflict"
-                    conflicts += 1
-                    logger.info(
-                        "fr_market conflict: %s %s existing=%.4f new=%.4f (src=%s)",
-                        province, eff_date, existing_row[1], fr_price, source,
-                    )
+                if fr_price is not None:
+                    cur.execute(_FETCH_CONFIRMED_FR_SQL, (province, eff_date))
+                    existing_row = cur.fetchone()
+                    if existing_row and existing_row[1] is not None and _values_conflict(float(existing_row[1]), fr_price):
+                        cur.execute(_SET_CONFLICT_SQL.format(table="marketdata.province_fr_market"),
+                                    (existing_row[0],))
+                        status = "conflict"
+                        conflicts += 1
+                        logger.info(
+                            "fr_market conflict: %s %s existing=%.4f new=%.4f (src=%s)",
+                            province, eff_date, existing_row[1], fr_price, source,
+                        )
 
                 # Prefer per-row source over generic tag
                 row_source = str(row.get("source") or source)[:500]
