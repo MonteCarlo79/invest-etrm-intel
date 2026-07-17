@@ -1,10 +1,12 @@
 """Tab 1 — Price Simulation: province selector, OU/PCA params, price path chart."""
 from __future__ import annotations
+from datetime import date, timedelta
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 from libs.deal_models.contracts import OUParams, PriceSimRequest
 from libs.deal_models.price_simulator import simulate_prices
+from services.deal_engine.price_data import fetch_price_history
 
 
 def render() -> None:
@@ -25,8 +27,9 @@ def render() -> None:
             kappa = st.number_input("Mean-reversion κ", 0.1, 20.0, 2.0, key="ou_kappa")
             sigma = st.number_input("Volatility σ (¥/MWh ann.)", 10.0, 300.0, 80.0, key="ou_sigma")
         else:
-            st.info("PCA mode: provide historical prices in the text box, then click Fit + Simulate.")
-            history_text = st.text_area("Paste hourly prices (one per line, ¥/MWh)", height=100, key="ps_history")
+            lookback = st.slider("History window (months)", 3, 24, 12, key="ps_lookback")
+            with st.expander("Paste custom data instead"):
+                history_text = st.text_area("Hourly prices (one per line, ¥/MWh)", height=100, key="ps_history")
 
         run_btn = st.button("▶ Run Simulation", type="primary", key="ps_run")
 
@@ -41,8 +44,16 @@ def render() -> None:
                             ou_params=OUParams(kappa=kappa, mu=mu, sigma=sigma),
                         )
                     else:
-                        raw = [float(x) for x in history_text.strip().splitlines() if x.strip()]
-                        if len(raw) < 24 * 7:
+                        custom = st.session_state.get("ps_history", "").strip()
+                        if custom:
+                            raw = [float(x) for x in custom.splitlines() if x.strip()]
+                        else:
+                            end_dt = date.today()
+                            start_dt = end_dt - timedelta(days=lookback * 30)
+                            raw = fetch_price_history(
+                                province, str(start_dt), str(end_dt)
+                            )
+                        if len(raw) < 168:
                             st.error("Need at least 168 hours of history for PCA fitting.")
                             return
                         req = PriceSimRequest(
