@@ -548,163 +548,22 @@ _scheduler_lock = __import__("threading").Lock()
 
 
 def _start_scheduler():
-    """Start APScheduler background scheduler (runs once per process, thread-safe)."""
+    """Return the in-process scheduler instance (status display only).
+
+    All background jobs are now run exclusively by the standalone
+    scheduler_service.py process launched by run.sh.  This function
+    exists solely so the sidebar status widget can call .get_jobs() /
+    .running — it starts an empty BackgroundScheduler with no jobs so
+    there is no risk of double-running any nightly job.
+    """
     global _scheduler_instance
     with _scheduler_lock:
         if _scheduler_instance is not None:
             return _scheduler_instance
     from apscheduler.schedulers.background import BackgroundScheduler
-
-    def _daily_market_job():
-        import importlib.util, pathlib
-        yesterday = date.today() - timedelta(days=1)
-        _run_ingestion_job(yesterday, yesterday, trigger="scheduled")
-        _table_counts.clear()
-        _get_ingestion_logs.clear()
-        # Ingest fuel mix from NESO CKAN
-        try:
-            _fm_path = pathlib.Path(__file__).with_name("fuel_mix_ingest.py")
-            _fm_spec = importlib.util.spec_from_file_location("fuel_mix_ingest", _fm_path)
-            _fm_mod  = importlib.util.module_from_spec(_fm_spec)
-            _fm_spec.loader.exec_module(_fm_mod)
-            n = _fm_mod.ingest_fuel_mix(yesterday, _conn())
-            logger.info("Fuel mix ingest: %d rows for %s", n, yesterday)
-        except Exception as _fm_exc:
-            logger.warning("Fuel mix ingest failed: %s", _fm_exc)
-
-    def _daily_knowledge_job():
-        _run_knowledge_ingest_job(trigger="scheduled")
-
-    def _daily_report_job():
-        if not _is_report_enabled():
-            logger.info("Daily report disabled for GB — skipping")
-            return
-        import importlib.util, pathlib
-        today     = date.today()
-        yesterday = today - timedelta(days=1)
-
-        # Ensure today's market-data ingestion succeeded before reporting.
-        # If the 03:00 job ran and logged success, skip; otherwise run it now.
-        ingestion_done = False
-        try:
-            cur = _conn().cursor()
-            cur.execute(
-                "SELECT COUNT(*) FROM intl_market.gb_ingestion_log "
-                "WHERE trigger IN ('scheduled', 'report_triggered') "
-                "AND status = 'success' "
-                "AND date_from = %s AND run_at::date = %s",
-                (yesterday, today),
-            )
-            ingestion_done = cur.fetchone()[0] > 0
-        except Exception as _chk_exc:
-            logger.warning("Report job: could not check ingestion log: %s", _chk_exc)
-
-        if not ingestion_done:
-            logger.info("Report job: ingestion not complete, running now")
-            _run_ingestion_job(yesterday, yesterday, trigger="report_triggered")
-            _table_counts.clear()
-            _get_ingestion_logs.clear()
-
-        _rpt_path = pathlib.Path(__file__).with_name("daily_report.py")
-        _spec = importlib.util.spec_from_file_location("daily_report", _rpt_path)
-        _mod  = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-
-        # Generate PDF once; send via email and WeCom
-        _rpt_date = _mod._get_latest_data_date(_mod._get_conn())
-        pdf_bytes, ai_commentary = _mod.generate_report_pdf(_rpt_date)
-
-        # Email
-        try:
-            _mod.send_daily_report_email(pdf_bytes, _rpt_date, ai_commentary=ai_commentary)
-            logger.info("Daily report emailed for %s (%d bytes)", _rpt_date, len(pdf_bytes))
-        except Exception as _email_exc:
-            logger.error("Daily report email failed: %s", _email_exc)
-
-        # WeCom (optional — only if webhook URL is configured)
-        _wecom_url = os.environ.get("WECOM_WEBHOOK_URL", "")
-        if _wecom_url:
-            try:
-                _mod.send_daily_report_wecom(pdf_bytes, _rpt_date,
-                                             webhook_url=_wecom_url,
-                                             ai_commentary=ai_commentary)
-                logger.info("Daily report sent to WeCom for %s", _rpt_date)
-            except Exception as _wc_exc:
-                logger.error("Daily report WeCom send failed: %s", _wc_exc)
-
-    def _pricing_batch_job():
-        import importlib.util, pathlib
-        yesterday = date.today() - timedelta(days=1)
-        try:
-            _pb_path = pathlib.Path(__file__).with_name("pricing_batch.py")
-            _pb_spec = importlib.util.spec_from_file_location("pricing_batch", _pb_path)
-            _pb_mod  = importlib.util.module_from_spec(_pb_spec)
-            _pb_spec.loader.exec_module(_pb_mod)
-            result = _pb_mod.run_pricing_batch(yesterday, _conn())
-            logger.info("Pricing batch: %s", result)
-        except Exception as _pb_exc:
-            logger.error("Pricing batch failed: %s", _pb_exc)
-
-    def _modo_ai_job():
-        """Distill daily GB BESS intelligence from Modo Energy's AI agent."""
-        try:
-            from services.gb_knowledge.modo_ai import ModoAIConnector
-            from services.gb_knowledge.base import get_db_conn, ensure_table, upsert_doc
-            conn = get_db_conn()
-            ensure_table(conn)
-            connector = ModoAIConnector()
-            n = connector.run(conn)
-            conn.close()
-            logger.info("Modo AI distillation: %d new docs inserted", n)
-        except Exception as _ma_exc:
-            logger.error("Modo AI distillation failed: %s", _ma_exc)
-
     scheduler = BackgroundScheduler(timezone="Asia/Singapore")
-    scheduler.add_job(_daily_market_job, "cron", hour=3, minute=0,
-                      id="gb_daily_market", misfire_grace_time=3600)
-    scheduler.add_job(_daily_knowledge_job, "cron", hour=3, minute=30,
-                      id="gb_daily_knowledge", misfire_grace_time=3600)
-    scheduler.add_job(_modo_ai_job, "cron", hour=4, minute=0,
-                      id="gb_modo_ai_distill", misfire_grace_time=3600)
-
-    def _kb_digest_job():
-        """Digest unprocessed KB docs into structured expert insights."""
-        try:
-            from services.gb_knowledge.expert_memory import digest_kb_docs
-            n = digest_kb_docs(_ANTHROPIC_KEY, limit=100)
-            logger.info("KB digest: %d new insights extracted", n)
-        except Exception as _exc:
-            logger.error("KB digest failed: %s", _exc)
-
-    scheduler.add_job(_kb_digest_job, "cron", hour=3, minute=45,
-                      id="gb_kb_digest", misfire_grace_time=3600)
-    scheduler.add_job(_pricing_batch_job, "cron", hour=4, minute=30,
-                      id="gb_pricing_batch", misfire_grace_time=3600)
-    scheduler.add_job(_daily_report_job, "cron", hour=6, minute=0,
-                      id="gb_daily_report", misfire_grace_time=3600)
-
-    def _elexon_ops_job():
-        """Ingest Elexon settlement system prices + wind forecast for yesterday.
-
-        Runs at 09:15 SGT (01:15 UTC) — after the final settlement run publishes
-        all 48 half-hourly periods for the previous day (~01:00 UTC).
-        """
-        yesterday = date.today() - timedelta(days=1)
-        try:
-            from services.gb_knowledge.elexon_ops import run_elexon_ops_ingest
-            result = run_elexon_ops_ingest(yesterday)
-            logger.info("Elexon ops ingest: %s for %s", result, yesterday)
-            _get_elexon_sp_daily.clear()
-            _get_elexon_sp_hh.clear()
-            _get_wind_forecast.clear()
-        except Exception as _exc:
-            logger.error("Elexon ops ingest failed: %s", _exc)
-
-    scheduler.add_job(_elexon_ops_job, "cron", hour=9, minute=15,
-                      id="gb_elexon_ops", misfire_grace_time=3600)
     scheduler.start()
     _scheduler_instance = scheduler
-    print("[SCHEDULER] GB scheduler started", flush=True)
     return scheduler
 
 
@@ -4159,19 +4018,24 @@ with tab_mgmt:
     st.divider()
     st.subheader("Scheduled Downloads")
 
-    # Scheduler status
+    # Scheduler status — jobs run in the standalone scheduler_service.py process
     try:
-        sched = _start_scheduler()
-        jobs = sched.get_jobs()
-        if jobs:
-            job = jobs[0]
-            next_run = job.next_run_time
-            next_str = next_run.strftime("%Y-%m-%d %H:%M SGT") if next_run else "—"
-            st.success(f"Scheduler running · Next run: **{next_str}** (daily 03:00 SGT)")
-        else:
-            st.warning("Scheduler has no active jobs.")
+        import pytz as _pytz
+        _sgt = _pytz.timezone("Asia/Singapore")
+        _now = datetime.now(_sgt)
+        _next = _now.replace(hour=3, minute=0, second=0, microsecond=0)
+        if _next <= _now:
+            from datetime import timedelta as _td
+            _next += _td(days=1)
+        _next_str = _next.strftime("%Y-%m-%d %H:%M SGT")
+        st.success(
+            f"Standalone scheduler running · "
+            f"Jobs: 03:00 market · 03:30 KB · 03:45 digest · "
+            f"04:00 Modo AI · 04:30 pricing · 06:00 report · 09:15 Elexon ops · "
+            f"Next market ingest: **{_next_str}**"
+        )
     except Exception as e:
-        st.error(f"Scheduler error: {e}")
+        st.info("Standalone scheduler running (scheduler_service.py)")
 
     st.caption("Recent ingestion runs (auto-refreshes every 30s)")
     if st.button("Refresh logs"):
