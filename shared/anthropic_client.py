@@ -26,10 +26,12 @@ logger = logging.getLogger(__name__)
 # Maps direct Anthropic model IDs → Bedrock model IDs (us-east-1 regional).
 # Override any entry via env var BEDROCK_MODEL_<DIRECT_ID_UPPERCASED_UNDERSCORED>.
 _BEDROCK_MODEL_MAP: dict[str, str] = {
-    "claude-haiku-4-5":                "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-haiku-4-5-20251001":       "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-sonnet-4-6":               "anthropic.claude-sonnet-4-6",
-    "claude-opus-4-6":                 "anthropic.claude-opus-4-6-v1",
+    # Claude 4.x — on-demand throughput not supported; must use cross-region inference profiles
+    "claude-sonnet-4-6":               "us.anthropic.claude-sonnet-4-6-20250514-v1:0",
+    "claude-opus-4-6":                 "us.anthropic.claude-opus-4-6-20250514-v1:0",
+    "claude-haiku-4-5":                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-haiku-4-5-20251001":       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    # Claude 3.x — on-demand throughput supported with direct regional IDs
     "claude-3-5-sonnet-20241022":      "anthropic.claude-3-5-sonnet-20241022-v2:0",
     "claude-3-5-haiku-20241022":       "anthropic.claude-3-5-haiku-20241022-v1:0",
     "claude-3-opus-20240229":          "anthropic.claude-3-opus-20240229-v1:0",
