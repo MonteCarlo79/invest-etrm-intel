@@ -53,6 +53,7 @@ from services.hermes.mengxi_ranking_report import (
 )
 from services.hermes.mengxi_bess_screener import screen_new_bess as _screen_new_bess
 from services.hermes.news_screener import screen_news_sources as _screen_news_sources, get_sources as _ns_get_sources, backfill_source as _backfill_source
+from shared.anthropic_client import is_llm_available as _is_llm_available
 from services.hermes.capacity_screener import screen_installed_capacity as _screen_capacity
 from services.hermes.market_report import send_daily_report as _send_daily_report, send_monthly_report as _send_monthly_report
 from services.hermes.nodal_scraper import scrape_daily as _scrape_nodal_daily, scrape_date as _scrape_nodal_date, format_summary as _nodal_summary
@@ -684,7 +685,7 @@ def _make_clients():
 
     agent = HermesAgent(
         tasks=tasks,
-        anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         onedrive=onedrive,
     )
     thinking_agent = ThinkingAgent(
@@ -1145,8 +1146,8 @@ def create_app() -> FastAPI:
         if not _pg:
             return Response(content="DB not configured", status_code=503)
         _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not _api_key:
-            return Response(content="API key not configured", status_code=503)
+        if not _is_llm_available(_api_key):
+            return Response(content="No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)", status_code=503)
         background.add_task(
             _screen_capcomp,
             pg_url=_pg,
@@ -1190,8 +1191,8 @@ def create_app() -> FastAPI:
         Returns immediately with {"status": "started"}.
         """
         _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not _api_key:
-            return Response(content="ANTHROPIC_API_KEY not set", status_code=503)
+        if not _is_llm_available(_api_key):
+            return Response(content="No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)", status_code=503)
         background.add_task(_run_jizhi_scan, _api_key)
         return {"status": "started"}
 
@@ -1203,8 +1204,8 @@ def create_app() -> FastAPI:
         The job runs in the background and logs results to CloudWatch.
         """
         _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not _api_key:
-            return Response(content="ANTHROPIC_API_KEY not set", status_code=503)
+        if not _is_llm_available(_api_key):
+            return Response(content="No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)", status_code=503)
         background.add_task(_run_kb_digest, _api_key)
         return {"status": "started"}
 
