@@ -715,15 +715,7 @@ class HermesAgent:
         try:
             from services.hermes.bayesian_agent import BayesianAnalystAgent
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
-            # Resolve model preference to a concrete claude model ID
-            pref = self.get_model_pref(chat_id) if chat_id else "auto"
-            _CLAUDE_MODELS = {
-                "claude":   "claude-sonnet-4-6",
-                "opus":     "claude-opus-4-6",
-            }
-            # For Bayesian analysis always use Claude; pick opus if user chose claude explicitly
-            # (opus = more capable; sonnet = default/fast)
-            bay_model = "claude-opus-4-6" if pref == "claude" else "claude-sonnet-4-6"
+            bay_model = "claude-sonnet-4-6"
             bay_agent = BayesianAnalystAgent(
                 anthropic_api_key=self._api_key,
                 pg_url=pg_url,
