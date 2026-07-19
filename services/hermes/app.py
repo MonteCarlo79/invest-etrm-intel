@@ -1744,19 +1744,31 @@ def create_app() -> FastAPI:
             return {}
 
         if act == "set_llm":
-            model_alias = value.get("model", "auto")
+            model_alias  = value.get("model", "auto")
+            message_id   = payload.get("open_message_id", "")
             if open_id:
-                try:
-                    canon = agent.set_model_pref(open_id, model_alias)
-                    label = agent._MODEL_LABELS.get(canon, canon)
-                    if feishu:
-                        feishu.send_text(open_id=open_id, text=f"✅ 模型已切换：{label}")
-                        # Refresh the card to show updated selection
-                        _avail = agent.available_models() + ["auto"]
-                        feishu.send_card(open_id=open_id, card=_build_llm_selector_card(canon, _avail))
-                except Exception as _me:
-                    if feishu:
-                        feishu.send_text(open_id=open_id, text=f"❌ 模型切换失败：{_me}")
+                # Resolve alias with dict lookup only — no I/O, safe within 3s window
+                canon = agent._MODEL_ALIASES.get(model_alias.lower())
+                if not canon:
+                    return {"toast": {"type": "fail", "content": f"❌ 未知模型：{model_alias}"}}
+                label = agent._MODEL_LABELS.get(canon, canon)
+
+                async def _bg_set_llm(
+                    _canon=canon, _open_id=open_id, _mid=message_id
+                ):
+                    try:
+                        agent.tasks.set_setting(f"llm_pref:{_open_id}", _canon)
+                    except Exception as exc:
+                        logger.error("set_llm bg: DB write failed: %s", exc)
+                    if _mid and feishu:
+                        try:
+                            _avail = agent.available_models() + ["auto"]
+                            feishu.update_card(_mid, _build_llm_selector_card(_canon, _avail))
+                        except Exception as exc:
+                            logger.error("set_llm bg: card update failed: %s", exc)
+
+                background.add_task(_bg_set_llm)
+                return {"toast": {"type": "success", "content": f"✅ 模型已切换：{label}"}}
             return {}
 
         if act == "survey_region":
