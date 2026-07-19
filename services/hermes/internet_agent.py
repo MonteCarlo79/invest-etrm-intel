@@ -276,7 +276,7 @@ from shared.anthropic_client import make_client as _make_anthropic_client
     messages = [{"role": "user", "content": question}]
     while True:
         resp = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-3-5-sonnet-20241022",  # on-demand Bedrock; 4.6 cross-region profile blocks tool use
             max_tokens=4096,
             system=_SYSTEM,
             tools=_TOOLS,

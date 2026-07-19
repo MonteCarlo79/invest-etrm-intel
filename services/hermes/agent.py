@@ -715,7 +715,7 @@ class HermesAgent:
         try:
             from services.hermes.bayesian_agent import BayesianAnalystAgent
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
-            bay_model = "claude-sonnet-4-6"
+            bay_model = "claude-3-5-sonnet-20241022"  # on-demand Bedrock; claude-sonnet-4-6 cross-region profile blocks tool use
             bay_agent = BayesianAnalystAgent(
                 anthropic_api_key=self._api_key,
                 pg_url=pg_url,

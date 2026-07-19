@@ -250,7 +250,7 @@ class BayesianAnalystAgent:
     ) -> None:
         self._api_key = anthropic_api_key
         self._pg_url = pg_url
-        self._model = model or "claude-sonnet-4-6"
+        self._model = model or "claude-3-5-sonnet-20241022"  # on-demand Bedrock; 4.6 cross-region profile blocks tool use
         self._client = _make_anthropic_client(anthropic_api_key)
 
     # ── Tools ─────────────────────────────────────────────────────────────────

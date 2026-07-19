@@ -65,7 +65,7 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "")
 def _run_spot_query(question: str, api_key: str) -> str:
     """Full Strategist-parity spot market agent with 7 data tools."""
     import anthropic
-from shared.anthropic_client import make_client as _make_anthropic_client
+    from shared.anthropic_client import make_client as _make_anthropic_client
     import json
 
     client = _make_anthropic_client(api_key)
@@ -260,7 +260,7 @@ Hebei-South, Qinghai, Jiangxi, Hainan, Chongqing, Shanghai, Beijing, Tianjin.
     messages = [{"role": "user", "content": question}]
     while True:
         resp = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=2048,
+            model="claude-3-5-sonnet-20241022", max_tokens=2048,  # on-demand Bedrock; 4.6 cross-region profile blocks tool use
             system=system, tools=tools, messages=messages,
         )
         messages = messages + [{"role": "assistant", "content": resp.content}]
