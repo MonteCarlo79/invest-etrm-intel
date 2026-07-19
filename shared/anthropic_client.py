@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 _BEDROCK_MODEL_MAP: dict[str, str] = {
     "claude-haiku-4-5":                "anthropic.claude-haiku-4-5-20251001-v1:0",
     "claude-haiku-4-5-20251001":       "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-sonnet-4-6":               "anthropic.claude-sonnet-4-6-20250514-v1:0",
-    "claude-opus-4-6":                 "anthropic.claude-opus-4-6-20250514-v1:0",
+    "claude-sonnet-4-6":               "anthropic.claude-sonnet-4-6",
+    "claude-opus-4-6":                 "anthropic.claude-opus-4-6-v1",
     "claude-3-5-sonnet-20241022":      "anthropic.claude-3-5-sonnet-20241022-v2:0",
     "claude-3-5-haiku-20241022":       "anthropic.claude-3-5-haiku-20241022-v1:0",
     "claude-3-opus-20240229":          "anthropic.claude-3-opus-20240229-v1:0",
