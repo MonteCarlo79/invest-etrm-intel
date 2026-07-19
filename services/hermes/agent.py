@@ -281,7 +281,7 @@ class HermesAgent:
     _MODEL_LABELS: dict = {
         "gpt":      "GPT-4o (Azure)",
         "deepseek": "DeepSeek",
-        "claude":   "Claude claude-opus-4-6",
+        "claude":   "Claude Sonnet 4.6",
         "auto":     "Auto (GPT-4o → DeepSeek → Claude)",
     }
 
@@ -365,16 +365,20 @@ class HermesAgent:
                 logger.warning("DeepSeek failed: %s", exc, exc_info=True)
                 return None
 
-        def _try_claude() -> str:
-            resp = self.client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=4096,
-                system=system,
-                messages=[{"role": "user", "content": user_text}],
-            )
-            raw = resp.content[0].text.strip()
-            logger.info("LLM: Claude claude-opus-4-6 [%d chars]", len(raw))
-            return raw
+        def _try_claude() -> Optional[str]:
+            try:
+                resp = self.client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=4096,
+                    system=system,
+                    messages=[{"role": "user", "content": user_text}],
+                )
+                raw = resp.content[0].text.strip()
+                logger.info("LLM: Claude Sonnet 4.6 [%d chars]", len(raw))
+                return raw
+            except Exception as exc:
+                logger.warning("Claude Sonnet 4.6 failed: %s", exc, exc_info=True)
+                return None
 
         # Build call order based on preference
         if preferred == "gpt":
@@ -390,8 +394,7 @@ class HermesAgent:
             result = fn()
             if result is not None:
                 return result
-        # Should never reach here (claude always succeeds or raises)
-        return _try_claude()
+        raise RuntimeError("All LLM tiers failed — check API keys / Bedrock config")
 
     def _get_memory(self):
         if self._memory is None:
