@@ -20,4 +20,4 @@ def get_pg_url() -> str:
 
 
 def get_engine() -> Engine:
-    return create_engine(get_pg_url())
+    return create_engine(get_pg_url(), connect_args={"connect_timeout": 10})

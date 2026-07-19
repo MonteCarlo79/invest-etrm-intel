@@ -122,6 +122,7 @@ resource "aws_ecs_task_definition" "hermes" {
     environment = [
       { name = "PGURL",              value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY",  value = var.hermes_anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "WECOM_CORP_ID",      value = var.hermes_wecom_corp_id },
       { name = "WECOM_AGENT_ID",     value = var.hermes_wecom_agent_id },
       { name = "WECOM_SECRET",       value = var.hermes_wecom_secret },

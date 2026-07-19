@@ -168,7 +168,8 @@ def _call_claude(context: str, api_key: str, year: int) -> Optional[dict]:
     context = context[:12000]
     prompt = _PROMPT.format(year=year, context=context)
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        from shared.anthropic_client import make_client as _make_anthropic_client
+        client = _make_anthropic_client(api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
@@ -399,7 +400,8 @@ def extract_capcomp_from_image(
     _mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
              "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
     media_type = _mime.get(ext, "image/jpeg")
-    client = anthropic.Anthropic(api_key=api_key)
+    from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -540,14 +542,14 @@ def extract_from_file_for_gap(
         {"extracted": True, "values": {...field: value}, "summary": str}
         {"extracted": False, "error": str}
     """
-    import anthropic as _ant
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     prompt_template = _GAP_FILL_PROMPTS.get(fill_table)
     if not prompt_template:
         return {"extracted": False, "error": f"Unsupported fill_table: {fill_table}"}
 
-    client = _ant.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
 
     # Image path: use Claude vision
     if ext in ("jpg", "jpeg", "png", "webp", "gif"):

@@ -166,8 +166,8 @@ def _extract_capacity(text: str, source_name: str, api_key: str) -> tuple[Option
 
     Returns (year_month, rows).
     """
-    from anthropic import Anthropic
-    client = Anthropic(api_key=api_key)
+    from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
 
     try:
         resp = client.messages.create(

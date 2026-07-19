@@ -19,12 +19,13 @@ def run_batch(
     progress_callback(fraction: float) is called every 5% of sims.
     Compatible with Streamlit's st.progress() via: run_batch(req, progress_callback=bar.progress)
     """
-    price_paths = simulate_prices(req.price_sim, seed=req.random_seed)
+    n_sim = req.n_simulations
+    price_sim = req.price_sim.model_copy(update={"n_simulations": n_sim})
+    price_paths = simulate_prices(price_sim, seed=req.random_seed)
     dispatch_result = dispatch_annual(price_paths, req.dispatch)
     revenue_paths = dispatch_result.revenue_paths
 
     n = req.financials.project_life_years
-    n_sim = req.n_simulations
     equity_irr_paths = np.empty(n_sim)
     npv_paths = np.empty(n_sim)
 

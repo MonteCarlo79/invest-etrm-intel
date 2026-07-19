@@ -12,6 +12,7 @@ import logging
 from typing import Optional
 
 import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 import psycopg2
 import psycopg2.extras
 
@@ -50,7 +51,7 @@ Respond ONLY with valid JSON:
 
 def hyde_expand(query: str, api_key: str, cfg) -> tuple[str, list[str]]:
     """Generate hypothetical answer and extract search terms."""
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_HAIKU_MODEL,
@@ -123,7 +124,7 @@ def rerank(query: str, candidates: list[dict], api_key: str, top_k: int = 6) -> 
             f"{c['content_snippet'][:400]}\n"
         )
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_HAIKU_MODEL,

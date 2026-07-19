@@ -39,6 +39,7 @@ import logging
 from typing import Optional
 
 import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 from .db import get_conn
 from .knowledge_docs import search_reference_docs, vector_search_reference_docs
@@ -76,7 +77,7 @@ def hyde_expand(query: str, api_key: str) -> tuple[str, list[str]]:
     Returns (hypothetical_answer, search_terms).
     Falls back to (query, [query]) on error.
     """
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_HYDE_MODEL,
@@ -289,7 +290,7 @@ def rerank_candidates(
         )
 
     import json
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_RERANK_MODEL,

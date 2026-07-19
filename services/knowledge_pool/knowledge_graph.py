@@ -30,6 +30,7 @@ import time
 from typing import Optional
 
 import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 from .db import get_conn
 
@@ -282,7 +283,7 @@ def _extract_policy_timeline(
     api_key: str,
 ) -> dict | None:
     """Extract policy timeline data for one document."""
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_GRAPH_MODEL,

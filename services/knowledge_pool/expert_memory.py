@@ -34,6 +34,7 @@ from datetime import date
 from typing import Optional
 
 import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 from .db import get_conn
 from .knowledge_docs import _has_cjk, _cjk_bigrams
@@ -120,7 +121,7 @@ def extract_and_store_insights(
 
     conversation_text = "\n\n---\n\n".join(turns)
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_MEMORY_MODEL,
@@ -308,7 +309,7 @@ def extract_spot_insights(user_msg: str, agent_reply: str, api_key: str) -> int:
     Called after each agent response in the Strategist tab.
     Returns number of insights stored (0 if none or on error — never raises).
     """
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_TURN_EXTRACT_MODEL,
@@ -464,7 +465,7 @@ def digest_spot_kb_docs(
         return 0
 
     logger.info("[kb_digest] Digesting %d docs…", len(rows))
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     total = 0
     today = date.today().isoformat()
 

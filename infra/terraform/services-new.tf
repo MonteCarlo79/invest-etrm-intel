@@ -83,6 +83,7 @@ resource "aws_ecs_task_definition" "ph_market" {
     environment = [
       { name = "PGURL",             value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -205,6 +206,7 @@ resource "aws_ecs_task_definition" "po_market" {
     environment = [
       { name = "PGURL",             value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -324,6 +326,7 @@ resource "aws_ecs_task_definition" "deal_structurer" {
     environment = [
       { name = "PGURL",             value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -436,6 +439,7 @@ resource "aws_ecs_task_definition" "crystal_ball_client" {
     environment = [
       { name = "PGURL",             value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "AWS_REGION",        value = var.region },
       { name = "TIMEZONE",          value = "Asia/Shanghai" },
     ]

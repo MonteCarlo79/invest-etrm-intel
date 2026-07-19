@@ -151,7 +151,8 @@ def extract_insights(
     market_name: str = "electricity",
 ) -> int:
     """Extract durable insights from a strategist turn and store them."""
-    client = anthropic.Anthropic(api_key=api_key)
+    from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_EXTRACT_MODEL,
@@ -349,7 +350,8 @@ def digest_kb_docs(
             return 0
 
         logger.info("[kb_digest:%s] Digesting %d docs…", table_prefix, len(docs))
-        client = anthropic.Anthropic(api_key=api_key)
+        from shared.anthropic_client import make_client as _make_anthropic_client
+        client = _make_anthropic_client(api_key)
         total = 0
         for doc in docs:
             insights = _extract_insights_from_doc(client, doc, market_name)

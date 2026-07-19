@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 import psycopg2
-from anthropic import Anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ class BayesianAnalystAgent:
         self._api_key = anthropic_api_key
         self._pg_url = pg_url
         self._model = model or "claude-sonnet-4-6"
-        self._client = Anthropic(api_key=anthropic_api_key)
+        self._client = _make_anthropic_client(anthropic_api_key)
 
     # ── Tools ─────────────────────────────────────────────────────────────────
 

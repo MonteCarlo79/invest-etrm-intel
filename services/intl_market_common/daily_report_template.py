@@ -226,13 +226,10 @@ def _generate_ai_commentary(
     market: dict,
     prev_revenue: pd.DataFrame | None = None,
 ) -> str:
+    from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
+    if not is_llm_available():
+        return ""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return ""
-    try:
-        import anthropic as _anthropic
-    except ImportError:
-        return ""
 
     cur = cfg.currency_sym
 
@@ -301,7 +298,7 @@ def _generate_ai_commentary(
         f"Data:\n{data_snapshot}"
     )
     try:
-        client = _anthropic.Anthropic(api_key=api_key)
+        client = _make_anthropic_client(api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,

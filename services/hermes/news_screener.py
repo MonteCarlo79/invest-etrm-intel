@@ -732,7 +732,7 @@ def _synthesize_digest(articles: list[dict], api_key: str) -> str:
     from today's high/mid-relevance articles. Returns plain Chinese text.
     Called only when there are ≥2 articles scoring ≥6.
     """
-    import anthropic
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
     lines = []
     for a in articles[:12]:  # cap at 12 to keep prompt short
@@ -748,7 +748,7 @@ def _synthesize_digest(articles: list[dict], api_key: str) -> str:
         "语言简洁专业，适合能源从业者阅读。只输出综述正文，不要加标题或前言。"
     )
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = _make_anthropic_client(api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -765,9 +765,9 @@ def _score_article(title: str, body: str, api_key: str) -> dict:
     Call Claude Haiku to score relevance and extract metadata.
     Returns dict with keys: relevance, region_bucket, region_province, category, summary.
     """
-    import anthropic
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     prompt = _AI_PROMPT.format(title=title, excerpt=body[:800])
     try:
         msg = client.messages.create(

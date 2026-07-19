@@ -169,13 +169,8 @@ def _ocr_page_with_vision(image_bytes: bytes, api_key: str) -> str:
     Returns the extracted text, or empty string on failure.
     """
     import base64
-    import anthropic
-    # Force direct Anthropic API — bypass any ANTHROPIC_BASE_URL proxy that
-    # may be set in the local dev environment (e.g. LiteLLM corporate gateway).
-    client = anthropic.Anthropic(
-        api_key=api_key,
-        base_url="https://api.anthropic.com",
-    )
+    from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=3000,

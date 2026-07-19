@@ -121,9 +121,9 @@ def _parse_with_llm(text: str, filename: str, api_key: str,
                     province_hint: Optional[str] = None,
                     year_month_hint: Optional[date] = None) -> list[dict]:
     """Use Claude Haiku to extract structured capacity data from raw Excel text."""
-    from anthropic import Anthropic
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
-    client = Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
 
     # Build context hints so LLM can resolve "5月" → correct year
     hint_lines = []

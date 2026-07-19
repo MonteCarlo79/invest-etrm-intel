@@ -172,7 +172,8 @@ def _compute_irr(cashflows: list[float]) -> float:
 def run_gb_query(question: str, api_key: str, pg_url: str) -> str:
     """Run the GB BESS Market Strategist agent and return its text answer."""
     import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
+from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
 
     pg_url = pg_url or os.environ.get("PGURL") or os.environ.get("DATABASE_URL", "")
     conn = _open_conn(pg_url)

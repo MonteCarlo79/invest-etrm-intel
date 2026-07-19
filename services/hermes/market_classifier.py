@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from anthropic import Anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ def classify_to_market_fundamentals(
         None — if the file is not market-related (NOT_MARKET)
     Falls back to base CN path on error.
     """
-    client = Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     user_content = f"Filename: {filename}"
     if hint:
         user_content += f"\nUser hint: {hint}"

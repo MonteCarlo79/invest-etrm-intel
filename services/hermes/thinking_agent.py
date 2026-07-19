@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, TYPE_CHECKING
 
 import psycopg2
-from anthropic import Anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 if TYPE_CHECKING:
     from services.hermes.feishu_client import FeishuClient
@@ -153,7 +153,7 @@ class ThinkingAgent:
         self._feishu = feishu
         self._owner_id = feishu_owner_open_id
         self._onedrive = onedrive
-        self._client = Anthropic(api_key=anthropic_api_key)
+        self._client = _make_anthropic_client(anthropic_api_key)
 
     def _resolve_model(self, mode: str) -> str:
         """Return the Anthropic model ID for the given mode, respecting env-var overrides."""

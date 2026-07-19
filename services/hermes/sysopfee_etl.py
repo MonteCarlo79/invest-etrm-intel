@@ -158,8 +158,8 @@ def _excel_to_text(file_bytes: bytes, max_rows: int = 80) -> str:
 
 
 def _parse_with_llm(text: str, filename: str, api_key: str) -> list[dict]:
-    from anthropic import Anthropic
-    client = Anthropic(api_key=api_key)
+    from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1500,

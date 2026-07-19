@@ -28,8 +28,9 @@ from services.intl_market_common.market_config import MarketConfig
 
 logger = logging.getLogger(__name__)
 
+from shared.anthropic_client import make_client as _make_anthropic_client
 _ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-_client = anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
+_client = _make_anthropic_client(_ANTHROPIC_KEY)
 _REV_COLOR_SCALE = [[0, "#d73027"], [0.5, "#fee08b"], [1, "#1a9850"]]
 
 # ---------------------------------------------------------------------------

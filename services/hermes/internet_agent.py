@@ -270,7 +270,8 @@ _SYSTEM = (
 def run_internet_query(question: str, api_key: str, pg_url: str = "") -> str:
     """Run the internet research agent and return its answer."""
     import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
+from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
 
     messages = [{"role": "user", "content": question}]
     while True:

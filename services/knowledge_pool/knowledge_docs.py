@@ -51,6 +51,7 @@ def _describe_image(
     """
     import base64
     import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
     prompt = (
         "Describe this image in detail for text indexing. "
@@ -62,7 +63,7 @@ def _describe_image(
     if context:
         prompt = f"Context: {context}\n\n" + prompt
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     resp = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1024,
@@ -440,7 +441,7 @@ def auto_categorize(
     # LLM fallback — Haiku is cheap and fast
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        client = _make_anthropic_client(api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=20,

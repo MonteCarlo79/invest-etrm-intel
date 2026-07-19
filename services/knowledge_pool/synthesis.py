@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 from .db import get_conn
 from .knowledge_docs import _has_cjk, _cjk_bigrams
@@ -254,7 +255,7 @@ def _synthesize_text_mode(
         f"Document: {filename}\nCategory: {category}\n\n"
         f"Content:\n{text}"
     )
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     permission_denied_count = 0
 
     for attempt in range(retry + 1):

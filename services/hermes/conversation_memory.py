@@ -172,7 +172,8 @@ class HermesMemory:
             return 0
         try:
             import anthropic
-            client = anthropic.Anthropic(api_key=self._api_key)
+from shared.anthropic_client import make_client as _make_anthropic_client
+            client = _make_anthropic_client(self._api_key)
             resp = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=600,

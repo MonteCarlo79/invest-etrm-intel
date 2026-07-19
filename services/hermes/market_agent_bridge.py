@@ -65,9 +65,10 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "")
 def _run_spot_query(question: str, api_key: str) -> str:
     """Full Strategist-parity spot market agent with 7 data tools."""
     import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
     import json
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
 
     try:
         from services.spot_mcp.tools import (

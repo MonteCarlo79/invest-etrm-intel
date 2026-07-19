@@ -133,8 +133,8 @@ Rules:
 def _extract_fees(
     text: str, source_name: str, api_key: str
 ) -> tuple[Optional[date], list[dict]]:
-    from anthropic import Anthropic
-    client = Anthropic(api_key=api_key)
+    from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",

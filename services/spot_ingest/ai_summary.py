@@ -94,15 +94,15 @@ def generate_summary(
         _log.warning("[AI] anthropic package not installed; skipping summary")
         return None
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        _log.warning("[AI] ANTHROPIC_API_KEY not set; skipping summary for %s", report_date)
+    from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
+    if not is_llm_available():
+        _log.warning("[AI] No LLM configured; skipping summary for %s", report_date)
         return None
 
     prompt = _build_prompt(report_date, price_rows, interprov_rows)
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = _make_anthropic_client()
         msg = client.messages.create(
             model=_MODEL,
             max_tokens=400,

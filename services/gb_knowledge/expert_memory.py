@@ -80,7 +80,8 @@ def extract_gb_insights(user_msg: str, agent_reply: str, api_key: str) -> int:
 
     Returns number of insights stored (0 if none or on error).
     """
-    client = anthropic.Anthropic(api_key=api_key)
+    from shared.anthropic_client import make_client as _make_anthropic_client
+    client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
             model=_EXTRACT_MODEL,
@@ -309,7 +310,8 @@ def digest_kb_docs(api_key: str, limit: int = 50) -> int:
             return 0
 
         logger.info("[kb_digest] Digesting %d docs…", len(docs))
-        client = anthropic.Anthropic(api_key=api_key)
+        from shared.anthropic_client import make_client as _make_anthropic_client
+        client = _make_anthropic_client(api_key)
         total = 0
         today = date.today().isoformat()
         for doc in docs:

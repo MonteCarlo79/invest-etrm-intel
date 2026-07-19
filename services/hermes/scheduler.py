@@ -302,7 +302,7 @@ def send_morning_briefing(
 
 def summarize_emails(messages: list[dict], api_key: str) -> str:
     """Use Claude Haiku to produce a concise digest of a list of email dicts."""
-    from anthropic import Anthropic
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
     lines = []
     for i, m in enumerate(messages, 1):
@@ -316,7 +316,7 @@ def summarize_emails(messages: list[dict], api_key: str) -> str:
             f"   Preview: {m.get('bodyPreview', '')[:200]}"
         )
 
-    client = Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=800,

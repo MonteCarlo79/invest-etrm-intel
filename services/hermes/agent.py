@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Optional
 
-from anthropic import Anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 from services.hermes.models import Action, InboundMessage
 from services.hermes.tasks_client import TasksClient
@@ -265,7 +265,7 @@ class HermesAgent:
         self.tasks = tasks
         self.onedrive = onedrive
         self._api_key = anthropic_api_key
-        self.client = Anthropic(api_key=anthropic_api_key)
+        self.client = _make_anthropic_client(anthropic_api_key)
         # Conversation memory (lazy-init; disabled gracefully if DB unavailable)
         self._memory: Optional[object] = None
         self._last_answer: str = ""  # track last substantive reply for EXPORT_ANSWER
@@ -687,8 +687,8 @@ class HermesAgent:
                     rows = cur.fetchall()
             if rows:
                 full_text = "\n\n".join(r[0] for r in rows)[:12000]
-                from anthropic import Anthropic
-                client = Anthropic(api_key=self._api_key)
+                from shared.anthropic_client import make_client as _make_anthropic_client
+                client = _make_anthropic_client(self._api_key)
                 resp = client.messages.create(
                     model="claude-haiku-4-5-20251001",
                     max_tokens=800,

@@ -34,14 +34,14 @@ _PROVINCE_ALIASES = {
 
 def _parse_spot_query_params(question: str, api_key: str) -> dict:
     """Use Claude Haiku to extract province, date range, and metrics from a question."""
-    import anthropic
+    from shared.anthropic_client import make_client as _make_anthropic_client
     import json
     from datetime import date
 
     today = date.today().isoformat()
     year = date.today().year
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=200,

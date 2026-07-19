@@ -205,9 +205,10 @@ def draft_report(
         Markdown-formatted report string.
     """
     import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
     from services.hermes.market_agent_bridge import run_market_query as _bridge
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
 
     # ── 1. Query each market agent in parallel ────────────────────────────────
     def _query_market(market: str) -> tuple[str, str]:

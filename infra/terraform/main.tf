@@ -739,6 +739,10 @@ resource "aws_ecs_task_definition" "bess_map" {
         value = var.anthropic_api_key
       },
       {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
+      {
         name  = "S3_BUCKET"
         value = var.uploads_bucket_name
       }
@@ -951,6 +955,10 @@ resource "aws_ecs_task_definition" "portal" {
         {
           name  = "ANTHROPIC_API_KEY"
           value = var.anthropic_api_key
+        },
+        {
+          name  = "BEDROCK_REGION"
+          value = "us-east-1"
         }
 
       ]
@@ -1497,6 +1505,10 @@ resource "aws_ecs_task_definition" "spot_markets" {
           name  = "ANTHROPIC_API_KEY"
           value = var.anthropic_api_key
         },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
         {
           name  = "UPLOADS_BUCKET"
           value = var.uploads_bucket_name
@@ -1668,6 +1680,10 @@ resource "aws_ecs_task_definition" "gb_market" {
           name  = "ANTHROPIC_API_KEY"
           value = var.anthropic_api_key
         },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
         {
           name  = "MODO_API_KEY"
           value = var.modo_api_key
@@ -1801,6 +1817,7 @@ resource "aws_ecs_task_definition" "au_market" {
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
       { name = "MODO_EMAIL",        value = var.modo_email },
       { name = "MODO_PASSWORD",     value = var.modo_password },
@@ -1892,6 +1909,7 @@ resource "aws_ecs_task_definition" "ercot_market" {
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
       { name = "MODO_EMAIL",        value = var.modo_email },
       { name = "MODO_PASSWORD",     value = var.modo_password },
@@ -1983,6 +2001,7 @@ resource "aws_ecs_task_definition" "pjm_market" {
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
       { name = "MODO_EMAIL",        value = var.modo_email },
       { name = "MODO_PASSWORD",     value = var.modo_password },
@@ -2074,6 +2093,7 @@ resource "aws_ecs_task_definition" "caiso_market" {
     environment = [
       { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
       { name = "MODO_EMAIL",        value = var.modo_email },
       { name = "MODO_PASSWORD",     value = var.modo_password },
@@ -2457,6 +2477,10 @@ resource "aws_ecs_task_definition" "mengxi_dashboard" {
           name  = "ANTHROPIC_API_KEY"
           value = var.anthropic_api_key
         },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
         {
           name  = "FENGXING_API_KEY"
           value = var.fengxing_api_key
@@ -3291,6 +3315,10 @@ resource "aws_ecs_task_definition" "trading_performance_agent" {
           name  = "ANTHROPIC_API_KEY"
           value = var.anthropic_api_key
         },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
         {
           name  = "SMTP_HOST"
           value = var.smtp_host
@@ -3446,6 +3474,10 @@ resource "aws_ecs_task_definition" "crystal_ball" {
           name  = "ANTHROPIC_API_KEY"
           value = var.anthropic_api_key
         },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
         {
           name  = "SMTP_HOST"
           value = var.smtp_host

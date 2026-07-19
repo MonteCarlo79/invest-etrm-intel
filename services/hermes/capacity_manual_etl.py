@@ -21,6 +21,7 @@ from datetime import date
 from typing import Optional
 
 import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ def _call_claude(context: str, api_key: str) -> Optional[dict]:
         today_ym=today.strftime("%Y-%m"),
     )
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = _make_anthropic_client(api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
