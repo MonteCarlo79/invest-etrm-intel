@@ -109,6 +109,14 @@ resource "aws_security_group" "ecs_tasks" {
   tags        = local.tags
 
   ingress {
+    description     = "Hermes FastAPI from ALB"
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
     to_port         = 8530
