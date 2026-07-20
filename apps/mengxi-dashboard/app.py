@@ -1558,16 +1558,16 @@ with tab_pypsa:
 # Tab 8: Trader
 # ---------------------------------------------------------------------------
 with tab_trader:
-    import anthropic as _ant
+    from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
     import json as _json
 
     _TRADER_APP = "mengxi_trader"
     _TRADER_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-    if not _TRADER_API_KEY:
-        st.error("ANTHROPIC_API_KEY not set — Trader agent unavailable.")
+    if not is_llm_available(_TRADER_API_KEY):
+        st.error("No LLM configured — Trader agent unavailable. Set ANTHROPIC_API_KEY or BEDROCK_REGION.")
         _trader_client = None
     else:
-        _trader_client = _ant.Anthropic(api_key=_TRADER_API_KEY)
+        _trader_client = _make_anthropic_client(_TRADER_API_KEY)
 
     # ── memory helpers ────────────────────────────────────────────────────────
     @st.cache_resource

@@ -61,6 +61,8 @@ from dotenv import load_dotenv
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
+from shared.anthropic_client import make_client as _make_anthropic_client
+
 for _env in [_REPO / "config" / ".env", _REPO / ".env"]:
     if _env.exists():
         load_dotenv(_env)
@@ -1116,8 +1118,7 @@ def _translate_to_zh(text: str) -> str:
     if not api_key:
         return text
     try:
-        import anthropic as _ant_tr
-        msg = _ant_tr.Anthropic(api_key=api_key).messages.create(
+        msg = _make_anthropic_client(api_key).messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
             messages=[{
@@ -2754,7 +2755,6 @@ with tab_agent:
     import os as _os
     import json as _json
     import uuid as _uuid
-    import anthropic as _anthropic
 
     # ── Memory infrastructure ──────────────────────────────────────────────────
     _SPOT_MEM_KEY = "spot_v1"
@@ -2956,7 +2956,7 @@ Respond ONLY with valid JSON:
             _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
             if not _api_key:
                 return []
-            _haiku = _anthropic.Anthropic(api_key=_api_key)
+            _haiku = _make_anthropic_client(_api_key)
             _resp = _haiku.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=900,
@@ -2985,7 +2985,7 @@ Respond ONLY with valid JSON:
             _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
             if not _api_key:
                 return None
-            _haiku = _anthropic.Anthropic(api_key=_api_key)
+            _haiku = _make_anthropic_client(_api_key)
             _resp = _haiku.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=400,
@@ -3109,7 +3109,7 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         if not api_key:
             return []
         try:
-            haiku = _anthropic.Anthropic(api_key=api_key)
+            haiku = _make_anthropic_client(api_key)
             resp = haiku.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=512,
@@ -3375,7 +3375,7 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         if not _api_key:
             return _t("agent_no_key"), messages, []
 
-        client = _anthropic.Anthropic(api_key=_api_key)
+        client = _make_anthropic_client(_api_key)
         tool_events: list[dict] = []
         # Status line shown during tool calls (lives inside the same chat message)
         _status_ph = st.empty() if text_placeholder is not None else None

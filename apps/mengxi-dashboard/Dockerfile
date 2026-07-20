@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
 # Copy source
 COPY libs/ ./libs/
 COPY services/ ./services/
+COPY shared/ ./shared/
 COPY apps/mengxi-dashboard/ ./apps/mengxi-dashboard/
 
 ENV PYTHONPATH=/app

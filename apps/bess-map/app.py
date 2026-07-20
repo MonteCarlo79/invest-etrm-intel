@@ -3831,7 +3831,7 @@ with tab_mgmt:
 with tab_agent:
     _ensure_memory_table()  # deferred: runs once, only when agent tab is visited
 
-    import anthropic as _ant
+    from shared.anthropic_client import make_client as _make_anthropic_client
     import json as _json
 
     # ── LLM provider selector ─────────────────────────────────────────────────
@@ -3850,7 +3850,7 @@ with tab_agent:
 
     # ── initialise LLM client ─────────────────────────────────────────────────
     # Anthropic client is always available (used for memory extraction with Haiku)
-    _ant_client = _ant.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    _ant_client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
 
     if _llm_provider == "anthropic":
         if not os.environ.get("ANTHROPIC_API_KEY"):

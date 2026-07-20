@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir \
     numpy \
     "matplotlib>=3.8" \
     "python-dotenv==1.0.1" \
-    "anthropic>=0.40" \
+    "anthropic[bedrock]>=0.40" \
     "boto3==1.34.0" \
     openpyxl \
     pulp \
