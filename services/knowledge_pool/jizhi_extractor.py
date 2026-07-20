@@ -377,7 +377,7 @@ def extract_bids(text: str, api_key: str = "") -> list[dict]:
             raise _bedrock_exc
         return []
     import anthropic
-from shared.anthropic_client import make_client as _make_anthropic_client
+    from shared.anthropic_client import make_client as _make_anthropic_client
     client = _make_anthropic_client(api_key)
     try:
         response = client.messages.create(

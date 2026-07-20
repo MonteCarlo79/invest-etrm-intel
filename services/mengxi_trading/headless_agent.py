@@ -254,7 +254,7 @@ def _dispatch(name: str, inputs: dict, engine) -> str:
 def run_mengxi_query(question: str, api_key: str, pg_url: str = "") -> str:
     """Run the Mengxi trading headless agent and return its answer."""
     import anthropic
-from shared.anthropic_client import make_client as _make_anthropic_client
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
     client = _make_anthropic_client(api_key)
     engine = _make_engine(pg_url)

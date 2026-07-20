@@ -51,7 +51,7 @@ def _describe_image(
     """
     import base64
     import anthropic
-from shared.anthropic_client import make_client as _make_anthropic_client
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
     prompt = (
         "Describe this image in detail for text indexing. "

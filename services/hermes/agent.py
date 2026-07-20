@@ -386,7 +386,7 @@ class HermesAgent:
         elif preferred == "deepseek":
             order = [_try_deepseek, _try_gpt, _try_claude]
         elif preferred == "claude":
-            order = [_try_claude]
+            order = [_try_claude, _try_gpt, _try_deepseek]
         else:  # auto — default priority chain
             order = [_try_gpt, _try_deepseek, _try_claude]
 
