@@ -6,6 +6,7 @@ import streamlit as st
 import libs.deal_models.deal_structures as _ds_mod  # triggers registration
 from libs.deal_models.registry import list_structures, get
 from libs.deal_models.deal_structures import price_structure
+from apps.deal_structurer import session_cache
 
 
 def render() -> None:
@@ -46,6 +47,7 @@ def render() -> None:
                 params = spec.params_schema(**param_vals)
                 result = price_structure(structure, revenue_paths, params)
                 st.session_state["dp_result"] = result
+                session_cache.save(st.session_state)
             except Exception as e:
                 st.error(f"Pricing failed: {e}")
 

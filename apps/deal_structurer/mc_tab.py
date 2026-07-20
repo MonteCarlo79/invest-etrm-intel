@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from libs.deal_models.contracts import MCRequest
 from services.deal_engine.batch_runner import run_batch
+from apps.deal_structurer import session_cache
 
 
 def render() -> None:
@@ -29,6 +30,7 @@ def render() -> None:
             bar = st.progress(0.0, text="Running simulations…")
             mc = run_batch(req, progress_callback=bar.progress)
             st.session_state["mc_result"] = mc
+            session_cache.save(st.session_state)
             bar.empty()
 
         mc = st.session_state.get("mc_result")

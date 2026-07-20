@@ -27,6 +27,12 @@ for k, v in _DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+# Restore persisted results from previous session (only on first run)
+from apps.deal_structurer import session_cache as _sc
+if not st.session_state.get("_cache_loaded"):
+    _sc.load(st.session_state)
+    st.session_state["_cache_loaded"] = True
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📊 Deal Structurer")
@@ -41,6 +47,12 @@ with st.sidebar:
     )
     st.divider()
     st.caption("Province → Price Paths → Dispatch → Cashflow → MC → Deal Pricing")
+    st.divider()
+    if st.button("🗑 Clear saved session", use_container_width=True):
+        _sc.clear()
+        for k, v in _DEFAULTS.items():
+            st.session_state[k] = v
+        st.rerun()
 
 # ── Route to tabs ─────────────────────────────────────────────────────────────
 if tab_choice == "1 · Price Simulation":

@@ -7,6 +7,7 @@ import streamlit as st
 from libs.deal_models.contracts import OUParams, PriceSimRequest
 from libs.deal_models.price_simulator import simulate_prices
 from services.deal_engine.price_data import fetch_price_history
+from apps.deal_structurer import session_cache
 
 
 def render() -> None:
@@ -65,6 +66,7 @@ def render() -> None:
                     paths = simulate_prices(req)
                     st.session_state["price_paths"] = paths
                     st.session_state["price_sim_req"] = req
+                    session_cache.save(st.session_state)
                 except Exception as e:
                     st.error(f"Simulation failed: {e}")
                     return

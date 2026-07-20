@@ -111,7 +111,18 @@ services:
   deal-structurer:
     <<: *common
     image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-deal-structurer:v5
+    command: ["streamlit", "run", "apps/deal_structurer/app.py",
+              "--server.port=8522", "--server.address=0.0.0.0",
+              "--server.baseUrlPath=deal-structurer",
+              "--server.enableCORS=false", "--server.enableXsrfProtection=false",
+              "--server.headless=true", "--server.fileWatcherType=none"]
     ports: ["8522:8522"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./apps/deal_structurer:/app/apps/deal_structurer:ro
+      - ./services/deal_engine:/app/services/deal_engine:ro
+      - ./services/common:/app/services/common:ro
+      - ./libs/deal_models:/app/libs/deal_models:ro
 
   spot-markets:
     <<: *common

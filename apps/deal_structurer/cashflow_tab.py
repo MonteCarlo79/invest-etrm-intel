@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from libs.deal_models.contracts import ProjectFinancials
 from libs.deal_models.project_cashflow import compute_cashflow
+from apps.deal_structurer import session_cache
 
 
 def render() -> None:
@@ -38,6 +39,7 @@ def render() -> None:
             cf = compute_cashflow(fin)
             st.session_state["last_financials"] = fin
             st.session_state["last_cf_result"] = cf
+            session_cache.save(st.session_state)
 
         cf = st.session_state.get("last_cf_result")
         if cf is None:
