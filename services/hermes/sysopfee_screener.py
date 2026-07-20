@@ -137,7 +137,7 @@ def _extract_fees(
     client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
             max_tokens=1000,
             system=_EXTRACT_PROMPT,
             messages=[{

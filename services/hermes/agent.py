@@ -693,7 +693,7 @@ class HermesAgent:
                 from shared.anthropic_client import make_client as _make_anthropic_client
                 client = _make_anthropic_client(self._api_key)
                 resp = client.messages.create(
-                    model="claude-haiku-4-5-20251001",
+                    model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
                     max_tokens=800,
                     system=(
                         "You are a research assistant. Summarise the article clearly and concisely. "
@@ -920,7 +920,7 @@ class HermesAgent:
                 return f"⚠️ 无法读取文件内容：{filename}"
 
             resp = self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
                 max_tokens=1200,
                 system=(
                     "You are a China electricity market expert and BESS investment analyst. "

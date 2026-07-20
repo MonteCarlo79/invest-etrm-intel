@@ -175,7 +175,7 @@ class HermesMemory:
             from shared.anthropic_client import make_client as _make_anthropic_client
             client = _make_anthropic_client(self._api_key)
             resp = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
                 max_tokens=600,
                 system=(
                     "Extract memorable facts, preferences, or decisions from this assistant conversation. "

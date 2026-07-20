@@ -141,7 +141,7 @@ def classify_to_market_fundamentals(
 
     try:
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
             max_tokens=160,
             system=_CLASSIFY_PROMPT,
             messages=[{"role": "user", "content": user_content}],

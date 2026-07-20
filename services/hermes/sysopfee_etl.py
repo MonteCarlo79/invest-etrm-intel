@@ -161,7 +161,7 @@ def _parse_with_llm(text: str, filename: str, api_key: str) -> list[dict]:
     from shared.anthropic_client import make_client as _make_anthropic_client
     client = _make_anthropic_client(api_key)
     resp = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
         max_tokens=1500,
         system="""You are a data extraction assistant for China electricity market data.
 Extract province-level 系统运行费 (grid system operation fee) in yuan/kWh.

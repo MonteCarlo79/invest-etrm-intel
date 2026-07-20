@@ -171,7 +171,7 @@ def _call_claude(context: str, api_key: str, year: int) -> Optional[dict]:
         from shared.anthropic_client import make_client as _make_anthropic_client
         client = _make_anthropic_client(api_key)
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
             max_tokens=2048,
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
@@ -404,7 +404,7 @@ def extract_capcomp_from_image(
     client = _make_anthropic_client(api_key)
     try:
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
             max_tokens=4000,
             messages=[{
                 "role": "user",
@@ -563,7 +563,7 @@ def extract_from_file_for_gap(
         )
         try:
             resp = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
                 max_tokens=300,
                 messages=[{"role": "user", "content": [
                     {"type": "image", "source": {"type": "base64",
@@ -585,7 +585,7 @@ def extract_from_file_for_gap(
         )
         try:
             resp = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
                 max_tokens=300,
                 messages=[{"role": "user", "content": full_prompt}],
             )

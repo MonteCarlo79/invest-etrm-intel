@@ -43,7 +43,7 @@ def _parse_spot_query_params(question: str, api_key: str) -> dict:
 
     client = _make_anthropic_client(api_key)
     resp = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
         max_tokens=200,
         messages=[{
             "role": "user",

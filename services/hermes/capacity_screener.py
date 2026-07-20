@@ -171,7 +171,7 @@ def _extract_capacity(text: str, source_name: str, api_key: str) -> tuple[Option
 
     try:
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
             max_tokens=1500,
             system=_EXTRACT_PROMPT,
             messages=[{

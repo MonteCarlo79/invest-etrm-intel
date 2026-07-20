@@ -750,7 +750,7 @@ def _synthesize_digest(articles: list[dict], api_key: str) -> str:
     try:
         client = _make_anthropic_client(api_key)
         msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
             max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -771,7 +771,7 @@ def _score_article(title: str, body: str, api_key: str) -> dict:
     prompt = _AI_PROMPT.format(title=title, excerpt=body[:800])
     try:
         msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
             max_tokens=256,
             messages=[{"role": "user", "content": prompt}],
         )
