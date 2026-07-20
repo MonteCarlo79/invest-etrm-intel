@@ -32,8 +32,9 @@ _BEDROCK_MODEL_MAP: dict[str, str] = {
     # Claude 4.5 Haiku — on-demand not supported; use cross-region inference profile
     "claude-haiku-4-5":                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "claude-haiku-4-5-20251001":       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    # Claude 3.x — on-demand supported
-    "claude-3-5-sonnet-20241022":      "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    # Claude 4.5 Sonnet — cross-region inference profile (tool use approved)
+    "claude-sonnet-4-5-20250929":      "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    # Claude 3.x — on-demand (claude-3-5-sonnet-20241022 EOL in us-east-1 as of 2026-07; use claude-sonnet-4-5-20250929)
     "claude-3-5-haiku-20241022":       "anthropic.claude-3-5-haiku-20241022-v1:0",
     "claude-3-opus-20240229":          "anthropic.claude-3-opus-20240229-v1:0",
 }
