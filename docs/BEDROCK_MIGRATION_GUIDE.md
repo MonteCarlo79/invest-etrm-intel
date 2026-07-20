@@ -1,17 +1,65 @@
 # Bedrock Migration Guide — All Apps
-**Date:** 2026-07-19  
-**Status:** Services layer already done. Apps layer pending.
-
-This document gives step-by-step instructions to migrate each app from direct `Anthropic(api_key=...)` to the Bedrock-aware factory, so they work without personal Anthropic API credits when `BEDROCK_REGION` is set.
+**Date:** 2026-07-19 (updated 2026-07-20 with lessons from crystal-ball migration)  
+**Status:** Services layer done. Apps layer partially done — see status table.
 
 ---
 
-## How the factory works (recap)
+## ⚠️ Lessons Learned (crystal-ball migration, 2026-07-20)
+
+Read this before touching anything else.
+
+### 1. Do NOT use `us.anthropic.*` cross-region inference profiles
+
+The original guide said to use `us.anthropic.claude-sonnet-4-6`. This is wrong for this account. Those profiles require an **AWS Marketplace subscription** that cannot be auto-completed:
+
+```
+PermissionDeniedError 403: Model access is denied — IAM role not authorized to perform
+aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe
+```
+
+Even after adding the IAM permissions, the subscription still fails with "cannot be completed at this time."
+
+**Fix: use `global.anthropic.*` inference profiles instead.** These are available in ap-southeast-1 and require no Marketplace subscription.
+
+### 2. Use `BEDROCK_REGION=ap-southeast-1`, not `us-east-1`
+
+All ECS services run in ap-southeast-1. Setting `BEDROCK_REGION=us-east-1` routes all Bedrock calls cross-region unnecessarily. Use `ap-southeast-1` — `global.anthropic.*` profiles are available there and route optimally.
+
+### 3. BEDROCK_REGION is NOT pre-set in task definitions
+
+Despite what an earlier version of this guide said, `BEDROCK_REGION` was NOT already in the crystal-ball task definitions. **You must add it explicitly** when registering the new task definition. Check every app's task def before assuming it's there.
+
+### 4. Submitting the use case form
+
+The "Model access" page in the AWS Bedrock console has been retired. If you get a 404 "use case details" error:
+- Go to **Bedrock console → Model catalog** in ap-southeast-1
+- Find any Anthropic model → open its page → submit the use case form
+- The form is account-level: submitting once unlocks all Claude models
+- Wait ~15 minutes after submission
+
+With `global.anthropic.*` profiles this error was not encountered — but it may appear on first use in a fresh account.
+
+### 5. Correct model IDs (confirmed working, ap-southeast-1)
+
+| Direct API model string | Bedrock model ID | Type |
+|---|---|---|
+| `claude-sonnet-4-6` | `global.anthropic.claude-sonnet-4-6` | global inference profile |
+| `claude-opus-4-6` | `global.anthropic.claude-opus-4-6-v1` | global inference profile |
+| `claude-haiku-4-5` / `claude-haiku-4-5-20251001` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | global inference profile |
+| `claude-sonnet-4-5-20250929` | `global.anthropic.claude-sonnet-4-5-20250929-v1:0` | global inference profile |
+| `claude-3-5-haiku-20241022` | `anthropic.claude-3-5-haiku-20241022-v1:0` | on-demand |
+| `claude-3-opus-20240229` | `anthropic.claude-3-opus-20240229-v1:0` | on-demand |
+
+These are already in `shared/anthropic_client.py`. Call sites do not need to change model strings.
+
+---
+
+## How the factory works
 
 `shared/anthropic_client.py` (already in bess-platform):
 
 ```python
-from shared.anthropic_client import make_client
+from shared.anthropic_client import make_client, is_llm_available
 
 client = make_client(api_key)          # api_key can be None
 client.messages.create(model="claude-sonnet-4-6", ...)
@@ -19,9 +67,8 @@ client.messages.create(model="claude-sonnet-4-6", ...)
 
 - If `BEDROCK_REGION` env var is set → uses `AnthropicBedrock` + IAM role, ignores `api_key`
 - Otherwise → uses `Anthropic(api_key=api_key or ANTHROPIC_API_KEY)`
-- Model strings (e.g. `"claude-sonnet-4-6"`) are auto-mapped to Bedrock model IDs — no call-site changes needed
-
-**ib-platform** needs its own copy of the factory (different repo). See §8.
+- Model strings (e.g. `"claude-sonnet-4-6"`) are auto-mapped to Bedrock IDs
+- Env var `BEDROCK_MODEL_<ID>` overrides the static map — change model IDs without rebuilding (e.g. `BEDROCK_MODEL_CLAUDE_SONNET_4_6=global.anthropic.claude-sonnet-4-6`)
 
 ---
 
@@ -34,18 +81,24 @@ api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 client = anthropic.Anthropic(api_key=api_key)
 ```
 
-### After (bess-platform apps)
+### After
 ```python
 from shared.anthropic_client import make_client as _make_anthropic_client
 api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 client = _make_anthropic_client(api_key)
 ```
 
-### After (ib-platform)
+### For guards that block when key is absent
+
 ```python
-from libs.anthropic_client import make_client as _make_anthropic_client
-api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-client = _make_anthropic_client(api_key)
+# Before
+if not api_key:
+    return "ANTHROPIC_API_KEY not set", ...
+
+# After
+from shared.anthropic_client import is_llm_available
+if not is_llm_available(api_key):
+    return "No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)", ...
 ```
 
 The rest of the code (`.messages.create(...)`, model strings, streaming) is unchanged.
@@ -56,56 +109,86 @@ The rest of the code (`.messages.create(...)`, model strings, streaming) is unch
 
 | App | Repo | Files to change | Done? |
 |---|---|---|---|
-| hermes | bess-platform | `services/hermes/app.py` (startup crash + 3 endpoint guards) | No |
+| crystal-ball | Crystal-Ball repo | `apps/fortune-teller/app.py` (×5) | ✅ v37/td:59 |
+| crystal-ball-client | Crystal-Ball repo | `apps/crystal-ball-client/app.py` (×2) | ✅ v22/td:25 |
+| hermes | bess-platform | `services/hermes/app.py` (×4) | No |
 | spot-market | bess-platform | `apps/spot-market/app.py` (×5), `spot_report.py` (×1) | No |
 | gb-market | bess-platform | `apps/gb-market/app.py` (×1), `daily_report.py` (×1) | No |
 | bess-map | bess-platform | `apps/bess-map/app.py` (×1) | No |
 | mengxi-dashboard | bess-platform | `apps/mengxi-dashboard/app.py` (×1) | No |
 | deal-structurer | bess-platform | `apps/deal_structurer/strategist.py` (×1) | No |
-| crystal-ball | separate repo | unknown — source not in this repo | No |
-| crystal-ball-client | separate repo | unknown — source not in this repo | No |
 | ph-market | bess-platform | empty dir — no code yet | N/A |
 | po-market | bess-platform | empty dir — no code yet | N/A |
-| ib-platform | ib-platform repo | `services/knowledge/expert_memory.py` (×3), `daily_briefing.py` (×1), `services/news/scorer.py` (×1), `apps/news/tabs/digest.py` (×1), `apps/portfolio/tabs/advisor_pretrade.py` (×1) | No |
+| ib-platform | ib-platform repo | 5 files, 7 call sites | No |
 
-**Already done (bess-platform services layer):** 37 files under `services/` — commits `ae66e2c` + `2ac42a1`.  
-**Partially done (hermes):** All agent/screener/report modules inside `services/hermes/` already use `make_client`. Only `app.py` (the FastAPI entrypoint) still has raw `ANTHROPIC_API_KEY` references.
+**Already done (services layer):** 37 files under `services/` — commits `ae66e2c` + `2ac42a1`.
 
 ---
 
-## 1. hermes
+## Per-app changes
+
+### ECS task definition — required for every app
+
+For each app, add `BEDROCK_REGION=ap-southeast-1` to the task definition environment when registering the new revision. **Do not assume it is already there.**
+
+```bash
+# Fetch current task def
+MSYS_NO_PATHCONV=1 aws ecs describe-task-definition \
+  --task-definition <family>:<rev> \
+  --region ap-southeast-1 \
+  --query 'taskDefinition' --output json > C:/tmp/td.json
+
+# Strip read-only fields + add BEDROCK_REGION + update image (Python):
+py -3 -c "
+import json
+with open('C:/tmp/td.json') as f: td = json.load(f)
+for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
+    td.pop(k, None)
+env = td['containerDefinitions'][0]['environment']
+# Add BEDROCK_REGION if not already present
+if not any(e['name'] == 'BEDROCK_REGION' for e in env):
+    env.append({'name': 'BEDROCK_REGION', 'value': 'ap-southeast-1'})
+else:
+    next(e for e in env if e['name'] == 'BEDROCK_REGION')['value'] = 'ap-southeast-1'
+# Update image tag
+td['containerDefinitions'][0]['image'] = td['containerDefinitions'][0]['image'].replace(':vOLD', ':vNEW')
+with open('C:/tmp/td-new.json', 'w') as f: json.dump(td, f, indent=2)
+print('done')
+"
+
+MSYS_NO_PATHCONV=1 aws ecs register-task-definition \
+  --cli-input-json file://C:/tmp/td-new.json --region ap-southeast-1
+
+MSYS_NO_PATHCONV=1 aws ecs update-service \
+  --cluster bess-platform-cluster --service <svc> \
+  --task-definition <family>:<new-rev> \
+  --force-new-deployment --region ap-southeast-1
+```
+
+### IAM role
+
+The ECS task role `bess-platform-task-role` already has a `bess-platform-task-bedrock` inline policy with `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`. As of 2026-07-20 it also has `aws-marketplace:ViewSubscriptions/Subscribe/Unsubscribe` (added during crystal-ball migration — harmless, safe to leave).
+
+No IAM changes needed for other apps.
+
+---
+
+### 1. hermes
 
 **File:** `services/hermes/app.py` only.
 
-All underlying modules (`agent.py`, `thinking_agent.py`, `bayesian_agent.py`, `internet_agent.py`, `market_report.py`, `report_drafter.py`, `scheduler.py`) were already migrated to `make_client` in commit `ae66e2c`. Only the FastAPI entrypoint `app.py` still has raw `ANTHROPIC_API_KEY` references.
+All underlying modules already use `make_client`. Only the FastAPI entrypoint still has raw `ANTHROPIC_API_KEY` references.
 
-### Issue A — Startup crash (line 687)
-
-`_make_clients()` uses the bracket form `os.environ["ANTHROPIC_API_KEY"]`, which throws `KeyError` at startup when only `BEDROCK_REGION` is set and `ANTHROPIC_API_KEY` is absent from the ECS env.
-
+**Issue A — Startup crash (line ~687)**
 ```python
-# Before (line 687):
-agent = HermesAgent(
-    tasks=tasks,
-    anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],   # ← KeyError crash
-    onedrive=onedrive,
-)
+# Before:
+agent = HermesAgent(tasks=tasks, anthropic_api_key=os.environ["ANTHROPIC_API_KEY"], ...)
 
 # After:
-agent = HermesAgent(
-    tasks=tasks,
-    anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),  # make_client handles Bedrock
-    onedrive=onedrive,
-)
+agent = HermesAgent(tasks=tasks, anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""), ...)
 ```
 
-`HermesAgent.__init__` already calls `_make_anthropic_client(anthropic_api_key)` internally, so passing an empty string is correct — the factory will use Bedrock when `BEDROCK_REGION` is set.
-
-### Issue B — Three endpoint guards reject requests when key is absent
-
-Three FastAPI endpoints check `if not _api_key: return Response(status_code=503)` before dispatching background tasks. With Bedrock, the key is empty but the LLM is available. Replace each guard with `is_llm_available`.
-
-**`/hermes/capcomp/scan` (lines ~1147–1149):**
+**Issue B — Three endpoint guards (lines ~1147, ~1192, ~1205)**
 ```python
 # Before:
 _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -119,127 +202,46 @@ if not is_llm_available(_api_key):
     return Response(content="No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)", status_code=503)
 ```
 
-**`/hermes/jizhi/scan` (lines ~1192–1194):**
-```python
-# Before:
-_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-if not _api_key:
-    return Response(content="ANTHROPIC_API_KEY not set", status_code=503)
+Add `from shared.anthropic_client import is_llm_available` once at the top of `app.py`.
 
-# After:
-from shared.anthropic_client import is_llm_available
-_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-if not is_llm_available(_api_key):
-    return Response(content="No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)", status_code=503)
-```
-
-**`/hermes/knowledge/digest` (lines ~1205–1207):**
-```python
-# Before:
-_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-if not _api_key:
-    return Response(content="ANTHROPIC_API_KEY not set", status_code=503)
-
-# After:
-from shared.anthropic_client import is_llm_available
-_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-if not is_llm_available(_api_key):
-    return Response(content="No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)", status_code=503)
-```
-
-> Tip: add `from shared.anthropic_client import is_llm_available` once at the top of `app.py` rather than inline in each endpoint.
-
-### Issue C — Log warnings reference key by name (cosmetic, optional)
-
-Lines 122 and 172 log `"skipped — ANTHROPIC_API_KEY not set"`. These are harmless but misleading on Bedrock. Optionally update to `"skipped — no LLM configured"`.
-
-### All scheduler `api_key=` kwargs are fine as-is
-
-Every scheduler job passes `api_key=os.environ.get("ANTHROPIC_API_KEY", "")` to functions that are already migrated. When `BEDROCK_REGION` is set, `make_client("")` inside those functions uses Bedrock. No changes needed to the scheduler block.
-
-### ECS — hermes already has BEDROCK_REGION in Terraform
-
-`infra/terraform/hermes.tf` already has `{ name = "BEDROCK_REGION", value = "us-east-1" }` (added in `ae66e2c`). After the three code changes above, force-redeploy:
-
-```bash
-aws ecs update-service --cluster bess-platform --service bess-platform-hermes-svc --force-new-deployment
-```
-
-### Summary of changes
-
-| Location | Change |
-|---|---|
-| `app.py:687` | `os.environ["ANTHROPIC_API_KEY"]` → `.get("ANTHROPIC_API_KEY", "")` |
-| `app.py:~1148` | `if not _api_key:` → `if not is_llm_available(_api_key):` |
-| `app.py:~1193` | same |
-| `app.py:~1206` | same |
-| `app.py` top imports | add `from shared.anthropic_client import is_llm_available` |
+**ECS:** cluster `bess-platform-cluster`, service `bess-platform-hermes-svc`.
 
 ---
 
-## 3. spot-market
+### 3. spot-market
 
-**Files:** `apps/spot-market/app.py`, `apps/spot-market/spot_report.py`
+**Files:** `apps/spot-market/app.py` (×5), `apps/spot-market/spot_report.py` (×1)
 
-### app.py — 5 instantiations
-
-The app uses `_anthropic.Anthropic(...)` (lazy-imported as `_ant_tr` or `_anthropic`). Locate by searching for `Anthropic(api_key=` in `app.py`. The lines are:
-
-| Line | Pattern | Change |
-|---|---|---|
-| 1119–1120 | `import anthropic as _ant_tr` + `_ant_tr.Anthropic(api_key=api_key)` | See below |
-| 2957–2959 | `_anthropic.Anthropic(api_key=_api_key)` | See below |
-| 2986–2988 | `_anthropic.Anthropic(api_key=_api_key)` | See below |
-| 3110–3112 | `_anthropic.Anthropic(api_key=api_key)` | See below |
-| 3376–3378 | `_anthropic.Anthropic(api_key=_api_key)` | See below |
-
-All follow the same pattern — replace each inline `anthropic.Anthropic(api_key=X)` with `_make_anthropic_client(X)`.
-
-**Add at the top of app.py** (after existing imports):
+Add at top of each file:
 ```python
-from shared.anthropic_client import make_client as _make_anthropic_client
+from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
 ```
 
-Then replace every `_ant_tr.Anthropic(api_key=...)` / `_anthropic.Anthropic(api_key=...)` with `_make_anthropic_client(...)`.
+Replace every `anthropic.Anthropic(api_key=X)` with `_make_anthropic_client(X)`.
 
-The local `import anthropic as _ant_tr` / `import anthropic as _anthropic` blocks can be removed if the only use was client creation. Keep them if other `anthropic.*` symbols (e.g. `anthropic.APIStatusError`) are used nearby.
-
-### spot_report.py — 1 instantiation (line 408)
-
+In `spot_report.py`, also update the `if not api_key:` guard:
 ```python
-# Before (lines ~336–408):
-api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+# Before:
 if not api_key:
     logger.warning("ANTHROPIC_API_KEY not set — skipping AI commentary")
-    ...
-import anthropic as _anthropic
-client = _anthropic.Anthropic(api_key=api_key)
 
 # After:
-from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
-api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 if not is_llm_available(api_key):
-    logger.warning("No LLM available (set ANTHROPIC_API_KEY or BEDROCK_REGION) — skipping AI commentary")
-    ...
-client = _make_anthropic_client(api_key)
+    logger.warning("No LLM available — skipping AI commentary")
 ```
 
-### Dockerfile check
-`apps/spot-market/Dockerfile` already has `"anthropic[bedrock]>=0.40"` — no change needed.
+**Dockerfile:** `apps/spot-market/Dockerfile` already has `"anthropic[bedrock]>=0.40"` — no change.
 
-### ECS env var
-`BEDROCK_REGION=us-east-1` is already in the spot-market task definition (added in `ae66e2c`). Just needs a force-redeploy after the code change.
+**ECS:** service name — verify with `aws ecs list-services --cluster bess-platform-cluster`.
 
 ---
 
-## 4. gb-market
+### 4. gb-market
 
-**Files:** `apps/gb-market/app.py`, `apps/gb-market/daily_report.py`
-
-### app.py — 1 instantiation (line 140, module-level)
+**Files:** `apps/gb-market/app.py` (line ~140), `apps/gb-market/daily_report.py` (line ~223)
 
 ```python
-# Before (lines 18, 139–140):
+# app.py — Before (lines 18, 139–140):
 import anthropic
 _ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 _client = anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
@@ -250,12 +252,8 @@ _ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 _client = _make_anthropic_client(_ANTHROPIC_KEY)
 ```
 
-Note: `app.py` line 1574 uses `if provider == "anthropic":` — that's a provider-string comparison, not client creation. Leave it untouched.
-
-### daily_report.py — 1 instantiation (line 223)
-
 ```python
-# Before:
+# daily_report.py — Before:
 import anthropic as _anthropic
 client = _anthropic.Anthropic(api_key=api_key)
 
@@ -264,23 +262,16 @@ from shared.anthropic_client import make_client as _make_anthropic_client
 client = _make_anthropic_client(api_key)
 ```
 
-### scheduler_service.py — no direct client, but passes api_key
-
-Line 129–130 calls `digest_kb_docs(anthropic_key, limit=100)` from `services.gb_knowledge.expert_memory` — that service is **already migrated** to use `make_client()`. The `anthropic_key` argument is now ignored when `BEDROCK_REGION` is set, so no change needed here.
-
-### Dockerfile check
-`apps/gb-market/Dockerfile` has `"anthropic>=0.40"` — **change to `"anthropic[bedrock]>=0.40"`** to include the Bedrock extras.
+**Dockerfile:** `apps/gb-market/Dockerfile` has `"anthropic>=0.40"` — change to `"anthropic[bedrock]>=0.40"`.
 
 ---
 
-## 5. bess-map
+### 5. bess-map
 
-**File:** `apps/bess-map/app.py`
-
-### app.py — 1 instantiation (line 3853)
+**File:** `apps/bess-map/app.py` (line ~3853)
 
 ```python
-# Before (lines 3834, 3853):
+# Before:
 import anthropic as _ant
 _ant_client = _ant.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
@@ -289,22 +280,16 @@ from shared.anthropic_client import make_client as _make_anthropic_client
 _ant_client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
 ```
 
-The `import anthropic as _ant` line at 3834 can be removed if `_ant` is only used for client creation. Verify no other `_ant.*` symbols (e.g. exception types) are referenced below line 3853.
-
-### Dockerfile check
-`apps/bess-map/Dockerfile` has `"anthropic>=0.40"` — **change to `"anthropic[bedrock]>=0.40"`**.  
-`apps/bess-map/requirements.txt` has `anthropic>=0.40` — **change to `anthropic[bedrock]>=0.40`**.
+**Dockerfile + requirements.txt:** change `anthropic>=0.40` → `anthropic[bedrock]>=0.40` in both.
 
 ---
 
-## 6. mengxi-dashboard
+### 6. mengxi-dashboard
 
-**File:** `apps/mengxi-dashboard/app.py`
-
-### app.py — 1 instantiation (line 1570)
+**File:** `apps/mengxi-dashboard/app.py` (line ~1570)
 
 ```python
-# Before (lines 1561, 1565, 1570):
+# Before:
 import anthropic as _ant
 _TRADER_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 if not _TRADER_API_KEY:
@@ -316,25 +301,21 @@ _trader_client = _ant.Anthropic(api_key=_TRADER_API_KEY)
 from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
 _TRADER_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 if not is_llm_available(_TRADER_API_KEY):
-    st.error("No LLM configured — Trader agent unavailable. Set ANTHROPIC_API_KEY or BEDROCK_REGION.")
+    st.error("No LLM configured — Trader agent unavailable.")
     ...
 _trader_client = _make_anthropic_client(_TRADER_API_KEY)
 ```
 
-### Dockerfile / requirements check
-`apps/mengxi-dashboard/requirements.txt` has `anthropic>=0.40` — **change to `anthropic[bedrock]>=0.40`**.  
-Check `apps/mengxi-dashboard/Dockerfile` — add `[bedrock]` extra if it installs anthropic.
+**requirements.txt:** `anthropic>=0.40` → `anthropic[bedrock]>=0.40`.
 
 ---
 
-## 7. deal-structurer
+### 7. deal-structurer
 
-**File:** `apps/deal_structurer/strategist.py`
-
-### strategist.py — 1 instantiation (line 38)
+**File:** `apps/deal_structurer/strategist.py` (line ~38)
 
 ```python
-# Before (lines 5, 34–38):
+# Before:
 import anthropic as _ant
 api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 if not api_key:
@@ -349,189 +330,81 @@ if not is_llm_available(api_key):
 client = _make_anthropic_client(api_key)
 ```
 
-### Dockerfile / requirements check
-`apps/deal_structurer/Dockerfile` already has `"anthropic[bedrock]>=0.40"` — no change needed.  
-`apps/deal_structurer/requirements.txt` already has `anthropic[bedrock]>=0.40` — no change needed.
+**Dockerfile + requirements.txt:** already have `"anthropic[bedrock]>=0.40"` — no change.
 
 ---
 
-## 8. crystal-ball and crystal-ball-client
+### 8. ph-market and po-market
 
-These apps live in **separate repos** (images pushed to ECR `crystal-ball-fortune` and `crystal-ball-client`). Terraform already has `BEDROCK_REGION=us-east-1` in both task definitions.
+Both `apps/ph-market/` and `apps/po-market/` are empty — no code yet. When you build these apps, use `make_client()` from the start:
 
-**What to do in each source repo:**
-
-1. Copy `shared/anthropic_client.py` from bess-platform into the repo (or re-implement it — it's ~100 lines).
-2. Find all `Anthropic(api_key=...)` calls and replace with `make_client(api_key)`.
-3. Ensure `requirements.txt` / `Dockerfile` has `anthropic[bedrock]>=0.40`.
-4. Push a new image, then force-redeploy the ECS service.
-
-Until this is done, these two services will fail if `ANTHROPIC_API_KEY` is not set (they'll get an empty key and the Bedrock path won't activate because the factory isn't there yet).
+```python
+from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
+```
 
 ---
 
-## 9. ph-market and po-market
+### 9. ib-platform (separate repo)
 
-Both `apps/ph-market/` and `apps/po-market/` are **empty directories** — no code yet. When you build these apps, use `make_client()` from the start rather than direct `Anthropic(api_key=...)`.
-
----
-
-## 10. ib-platform
-
-ib-platform is a **separate repo** (`~/repo/ETRM/ib-platform`) that runs locally on the MacBook, not on ECS. The migration pattern is the same but uses a local copy of the factory.
-
-### Step 1 — Create the factory
-
-Create `libs/anthropic_client.py` (copy from bess-platform's `shared/anthropic_client.py`, change the module docstring):
-
-```python
-# libs/anthropic_client.py
-# Same content as bess-platform/shared/anthropic_client.py
-# Usage: from libs.anthropic_client import make_client, is_llm_available
-```
-
-### Step 2 — Set env var locally
-
-Add to `config/.env`:
-```
-BEDROCK_REGION=us-east-1
-```
-
-The `claude-bedrock` AWS profile already has Bedrock credentials. With this set, all `make_client()` calls will use Bedrock instead of the personal API key.
-
-### Step 3 — Migrate each file
-
-**`services/knowledge/expert_memory.py`** — 3 instantiations (lines 99, 170, 222)
-
-```python
-# Before:
-import anthropic
-client = anthropic.Anthropic(api_key=api_key)   # appears 3 times
-
-# After (add import at top, replace all 3):
-from libs.anthropic_client import make_client as _make_anthropic_client
-client = _make_anthropic_client(api_key)
-```
-
-**`services/knowledge/daily_briefing.py`** — 1 instantiation (line 61)
-
-```python
-# Before:
-import anthropic
-client = anthropic.Anthropic(api_key=api_key)
-
-# After:
-from libs.anthropic_client import make_client as _make_anthropic_client
-client = _make_anthropic_client(api_key)
-```
-
-**`services/news/scorer.py`** — 1 instantiation (line 113)
-
-```python
-# Before:
-import anthropic
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
-
-# After:
-from libs.anthropic_client import make_client as _make_anthropic_client
-client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
-```
-
-**`apps/news/tabs/digest.py`** — 1 instantiation (line 52)
-
-```python
-# Before:
-import anthropic
-client = anthropic.Anthropic(api_key=api_key)
-
-# After:
-from libs.anthropic_client import make_client as _make_anthropic_client
-client = _make_anthropic_client(api_key)
-```
-
-**`apps/portfolio/tabs/advisor_pretrade.py`** — 1 instantiation (line 82)
-
-```python
-# Before:
-import anthropic
-client = anthropic.Anthropic(api_key=api_key)
-
-# After:
-from libs.anthropic_client import make_client as _make_anthropic_client
-client = _make_anthropic_client(api_key)
-```
-
-### Step 4 — Install Bedrock extras
+ib-platform runs locally on the MacBook, not on ECS. Create a local copy of the factory:
 
 ```bash
-source .venv/bin/activate
-pip install "anthropic[bedrock]>=0.40"
+cp shared/anthropic_client.py ~/repo/ETRM/ib-platform/libs/anthropic_client.py
 ```
 
-Or update `requirements.txt`: change `anthropic>=0.40` → `anthropic[bedrock]>=0.40`.
+Update the docstring to say `from libs.anthropic_client import make_client`. Then migrate 5 files:
 
-### Step 5 — Smoke test
+| File | Call sites |
+|---|---|
+| `services/knowledge/expert_memory.py` | 3 |
+| `services/knowledge/daily_briefing.py` | 1 |
+| `services/news/scorer.py` | 1 |
+| `apps/news/tabs/digest.py` | 1 |
+| `apps/portfolio/tabs/advisor_pretrade.py` | 1 |
+
+Pattern is the same — replace `anthropic.Anthropic(api_key=X)` with `_make_anthropic_client(X)`.
+
+Set env var locally: add `BEDROCK_REGION=ap-southeast-1` to `config/.env`.
+
+---
+
+## Deployment workflow (quick reference)
 
 ```bash
-python -c "
-from libs.anthropic_client import make_client
-c = make_client()
-r = c.messages.create(model='claude-haiku-4-5-20251001', max_tokens=10, messages=[{'role':'user','content':'ping'}])
-print(r.content[0].text)
-"
-```
+# 1. Build image
+cd /path/to/repo
+docker build -f apps/<app>/Dockerfile -t <image>:vN .
+docker tag <image>:vN 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<image>:vN
 
-Should print without error, hitting Bedrock via the `claude-bedrock` AWS profile.
+# 2. ECR login + push
+MSYS_NO_PATHCONV=1 aws ecr get-login-password --region ap-southeast-1 \
+  | docker login --username AWS --password-stdin \
+    319383842493.dkr.ecr.ap-southeast-1.amazonaws.com
+docker push 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<image>:vN
 
----
-
-## 11. ECS redeployment (after each bess-platform app migration)
-
-After committing code changes for an app, force-redeploy its ECS service to pick up the `BEDROCK_REGION` env var (Terraform `lifecycle { ignore_changes }` blocks automatic propagation):
-
-```bash
-# Replace <service-name> with the actual ECS service name
-aws ecs update-service \
-  --cluster bess-platform \
-  --service bess-platform-<service-name>-svc \
-  --force-new-deployment
-
-# Service names:
-#   spot-market      → bess-platform-spot-markets-svc (verify exact name)
-#   gb-market        → bess-platform-gb-market-svc (verify exact name)
-#   bess-map         → bess-platform-bess-map-svc
-#   mengxi-dashboard → bess-platform-mengxi-dashboard-svc (verify exact name)
-#   deal-structurer  → bess-platform-deal-structurer-svc (verify exact name)
-#   crystal-ball     → bess-platform-crystal-ball-svc (verify exact name)
-#   crystal-ball-client → bess-platform-crystal-ball-client-svc (verify exact name)
-
-# List actual service names:
-aws ecs list-services --cluster bess-platform --output text
+# 3. Register new task def + update service (see "ECS task definition" section above)
 ```
 
 ---
 
-## 12. Verification checklist per app
+## Verification checklist per app
 
-After migrating and redeploying each app, confirm:
+After migrating and redeploying:
 
-- [ ] App starts without error (`/health` or `/_stcore/health` returns 200)
-- [ ] LLM feature works in the UI (e.g. generate a summary, run the agent)
-- [ ] CloudWatch logs show no `AuthenticationError` or `invalid_api_key`
-- [ ] If Bedrock: logs show `Bedrock region=us-east-1` (from `logger.debug` in factory)
-- [ ] `ANTHROPIC_API_KEY` can be removed from ECS task definition (or left as empty string) once Bedrock is confirmed working
+- [ ] App starts (`/_stcore/health` or `/health` returns 200)
+- [ ] LLM feature works in the UI (no `AuthenticationError`, no `PermissionDeniedError`)
+- [ ] CloudWatch logs show no `invalid_api_key` errors
+- [ ] Task definition has `BEDROCK_REGION=ap-southeast-1` (verify via `describe-task-definition`)
+- [ ] `ANTHROPIC_API_KEY` can be removed from task def once Bedrock confirmed working (or left as empty string)
 
 ---
 
-## 13. Recommended order
+## Recommended order
 
-Highest risk first (things that will break daily ops), then easiest:
-
-1. **hermes** — **DO THIS FIRST.** The startup crash on line 687 means hermes will fail to start entirely when `ANTHROPIC_API_KEY` is removed from ECS. Only 4 lines to change. All underlying modules already use `make_client`. Blocks all daily scheduled jobs (news screener, KB digest, market reports, etc.).
-2. **deal-structurer** — 1 file, 1 call site, already has `[bedrock]` in requirements
+1. **hermes** — startup crash on `os.environ["ANTHROPIC_API_KEY"]` blocks ALL scheduled jobs. Only 4 lines to change.
+2. **deal-structurer** — 1 file, 1 call site
 3. **bess-map** — 1 file, 1 call site
 4. **mengxi-dashboard** — 1 file, 1 call site
 5. **gb-market** — 2 files, 2 call sites
-6. **ib-platform** — 5 files, 7 call sites (local MacBook, no ECS redeploy needed)
-7. **spot-market** — 2 files, 6 call sites (most complex — verify each call site context)
-8. **crystal-ball / crystal-ball-client** — separate repos, coordinate separately
+6. **spot-market** — 2 files, 6 call sites (most complex)
+7. **ib-platform** — local MacBook, no ECS redeploy

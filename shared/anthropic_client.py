@@ -23,18 +23,20 @@ import anthropic as _anthropic
 
 logger = logging.getLogger(__name__)
 
-# Maps direct Anthropic model IDs → Bedrock model IDs (us-east-1 regional).
-# Override any entry via env var BEDROCK_MODEL_<DIRECT_ID_UPPERCASED_UNDERSCORED>.
+# Maps direct Anthropic model IDs → Bedrock model IDs.
+# Uses global inference profiles — available in all regions, no AWS Marketplace subscription required.
+# Override any entry at runtime via BEDROCK_MODEL_<DIRECT_ID_UPPERCASED_UNDERSCORED> env var (checked first).
+# IMPORTANT: us.anthropic.* cross-region profiles require an AWS Marketplace subscription that
+# cannot be auto-completed in most accounts → use global.anthropic.* instead.
 _BEDROCK_MODEL_MAP: dict[str, str] = {
-    # Claude 4.x — on-demand not supported; use cross-region inference profiles
-    "claude-sonnet-4-6":               "us.anthropic.claude-sonnet-4-6",
-    "claude-opus-4-6":                 "us.anthropic.claude-opus-4-6-v1",
-    # Claude 4.5 Haiku — on-demand not supported; use cross-region inference profile
-    "claude-haiku-4-5":                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-haiku-4-5-20251001":       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    # Claude 4.5 Sonnet — cross-region inference profile (tool use approved)
-    "claude-sonnet-4-5-20250929":      "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    # Claude 3.x — on-demand (claude-3-5-sonnet-20241022 EOL in us-east-1 as of 2026-07; use claude-sonnet-4-5-20250929)
+    # Claude 4.x — global inference profiles
+    "claude-sonnet-4-6":               "global.anthropic.claude-sonnet-4-6",
+    "claude-opus-4-6":                 "global.anthropic.claude-opus-4-6-v1",
+    # Claude 4.5 — global inference profiles
+    "claude-haiku-4-5":                "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-haiku-4-5-20251001":       "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-sonnet-4-5-20250929":      "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    # Claude 3.x — on-demand
     "claude-3-5-haiku-20241022":       "anthropic.claude-3-5-haiku-20241022-v1:0",
     "claude-3-opus-20240229":          "anthropic.claude-3-opus-20240229-v1:0",
 }
@@ -47,11 +49,13 @@ class _BedrockMessages:
         self._client = client
 
     def _map(self, model: str) -> str:
-        mapped = _BEDROCK_MODEL_MAP.get(model)
-        if mapped:
-            return mapped
+        # Env var override takes precedence — change model IDs without rebuilding image
         env_key = "BEDROCK_MODEL_" + model.upper().replace("-", "_").replace(".", "_")
-        return os.environ.get(env_key, model)
+        env_override = os.environ.get(env_key)
+        if env_override:
+            return env_override
+        mapped = _BEDROCK_MODEL_MAP.get(model)
+        return mapped if mapped else model
 
     def create(self, *, model: str, **kwargs):
         bedrock_id = self._map(model)
