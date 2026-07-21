@@ -391,7 +391,7 @@ def _call_claude_tool(api_key: str, prompt: str, tool: dict, max_tokens: int) ->
     from shared.anthropic_client import make_client as _make_anthropic_client
     client = _make_anthropic_client(api_key)
     msg = client.messages.create(
-        model="claude-sonnet-4-5-20250929",  # Bedrock inference profile; claude-3-5-sonnet-20241022 EOL in us-east-1
+        model="claude-sonnet-4-6",  # tool-use; global.anthropic.claude-sonnet-4-6 is the only confirmed-working model
         max_tokens=max_tokens,
         tools=[tool],
         tool_choice={"type": "tool", "name": tool["name"]},

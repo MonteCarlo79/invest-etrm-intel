@@ -270,13 +270,13 @@ _SYSTEM = (
 def run_internet_query(question: str, api_key: str, pg_url: str = "") -> str:
     """Run the internet research agent and return its answer."""
     import anthropic
-from shared.anthropic_client import make_client as _make_anthropic_client
+    from shared.anthropic_client import make_client as _make_anthropic_client
     client = _make_anthropic_client(api_key)
 
     messages = [{"role": "user", "content": question}]
     while True:
         resp = client.messages.create(
-            model="claude-sonnet-4-5-20250929",  # Bedrock inference profile; claude-3-5-sonnet-20241022 EOL in us-east-1
+            model="claude-sonnet-4-6",  # tool-use; global.anthropic.claude-sonnet-4-6 is the only confirmed-working model
             max_tokens=4096,
             system=_SYSTEM,
             tools=_TOOLS,

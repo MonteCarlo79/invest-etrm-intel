@@ -250,7 +250,7 @@ class BayesianAnalystAgent:
     ) -> None:
         self._api_key = anthropic_api_key
         self._pg_url = pg_url
-        self._model = model or "claude-sonnet-4-5-20250929"  # Bedrock inference profile; claude-3-5-sonnet-20241022 EOL in us-east-1
+        self._model = model or "claude-sonnet-4-6"  # tool-use; global.anthropic.claude-sonnet-4-6 is the only confirmed-working model
         self._client = _make_anthropic_client(anthropic_api_key)
 
     # ── Tools ─────────────────────────────────────────────────────────────────

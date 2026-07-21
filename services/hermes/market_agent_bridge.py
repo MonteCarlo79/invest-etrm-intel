@@ -260,7 +260,7 @@ Hebei-South, Qinghai, Jiangxi, Hainan, Chongqing, Shanghai, Beijing, Tianjin.
     messages = [{"role": "user", "content": question}]
     while True:
         resp = client.messages.create(
-            model="claude-sonnet-4-5-20250929", max_tokens=2048,  # Bedrock inference profile; claude-3-5-sonnet-20241022 EOL in us-east-1
+            model="claude-sonnet-4-6", max_tokens=2048,  # tool-use; global.anthropic.claude-sonnet-4-6 is the only confirmed-working model
             system=system, tools=tools, messages=messages,
         )
         messages = messages + [{"role": "assistant", "content": resp.content}]
