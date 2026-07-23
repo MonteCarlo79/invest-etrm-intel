@@ -812,3 +812,15 @@ variable "deeptutor_pb_admin_password" {
   sensitive   = true
   default     = ""
 }
+
+# ─── Asset Risk ──────────────────────────────────────────────────────────────
+variable "image_asset_risk" {
+  description = "Docker image for Asset Risk Management Streamlit app"
+  type        = string
+}
+
+variable "desired_count_asset_risk" {
+  description = "Desired task count for the asset-risk ECS service."
+  type        = number
+  default     = 1
+}
