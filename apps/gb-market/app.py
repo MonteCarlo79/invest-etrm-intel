@@ -10,12 +10,13 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 
 logger = logging.getLogger(__name__)
 from datetime import date, datetime, timedelta
 
-import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -137,7 +138,7 @@ def _set_report_enabled(enabled: bool) -> None:
 
 _APP_KEY = "gb_market"
 _ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-_client = anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
+_client = _make_anthropic_client(_ANTHROPIC_KEY)
 
 
 def _ensure_memory_table():
@@ -545,6 +546,9 @@ def _run_knowledge_ingest_job(only: list[str] | None = None, trigger: str = "man
 
 _scheduler_instance = None
 _scheduler_lock = __import__("threading").Lock()
+
+# Module-level dict for background-thread auth result (st.session_state not accessible from threads)
+_PW_AUTH_STATE: dict = {"running": False, "result": None, "start": 0.0}
 
 
 def _start_scheduler():
@@ -1565,33 +1569,79 @@ def _dispatch_quant(name: str, inputs: dict) -> str:
 # Agent turn loop
 # ---------------------------------------------------------------------------
 
-def _run_agent_turn(messages: list, system: str, tools: list, dispatch_fn) -> tuple[str, list, list]:
+def _run_agent_turn(messages: list, system: str, tools: list, dispatch_fn,
+                    provider: str = "anthropic", oai_client=None,
+                    oai_model: str = "gpt-4o") -> tuple[str, list, list]:
+    """Run one agent turn. provider: 'anthropic' | 'openai' | 'deepseek'."""
     tool_events: list[dict] = []
-    while True:
-        resp = _client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            system=system,
-            tools=tools,
-            messages=messages,
-        )
-        messages = messages + [{"role": "assistant", "content": resp.content}]
 
-        if resp.stop_reason == "end_turn":
-            text = next((b.text for b in resp.content if hasattr(b, "text")), "")
-            return text, messages, tool_events
+    if provider == "anthropic":
+        while True:
+            resp = _client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                system=system,
+                tools=tools,
+                messages=messages,
+            )
+            messages = messages + [{"role": "assistant", "content": resp.content}]
+            if resp.stop_reason == "end_turn":
+                text = next((b.text for b in resp.content if hasattr(b, "text")), "")
+                return text, messages, tool_events
+            tool_results = []
+            for block in resp.content:
+                if block.type == "tool_use":
+                    result_str = dispatch_fn(block.name, block.input)
+                    tool_events.append({"tool": block.name, "result": result_str[:200]})
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    })
+            messages = messages + [{"role": "user", "content": tool_results}]
 
-        tool_results = []
-        for block in resp.content:
-            if block.type == "tool_use":
-                result_str = dispatch_fn(block.name, block.input)
-                tool_events.append({"tool": block.name, "result": result_str[:200]})
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
+    else:
+        # OpenAI-compatible: OpenAI, DeepSeek, Azure GPT
+        import json as _json
+        oai_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t["description"],
+                    "parameters": t["input_schema"],
+                },
+            }
+            for t in tools
+        ]
+        oai_messages = [{"role": "system", "content": system}] + [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if isinstance(m.get("content"), str)
+        ]
+        while True:
+            resp = oai_client.chat.completions.create(
+                model=oai_model,
+                max_tokens=4096,
+                tools=oai_tools,
+                messages=oai_messages,
+            )
+            choice = resp.choices[0]
+            oai_messages.append(choice.message)
+            if choice.finish_reason == "stop" or not choice.message.tool_calls:
+                return choice.message.content or "", [], tool_events
+            for tc in choice.message.tool_calls:
+                try:
+                    args = _json.loads(tc.function.arguments)
+                except Exception:
+                    args = {}
+                result_str = dispatch_fn(tc.function.name, args)
+                tool_events.append({"tool": tc.function.name, "result": result_str[:200]})
+                oai_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
                     "content": result_str,
                 })
-        messages = messages + [{"role": "user", "content": tool_results}]
 
 
 # ---------------------------------------------------------------------------
@@ -3275,9 +3325,57 @@ with tab_knowledge:
                     st.text(row["snippet"])
 
 
+# ---- Shared LLM provider selector (used by Strategist + Quant) -------------
+_LLM_OPTIONS = {
+    "GPT-4o (OpenAI)":    ("openai",   "gpt-4o"),
+    "GPT-4o (Azure)":     ("azure",    os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")),
+    "Claude (Anthropic)": ("anthropic", "claude-sonnet-4-6"),
+    "DeepSeek":           ("deepseek",  "deepseek-chat"),
+}
+
 # ---- Strategist Agent ------------------------------------------------------
 with tab_strategist:
     st.header("Strategist — GB Market Analysis")
+
+    # ── LLM provider selector ────────────────────────────────────────────────
+    _strat_llm_label = st.radio(
+        "LLM provider",
+        list(_LLM_OPTIONS.keys()),
+        horizontal=True,
+        key="strat_llm_provider",
+    )
+    _strat_provider, _strat_model = _LLM_OPTIONS[_strat_llm_label]
+
+    # Build the OAI-compatible client for non-Anthropic providers
+    _strat_oai_client = None
+    if _strat_provider == "openai":
+        _oai_key = os.environ.get("OPENAI_API_KEY")
+        if not _oai_key:
+            st.warning("OPENAI_API_KEY not set — switch to another provider.")
+        else:
+            from openai import OpenAI as _OAI
+            _strat_oai_client = _OAI(api_key=_oai_key)
+    elif _strat_provider == "azure":
+        _az_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        _az_ep  = os.environ.get("AZURE_OPENAI_ENDPOINT")
+        _az_ver = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+        if not _az_key or not _az_ep:
+            st.warning("AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT not set — switch to another provider.")
+        else:
+            from openai import AzureOpenAI as _AzOAI
+            _strat_oai_client = _AzOAI(api_key=_az_key, azure_endpoint=_az_ep, api_version=_az_ver)
+    elif _strat_provider == "deepseek":
+        _ds_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not _ds_key:
+            st.warning("DEEPSEEK_API_KEY not set — switch to another provider.")
+        else:
+            from openai import OpenAI as _OAI
+            _strat_oai_client = _OAI(api_key=_ds_key, base_url="https://api.deepseek.com")
+
+    # Clear history when provider changes
+    if st.session_state.get("_strat_last_provider") != _strat_provider:
+        st.session_state["strat_history"] = []
+        st.session_state["_strat_last_provider"] = _strat_provider
 
     # Show accumulated insight pool count
     _insight_pool_df = _query(
@@ -3482,6 +3580,9 @@ with tab_strategist:
                     reply, updated, tool_events = _run_agent_turn(
                         api_messages, _build_strategist_system(user_input),
                         _STRATEGIST_TOOLS, _dispatch_strategist,
+                        provider=_strat_provider,
+                        oai_client=_strat_oai_client,
+                        oai_model=_strat_model,
                     )
                 except Exception as _agent_err:
                     reply = f"⚠️ API error: {_agent_err}. Please try again."
@@ -3521,6 +3622,44 @@ with tab_quant:
     st.header("Quant — BESS Investment Economics")
     st.caption("Grounded on Modo index data · Parametric IRR model")
 
+    # ── LLM provider selector ────────────────────────────────────────────────
+    _quant_llm_label = st.radio(
+        "LLM provider",
+        list(_LLM_OPTIONS.keys()),
+        horizontal=True,
+        key="quant_llm_provider",
+    )
+    _quant_provider, _quant_model = _LLM_OPTIONS[_quant_llm_label]
+
+    _quant_oai_client = None
+    if _quant_provider == "openai":
+        _oai_key = os.environ.get("OPENAI_API_KEY")
+        if not _oai_key:
+            st.warning("OPENAI_API_KEY not set — switch to another provider.")
+        else:
+            from openai import OpenAI as _OAI
+            _quant_oai_client = _OAI(api_key=_oai_key)
+    elif _quant_provider == "azure":
+        _az_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        _az_ep  = os.environ.get("AZURE_OPENAI_ENDPOINT")
+        _az_ver = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+        if not _az_key or not _az_ep:
+            st.warning("AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT not set — switch to another provider.")
+        else:
+            from openai import AzureOpenAI as _AzOAI
+            _quant_oai_client = _AzOAI(api_key=_az_key, azure_endpoint=_az_ep, api_version=_az_ver)
+    elif _quant_provider == "deepseek":
+        _ds_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not _ds_key:
+            st.warning("DEEPSEEK_API_KEY not set — switch to another provider.")
+        else:
+            from openai import OpenAI as _OAI
+            _quant_oai_client = _OAI(api_key=_ds_key, base_url="https://api.deepseek.com")
+
+    if st.session_state.get("_quant_last_provider") != _quant_provider:
+        st.session_state["quant_history"] = []
+        st.session_state["_quant_last_provider"] = _quant_provider
+
     if "quant_history" not in st.session_state:
         st.session_state["quant_history"] = []
 
@@ -3544,6 +3683,9 @@ with tab_quant:
                     reply_q, _, tool_events_q = _run_agent_turn(
                         api_messages_q, _build_quant_system(),
                         _QUANT_TOOLS, _dispatch_quant,
+                        provider=_quant_provider,
+                        oai_client=_quant_oai_client,
+                        oai_model=_quant_model,
                     )
                 except Exception as _agent_err:
                     reply_q = f"⚠️ API error: {_agent_err}. Please try again."
@@ -3675,12 +3817,37 @@ with tab_mgmt:
             "If Modo shows an SSO page it will try to navigate back and use the password."
         )
         if st.button("Try Password Auth", type="primary", key="modo_pw_auth_btn"):
-            with st.spinner("Running headless login (30–60 s)…"):
-                try:
-                    from services.gb_knowledge.modo_ai import authenticate_with_password
-                    _pw_result = authenticate_with_password()
-                except Exception as _pw_exc:
-                    _pw_result = {"success": False, "message": str(_pw_exc), "page_dump": ""}
+            if not _PW_AUTH_STATE["running"]:
+                _PW_AUTH_STATE["running"] = True
+                _PW_AUTH_STATE["result"] = None
+                _PW_AUTH_STATE["start"] = time.monotonic()
+                def _run_pw_auth():
+                    try:
+                        from services.gb_knowledge.modo_ai import authenticate_with_password
+                        r = authenticate_with_password()
+                    except Exception as _e:
+                        r = {"success": False, "message": str(_e), "page_dump": ""}
+                    _PW_AUTH_STATE["result"] = r
+                    _PW_AUTH_STATE["running"] = False
+                __import__("threading").Thread(target=_run_pw_auth, daemon=True).start()
+                st.rerun()
+
+        if _PW_AUTH_STATE["running"]:
+            _elapsed = time.monotonic() - _PW_AUTH_STATE["start"]
+            if _elapsed > 240:
+                _PW_AUTH_STATE["running"] = False
+                _PW_AUTH_STATE["result"] = {
+                    "success": False,
+                    "message": "Timeout: Playwright login hung for >4 min. Try magic link instead.",
+                    "page_dump": "",
+                }
+                st.rerun()
+            with st.spinner(f"Running headless login… ({int(_elapsed)}s elapsed)"):
+                time.sleep(3)
+                st.rerun()
+
+        _pw_result = _PW_AUTH_STATE.pop("result", None) if not _PW_AUTH_STATE["running"] else None
+        if _pw_result is not None:
             if _pw_result["success"]:
                 st.success(_pw_result["message"])
             else:

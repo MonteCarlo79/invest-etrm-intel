@@ -201,7 +201,7 @@ _T: dict[str, dict[str, str]] = {
         "agent_thinking":       "Thinking...",
         "agent_tool_call":      "Tool call: {tool}",
         "agent_tool_result":    "Result ({n} rows)",
-        "agent_no_key":         "ANTHROPIC_API_KEY is not set.",
+        "agent_no_key":         "No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION).",
         "agent_clear":          "Clear chat",
         "agent_error":          "Agent error: {err}",
         "llm_selector_label":   "AI Model",
@@ -442,7 +442,7 @@ _T: dict[str, dict[str, str]] = {
         "agent_thinking":       "思考中...",
         "agent_tool_call":      "工具调用：{tool}",
         "agent_tool_result":    "结果（{n}行）",
-        "agent_no_key":         "ANTHROPIC_API_KEY未设置。",
+        "agent_no_key":         "未配置LLM（请设置 ANTHROPIC_API_KEY 或 BEDROCK_REGION）。",
         "agent_clear":          "清空对话",
         "agent_error":          "助手错误：{err}",
         "llm_selector_label":   "AI 模型",
@@ -3831,7 +3831,7 @@ with tab_mgmt:
 with tab_agent:
     _ensure_memory_table()  # deferred: runs once, only when agent tab is visited
 
-    from shared.anthropic_client import make_client as _make_anthropic_client
+    from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available as _is_llm_available
     import json as _json
 
     # ── LLM provider selector ─────────────────────────────────────────────────
@@ -3853,7 +3853,7 @@ with tab_agent:
     _ant_client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
 
     if _llm_provider == "anthropic":
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        if not _is_llm_available(os.environ.get("ANTHROPIC_API_KEY", "")):
             st.error(_t("agent_no_key"))
             st.stop()
         _chat_client = None  # use _ant_client directly

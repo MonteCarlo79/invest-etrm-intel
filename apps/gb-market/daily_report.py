@@ -60,15 +60,10 @@ def _generate_ai_commentary(
 
     Returns plain text. Returns empty string on any error (report still sends).
     """
+    from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.warning("ANTHROPIC_API_KEY not set — skipping AI commentary")
-        return ""
-
-    try:
-        import anthropic as _anthropic
-    except ImportError:
-        logger.warning("anthropic package not available — skipping AI commentary")
+    if not is_llm_available(api_key):
+        logger.warning("No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION) — skipping AI commentary")
         return ""
 
     # ── Build data snapshot for the prompt ───────────────────────────────────
@@ -220,7 +215,7 @@ def _generate_ai_commentary(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=api_key)
+        client = _make_anthropic_client(api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,

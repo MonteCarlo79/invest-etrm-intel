@@ -52,10 +52,12 @@ def fit_pca(prices: list[float], n_components: int = 4) -> PCAModelParams:
     mean_profile = X.mean(axis=0)
     Xc = X - mean_profile
 
-    # SVD-based PCA (no sklearn dependency)
-    _, _, Vt = np.linalg.svd(Xc, full_matrices=False)
-    loadings = Vt[:n_components]           # (n_components, 24)
-    scores = Xc @ loadings.T               # (n_complete_days, n_components)
+    # Eigendecomposition of (24×24) covariance matrix — equivalent to SVD but avoids
+    # OpenBLAS segfault on the tall matrix (n_days × 24) seen in some numpy builds.
+    cov = Xc.T @ Xc                                        # (24, 24)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)        # ascending order, cols = eigenvectors
+    loadings = eigenvectors[:, ::-1].T[:n_components]      # (n_components, 24), descending variance
+    scores = Xc @ loadings.T                               # (n_complete_days, n_components)
 
     pc_params = [
         PCScoreParams(

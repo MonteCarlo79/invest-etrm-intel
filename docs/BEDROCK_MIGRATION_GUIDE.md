@@ -111,12 +111,12 @@ The rest of the code (`.messages.create(...)`, model strings, streaming) is unch
 |---|---|---|---|
 | crystal-ball | Crystal-Ball repo | `apps/fortune-teller/app.py` (×5) | ✅ v37/td:59 |
 | crystal-ball-client | Crystal-Ball repo | `apps/crystal-ball-client/app.py` (×2) | ✅ v22/td:25 |
-| hermes | bess-platform | `services/hermes/app.py` (×4) | No |
-| spot-market | bess-platform | `apps/spot-market/app.py` (×5), `spot_report.py` (×1) | No |
-| gb-market | bess-platform | `apps/gb-market/app.py` (×1), `daily_report.py` (×1) | No |
-| bess-map | bess-platform | `apps/bess-map/app.py` (×1) | No |
-| mengxi-dashboard | bess-platform | `apps/mengxi-dashboard/app.py` (×1) | No |
-| deal-structurer | bess-platform | `apps/deal_structurer/strategist.py` (×1) | No |
+| hermes | bess-platform | `services/hermes/app.py` (×4) | ✅ |
+| spot-market | bess-platform | `apps/spot-market/app.py` (×5), `spot_report.py` (×1) | ✅ |
+| gb-market | bess-platform | `apps/gb-market/app.py` (×1), `daily_report.py` (×1) | ✅ |
+| bess-map | bess-platform | `apps/bess-map/app.py` (×1) | ✅ |
+| mengxi-dashboard | bess-platform | `apps/mengxi-dashboard/app.py` (×1) | ✅ |
+| deal-structurer | bess-platform | `apps/deal_structurer/strategist.py` (×1) | ✅ v8/td:9 |
 | ph-market | bess-platform | empty dir — no code yet | N/A |
 | po-market | bess-platform | empty dir — no code yet | N/A |
 | ib-platform | ib-platform repo | 5 files, 7 call sites | No |

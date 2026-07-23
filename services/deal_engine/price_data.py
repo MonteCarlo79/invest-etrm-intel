@@ -88,9 +88,11 @@ def fetch_price_wind_correlation() -> pd.DataFrame:
             SELECT
                 province,
                 DATE_TRUNC('month', datetime)::date AS month,
-                AVG(da_price) AS avg_price
+                AVG(CASE WHEN da_price IS NOT NULL AND da_price != 0
+                         THEN da_price
+                         ELSE rt_price END) AS avg_price
             FROM marketdata.spot_prices_hourly
-            WHERE da_price IS NOT NULL
+            WHERE da_price IS NOT NULL OR rt_price IS NOT NULL
             GROUP BY province, DATE_TRUNC('month', datetime)
         """)
         price_df = pd.read_sql(price_sql, conn)

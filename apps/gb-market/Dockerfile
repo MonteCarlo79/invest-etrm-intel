@@ -9,7 +9,8 @@ RUN pip install --no-cache-dir \
     "sqlalchemy>=2.0" \
     numpy \
     "python-dotenv==1.0.1" \
-    "anthropic>=0.40" \
+    "anthropic[bedrock]>=0.40" \
+    "openai>=1.30" \
     "requests==2.32.3" \
     openpyxl \
     "apscheduler==3.10.4" \
@@ -36,6 +37,7 @@ COPY services/modo_energy/        ./services/modo_energy/
 COPY services/common/             ./services/common/
 COPY services/intl_market_common/ ./services/intl_market_common/
 COPY services/gb_knowledge/       ./services/gb_knowledge/
+COPY shared/                      ./shared/
 
 ENV PYTHONPATH=/app
 

@@ -19,6 +19,7 @@ COPY apps/deal_structurer/    ./apps/deal_structurer/
 COPY libs/deal_models/        ./libs/deal_models/
 COPY services/deal_engine/    ./services/deal_engine/
 COPY services/common/         ./services/common/
+COPY shared/                  ./shared/
 
 ENV PYTHONPATH=/app
 

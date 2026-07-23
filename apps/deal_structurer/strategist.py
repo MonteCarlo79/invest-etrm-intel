@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 import streamlit as st
-import anthropic as _ant
+from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
 from libs.deal_models.adapters.agent_tools import AGENT_TOOLS, dispatch_tool
 
 _SYSTEM = """You are a quantitative deal-structuring advisor for renewable energy assets in China's spot markets.
@@ -32,10 +32,10 @@ _TOOL_ICONS = {
 
 def _run_agent_turn(messages: list, text_ph) -> tuple[str, list]:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return "ANTHROPIC_API_KEY not set.", messages
+    if not is_llm_available(api_key):
+        return "No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION).", messages
 
-    client = _ant.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
     status_ph = st.empty()
 
     while True:

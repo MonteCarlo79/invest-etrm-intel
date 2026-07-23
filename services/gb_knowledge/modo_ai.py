@@ -1304,16 +1304,20 @@ def authenticate_with_password() -> dict:
     Call this from the Streamlit UI to authenticate without needing a magic link.
     Returns {"success": bool, "message": str, "page_dump": str}.
     """
+    print("[modo_auth] authenticate_with_password() entered", flush=True)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return {"success": False, "message": "playwright not installed", "page_dump": ""}
 
+    print("[modo_auth] sync_playwright() starting…", flush=True)
     try:
         with sync_playwright() as pw:
+            print("[modo_auth] launching chromium…", flush=True)
             browser = pw.chromium.launch(
                 headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
             )
+            print("[modo_auth] chromium launched", flush=True)
             ctx = browser.new_context(
                 viewport={"width": 1280, "height": 900},
                 user_agent=(
