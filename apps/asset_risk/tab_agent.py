@@ -12,9 +12,10 @@ def render_agent(engine):
     """Render agent chat tab."""
     st.subheader("Risk Agent")
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        st.warning("ANTHROPIC_API_KEY not set. Agent unavailable.")
+    from shared.anthropic_client import is_llm_available
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not is_llm_available(api_key):
+        st.warning("No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION). Agent unavailable.")
         return
 
     if "agent_messages" not in st.session_state:
@@ -38,9 +39,9 @@ def render_agent(engine):
 
 def _call_agent(user_message: str, engine, api_key: str) -> str:
     """Call Claude with risk management tools."""
-    import anthropic
+    from shared.anthropic_client import make_client as _make_anthropic_client
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _make_anthropic_client(api_key)
 
     tools = [
         {
@@ -88,7 +89,7 @@ def _call_agent(user_message: str, engine, api_key: str) -> str:
 
     messages = [{"role": "user", "content": user_message}]
     response = client.messages.create(
-        model="claude-sonnet-4-6-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=2048,
         system=system_prompt,
         tools=tools,
@@ -110,7 +111,7 @@ def _call_agent(user_message: str, engine, api_key: str) -> str:
         messages.append({"role": "user", "content": tool_results})
 
         final = client.messages.create(
-            model="claude-sonnet-4-6-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system_prompt,
             tools=tools,
