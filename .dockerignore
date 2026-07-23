@@ -131,6 +131,9 @@ apps/bess-inner-mongolia/
 !services/operating_assets/
 !apps/asset_risk/
 
+# retail-risk image exceptions
+!apps/retail_risk/
+
 # IDE / OS
 .idea/
 .vscode/
