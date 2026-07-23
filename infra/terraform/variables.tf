@@ -824,3 +824,15 @@ variable "desired_count_asset_risk" {
   type        = number
   default     = 1
 }
+
+# ─── Retail Risk ─────────────────────────────────────────────────────────────
+variable "image_retail_risk" {
+  description = "Docker image for Retail Risk Management Streamlit app"
+  type        = string
+}
+
+variable "desired_count_retail_risk" {
+  description = "Desired task count for the retail-risk ECS service."
+  type        = number
+  default     = 1
+}

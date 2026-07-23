@@ -581,3 +581,103 @@ resource "aws_ecs_service" "asset_risk" {
 
   lifecycle { ignore_changes = [task_definition] }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Retail Risk Management  (port 8513, Cognito auth)
+# ─────────────────────────────────────────────────────────────────────────────
+resource "aws_lb_target_group" "retail_risk" {
+  name        = "bess-platform-retail-risk"
+  port        = 8513
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  lifecycle { create_before_destroy = true }
+  health_check {
+    path                = "/retail-risk/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "retail_risk_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 58
+
+  action {
+    type = "authenticate-cognito"
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.retail_risk.arn
+  }
+  condition {
+    path_pattern { values = ["/retail-risk", "/retail-risk/", "/retail-risk/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "retail_risk" {
+  family                   = "${var.name}-retail-risk"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([{
+    name      = "retail-risk"
+    image     = var.image_retail_risk
+    essential = true
+    portMappings = [{ containerPort = 8513, protocol = "tcp" }]
+    environment = [
+      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",    value = "ap-southeast-1" },
+      { name = "AWS_REGION",        value = var.region },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = local.log_group
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "retail-risk"
+      }
+    }
+  }])
+
+  lifecycle { ignore_changes = [container_definitions] }
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "retail_risk" {
+  name            = "${var.name}-retail-risk-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.retail_risk.arn
+  desired_count   = var.desired_count_retail_risk
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.retail_risk.arn
+    container_name   = "retail-risk"
+    container_port   = 8513
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+
+  lifecycle { ignore_changes = [task_definition] }
+}
