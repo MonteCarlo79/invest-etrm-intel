@@ -137,6 +137,15 @@ SERVICES: dict[str, dict[str, Any]] = {
         "web_url": "/deal-structurer/",
         "label": "Deal Structurer",
     },
+    "asset-risk": {
+        "svc": "bess-platform-asset-risk-svc",
+        "family": "bess-platform-asset-risk",
+        "container": "asset-risk",
+        "has_scheduler": False,
+        "scheduler_cmd": [],
+        "web_url": "/asset-risk/",
+        "label": "Asset Risk",
+    },
 }
 
 
