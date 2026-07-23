@@ -61,7 +61,7 @@ from dotenv import load_dotenv
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
-from shared.anthropic_client import make_client as _make_anthropic_client
+from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available as _is_llm_available
 
 for _env in [_REPO / "config" / ".env", _REPO / ".env"]:
     if _env.exists():
@@ -153,7 +153,7 @@ _T: dict[str, dict[str, str]] = {
         "agent_thinking":       "Thinking...",
         "agent_tool_call":      "Tool call: {tool}",
         "agent_tool_result":    "Result ({n} rows)",
-        "agent_no_key":         "ANTHROPIC_API_KEY is not set. Please add it to your .env file.",
+        "agent_no_key":         "No LLM configured. Set ANTHROPIC_API_KEY or BEDROCK_REGION.",
         "agent_clear":          "Clear chat",
         "agent_error":          "Agent error: {err}",
         # knowledge base
@@ -464,7 +464,7 @@ _T: dict[str, dict[str, str]] = {
         "agent_thinking":       "思考中…",
         "agent_tool_call":      "工具调用：{tool}",
         "agent_tool_result":    "结果（{n} 行）",
-        "agent_no_key":         "未设置 ANTHROPIC_API_KEY，请在 .env 文件中添加。",
+        "agent_no_key":         "未配置 LLM，请设置 ANTHROPIC_API_KEY 或 BEDROCK_REGION。",
         "agent_clear":          "清除对话",
         "agent_error":          "助手出错：{err}",
         # knowledge base
@@ -1115,7 +1115,7 @@ def load_summaries(start: date, end: date) -> tuple[pd.DataFrame, str]:
 def _translate_to_zh(text: str) -> str:
     """Translate an English market summary to Chinese. Cached per text (one API call per unique summary)."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
+    if not _is_llm_available(api_key):
         return text
     try:
         msg = _make_anthropic_client(api_key).messages.create(
@@ -2954,7 +2954,7 @@ Respond ONLY with valid JSON:
 """
         try:
             _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
-            if not _api_key:
+            if not _is_llm_available(_api_key):
                 return []
             _haiku = _make_anthropic_client(_api_key)
             _resp = _haiku.messages.create(
@@ -2983,7 +2983,7 @@ Respond ONLY with valid JSON:
             if len(_combined) < 150:
                 return None
             _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
-            if not _api_key:
+            if not _is_llm_available(_api_key):
                 return None
             _haiku = _make_anthropic_client(_api_key)
             _resp = _haiku.messages.create(
@@ -3106,7 +3106,7 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
     def _extract_spot_memories(user_msg: str, agent_reply: str) -> list[dict]:
         """Use Haiku to extract memorable facts/preferences from a conversation turn."""
         api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
+        if not _is_llm_available(api_key):
             return []
         try:
             haiku = _make_anthropic_client(api_key)
@@ -3372,7 +3372,7 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         messages: list, system: str, text_placeholder=None
     ) -> tuple[str, list, list]:
         _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
-        if not _api_key:
+        if not _is_llm_available(_api_key):
             return _t("agent_no_key"), messages, []
 
         client = _make_anthropic_client(_api_key)
