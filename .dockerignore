@@ -123,6 +123,14 @@ apps/bess-inner-mongolia/
 !libs/deal_models/
 !services/deal_engine/
 
+# asset-risk image exceptions
+!libs/risk/
+!libs/settlement/
+!libs/options/
+!services/forward_curve/
+!services/operating_assets/
+!apps/asset_risk/
+
 # IDE / OS
 .idea/
 .vscode/
