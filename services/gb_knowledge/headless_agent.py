@@ -208,6 +208,16 @@ def run_gb_query(question: str, api_key: str, pg_url: str) -> str:
     except Exception:
         pass
 
+    # Inject accumulated expert insights (query-aware — same as gb-market Strategist app)
+    try:
+        from services.gb_knowledge.expert_memory import get_gb_insights, inject_gb_memory
+        insights = get_gb_insights(question, limit=5)
+        mem_block = inject_gb_memory(insights)
+        if mem_block:
+            system += f"\n\n{mem_block}"
+    except Exception:
+        pass
+
     mems = _load_memories(conn)
     if not mems.empty:
         mem_lines = "\n".join(f"- [{r.category}] {r.subject}: {r.content}" for r in mems.itertuples())
@@ -401,7 +411,14 @@ def run_gb_query(question: str, api_key: str, pg_url: str) -> str:
         messages = messages + [{"role": "assistant", "content": resp.content}]
         if resp.stop_reason == "end_turn":
             conn.close()
-            return next((b.text for b in resp.content if hasattr(b, "text")), "")
+            answer = next((b.text for b in resp.content if hasattr(b, "text")), "")
+            # Extract and store new expert insights from this exchange (feeds future queries)
+            try:
+                from services.gb_knowledge.expert_memory import extract_gb_insights
+                extract_gb_insights(user_msg=question, agent_reply=answer, api_key=api_key)
+            except Exception:
+                pass
+            return answer
         tool_results = []
         for block in resp.content:
             if block.type == "tool_use":
