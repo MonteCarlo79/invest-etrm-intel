@@ -745,7 +745,7 @@ def run_market_app(cfg: MarketConfig, _app_file: str | None = None) -> None:
                 f'{{"questions": [{{"question": "...", "topic": "market_structure|regulation|operations|bess_economics|grid_services", "why_asking": "one sentence"}}]}}'
             )
             resp = _client.messages.create(
-                model="claude-haiku-4-5-20251001", max_tokens=900,
+                model="claude-sonnet-4-6", max_tokens=900,
                 system=system,
                 messages=[{"role": "user", "content": "\n".join(ctx)}],
             )
@@ -1125,7 +1125,7 @@ def run_market_app(cfg: MarketConfig, _app_file: str | None = None) -> None:
 
     def _extract_memories(user_msg: str, agent_reply: str) -> list[dict]:
         resp = _client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=512,
+            model="claude-sonnet-4-6", max_tokens=512,
             system=(
                 f"Extract memorable analyst preferences or domain facts from this {cfg.name} "
                 f"power market conversation. Return a JSON array with keys: "

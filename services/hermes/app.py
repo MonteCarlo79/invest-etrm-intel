@@ -169,8 +169,8 @@ def _run_jizhi_scan(api_key: str, feishu=None) -> dict:
     import datetime as _dt
     _log = logging.getLogger(__name__)
 
-    if not api_key:
-        _log.warning("[jizhi_scan] skipped — ANTHROPIC_API_KEY not set")
+    if not _is_llm_available(api_key):
+        _log.warning("[jizhi_scan] skipped — no LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)")
         return {"new_upcoming": 0, "provinces": []}
 
     pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")

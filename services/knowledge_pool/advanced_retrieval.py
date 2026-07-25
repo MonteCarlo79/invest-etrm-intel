@@ -47,8 +47,8 @@ from .synthesis import search_summaries, search_qa_pairs
 
 logger = logging.getLogger(__name__)
 
-_RERANK_MODEL = "claude-haiku-4-5-20251001"   # fast + cheap for re-ranking
-_HYDE_MODEL = "claude-haiku-4-5-20251001"
+_RERANK_MODEL = "claude-sonnet-4-6"   # haiku blocked on Bedrock; restore when use-case form approved
+_HYDE_MODEL = "claude-sonnet-4-6"
 
 
 # ── Phase 5a: HyDE query expansion ────────────────────────────────────────────

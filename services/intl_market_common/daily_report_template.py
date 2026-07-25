@@ -300,7 +300,7 @@ def _generate_ai_commentary(
     try:
         client = _make_anthropic_client(api_key)
         msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
         )

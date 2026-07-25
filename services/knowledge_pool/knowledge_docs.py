@@ -443,7 +443,7 @@ def auto_categorize(
         import anthropic
         client = _make_anthropic_client(api_key)
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",
             max_tokens=20,
             system=(
                 "Classify this Chinese electricity market document into exactly one category. "

@@ -270,7 +270,7 @@ def inject_expert_memory(insights: list[dict]) -> str:
 
 # ── Per-turn insight extraction (Strategist chat) ────────────────────────────
 
-_TURN_EXTRACT_MODEL = "claude-haiku-4-5-20251001"
+_TURN_EXTRACT_MODEL = "claude-sonnet-4-6"
 
 _TURN_EXTRACT_SYSTEM = """\
 Extract durable expert insights from this China electricity market analyst conversation turn.
@@ -363,7 +363,7 @@ def extract_spot_insights(user_msg: str, agent_reply: str, api_key: str) -> int:
 
 # ── KB document digest → expert insights ─────────────────────────────────────
 
-_DIGEST_MODEL = "claude-haiku-4-5-20251001"
+_DIGEST_MODEL = "claude-sonnet-4-6"
 
 _DIGEST_SYSTEM = """\
 Extract 3-7 durable China electricity market insights from this synthesized document.

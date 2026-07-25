@@ -37,10 +37,10 @@ logger = logging.getLogger(__name__)
 #
 # Optional overrides:
 #   DEEPSEEK_MODEL   (default: deepseek-chat)
-#   BEDROCK_MODEL_ID (default: anthropic.claude-haiku-4-5-20251001-v1:0)
+#   BEDROCK_MODEL_ID (default: global.anthropic.claude-sonnet-4-6)
 
-_DEFAULT_DIRECT_MODEL   = "claude-haiku-4-5-20251001"
-_DEFAULT_BEDROCK_MODEL  = "anthropic.claude-haiku-4-5-20251001-v1:0"
+_DEFAULT_DIRECT_MODEL   = "claude-sonnet-4-6"
+_DEFAULT_BEDROCK_MODEL  = "global.anthropic.claude-sonnet-4-6"
 _DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 _DEEPSEEK_BASE_URL      = "https://api.deepseek.com"
 
@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS staging.exchange_monthly_metrics (
     -- Metadata
     exchange_report_id          INT REFERENCES staging.exchange_monthly_reports(id),
     extracted_at                TIMESTAMPTZ DEFAULT NOW(),
-    extraction_model            TEXT DEFAULT 'claude-haiku-4-5-20251001',
+    extraction_model            TEXT DEFAULT 'claude-sonnet-4-6',
 
     UNIQUE(province, report_month, report_type)
 );
@@ -628,7 +628,7 @@ def upsert_metrics(
     report_month: date,
     report_type: str = "monthly",
     exchange_report_id: Optional[int] = None,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "claude-sonnet-4-6",
     pg_url: Optional[str] = None,
 ) -> int:
     """

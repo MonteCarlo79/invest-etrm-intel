@@ -172,7 +172,7 @@ def _ocr_page_with_vision(image_bytes: bytes, api_key: str) -> str:
     from shared.anthropic_client import make_client as _make_anthropic_client
     client = _make_anthropic_client(api_key)
     resp = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6",
         max_tokens=3000,
         messages=[{
             "role": "user",

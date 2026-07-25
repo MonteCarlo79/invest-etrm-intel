@@ -381,7 +381,7 @@ def extract_bids(text: str, api_key: str = "") -> list[dict]:
     client = _make_anthropic_client(api_key)
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",
             max_tokens=4096,
             tools=[_BIDS_TOOL],
             tool_choice={"type": "tool", "name": "save_bid_results"},
@@ -472,7 +472,7 @@ def extract_upcoming(text: str, api_key: str = "") -> list[dict]:
     client = _make_anthropic_client(api_key)
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",
             max_tokens=2048,
             tools=[_UPCOMING_TOOL],
             tool_choice={"type": "tool", "name": "save_upcoming_bids"},
