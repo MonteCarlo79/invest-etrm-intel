@@ -369,7 +369,7 @@ class HermesAgent:
             try:
                 resp = self.client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=4096,
+                    max_tokens=8192,
                     system=system,
                     messages=[{"role": "user", "content": user_text}],
                 )
