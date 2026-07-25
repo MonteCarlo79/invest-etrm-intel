@@ -257,6 +257,16 @@ Hebei-South, Qinghai, Jiangxi, Hainan, Chongqing, Shanghai, Beijing, Tianjin.
 8. Respond in the same language as the question (Chinese or English).\
 """
 
+    # Inject accumulated expert insights (READ path — same pattern as GB Strategist)
+    try:
+        from services.knowledge_pool.expert_memory import get_relevant_insights, inject_expert_memory
+        insights = get_relevant_insights(question, limit=5)
+        mem_block = inject_expert_memory(insights)
+        if mem_block:
+            system += f"\n\n{mem_block}"
+    except Exception:
+        pass
+
     messages = [{"role": "user", "content": question}]
     while True:
         resp = client.messages.create(
@@ -265,7 +275,14 @@ Hebei-South, Qinghai, Jiangxi, Hainan, Chongqing, Shanghai, Beijing, Tianjin.
         )
         messages = messages + [{"role": "assistant", "content": resp.content}]
         if resp.stop_reason == "end_turn":
-            return next((b.text for b in resp.content if hasattr(b, "text")), "")
+            answer = next((b.text for b in resp.content if hasattr(b, "text")), "")
+            # Extract and store new insights from this exchange (WRITE path)
+            try:
+                from services.knowledge_pool.expert_memory import extract_spot_insights
+                extract_spot_insights(user_msg=question, agent_reply=answer, api_key=api_key)
+            except Exception:
+                pass
+            return answer
         tool_results = []
         for block in resp.content:
             if block.type == "tool_use":

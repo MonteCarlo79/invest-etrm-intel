@@ -259,18 +259,36 @@ def run_mengxi_query(question: str, api_key: str, pg_url: str = "") -> str:
     client = _make_anthropic_client(api_key)
     engine = _make_engine(pg_url)
 
+    # Build system prompt with expert insights injected (READ path)
+    system = _SYSTEM
+    try:
+        from services.knowledge_pool.expert_memory import get_relevant_insights, inject_expert_memory
+        insights = get_relevant_insights(question, limit=4)
+        mem_block = inject_expert_memory(insights)
+        if mem_block:
+            system += f"\n\n{mem_block}"
+    except Exception:
+        pass
+
     messages = [{"role": "user", "content": question}]
     while True:
         resp = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
-            system=_SYSTEM,
+            system=system,
             tools=_TOOLS,
             messages=messages,
         )
         messages = messages + [{"role": "assistant", "content": resp.content}]
         if resp.stop_reason == "end_turn":
-            return next((b.text for b in resp.content if hasattr(b, "text")), "")
+            answer = next((b.text for b in resp.content if hasattr(b, "text")), "")
+            # Extract and store new insights (WRITE path)
+            try:
+                from services.knowledge_pool.expert_memory import extract_spot_insights
+                extract_spot_insights(user_msg=question, agent_reply=answer, api_key=api_key)
+            except Exception:
+                pass
+            return answer
         tool_results = []
         for block in resp.content:
             if block.type == "tool_use":

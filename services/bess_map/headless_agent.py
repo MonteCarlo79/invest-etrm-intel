@@ -431,6 +431,23 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
             return f"Error: {e}"
         return "Unknown tool"
 
+    # Inject KB context + expert insights (READ path)
+    try:
+        from services.knowledge_pool.advanced_retrieval import retrieve_for_agent
+        kb_ctx = retrieve_for_agent(query=question, api_key=api_key, app="strategist", top_k=4)
+        if kb_ctx and "No relevant" not in kb_ctx:
+            system += f"\n\nKNOWLEDGE BASE CONTEXT:\n{kb_ctx}"
+    except Exception:
+        pass
+    try:
+        from services.knowledge_pool.expert_memory import get_relevant_insights, inject_expert_memory
+        insights = get_relevant_insights(question, limit=5)
+        mem_block = inject_expert_memory(insights)
+        if mem_block:
+            system += f"\n\n{mem_block}"
+    except Exception:
+        pass
+
     messages = [{"role": "user", "content": question}]
     while True:
         resp = client.messages.create(
@@ -440,7 +457,14 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
         messages = messages + [{"role": "assistant", "content": resp.content}]
         if resp.stop_reason == "end_turn":
             engine.dispose()
-            return next((b.text for b in resp.content if hasattr(b, "text")), "")
+            answer = next((b.text for b in resp.content if hasattr(b, "text")), "")
+            # Extract and store new insights (WRITE path)
+            try:
+                from services.knowledge_pool.expert_memory import extract_spot_insights
+                extract_spot_insights(user_msg=question, agent_reply=answer, api_key=api_key)
+            except Exception:
+                pass
+            return answer
         tool_results = []
         for block in resp.content:
             if block.type == "tool_use":
