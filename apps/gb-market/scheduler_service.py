@@ -116,7 +116,11 @@ def _daily_market_job():
 def _daily_knowledge_job():
     try:
         from services.gb_knowledge.ingest import run_knowledge_ingest
-        results = run_knowledge_ingest(only=None, verbose=False)
+        # Exclude modo_ai — it requires active Playwright login and runs separately
+        # via _modo_ai_job at 20:00 SGT. Running it here triggers unwanted magic-link emails.
+        results = run_knowledge_ingest(
+            only=["elexon", "entso_e", "timera", "modo", "meteologica"], verbose=False
+        )
         total = sum(results.values())
         logger.info("Knowledge ingest: %d total items", total)
     except Exception as exc:
