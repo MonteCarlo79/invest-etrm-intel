@@ -93,3 +93,110 @@ def parse_capacity_compensation(xl: pd.ExcelFile) -> list[dict[str, Any]]:
             "notes": str(row.get("月份", "")),
         })
     return items
+
+
+def parse_pdf_settlement(file_path_or_bytes) -> list[dict[str, Any]]:
+    """Parse PDF settlement statement (上网电费结算单) using pdfplumber.
+
+    Extracts tables from the PDF and maps rows to settlement items.
+    Handles both file paths and BytesIO objects.
+
+    Args:
+        file_path_or_bytes: Path string or file-like object (BytesIO)
+
+    Returns:
+        List of settlement item dicts with keys:
+          category, volume_mwh, price_cny_kwh, amount_cny, peak_period, notes
+    """
+    import pdfplumber
+
+    if isinstance(file_path_or_bytes, str):
+        pdf = pdfplumber.open(file_path_or_bytes)
+    else:
+        pdf = pdfplumber.open(file_path_or_bytes)
+
+    items = []
+    for page in pdf.pages:
+        tables = page.extract_tables()
+        for table in tables:
+            if not table or len(table) < 2:
+                continue
+            # Use first row as headers
+            headers = [str(h).strip() if h else "" for h in table[0]]
+            for row in table[1:]:
+                if not row or all(c is None or str(c).strip() == "" for c in row):
+                    continue
+                row_dict = dict(zip(headers, row))
+
+                # Detect category from row content
+                category = _classify_pdf_row(row_dict)
+
+                # Extract numeric fields
+                volume = _safe_float(row_dict.get("电量", row_dict.get("结算电量", row_dict.get("MWh", ""))))
+                price = _safe_float(row_dict.get("电价", row_dict.get("单价", row_dict.get("元/kWh", ""))))
+                amount = _safe_float(row_dict.get("金额", row_dict.get("电费", row_dict.get("合计", ""))))
+
+                # Detect TOU period
+                peak_period = None
+                for key in row_dict:
+                    if "峰" in str(key) or "peak" in str(key).lower():
+                        peak_period = "peak"
+                    elif "谷" in str(key) or "valley" in str(key).lower():
+                        peak_period = "valley"
+                    elif "平" in str(key) or "flat" in str(key).lower():
+                        peak_period = "flat"
+
+                if amount is not None and amount != 0:
+                    items.append({
+                        "category": category,
+                        "volume_mwh": volume,
+                        "price_cny_kwh": price / 1000.0 if price and price > 1 else price,
+                        "amount_cny": amount,
+                        "peak_period": peak_period,
+                        "notes": " | ".join(str(v) for v in row if v),
+                    })
+
+    pdf.close()
+    return items
+
+
+def _classify_pdf_row(row_dict: dict) -> str:
+    """Classify a PDF table row into a settlement category."""
+    text = " ".join(str(v) for v in row_dict.values() if v).lower()
+    if "放电" in text or "discharge" in text:
+        return "discharge_energy"
+    elif "充电" in text or "charge" in text:
+        return "charge_energy"
+    elif "容量补偿" in text or "capacity" in text:
+        return "capacity_compensation"
+    elif "输配" in text or "输电" in text or "transmission" in text:
+        return "transmission"
+    elif "政府性基金" in text or "surcharge" in text:
+        return "govt_surcharges"
+    elif "系统运行" in text or "system" in text:
+        return "system_operation"
+    elif "煤电容量" in text or "coal" in text:
+        return "coal_capacity_charge"
+    elif "基本电费" in text or "basic" in text:
+        return "basic_fee"
+    elif "补贴" in text or "subsidy" in text:
+        return "subsidy"
+    elif "罚" in text or "penalty" in text:
+        return "penalty"
+    elif "发电" in text or "generation" in text:
+        return "generation_revenue"
+    return "other"
+
+
+def _safe_float(value) -> float | None:
+    """Safely convert a value to float, returning None on failure."""
+    if value is None:
+        return None
+    try:
+        # Remove commas, spaces, currency symbols
+        cleaned = str(value).replace(",", "").replace("¥", "").replace(" ", "").strip()
+        if not cleaned or cleaned == "-":
+            return None
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return None

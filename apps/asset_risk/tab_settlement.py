@@ -28,13 +28,47 @@ def render_settlement(engine):
     if uploaded and st.button("Process File"):
         file_type = uploaded.name.split(".")[-1].lower()
         if file_type == "pdf":
-            st.warning("PDF parsing not yet implemented — requires pdfplumber integration.")
+            _process_pdf(uploaded, book_id, settlement_month, engine)
         else:
             _process_excel(uploaded, book_id, settlement_month, engine)
 
     st.divider()
     st.subheader("Settlement Analytics")
     _render_analytics(book_id, engine)
+
+
+def _process_pdf(uploaded, book_id: int, settlement_month, engine):
+    """Process uploaded PDF settlement (上网电费结算单)."""
+    import io
+    from libs.settlement.parser import parse_pdf_settlement
+
+    items = parse_pdf_settlement(io.BytesIO(uploaded.read()))
+    if not items:
+        st.warning("No settlement items extracted from PDF. Check file format.")
+        return
+
+    with engine.begin() as conn:
+        result = conn.execute(text("""
+            INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status)
+            VALUES (:bid, :month, :fname, 'pdf', 'processed')
+            RETURNING id
+        """), {"bid": book_id, "month": settlement_month, "fname": uploaded.name})
+        settlement_id = result.scalar()
+
+        for item in items:
+            conn.execute(text("""
+                INSERT INTO marketdata.rm_settlement_items
+                    (settlement_id, category, volume_mwh, price_cny_kwh,
+                     amount_cny, peak_period, notes)
+                VALUES (:sid, :cat, :vol, :price, :amt, :peak, :notes)
+            """), {
+                "sid": settlement_id, "cat": item["category"],
+                "vol": item.get("volume_mwh"), "price": item.get("price_cny_kwh"),
+                "amt": item["amount_cny"], "peak": item.get("peak_period"),
+                "notes": item.get("notes"),
+            })
+
+    st.success(f"Processed {len(items)} settlement items from PDF.")
 
 
 def _process_excel(uploaded, book_id: int, settlement_month, engine):
