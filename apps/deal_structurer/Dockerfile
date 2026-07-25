@@ -22,6 +22,8 @@ COPY services/common/         ./services/common/
 COPY shared/                  ./shared/
 
 ENV PYTHONPATH=/app
+ENV OPENBLAS_NUM_THREADS=1
+ENV OMP_NUM_THREADS=1
 
 EXPOSE 8522
 

@@ -36,8 +36,26 @@ def render() -> None:
         if asset_type in ("wind", "wind_bess"):
             st.subheader("Wind Parameters")
             installed_mw = st.number_input("Installed MW", 1.0, 2000.0, 100.0, key="dr_wind_mw")
+            st.subheader("Cannibalization Model")
+            price_wind_corr = st.slider(
+                "Price-Wind Correlation ρ",
+                min_value=-1.0, max_value=1.0, value=0.0, step=0.05,
+                key="dr_corr",
+                help="Correlation between annual avg price and wind CF. "
+                     "Negative = cannibalization (more wind → lower prices). "
+                     "蒙西 ≈ -0.38 · 山东 ≈ -0.13 · 安徽 ≈ +0.26",
+            )
+            cf_volatility = st.slider(
+                "CF Annual Volatility σ",
+                min_value=0.0, max_value=0.30, value=0.10, step=0.01,
+                key="dr_cf_vol",
+                help="Year-to-year spread in wind capacity factor. "
+                     "0 = fixed CF every year. 0.10 = ±10% CF variation across years.",
+            )
         else:
             installed_mw = 0.0
+            price_wind_corr = 0.0
+            cf_volatility = 0.0
 
         run_btn = st.button("▶ Calculate Revenue", type="primary", key="dr_run")
 
@@ -48,6 +66,8 @@ def render() -> None:
                 capacity_mwh=capacity_mwh, power_mw=power_mw,
                 roundtrip_eff=roundtrip_eff, cycles_per_day=cycles,
                 om_cost_yuan_per_mwh=om, installed_mw=installed_mw,
+                price_wind_corr=price_wind_corr,
+                cf_volatility=cf_volatility,
             )
             with st.spinner("Calculating dispatch revenue…"):
                 result = dispatch_annual(paths, req)
@@ -57,64 +77,90 @@ def render() -> None:
 
         result = st.session_state.get("dispatch_result")
         if result is not None:
-            m_cols = st.columns(3)
-            m_cols[0].metric("P10 Annual Revenue", f"¥{result.p10/1e6:.1f}M")
-            m_cols[1].metric("P50 Annual Revenue", f"¥{result.p50/1e6:.1f}M")
-            m_cols[2].metric("P90 Annual Revenue", f"¥{result.p90/1e6:.1f}M")
+            # ── Revenue statistics ────────────────────────────────────────────
+            rev = result.revenue_paths
+            r_cols = st.columns(4)
+            r_cols[0].metric("P10 Revenue", f"¥{result.p10/1e6:.1f}M")
+            r_cols[1].metric("P50 Revenue", f"¥{result.p50/1e6:.1f}M")
+            r_cols[2].metric("P90 Revenue", f"¥{result.p90/1e6:.1f}M")
+            r_cols[3].metric("Mean Revenue", f"¥{result.mean/1e6:.1f}M")
 
-            # ── Unit revenue metrics ───────────────────────────────────────────
+            # ── Unit revenue statistics ───────────────────────────────────────
             saved_req = st.session_state.get("last_dispatch_req")
+            unit_rev_paths = None
+            vol_label = ""
             if saved_req is not None and paths is not None:
                 n_hours = paths.shape[1]
                 n_days = n_hours // 24
 
                 if saved_req.asset_type == "wind":
                     cf_arr = saved_req.capacity_factor_profile
-                    mean_cf = float(np.mean(cf_arr[:n_hours])) if cf_arr else 0.30
-                    wind_gen = saved_req.installed_mw * mean_cf * n_hours
-                    u_cols = st.columns(2)
-                    u_cols[0].metric("Total Generation (P50)", f"{wind_gen/1e3:.1f} GWh/yr")
-                    u_cols[1].metric("Unit Revenue (P50)", f"¥{result.p50/wind_gen:.1f}/MWh" if wind_gen > 0 else "—")
+                    wind_gen = saved_req.installed_mw * (
+                        float(np.sum(cf_arr[:n_hours])) if cf_arr else 0.30 * n_hours
+                    )
+                    vol_label = f"Total generation: {wind_gen/1e3:.1f} GWh/yr"
+                    if wind_gen > 0:
+                        unit_rev_paths = rev / wind_gen
 
                 elif saved_req.asset_type == "bess":
                     n_cyc = max(1, int(saved_req.cycles_per_day))
                     energy = min(saved_req.power_mw, saved_req.capacity_mwh / n_cyc)
                     charge_vol = energy * n_cyc * n_days
-                    u_cols = st.columns(2)
-                    u_cols[0].metric("Annual Charging Volume (P50)", f"{charge_vol/1e3:.1f} GWh/yr")
-                    u_cols[1].metric("Unit Revenue (P50)", f"¥{result.p50/charge_vol:.1f}/MWh" if charge_vol > 0 else "—")
+                    vol_label = f"Annual throughput: {charge_vol/1e3:.1f} GWh/yr"
+                    if charge_vol > 0:
+                        unit_rev_paths = rev / charge_vol
 
                 elif saved_req.asset_type == "wind_bess":
-                    # Re-derive component revenues from saved paths
-                    wind_rev_paths = _dispatch_wind(paths, saved_req)
-                    bess_rev_paths = _dispatch_bess(paths, saved_req)
-                    wind_p50 = float(np.percentile(wind_rev_paths, 50))
-                    bess_p50 = float(np.percentile(bess_rev_paths, 50))
-
                     cf_arr = saved_req.capacity_factor_profile
-                    mean_cf = float(np.mean(cf_arr[:n_hours])) if cf_arr else 0.30
-                    wind_gen = saved_req.installed_mw * mean_cf * n_hours
-
+                    wind_gen = saved_req.installed_mw * (
+                        float(np.sum(cf_arr[:n_hours])) if cf_arr else 0.30 * n_hours
+                    )
                     n_cyc = max(1, int(saved_req.cycles_per_day))
                     energy = min(saved_req.power_mw, saved_req.capacity_mwh / n_cyc)
                     charge_vol = energy * n_cyc * n_days
+                    combined_vol = wind_gen + charge_vol
+                    vol_label = f"Wind {wind_gen/1e3:.1f} GWh + BESS {charge_vol/1e3:.1f} GWh/yr"
+                    if combined_vol > 0:
+                        unit_rev_paths = rev / combined_vol
 
-                    u_cols = st.columns(4)
-                    u_cols[0].metric("Wind Generation (P50)", f"{wind_gen/1e3:.1f} GWh/yr")
-                    u_cols[1].metric("Wind Unit Revenue (P50)", f"¥{wind_p50/wind_gen:.1f}/MWh" if wind_gen > 0 else "—")
-                    u_cols[2].metric("BESS Charging Vol (P50)", f"{charge_vol/1e3:.1f} GWh/yr")
-                    u_cols[3].metric("BESS Unit Revenue (P50)", f"¥{bess_p50/charge_vol:.1f}/MWh" if charge_vol > 0 else "—")
+            if unit_rev_paths is not None:
+                u_cols = st.columns(4)
+                u_cols[0].metric("P10 Unit Revenue", f"¥{float(np.percentile(unit_rev_paths,10)):.1f}/MWh")
+                u_cols[1].metric("P50 Unit Revenue", f"¥{float(np.percentile(unit_rev_paths,50)):.1f}/MWh")
+                u_cols[2].metric("P90 Unit Revenue", f"¥{float(np.percentile(unit_rev_paths,90)):.1f}/MWh")
+                u_cols[3].metric("Mean Unit Revenue", f"¥{float(unit_rev_paths.mean()):.1f}/MWh")
+                if vol_label:
+                    st.caption(vol_label)
 
-            fig = go.Figure()
-            fig.add_trace(go.Histogram(
-                x=result.revenue_paths / 1e6, nbinsx=40,
-                name="Revenue (¥M)", marker_color="rgb(99,110,250)",
-            ))
-            fig.add_vline(x=result.p10 / 1e6, line_dash="dot", line_color="orange", annotation_text="P10")
-            fig.add_vline(x=result.p50 / 1e6, line_dash="dash", line_color="green", annotation_text="P50")
-            fig.add_vline(x=result.p90 / 1e6, line_dash="dot", line_color="blue", annotation_text="P90")
-            fig.update_layout(title="Annual Revenue Distribution", xaxis_title="Revenue (¥M)", height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            # ── Histograms ────────────────────────────────────────────────────
+            hist_cols = st.columns(2 if unit_rev_paths is not None else 1)
+
+            with hist_cols[0]:
+                fig_rev = go.Figure()
+                fig_rev.add_trace(go.Histogram(
+                    x=rev / 1e6, nbinsx=40,
+                    name="Revenue", marker_color="rgb(99,110,250)",
+                ))
+                fig_rev.add_vline(x=result.p10/1e6, line_dash="dot", line_color="orange", annotation_text="P10")
+                fig_rev.add_vline(x=result.p50/1e6, line_dash="dash", line_color="green", annotation_text="P50")
+                fig_rev.add_vline(x=result.p90/1e6, line_dash="dot", line_color="royalblue", annotation_text="P90")
+                fig_rev.add_vline(x=result.mean/1e6, line_dash="dash", line_color="red", annotation_text="Mean")
+                fig_rev.update_layout(title="Annual Revenue Distribution", xaxis_title="Revenue (¥M)", height=380, showlegend=False)
+                st.plotly_chart(fig_rev, use_container_width=True)
+
+            if unit_rev_paths is not None:
+                with hist_cols[1]:
+                    fig_unit = go.Figure()
+                    fig_unit.add_trace(go.Histogram(
+                        x=unit_rev_paths, nbinsx=40,
+                        name="Unit Revenue", marker_color="rgb(239,85,59)",
+                    ))
+                    fig_unit.add_vline(x=float(np.percentile(unit_rev_paths,10)), line_dash="dot", line_color="orange", annotation_text="P10")
+                    fig_unit.add_vline(x=float(np.percentile(unit_rev_paths,50)), line_dash="dash", line_color="green", annotation_text="P50")
+                    fig_unit.add_vline(x=float(np.percentile(unit_rev_paths,90)), line_dash="dot", line_color="royalblue", annotation_text="P90")
+                    fig_unit.add_vline(x=float(unit_rev_paths.mean()), line_dash="dash", line_color="red", annotation_text="Mean")
+                    fig_unit.update_layout(title="Unit Revenue Distribution", xaxis_title="¥/MWh", height=380, showlegend=False)
+                    st.plotly_chart(fig_unit, use_container_width=True)
         else:
             st.info("Configure asset parameters and click **▶ Calculate Revenue**.")
 

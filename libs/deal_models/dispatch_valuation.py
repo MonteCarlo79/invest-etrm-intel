@@ -37,15 +37,43 @@ def _dispatch_bess(price_paths: np.ndarray, req: DispatchRequest) -> np.ndarray:
     return daily_rev.sum(axis=1)
 
 
-def _dispatch_wind(price_paths: np.ndarray, req: DispatchRequest) -> np.ndarray:
-    """Simple energy revenue: price * installed_mw * CF per hour."""
-    n_hours = price_paths.shape[1]
+def _dispatch_wind(price_paths: np.ndarray, req: DispatchRequest, seed: int = 42) -> np.ndarray:
+    """
+    Wind energy revenue: price * installed_mw * CF per hour.
+
+    When price_wind_corr != 0 and cf_volatility > 0, applies a Gaussian-copula
+    per-simulation CF scale factor correlated with mean annual price.
+    This models wind cannibalization: high-price years → lower wind output,
+    low-price years → higher wind output (or vice versa for positive correlation).
+
+    cf_scale[i] = 1 + cf_volatility * (corr * z_price[i] + sqrt(1-corr²) * noise[i])
+    where z_price[i] is the standardised mean price of simulation i.
+    """
+    n_sim, n_hours = price_paths.shape
     if req.capacity_factor_profile:
         cf = np.asarray(req.capacity_factor_profile[:n_hours], dtype=float)
     else:
-        cf = np.full(n_hours, 0.30)   # default 30% CF
-    hourly_gen = req.installed_mw * cf  # MWh/h
-    return (price_paths * hourly_gen).sum(axis=1)
+        cf = np.full(n_hours, 0.30)
+    hourly_gen = req.installed_mw * cf          # (n_hours,)
+    base_rev = (price_paths * hourly_gen).sum(axis=1)  # (n_sim,)
+
+    corr = req.price_wind_corr
+    cf_vol = req.cf_volatility
+    if corr == 0.0 or cf_vol == 0.0:
+        return base_rev
+
+    # Standardise mean price across simulations
+    mean_prices = price_paths.mean(axis=1)      # (n_sim,)
+    std_p = mean_prices.std()
+    z_price = (mean_prices - mean_prices.mean()) / (std_p if std_p > 0 else 1.0)
+
+    # Correlated CF multiplier via Gaussian copula
+    rng = np.random.default_rng(seed)
+    noise = rng.standard_normal(n_sim)
+    z_wind = corr * z_price + np.sqrt(max(1.0 - corr ** 2, 0.0)) * noise
+    cf_scale = np.clip(1.0 + cf_vol * z_wind, 0.2, 2.0)  # (n_sim,)
+
+    return base_rev * cf_scale
 
 
 def dispatch_annual(price_paths: np.ndarray, req: DispatchRequest) -> DispatchResult:

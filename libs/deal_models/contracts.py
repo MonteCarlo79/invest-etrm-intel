@@ -58,6 +58,9 @@ class DispatchRequest(BaseModel):
     # Wind / Wind+BESS
     installed_mw: float = 0.0
     capacity_factor_profile: Optional[List[float]] = None  # len=8760
+    # Wind-price correlation (cannibalization model)
+    price_wind_corr: float = Field(0.0, ge=-1.0, le=1.0)   # ρ: -1=full cannibalization, 0=none
+    cf_volatility: float = Field(0.0, ge=0.0, le=0.5)      # σ: annual CF spread (0=no variation)
 
 
 class ProjectFinancials(BaseModel):

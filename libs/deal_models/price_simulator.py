@@ -85,15 +85,16 @@ def simulate_pca(params: PCAModelParams, n_sim: int, n_years: int, seed: int = 4
     loadings = np.array(params.loadings)       # (n_components, 24)
     mean_profile = np.array(params.mean_profile)  # (24,)
 
-    # Sample PC scores: (n_sim * n_days, n_components)
     total_days = n_sim * n_days
-    scores = np.column_stack([
-        rng.normal(loc=pc.loc, scale=pc.scale, size=total_days)
-        for pc in params.pc_params
-    ])
 
-    # Reconstruct daily 24h profiles
-    daily_profiles = scores @ loadings + mean_profile  # (total_days, 24)
+    # Reconstruct daily 24h profiles by accumulating one PC at a time.
+    # Avoids a large (total_days × n_components) @ (n_components × 24) BLAS call
+    # that triggers multi-threaded OpenBLAS and causes SIGSEGV on Fargate.
+    daily_profiles = np.tile(mean_profile, (total_days, 1))  # (total_days, 24)
+    for pc in params.pc_params:
+        score_col = rng.normal(loc=pc.loc, scale=pc.scale, size=total_days)  # (total_days,)
+        daily_profiles += np.outer(score_col, loadings[pc.pc_index])          # outer: no BLAS dgemm
+
     np.maximum(daily_profiles, 0.0, out=daily_profiles)
 
     # Reshape to (n_sim, n_hours)
