@@ -119,8 +119,8 @@ def _run_kb_digest(api_key: str, limit: int = 30) -> dict:
     _log = logging.getLogger(__name__)
     result: dict = {"synthesized": 0, "insights": 0}
 
-    if not api_key:
-        _log.warning("[kb_digest] skipped — ANTHROPIC_API_KEY not set")
+    if not _is_llm_available(api_key):
+        _log.warning("[kb_digest] skipped — no LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)")
         return result
 
     try:

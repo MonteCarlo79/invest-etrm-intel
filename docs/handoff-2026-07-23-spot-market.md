@@ -11,8 +11,15 @@
 
 | Service | Image | ECS Task Def | Cluster |
 |---|---|---|---|
-| spot-markets | `bess-spot-markets:v88` | `bess-platform-spot-markets:120` | `bess-platform-cluster` |
+| spot-markets | `bess-spot-markets:v90` | `bess-platform-spot-markets:123` | `bess-platform-cluster` |
 | hermes | `bess-platform-hermes:latest` | `bess-platform-hermes:156` | `bess-platform-cluster` |
+
+**v90 change log:**
+- v89: failed — `ModuleNotFoundError: No module named 'shared'` (Dockerfile missing `COPY shared/`)
+- v90: fixed — added `COPY shared/ ./shared/` before app copy; also added `fastembed>=0.3` to pip install
+- Both v90 and task def :123 have `BEDROCK_REGION=ap-southeast-1` injected
+
+**Next version = v91** (no code changes pending; rebuild when next feature lands).
 
 ---
 
@@ -35,10 +42,25 @@ All app-layer files were verified and the one remaining gap was fixed:
 **Remaining: `ib-platform`** (separate repo, local MacBook only — see `docs/BEDROCK_MIGRATION_GUIDE.md` §9).  
 `docs/BEDROCK_MIGRATION_GUIDE.md` status table updated to mark all bess-platform apps ✅.
 
-### Important: no new spot-market version deployed
+### 401 AI agent fix — root cause and resolution
 
-All Bedrock migration work for spot-market was already in the source code from a previous session.
-The running image is still **v88**. The next code change to spot-market will become **v89**.
+The Strategist tab was showing `authentication_error: API key is invalid (401)` because:
+1. v88 image was built before the Bedrock migration commit (July 20) — old code used `anthropic.Anthropic(api_key=...)` directly
+2. Task def :120 had no `BEDROCK_REGION` env var
+3. The `ANTHROPIC_API_KEY` in task def was an expired/invalid key
+
+Fix: rebuilt as v90 with migrated code + fixed Dockerfile; deployed as task def :123 with `BEDROCK_REGION=ap-southeast-1`.
+
+### Knowledge base ingest — 20 new policy/market docs added
+
+Ran `ingest_knowledge_bulk.py` across `data/market-fundamentals/` (2,234 files total), skipping Excel:
+- 20 new docs added: province capacity reports, 南方调频辅助服务规则, 新型能源体系十五五规划, 河北独储收益, 市场调研报告-内蒙, etc.
+- Digest returned 0 — because ingest runs with `synthesize=False`; `kp_doc_summaries` not populated yet
+- Fix: run synthesis (Phase 1) then digest (see "Knowledge Base Pipeline" section below)
+
+### config/.env — BEDROCK_REGION added
+
+Added `BEDROCK_REGION=ap-southeast-1` to `config/.env` so local scripts (synthesis, digest) use Bedrock instead of the invalid direct API key.
 
 ---
 
@@ -84,6 +106,55 @@ Key tables: `marketdata.spot_prices_hourly`, `marketdata.spot_prices_daily`, `ma
 | v86 | `_load_price_holdout`: `AND price_col > 0`; backtest guard skips chart when max < 1e-9 |
 | v87 | `_conn()`: `_get_conn.clear()` → `__conn.clear()` (NameError caused full app crash) |
 | v88 | `_fc_ho_valid` threshold raised to `0.05` ¥/kWh (50 ¥/MWh) — `> 0` alone passed garbage near-zero values → 100,000%+ MAPE |
+
+---
+
+## Knowledge Base Pipeline
+
+The KB pipeline has 3 stages for newly ingested docs:
+
+```
+ingest_knowledge_bulk.py   →   run_synthesis_pipeline.py --phase 1   →   digest_spot_kb_docs()
+   (chunks + vectors)              (kp_doc_summaries populated)            (kp_expert_insights)
+```
+
+### Current state (post 2026-07-23 session)
+- ~7,026 docs registered; 20 new policy/market docs added today
+- `kp_doc_summaries`: NOT yet updated for the 20 new docs (synthesis pending)
+- `kp_expert_insights`: NOT yet updated for the 20 new docs (digest pending)
+- fastembed: added to Dockerfile but not yet in ECS (v90 uses FTS fallback; v91 will have vectors)
+
+### To complete the KB pipeline for new docs
+
+```powershell
+# 1. Synthesis — run from repo root, uses Bedrock (BEDROCK_REGION in config/.env)
+py scripts/run_synthesis_pipeline.py --phase 1 --workers 1
+
+# 2. Digest — extract expert insights from new summaries
+py -c "
+import os, sys; sys.path.insert(0, '.')
+from dotenv import load_dotenv; load_dotenv('config/.env')
+from services.knowledge_pool.expert_memory import digest_spot_kb_docs
+n = digest_spot_kb_docs(api_key=os.environ.get('ANTHROPIC_API_KEY',''))
+print(f'Extracted {n} insights')
+"
+
+# 3. (Optional) retry the timed-out large policy PDF
+py scripts/ingest_knowledge_bulk.py --dir "data/market-fundamentals" --workers 1 --timeout 600 --ext pdf
+```
+
+### Key tables
+| Table | Purpose |
+|---|---|
+| `staging.spot_knowledge_docs` | One row per registered file |
+| `staging.spot_knowledge_chunks` | Text chunks (FTS + vector search) |
+| `staging.kp_doc_summaries` | Expert synthesis (300-500 words/doc) — populated by Phase 1 |
+| `staging.kp_qa_pairs` | Synthetic Q&A pairs — populated by Phase 1 |
+| `staging.kp_expert_insights` | Structured insights — populated by digest |
+
+### KB sharing: spot-market ↔ hermes
+Both apps query the same PostgreSQL tables. `app` column: `shared` (both apps see it), `trader`, `strategist`.  
+`search_reference_docs(app="strategist")` returns rows where `app IN ('strategist', 'shared')`.
 
 ---
 
@@ -140,12 +211,12 @@ Horizons: [1, 3, 7, 30, 90, 180, 365, days_to_eoy2027]
 
 ---
 
-## Deploy Next Version (v89+)
+## Deploy Next Version (v91+)
 
 ```bash
 # 1. Build
 docker build -f apps/spot-market/Dockerfile \
-  -t 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-spot-markets:v89 .
+  -t 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-spot-markets:v91 .
 
 # 2. ECR login + push
 MSYS_NO_PATHCONV=1 aws ecr get-login-password --region ap-southeast-1 \
@@ -169,7 +240,7 @@ if not any(e['name'] == 'BEDROCK_REGION' for e in env):
     env.append({'name': 'BEDROCK_REGION', 'value': 'ap-southeast-1'})
 else:
     next(e for e in env if e['name'] == 'BEDROCK_REGION')['value'] = 'ap-southeast-1'
-td['containerDefinitions'][0]['image'] = td['containerDefinitions'][0]['image'].replace(':v88', ':v89')
+td['containerDefinitions'][0]['image'] = td['containerDefinitions'][0]['image'].replace(':v90', ':v91')
 with open('C:/tmp/td_spot_new.json', 'w') as f: json.dump(td, f, indent=2)
 print('done')
 "

@@ -22,7 +22,8 @@ RUN pip install --no-cache-dir \
     "beautifulsoup4>=4.12" \
     "reportlab>=4.0" \
     "apscheduler>=3.10" \
-    "pymupdf>=1.24"
+    "pymupdf>=1.24" \
+    "fastembed>=0.3"
 
 # Install CJK font AFTER matplotlib so the font cache is rebuilt with it present.
 # fonts-noto-cjk provides "Noto Sans CJK SC" used by chart_geo_map for Chinese titles.
@@ -32,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python -c "import matplotlib.font_manager as _fm; _fm.fontManager = _fm.FontManager(); print('matplotlib font cache rebuilt')"
 
 # App + all service dependencies
+COPY shared/                            ./shared/
 COPY apps/spot-market/                  ./apps/spot-market/
 COPY services/spot_ingest/              ./services/spot_ingest/
 COPY services/spot_mcp/                 ./services/spot_mcp/
