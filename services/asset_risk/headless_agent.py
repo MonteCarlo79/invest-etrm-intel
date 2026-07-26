@@ -36,6 +36,8 @@ def _make_client(api_key: str):
 
 def _make_engine(pg_url: str):
     url = pg_url or os.environ.get("PGURL") or os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise ValueError("No database URL configured (set pg_url, PGURL, or DATABASE_URL)")
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
     if url.startswith("postgresql://") and not url.startswith("postgresql+psycopg2://"):
