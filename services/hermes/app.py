@@ -34,6 +34,8 @@ _pending_gap_fill: dict[str, dict] = {}
 _pending_reroute: dict[str, dict] = {}
 # sender_id → (folder_path, region_label) — survey/research-report mode
 _pending_survey: dict[str, tuple[str, str]] = {}
+# key=open_id, value={"question": str, "answer": str, "api_key": str, "ts": float}
+_pending_internet: dict[str, dict] = {}
 from fastapi import FastAPI, BackgroundTasks, Query, Request, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from services.hermes.models import InboundMessage
@@ -444,6 +446,37 @@ def _build_route_confirmed_card(filename: str, folder: str, pending: bool = Fals
         "config": {"wide_screen_mode": True},
         "header": {"template": "green", "title": {"content": f"📁 {filename}", "tag": "plain_text"}},
         "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": f"{icon} {msg}"}}],
+    }
+
+
+def _build_internet_approval_card(question: str, answer_preview: str) -> dict:
+    """Feishu card asking user to approve saving an internet answer to the KB."""
+    q_short = question[:120] + "…" if len(question) > 120 else question
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "orange",
+            "title": {"content": "🌐 Save to Knowledge Base?", "tag": "plain_text"},
+        },
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md", "content": f"**Q:** {q_short}"}},
+            {"tag": "div", "text": {"tag": "lark_md", "content": f"**A (preview):** {answer_preview}"}},
+            {"tag": "hr"},
+            {"tag": "action", "actions": [
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "✓ Approve & Save"},
+                    "type": "primary",
+                    "value": {"act": "internet_approve"},
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "✗ Skip"},
+                    "type": "default",
+                    "value": {"act": "internet_reject"},
+                },
+            ]},
+        ],
     }
 
 
@@ -1863,6 +1896,34 @@ def create_app() -> FastAPI:
                         ),
                     )
             return Response(content="{}", media_type="application/json")
+
+        if act == "internet_approve":
+            import time as _time_mod
+            entry = _pending_internet.pop(open_id, None)
+            if entry is None:
+                return {"toast": {"type": "fail", "content": "⏱ Approval expired — please ask again."}}
+            if _time_mod.time() - entry.get("ts", 0) > 86400:
+                return {"toast": {"type": "fail", "content": "⏱ Approval expired — please ask again."}}
+            try:
+                from services.knowledge_pool.expert_memory import extract_spot_insights
+                extract_spot_insights(
+                    user_msg=entry["question"],
+                    agent_reply=entry["answer"],
+                    api_key=entry["api_key"],
+                )
+                if feishu and open_id:
+                    feishu.send_text(open_id=open_id, text=f"✓ Saved to knowledge base: {entry['question'][:100]}")
+            except Exception as exc:
+                logger.error("internet_approve: extract_spot_insights failed: %s", exc)
+                if feishu and open_id:
+                    feishu.send_text(open_id=open_id, text=f"⚠ Save failed: {exc}")
+            return {}
+
+        if act == "internet_reject":
+            _pending_internet.pop(open_id, None)
+            if feishu and open_id:
+                feishu.send_text(open_id=open_id, text="✗ Discarded — answer not saved.")
+            return {}
 
         # ── Legacy category menu buttons ─────────────────────────────────────
         cat      = value.get("cat", "")
@@ -4315,6 +4376,24 @@ Daily — Province BESS ranking report"""
             reply = f"{reply}\n─\n[{_bj_now.strftime('%Y-%m-%d %H:%M')} 北京时间]"
             if msg.source == "feishu" and feishu:
                 feishu.send_text(open_id=msg.sender_id, text=reply)
+                # Internet answer approval card
+                if action.action == "MARKET_AGENT" and action.params.get("market") == "internet":
+                    import time as _time_mod
+                    _q = action.params.get("question", msg.text)
+                    _pending_internet[msg.sender_id] = {
+                        "question": _q,
+                        "answer": reply,
+                        "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+                        "ts": _time_mod.time(),
+                    }
+                    _preview = reply[:300] + "…" if len(reply) > 300 else reply
+                    try:
+                        feishu.send_card(
+                            open_id=msg.sender_id,
+                            card=_build_internet_approval_card(_q, _preview),
+                        )
+                    except Exception as _card_err:
+                        logger.warning("internet approval card send failed: %s", _card_err)
             elif msg.source == "wecom" and wecom:
                 wecom.send_text(user_id=msg.sender_id, text=reply)
             elif msg.source == "telegram" and telegram:
