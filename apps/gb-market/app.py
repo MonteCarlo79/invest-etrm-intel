@@ -4015,6 +4015,7 @@ with tab_mgmt:
                 _PW_AUTH_STATE["running"] = True
                 _PW_AUTH_STATE["result"] = None
                 _PW_AUTH_STATE["start"] = time.monotonic()
+                st.session_state["pw_auth_status"] = "started"
                 def _run_pw_auth():
                     try:
                         from services.gb_knowledge.modo_ai import authenticate_with_password
@@ -4025,30 +4026,6 @@ with tab_mgmt:
                     _PW_AUTH_STATE["running"] = False
                 __import__("threading").Thread(target=_run_pw_auth, daemon=True).start()
                 st.rerun()
-
-        if _PW_AUTH_STATE["running"]:
-            _elapsed = time.monotonic() - _PW_AUTH_STATE["start"]
-            if _elapsed > 240:
-                _PW_AUTH_STATE["running"] = False
-                _PW_AUTH_STATE["result"] = {
-                    "success": False,
-                    "message": "Timeout: Playwright login hung for >4 min. Try magic link instead.",
-                    "page_dump": "",
-                }
-                st.rerun()
-            with st.spinner(f"Running headless login… ({int(_elapsed)}s elapsed)"):
-                time.sleep(3)
-                st.rerun()
-
-        _pw_result = _PW_AUTH_STATE.pop("result", None) if not _PW_AUTH_STATE["running"] else None
-        if _pw_result is not None:
-            if _pw_result["success"]:
-                st.success(_pw_result["message"])
-            else:
-                st.error(_pw_result["message"])
-                if _pw_result.get("page_dump"):
-                    with st.expander("Page state at failure", expanded=True):
-                        st.code(_pw_result["page_dump"][:600])
 
         st.divider()
         st.markdown("**Option B — Magic link email**")
@@ -4094,6 +4071,34 @@ with tab_mgmt:
                     st.success(_ma_result["message"])
                 else:
                     st.error(_ma_result["message"])
+
+    # ── Password auth status — full-width, below columns ─────────────────────
+    if _PW_AUTH_STATE["running"]:
+        _elapsed = time.monotonic() - _PW_AUTH_STATE["start"]
+        if _elapsed > 300:
+            _PW_AUTH_STATE["running"] = False
+            _PW_AUTH_STATE["result"] = {
+                "success": False,
+                "message": "Timeout: Playwright login hung for >5 min. Use magic link instead.",
+                "page_dump": "",
+            }
+            st.rerun()
+        st.info(f"Running headless login… {int(_elapsed)}s elapsed. Chromium can take 1–3 min to start.")
+        time.sleep(3)
+        st.rerun()
+
+    if st.session_state.get("pw_auth_status") == "started" and not _PW_AUTH_STATE["running"]:
+        _pw_result = _PW_AUTH_STATE.get("result")
+        if _pw_result is not None:
+            _PW_AUTH_STATE["result"] = None
+            st.session_state["pw_auth_status"] = "done"
+            if _pw_result["success"]:
+                st.success(_pw_result["message"])
+            else:
+                st.error(_pw_result["message"])
+                if _pw_result.get("page_dump"):
+                    with st.expander("Page state at failure", expanded=True):
+                        st.code(_pw_result["page_dump"][:600])
 
     st.divider()
     st.subheader("Expert Memory — KB Digestion")
