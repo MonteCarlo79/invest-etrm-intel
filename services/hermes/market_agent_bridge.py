@@ -55,11 +55,23 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "")
         from services.mengxi_trading.headless_agent import run_mengxi_query
         return run_mengxi_query(question=question, api_key=api_key, pg_url=pg_url)
 
+    if market in ("deal", "deal-structurer", "structurer"):
+        from services.deal_structurer.headless_agent import run_deal_query
+        return run_deal_query(question=question, api_key=api_key, pg_url=pg_url)
+
+    if market in ("asset-risk", "risk", "book"):
+        from services.asset_risk.headless_agent import run_asset_risk_query
+        return run_asset_risk_query(question=question, api_key=api_key, pg_url=pg_url)
+
+    if market in ("retail-risk", "retail"):
+        from services.retail_risk.headless_agent import run_retail_risk_query
+        return run_retail_risk_query(question=question, api_key=api_key, pg_url=pg_url)
+
     if market == "internet":
         from services.hermes.internet_agent import run_internet_query
         return run_internet_query(question=question, api_key=api_key)
 
-    return f"Unknown market '{market}'. Available: gb, au, ercot, caiso, pjm, ph, po, bess-map, spot, mengxi, internet"
+    return f"Unknown market '{market}'. Available: gb, au, ercot, caiso, pjm, ph, po, bess-map, spot, mengxi, deal, asset-risk, retail-risk, internet"
 
 
 def _run_spot_query(question: str, api_key: str) -> str:
