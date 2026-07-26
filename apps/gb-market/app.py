@@ -796,6 +796,12 @@ DOMAIN CONTEXT:
   - Each service has Low (L) and High (H) directions, with EFA block auctions (EFA 1–6)
   - Clearing prices in GBP/MW/h (capacity payment)
 - Key BESS revenue streams: BM (balancing mechanism), CM (capacity market), frequency_response (DC/DM/DR)
+- Gas-power nexus: GB power prices are driven by the marginal gas generator
+  - Spark spread = power price − (gas price × heat rate) − (carbon price × emissions factor)
+  - Typical CCGT: heat rate ~7 GJ/MWh (efficiency ~49%), emissions factor ~0.36 tCO₂/MWh
+  - NBP (National Balancing Point): GB wholesale gas benchmark, quoted in p/therm
+  - TTF (Title Transfer Facility): continental European gas benchmark, quoted in €/MWh
+  - EUA (EU Allowance): EU carbon price, quoted in €/tonne CO₂ — affects GB via UK ETS linkage
 
 ANALYTICAL FRAMEWORK:
 - For price/market questions → call get_system_price or get_epex_prices
@@ -806,11 +812,26 @@ ANALYTICAL FRAMEWORK:
 - For BESS revenue trends by market stream → call get_bess_revenue_index
 - For asset-specific data (owner, operator, capacity, location) → call get_bess_assets
 - For market context, regulation, policy → call search_knowledge_base
+- For current NBP/TTF/EUA prices → call get_gas_prices (returns analyst-provided values)
+- For spark spread calculation → call calc_spark_spread
+- For gas-power analysis, LNG supply, gas market context → call search_knowledge_base with sources=['timera', 'meteologica']
 """
 
 
 def _build_strategist_system(query: str = "") -> str:
     base = _GB_STRATEGIST_BASE_SYSTEM
+
+    # Inject analyst-provided gas & carbon prices if set
+    _gas = st.session_state.get("gas_prices", {})
+    _gas_lines = []
+    if _gas.get("nbp"):
+        _gas_lines.append(f"  - NBP day-ahead: {_gas['nbp']} p/therm")
+    if _gas.get("ttf"):
+        _gas_lines.append(f"  - TTF front-month: {_gas['ttf']} €/MWh")
+    if _gas.get("eua"):
+        _gas_lines.append(f"  - EUA carbon: {_gas['eua']} €/tonne")
+    if _gas_lines:
+        base += "\n\n## Today's Gas & Carbon Prices (analyst-provided):\n" + "\n".join(_gas_lines)
 
     # Inject structured expert insights (HyDE-retrieved, confidence-ranked)
     if query:
@@ -1025,6 +1046,39 @@ _STRATEGIST_TOOLS = [
                 "end_date":   {"type": "string", "description": "ISO date e.g. '2026-06-13'"},
             },
             "required": ["start_date", "end_date"],
+        },
+    },
+    {
+        "name": "get_gas_prices",
+        "description": (
+            "Returns today's analyst-provided gas and carbon prices: "
+            "NBP day-ahead (p/therm), TTF front-month (€/MWh), EUA carbon (€/tonne). "
+            "These are manually entered by the analyst in the Gas & Carbon Prices panel. "
+            "Use as inputs for spark spread analysis or gas-power nexus reasoning."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "calc_spark_spread",
+        "description": (
+            "Calculate GB clean spark spread (£/MWh): "
+            "power price − (gas price × heat rate) − (carbon price × emissions factor). "
+            "A positive spark spread means gas generation is profitable; negative means loss-making. "
+            "Provide power_price_gbp (£/MWh) and optionally nbp_pence_therm, eua_eur_tonne, "
+            "heat_rate_gj_mwh (default 7.5), emissions_factor_tco2_mwh (default 0.36), "
+            "gbp_eur_fx (default 1.17)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "power_price_gbp":       {"type": "number", "description": "Power price in £/MWh"},
+                "nbp_pence_therm":       {"type": "number", "description": "NBP gas price in p/therm (optional — uses session value if omitted)"},
+                "eua_eur_tonne":         {"type": "number", "description": "EUA carbon price in €/tonne (optional — uses session value if omitted)"},
+                "heat_rate_gj_mwh":      {"type": "number", "description": "CCGT heat rate in GJ/MWh (default 7.5)"},
+                "emissions_factor_tco2_mwh": {"type": "number", "description": "Emissions factor in tCO₂/MWh (default 0.36)"},
+                "gbp_eur_fx":            {"type": "number", "description": "GBP/EUR FX rate (default 1.17)"},
+            },
+            "required": ["power_price_gbp"],
         },
     },
 ]
@@ -1281,6 +1335,71 @@ def _dispatch_strategist(name: str, inputs: dict) -> str:
                 f"Settlement system prices (daily avg, £/MWh):\n{sp_summary}\n\n"
                 f"Wind generation forecast (next 48h, MW):\n{wf_summary}"
             )
+
+        elif name == "get_gas_prices":
+            _gas = st.session_state.get("gas_prices", {})
+            if not any(_gas.get(k) for k in ["nbp", "ttf", "eua"]):
+                return (
+                    "No gas prices have been entered. Ask the analyst to fill in the "
+                    "Gas & Carbon Prices panel in the Strategist tab."
+                )
+            result = {}
+            if _gas.get("nbp"):
+                result["nbp_day_ahead_pence_therm"] = _gas["nbp"]
+                result["nbp_day_ahead_gbp_mwh"] = round(_gas["nbp"] * 100 / 293.07, 2)
+            if _gas.get("ttf"):
+                result["ttf_front_month_eur_mwh"] = _gas["ttf"]
+            if _gas.get("eua"):
+                result["eua_carbon_eur_tonne"] = _gas["eua"]
+            import json as _json
+            return _json.dumps(result)
+
+        elif name == "calc_spark_spread":
+            _gas = st.session_state.get("gas_prices", {})
+            power = inputs["power_price_gbp"]
+            nbp   = inputs.get("nbp_pence_therm") or _gas.get("nbp")
+            eua   = inputs.get("eua_eur_tonne")   or _gas.get("eua")
+            hr    = inputs.get("heat_rate_gj_mwh", 7.5)
+            ef    = inputs.get("emissions_factor_tco2_mwh", 0.36)
+            fx    = inputs.get("gbp_eur_fx", 1.17)
+
+            missing = []
+            if not nbp:
+                missing.append("NBP gas price (p/therm)")
+            if not eua:
+                missing.append("EUA carbon price (€/tonne)")
+            if missing:
+                return (
+                    f"Cannot calculate: missing {', '.join(missing)}. "
+                    "Enter them in the Gas & Carbon Prices panel or pass as tool arguments."
+                )
+
+            # Convert NBP p/therm → £/MWh:  1 therm = 29.307 kWh → 1 p/therm = 100/29.307 p/kWh = £/MWh * (1/29.307)
+            nbp_gbp_mwh   = nbp / 29.307                  # p/therm → £/MWh (29.307 kWh/therm)
+            gas_cost       = nbp_gbp_mwh * hr              # £/MWh_e (heat rate in GJ/MWh; 1 GJ = 277.78 kWh, but in UK gas is quoted per therm so direct)
+            # Actually: heat rate is in GJ/MWh_electrical. 1 therm = 0.105506 GJ
+            # So gas cost (£/MWh_e) = (NBP in p/therm) / 100 * (heat_rate_GJ_MWh / 0.105506)
+            # Let's redo properly:
+            nbp_gbp_therm  = nbp / 100.0                   # p/therm → £/therm
+            nbp_gbp_gj     = nbp_gbp_therm / 0.105506      # £/therm → £/GJ
+            gas_cost_gbp   = nbp_gbp_gj * hr               # £/GJ × GJ/MWh_e = £/MWh_e
+            carbon_cost_gbp = (eua / fx) * ef              # (€/t ÷ fx) × tCO₂/MWh = £/MWh
+            spark_spread    = power - gas_cost_gbp - carbon_cost_gbp
+
+            import json as _json
+            return _json.dumps({
+                "power_price_gbp_mwh":    round(power, 2),
+                "gas_cost_gbp_mwh":       round(gas_cost_gbp, 2),
+                "carbon_cost_gbp_mwh":    round(carbon_cost_gbp, 2),
+                "clean_spark_spread_gbp_mwh": round(spark_spread, 2),
+                "inputs_used": {
+                    "nbp_pence_therm": nbp,
+                    "eua_eur_tonne":   eua,
+                    "heat_rate_gj_mwh": hr,
+                    "emissions_factor_tco2_mwh": ef,
+                    "gbp_eur_fx": fx,
+                },
+            })
 
     except Exception as e:
         return f"Error: {e}"
@@ -3386,6 +3505,44 @@ with tab_strategist:
         f"Grounded on DB data only · Memory persists across sessions · "
         f"Expert memory: {_n_insights} accumulated insights from KB + conversations"
     )
+
+    # ── Gas & Carbon Prices (manual input) ───────────────────────────────────
+    if "gas_prices" not in st.session_state:
+        st.session_state["gas_prices"] = {"nbp": None, "ttf": None, "eua": None}
+    with st.expander("Gas & Carbon Prices (optional — for spark spread analysis)", expanded=False):
+        st.caption(
+            "Enter today's prices so the Strategist can reason about gas-power economics "
+            "and spark spreads. Values persist for this session only."
+        )
+        _gc1, _gc2, _gc3 = st.columns(3)
+        with _gc1:
+            _nbp_val = st.number_input(
+                "NBP day-ahead (p/therm)", min_value=0.0, step=1.0,
+                value=float(st.session_state["gas_prices"].get("nbp") or 0.0),
+                key="gas_nbp_input",
+            )
+        with _gc2:
+            _ttf_val = st.number_input(
+                "TTF front-month (€/MWh)", min_value=0.0, step=0.5,
+                value=float(st.session_state["gas_prices"].get("ttf") or 0.0),
+                key="gas_ttf_input",
+            )
+        with _gc3:
+            _eua_val = st.number_input(
+                "EUA carbon (€/tonne)", min_value=0.0, step=0.5,
+                value=float(st.session_state["gas_prices"].get("eua") or 0.0),
+                key="gas_eua_input",
+            )
+        st.session_state["gas_prices"] = {
+            "nbp": _nbp_val if _nbp_val > 0 else None,
+            "ttf": _ttf_val if _ttf_val > 0 else None,
+            "eua": _eua_val if _eua_val > 0 else None,
+        }
+        _set_prices = [k for k, v in st.session_state["gas_prices"].items() if v]
+        if _set_prices:
+            st.success(f"Prices set: {', '.join(_set_prices).upper()} — Strategist will use these for spark spread calculations.")
+        else:
+            st.info("No prices entered. The Strategist will search the knowledge base for gas market context.")
 
     # ── Knowledge Gap Interview ──────────────────────────────────────────────
     with st.expander("Teach the Agent — Knowledge Gap Interview", expanded=False):
