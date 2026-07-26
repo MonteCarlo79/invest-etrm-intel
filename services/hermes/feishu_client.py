@@ -104,7 +104,7 @@ class FeishuClient:
         """Update an existing interactive card message in-place (PATCH)."""
         resp = self._request_with_token_retry(
             "PATCH", f"{_API}/im/v1/messages/{message_id}",
-            json={"content": json.dumps(card)},
+            json={"msg_type": "interactive", "content": json.dumps(card)},
             timeout=15,
         )
         if not resp.ok:
