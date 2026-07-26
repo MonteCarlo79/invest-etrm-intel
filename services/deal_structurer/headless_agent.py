@@ -42,7 +42,11 @@ def _make_client(api_key: str):
 
 
 def run_deal_query(question: str, api_key: str, pg_url: str = "") -> str:
-    """Run the deal structurer headless agent and return its answer."""
+    """Run the deal structurer headless agent and return its answer.
+
+    pg_url is accepted for interface consistency with other headless agents
+    but not used — deal model tools run local Python models, not DB queries.
+    """
     from libs.deal_models.adapters.agent_tools import AGENT_TOOLS, dispatch_tool
 
     client = _make_client(api_key)
