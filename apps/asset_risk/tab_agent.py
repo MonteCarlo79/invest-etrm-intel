@@ -8,6 +8,44 @@ import streamlit as st
 from sqlalchemy import text
 
 
+tools = [
+    {
+        "name": "get_book_pnl",
+        "description": "Get P&L breakdown by category for a book.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "book_id": {"type": "integer"},
+            },
+            "required": ["book_id"],
+        },
+    },
+    {
+        "name": "get_position_mtm",
+        "description": "Get current MtM summary with unrealised P&L for a book.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"book_id": {"type": "integer"}},
+            "required": ["book_id"],
+        },
+    },
+    {
+        "name": "get_var",
+        "description": "Get current VaR figures for a book.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"book_id": {"type": "integer"}},
+            "required": ["book_id"],
+        },
+    },
+    {
+        "name": "get_asset_list",
+        "description": "Get list of registered assets and their books.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+
+
 def render_agent(engine):
     """Render agent chat tab."""
     st.subheader("Risk Agent")
@@ -42,43 +80,6 @@ def _call_agent(user_message: str, engine, api_key: str) -> str:
     from shared.anthropic_client import make_client as _make_anthropic_client
 
     client = _make_anthropic_client(api_key)
-
-    tools = [
-        {
-            "name": "get_book_pnl",
-            "description": "Get P&L breakdown by category for a book.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "book_id": {"type": "integer"},
-                },
-                "required": ["book_id"],
-            },
-        },
-        {
-            "name": "get_position_mtm",
-            "description": "Get current MtM summary with unrealised P&L for a book.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"book_id": {"type": "integer"}},
-                "required": ["book_id"],
-            },
-        },
-        {
-            "name": "get_var",
-            "description": "Get current VaR figures for a book.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"book_id": {"type": "integer"}},
-                "required": ["book_id"],
-            },
-        },
-        {
-            "name": "get_asset_list",
-            "description": "Get list of registered assets and their books.",
-            "input_schema": {"type": "object", "properties": {}},
-        },
-    ]
 
     system_prompt = (
         "You are an asset risk management assistant for a Chinese electricity trading company. "
