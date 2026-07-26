@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "config", ".env"))
 
-import anthropic
+from shared.anthropic_client import make_client as _make_anthropic_client
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -70,7 +70,7 @@ from services.intl_market_common.audio_ingest import transcribe_and_contextualiz
 logger = logging.getLogger(__name__)
 
 _ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-_client = anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
+_client = _make_anthropic_client(_ANTHROPIC_KEY)
 
 CFG = MARKET_CONFIG
 PREFIX = CFG.table_prefix      # "po_"

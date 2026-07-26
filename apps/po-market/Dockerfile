@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     "sqlalchemy>=2.0" \
     numpy \
     "python-dotenv==1.0.1" \
-    "anthropic>=0.40" \
+    "anthropic[bedrock]>=0.40" \
     "requests==2.32.3" \
     openpyxl \
     "apscheduler==3.10.4" \
@@ -27,6 +27,7 @@ RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     pulp
 
 COPY apps/po-market/               ./apps/po-market/
+COPY shared/                        ./shared/
 COPY services/common/               ./services/common/
 COPY services/po_knowledge/         ./services/po_knowledge/
 COPY services/intl_market_common/   ./services/intl_market_common/
