@@ -8,6 +8,53 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 
+tools = [
+    {
+        "name": "get_retail_margin",
+        "description": "Get retail margin breakdown (revenue, procurement, T&D, penalties, net) for a customer or all customers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "integer", "description": "Customer ID. Omit for all customers."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_procurement_coverage",
+        "description": "Get procurement coverage ratio (forward-bought / contracted load) for a book.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "book_id": {"type": "integer", "description": "Book ID to check coverage for."},
+            },
+            "required": ["book_id"],
+        },
+    },
+    {
+        "name": "get_customer_pnl_ranking",
+        "description": "Get customers ranked by net P&L contribution, showing top N.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "top_n": {"type": "integer", "description": "Number of top customers to return. Default 10."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_contract_expiry_pipeline",
+        "description": "Get contracts expiring soon, grouped by province and contract type.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days_ahead": {"type": "integer", "description": "Look ahead days. Default 90."},
+            },
+            "required": [],
+        },
+    },
+]
+
 
 def render_agent(engine):
     """Render agent chat tab."""
@@ -44,53 +91,6 @@ def _call_agent(user_message: str, engine, api_key: str) -> str:
     from shared.anthropic_client import make_client as _make_anthropic_client
 
     client = _make_anthropic_client(api_key)
-
-    tools = [
-        {
-            "name": "get_retail_margin",
-            "description": "Get retail margin breakdown (revenue, procurement, T&D, penalties, net) for a customer or all customers.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "customer_id": {"type": "integer", "description": "Customer ID. Omit for all customers."},
-                },
-                "required": [],
-            },
-        },
-        {
-            "name": "get_procurement_coverage",
-            "description": "Get procurement coverage ratio (forward-bought / contracted load) for a book.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "book_id": {"type": "integer", "description": "Book ID to check coverage for."},
-                },
-                "required": ["book_id"],
-            },
-        },
-        {
-            "name": "get_customer_pnl_ranking",
-            "description": "Get customers ranked by net P&L contribution, showing top N.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "top_n": {"type": "integer", "description": "Number of top customers to return. Default 10."},
-                },
-                "required": [],
-            },
-        },
-        {
-            "name": "get_contract_expiry_pipeline",
-            "description": "Get contracts expiring soon, grouped by province and contract type.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "days_ahead": {"type": "integer", "description": "Look ahead days. Default 90."},
-                },
-                "required": [],
-            },
-        },
-    ]
 
     system_prompt = (
         "You are a retail electricity risk management assistant for a Chinese energy trading company. "
