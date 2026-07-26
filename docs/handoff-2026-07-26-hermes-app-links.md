@@ -115,8 +115,8 @@ Card actions arrive at `POST /hermes/inbound/feishu-card`. The handler reads `pa
 
 | # | Task | Notes |
 |---|------|-------|
-| 1 | Fix DB: `thermal_mw=2812` for 冀南 in `province_installed_monthly` table | Old data issue |
-| 2 | Submit Anthropic use-case form in AWS Bedrock Console | Required for Bedrock model access |
+| ~~1~~ | ~~Fix DB: `thermal_mw=2812` for 冀南 in `province_installed_monthly` table~~ | ✅ Fixed |
+| ~~2~~ | ~~Submit Anthropic use-case form / Bedrock access~~ | ✅ Bedrock already working in Hermes |
 | 3 | Review and commit unstaged changes in `apps/gb-market/` | Various modified files not yet committed |
 
 ---
