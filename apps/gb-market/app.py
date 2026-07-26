@@ -549,6 +549,8 @@ _scheduler_lock = __import__("threading").Lock()
 
 # Module-level dict for background-thread auth result (st.session_state not accessible from threads)
 _PW_AUTH_STATE: dict = {"running": False, "result": None, "start": 0.0}
+_BACKFILL_STATE: dict = {"running": False, "result": None, "start": 0.0}
+_KB_INGEST_STATE: dict = {"running": False, "result": None, "start": 0.0}
 
 
 def _start_scheduler():
@@ -3885,15 +3887,34 @@ with tab_mgmt:
         st.caption("Fetches Modo data and upserts into DB.")
         bf_start = st.date_input("Backfill from", value=date.today() - timedelta(days=30), key="bf_start")
         bf_end   = st.date_input("Backfill to",   value=date.today(), key="bf_end")
-        if st.button("Run Backfill", type="primary"):
-            with st.spinner("Fetching from Modo Energy API…"):
-                result = _run_ingestion_job(bf_start, bf_end, trigger="manual")
-            if result["status"] == "success":
-                st.success(f"Backfill complete in {result['duration']:.1f}s")
+        if st.button("Run Backfill", type="primary", key="run_backfill_btn"):
+            if not _BACKFILL_STATE["running"]:
+                _BACKFILL_STATE["running"] = True
+                _BACKFILL_STATE["result"] = None
+                _BACKFILL_STATE["start"] = time.monotonic()
+                _bf_start_copy = bf_start
+                _bf_end_copy   = bf_end
+                def _run_backfill_thread():
+                    r = _run_ingestion_job(_bf_start_copy, _bf_end_copy, trigger="manual")
+                    _BACKFILL_STATE["result"] = r
+                    _BACKFILL_STATE["running"] = False
+                __import__("threading").Thread(target=_run_backfill_thread, daemon=True).start()
+                st.rerun()
+
+        if _BACKFILL_STATE["running"]:
+            _bf_elapsed = time.monotonic() - _BACKFILL_STATE["start"]
+            with st.spinner(f"Fetching from Modo Energy API… ({int(_bf_elapsed)}s elapsed)"):
+                time.sleep(3)
+                st.rerun()
+
+        _bf_result = _BACKFILL_STATE.pop("result", None) if not _BACKFILL_STATE["running"] else None
+        if _bf_result is not None:
+            if _bf_result["status"] == "success":
+                st.success(f"Backfill complete in {_bf_result['duration']:.1f}s")
             else:
-                st.error(f"Backfill failed: {result['error']}")
-            if result.get("log"):
-                st.code(result["log"])
+                st.error(f"Backfill failed: {_bf_result['error']}")
+            if _bf_result.get("log"):
+                st.code(_bf_result["log"])
             _table_counts.clear()
             _get_ingestion_logs.clear()
             st.rerun()
@@ -3908,18 +3929,34 @@ with tab_mgmt:
             key="kb_only",
         )
     with kb_col2:
-        if st.button("Run Knowledge Ingest", type="secondary"):
-            with st.spinner("Fetching knowledge from all sources…"):
-                kr = _run_knowledge_ingest_job(
-                    only=kb_only or None, trigger="manual"
-                )
-            if kr["status"] == "success":
-                st.success(f"{kr['total']} new docs in {kr['duration']:.1f}s")
-                if kr.get("results"):
-                    st.json(kr["results"])
-            else:
-                st.error(f"Knowledge ingest failed: {kr['error']}")
-            _knowledge_doc_counts.clear()
+        if st.button("Run Knowledge Ingest", type="secondary", key="run_kb_ingest_btn"):
+            if not _KB_INGEST_STATE["running"]:
+                _KB_INGEST_STATE["running"] = True
+                _KB_INGEST_STATE["result"] = None
+                _KB_INGEST_STATE["start"] = time.monotonic()
+                _kb_only_copy = kb_only or None
+                def _run_kb_ingest_thread():
+                    r = _run_knowledge_ingest_job(only=_kb_only_copy, trigger="manual")
+                    _KB_INGEST_STATE["result"] = r
+                    _KB_INGEST_STATE["running"] = False
+                __import__("threading").Thread(target=_run_kb_ingest_thread, daemon=True).start()
+                st.rerun()
+
+    if _KB_INGEST_STATE["running"]:
+        _kb_elapsed = time.monotonic() - _KB_INGEST_STATE["start"]
+        with st.spinner(f"Fetching knowledge from all sources… ({int(_kb_elapsed)}s elapsed)"):
+            time.sleep(3)
+            st.rerun()
+
+    _kb_result = _KB_INGEST_STATE.pop("result", None) if not _KB_INGEST_STATE["running"] else None
+    if _kb_result is not None:
+        if _kb_result["status"] == "success":
+            st.success(f"{_kb_result['total']} new docs in {_kb_result['duration']:.1f}s")
+            if _kb_result.get("results"):
+                st.json(_kb_result["results"])
+        else:
+            st.error(f"Knowledge ingest failed: {_kb_result['error']}")
+        _knowledge_doc_counts.clear()
 
     st.divider()
     st.subheader("Modo AI Distillation")
