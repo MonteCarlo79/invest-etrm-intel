@@ -3420,6 +3420,14 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                     text_placeholder.markdown(streamed_text)
                 return streamed_text, messages, tool_events
 
+            if _final.stop_reason == "max_tokens":
+                if _status_ph:
+                    _status_ph.empty()
+                if text_placeholder is not None:
+                    text_placeholder.markdown(streamed_text)
+                truncated = streamed_text + "\n\n*(回答因长度限制被截断。请发送「继续」以获取剩余内容。)*"
+                return truncated, messages, tool_events
+
             if _final.stop_reason != "tool_use":
                 if _status_ph:
                     _status_ph.empty()
