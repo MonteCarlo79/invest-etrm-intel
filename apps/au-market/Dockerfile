@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir --timeout 300 --retries 10 \
     "sqlalchemy>=2.0" \
     numpy \
     "python-dotenv==1.0.1" \
-    "anthropic>=0.40" \
+    "anthropic[bedrock]>=0.40" \
     "requests==2.32.3" \
     openpyxl \
     "apscheduler==3.10.4" \
@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk 
 RUN playwright install --with-deps chromium
 
 COPY apps/au-market/               ./apps/au-market/
+COPY shared/                       ./shared/
 COPY services/modo_energy/         ./services/modo_energy/
 COPY services/common/              ./services/common/
 COPY services/au_knowledge/        ./services/au_knowledge/

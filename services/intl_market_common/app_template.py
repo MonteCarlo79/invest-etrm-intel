@@ -17,7 +17,6 @@ import sys
 import uuid
 from datetime import date, timedelta
 
-import anthropic
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
