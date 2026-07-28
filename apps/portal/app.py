@@ -344,12 +344,12 @@ _QUICK_ASK_SYSTEM = {
 
 
 def _quick_ask(agent_key: str, question: str) -> str:
+    from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return "ANTHROPIC_API_KEY not configured."
+    if not is_llm_available(api_key):
+        return "No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION)."
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        client = _make_anthropic_client(api_key)
         resp = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=300,

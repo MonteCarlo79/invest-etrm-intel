@@ -140,7 +140,7 @@ services:
   #   APP_URL_MAP=gb-market=http://localhost:8508/gb-market,...
   portal:
     <<: *common
-    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-portal:v9
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-portal:v10
     command: ["streamlit", "run", "apps/portal/app.py",
               "--server.port=8500", "--server.address=0.0.0.0",
               "--server.enableCORS=false", "--server.enableXsrfProtection=false",

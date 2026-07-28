@@ -7,7 +7,7 @@ COPY shared /app/shared
 COPY auth /app/auth
 
 RUN pip install --no-cache-dir -r apps/portal/requirements.txt \
-    && pip install --no-cache-dir sqlalchemy psycopg2-binary boto3 "anthropic>=0.40"
+    && pip install --no-cache-dir sqlalchemy psycopg2-binary boto3 "anthropic[bedrock]>=0.40"
 
 ENV PYTHONPATH=/app
 

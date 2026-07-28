@@ -13,7 +13,11 @@ try:
 except Exception:
     pass
 
-import anthropic
+import sys as _sys
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
 
 DEFAULT_MODEL = os.getenv("SPOT_HI_MODEL", "claude-opus-4-6")
 
@@ -37,8 +41,8 @@ def audit_price_row(province_cn: str, report_date: str, extracted: dict, source_
     if not source_row_text:
         return ""
 
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        print("[WARN] ANTHROPIC_API_KEY not set; audit will be skipped")
+    if not is_llm_available(os.getenv("ANTHROPIC_API_KEY", "")):
+        print("[WARN] No LLM configured; audit will be skipped")
         return ""
 
     user_prompt = f"""
@@ -57,7 +61,7 @@ PDF 行文本：
 """
 
     try:
-        client = anthropic.Anthropic()
+        client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
         resp = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=120,
@@ -84,8 +88,8 @@ def summarize_highlights(
     :param raw_text:    extracted narrative text block (may contain many provinces)
     :return: short Chinese summary (<= ~50 chars)
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        print("[WARN] ANTHROPIC_API_KEY not set; highlights will be empty")
+    if not is_llm_available(os.getenv("ANTHROPIC_API_KEY", "")):
+        print("[WARN] No LLM configured; highlights will be empty")
         return ""
 
     if not raw_text or raw_text.strip() == "":
@@ -104,7 +108,7 @@ def summarize_highlights(
     )
 
     try:
-        client = anthropic.Anthropic()
+        client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
         resp = client.messages.create(
             model=model,
             max_tokens=120,
