@@ -82,7 +82,7 @@ services:
 
   bess-map:
     <<: *common
-    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-map:v58
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-map:v59
     # Uses default image CMD (run.sh baked in)
     ports: ["8503:8503"]
     volumes:

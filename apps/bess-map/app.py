@@ -3944,6 +3944,54 @@ with tab_agent:
                 "required": ["province", "duration_h", "capex_yuan_per_kwh"],
             },
         },
+        {
+            "name": "get_sysop_fee",
+            "description": (
+                "Get monthly grid system operation fees (系统运行费, ¥/kWh) by province. "
+                "This is a COST charged by the grid on every MWh discharged — reduces actual BESS revenue. "
+                "Higher fee = higher grid balancing cost = stronger BESS flexibility demand. "
+                "Use to adjust IRR calculations: pass the fee as a negative subsidy_per_mwh in get_irr_estimate."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "province": {"type": "string", "description": "Chinese province name, e.g. '山西'. Omit for all provinces."},
+                    "start_ym": {"type": "string", "description": "YYYY-MM filter start (inclusive). Omit for all history."},
+                    "end_ym":   {"type": "string", "description": "YYYY-MM filter end (inclusive). Omit for all history."},
+                },
+                "required": [],
+            },
+        },
+        {
+            "name": "get_capacity_compensation",
+            "description": (
+                "Get province capacity compensation (容量补偿/容量电价) policy data: ¥/kW rate and qualifying duration. "
+                "This is a REVENUE stream paid to BESS owners for providing capacity. "
+                "Use to add to IRR: annualised ¥/kW ÷ duration_h ÷ 1000 converts to ¥/MWh for subsidy_per_mwh in get_irr_estimate."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "province": {"type": "string", "description": "Chinese province name. Omit for all provinces."},
+                },
+                "required": [],
+            },
+        },
+        {
+            "name": "get_freq_reg_market",
+            "description": (
+                "Get province frequency regulation (调频辅助服务) market data: price in ¥/kW·h and annual pool size (亿元/年). "
+                "This is a REVENUE stream for BESS providing AGC/secondary regulation. "
+                "Use together with get_capacity_compensation and get_sysop_fee for a complete IRR picture."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "province": {"type": "string", "description": "Chinese province name. Omit for all provinces."},
+                },
+                "required": [],
+            },
+        },
     ]
 
     # OpenAI-format tools (used for GPT-4o and DeepSeek)
@@ -4012,6 +4060,50 @@ with tab_agent:
                 "simple_payback_yr": payback,
                 "npv_yuan": round(npv, 0),
             })
+
+        elif name == "get_sysop_fee":
+            df = load_sysopfee(_ENG_KEY)
+            if inp.get("province"):
+                df = df[df["province"] == inp["province"]]
+            if inp.get("start_ym"):
+                df = df[df["year_month"] >= inp["start_ym"]]
+            if inp.get("end_ym"):
+                df = df[df["year_month"] <= inp["end_ym"]]
+            if df.empty:
+                return "No system operation fee data found for the given filters."
+            # Return summary: latest fee per province + average
+            summary = (
+                df.sort_values("year_month")
+                .groupby("province")
+                .agg(
+                    latest_ym=("year_month", "max"),
+                    latest_fee_yuan_kwh=("fee_yuan_kwh", "last"),
+                    avg_fee_yuan_kwh=("fee_yuan_kwh", "mean"),
+                    months_count=("fee_yuan_kwh", "count"),
+                )
+                .reset_index()
+                .round(4)
+            )
+            return summary.to_json(orient="records", default_handler=str)
+
+        elif name == "get_capacity_compensation":
+            df = load_cap_comp(_ENG_KEY)
+            if inp.get("province"):
+                df = df[df["province"] == inp["province"]]
+            if df.empty:
+                return "No capacity compensation data found."
+            keep = ["province", "effective_date", "cap_comp_yuan_kw", "peak_duration_hours", "status", "notes"]
+            return df[[c for c in keep if c in df.columns]].to_json(orient="records", default_handler=str)
+
+        elif name == "get_freq_reg_market":
+            df = load_fr_market(_ENG_KEY)
+            if inp.get("province"):
+                df = df[df["province"] == inp["province"]]
+            if df.empty:
+                return "No frequency regulation market data found."
+            keep = ["province", "effective_date", "fr_price_yuan_kw_h", "fr_pool_billion_yuan", "status"]
+            return df[[c for c in keep if c in df.columns]].to_json(orient="records", default_handler=str)
+
         return "Unknown tool"
 
     # ── auto-extract helper ────────────────────────────────────────────────────
