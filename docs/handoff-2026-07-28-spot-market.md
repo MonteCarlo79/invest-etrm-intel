@@ -9,24 +9,23 @@
 
 ## Deployment State
 
-| Service | Image | ECS Task Def | Cluster | Status |
-|---------|-------|--------------|---------|--------|
-| spot-markets | `bess-spot-markets:v91` | `bess-platform-spot-markets:124` | `bess-platform-cluster` | ✅ LIVE |
-| hermes | `bess-platform-hermes:latest` | `bess-platform-hermes:158` | `bess-platform-cluster` | ✅ LIVE |
+| Service | Image | ECS Task Def | Status |
+|---------|-------|--------------|--------|
+| spot-markets | `bess-spot-markets:v91` | `bess-platform-spot-markets:124` | ✅ LIVE |
+| hermes | `bess-platform-hermes:latest` | `bess-platform-hermes:158` | ✅ LIVE |
 
-**Next version = v92** (rebuild when next code change lands).
+**Next version = v92** (rebuild when next code change lands in spot-market).
 
 ---
 
 ## What Was Done This Session (2026-07-28)
 
-### Fix: AI Agent `max_tokens` truncation (v91)
+### Fix 1 — AI Agent `max_tokens` truncation → v91 (commit `a0874c6`)
 
-**Problem:** When the Spot Market AI Agent hit Claude's `max_tokens=4096` limit mid-response (e.g. for long document requests), the app returned `"Unexpected stop_reason: max_tokens"` — discarding the streamed partial answer entirely.
+**Problem:** When the Spot Market AI Agent hit `max_tokens=4096` mid-response, the app
+discarded the streamed partial answer and showed `"Unexpected stop_reason: max_tokens"`.
 
-**Root cause:** `_run_agent_turn` in `apps/spot-market/app.py` lines 3423–3426 treated every non-`tool_use` stop reason as an unexpected error.
-
-**Fix:** Added explicit `max_tokens` handler at line 3423 (`a0874c6`):
+**Fix:** `apps/spot-market/app.py` line 3423 — added explicit handler:
 ```python
 if _final.stop_reason == "max_tokens":
     if _status_ph:
@@ -36,58 +35,70 @@ if _final.stop_reason == "max_tokens":
     truncated = streamed_text + "\n\n*(回答因长度限制被截断。请发送「继续」以获取剩余内容。)*"
     return truncated, messages, tool_events
 ```
+Partial answer is now shown; "继续" continues correctly (messages already had partial content).
 
-**Behaviour after fix:**
-- Partial answer is shown in the chat with a Chinese truncation notice
-- Conversation history is preserved — "继续" works correctly to continue generation
-- The `messages` list already included the partial `_final.content` (line 3414), so continuation was always functionally correct; the fix just surfaces the text
-
-**Deployed:** v91 → `bess-platform-spot-markets:124` → ECS rollout completed, target healthy.
+**Deployed:** v91 → task def `:124` → ECS rollout complete, target healthy.
 
 ---
 
-## Key File Reference
+### Fix 2 — Exchange monthly reports: 13 provinces missing from lookup (commit `c357429`)
 
-| File | Purpose | Notes |
-|------|---------|-------|
-| `apps/spot-market/app.py` | Main Streamlit app (~8240 lines) | All UI tabs, AI agent, scheduler |
-| `apps/spot-market/spot_report.py` | AI daily report generator | |
-| `apps/spot-market/Dockerfile` | Docker build (v90+: `COPY shared/`, `fastembed>=0.3`) | |
-| `services/knowledge_pool/jizhi_extractor.py` | Nova Pro AI extraction for 机制竞价 | |
-| `services/hermes/app.py` | `_run_kb_digest` nightly pipeline | Fixed LLM guard in td:158 |
-| `shared/anthropic_client.py` | Bedrock-aware client factory | |
+**Problem:** `scripts/ingest_exchange_reports.py` skipped 19 files with `province=None`
+because `_NAME_TO_PROVINCE` and `_FOLDER_TO_PROVINCE` in
+`services/exchange_reports/ingestor.py` only covered 10 provinces.
 
-### `apps/spot-market/app.py` — key line numbers
+**Missing provinces added:**
+云南, 吉林, 四川, 宁夏, 新疆, 江西, 河南, 海南, 湖南, 蒙东, 贵州, 辽宁, 青海
 
-| Line | What |
-|------|------|
-| ~149 | `agent_title` = "Spot Market AI Agent" |
-| ~712 | `__conn()` — `@st.cache_resource` DB connection |
-| ~723 | `_conn()` — reconnect wrapper |
-| ~3044 | Agent system prompt / tool instructions |
-| ~3139 | `_AGENT_TOOLS` definitions (`get_spot_prices`, `get_interprov_flow`, `get_market_fundamentals`, `get_bess_pnl`, `search_reference_docs`) |
-| ~3383 | `_run_agent_turn()` — main agentic loop |
-| **3391/3405** | **`max_tokens=4096`** — both streaming and non-streaming paths |
-| **3423** | **`max_tokens` stop_reason handler (THIS SESSION'S FIX)** |
-| ~5080 | `tab_forecast` — 价格预测 tab |
-| **~5927** | **`_load_forecast_fundamentals` — defined but NOT YET WIRED INTO ARIMA** |
+**Result after fix:**
+- 18 June 2026 reports ingested → `staging.spot_knowledge_docs` (kb_doc_id 7650–7667)
+- 1 permanent skip: `国网范围5月月报.pdf` — national scope, no province (expected)
+- KB digest triggered via `POST /hermes/knowledge/digest` — synthesising in ECS now
+
+**Caveat:** Metrics extraction (structured Claude-extracted data → `staging.exchange_monthly_metrics`)
+failed with 403 for all files — Anthropic direct API blocked from China IPs.
+Backfill metrics later from ECS or via:
+```powershell
+cd C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform
+PGURL=$(py -c "from dotenv import load_dotenv; load_dotenv('config/.env'); import os; print(os.getenv('PGURL',''))") \
+  py scripts/ingest_exchange_reports.py --extract-metrics-only
+```
+(Must be run from inside ECS or via a Hermes HTTP trigger — not from local China machine.)
+
+---
+
+## KB State After This Session
+
+| Table | Approx rows | Notes |
+|-------|-------------|-------|
+| `staging.spot_knowledge_docs` | ~7,667 | 18 new June 2026 exchange reports added |
+| `staging.spot_knowledge_chunks` | growing | FTS-indexed text chunks |
+| `staging.kp_doc_summaries` | growing | Synthesis backlog ~30 docs/night |
+| `staging.kp_expert_insights` | growing | Digest running now |
+| `staging.exchange_monthly_reports` | 9 new June rows | 冀南/安徽/山东/广东×2/广西/江苏/蒙西×2 from first run |
+| `staging.exchange_monthly_metrics` | 0 new (403 blocked) | Needs backfill from ECS |
+
+To drain KB backlog faster (call with ~2 min gap, 30 docs/call):
+```powershell
+py -c "import requests, urllib3; urllib3.disable_warnings(); r = requests.post('https://bess-platform-alb-1158505371.ap-southeast-1.elb.amazonaws.com/hermes/knowledge/digest', verify=False); print(r.status_code, r.text)"
+```
 
 ---
 
 ## Top Priorities (Open Work)
 
-### 1. Wire `_load_forecast_fundamentals` into ARIMA (highest value — see handoff §4 from 2026-07-25)
+### 1. Wire `_load_forecast_fundamentals` into ARIMA — `apps/spot-market/app.py` ~line 5927
 
-`_load_forecast_fundamentals` pulls from `marketdata.spot_fundamentals_hourly`:
-- columns: `province`, `datetime`, `load`, `wind`, `solar`, `net_export`
-- Currently defined but **not connected** to the PCA+ARIMA or merit-order stack
+`_load_forecast_fundamentals` pulls from `marketdata.spot_fundamentals_hourly`
+(province, datetime, load, wind, solar, net_export). Defined but **not connected** to
+the PCA+ARIMA or merit-order forecast models.
 
 Goal: ARIMAX with wind/solar/load as exogenous regressors.
 
 **Start here:**
-1. Read `_load_forecast_fundamentals` definition at ~line 5927
+1. Read `_load_forecast_fundamentals` at ~line 5927
 2. Read the PCA+ARIMA fitting block just below it
-3. Note: `spot_prices_hourly` has mixed units — `nanmedian > 5` → divide by 1000 (check at ~line 5927)
+3. Note: `spot_prices_hourly` has mixed units — `nanmedian > 5` → divide by 1000
 
 **Model architecture quick reference:**
 ```
@@ -106,32 +117,78 @@ Bayesian Conjugate Gaussian
 Horizons: [1, 3, 7, 30, 90, 180, 365, days_to_eoy2027]
 ```
 
-### 2. Deploy updated hermes image (low urgency)
+### 2. Metrics backfill for exchange monthly reports
 
-`services/hermes/app.py` has the `is_llm_available` guard fix committed but the running image (td:158) uses the old code with `ANTHROPIC_API_KEY=bedrock` workaround.
+18 June reports ingested to KB but `staging.exchange_monthly_metrics` rows are empty
+(403 blocked locally). Needs Claude to extract structured metrics (clearing prices,
+volumes, RE share, etc.) from each report.
 
+Must run from inside ECS. No HTTP endpoint exists yet — options:
+- Add `POST /hermes/exchange/extract-metrics` endpoint to trigger it remotely
+- Or run as a one-off ECS task
+
+### 3. Deploy updated hermes image (low urgency)
+
+`services/hermes/app.py` `is_llm_available` guard fix is committed but running image
+(td:158) still uses `ANTHROPIC_API_KEY=bedrock` workaround:
 ```bash
 bash scripts/deploy_hermes.sh
-# OR:
-aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com
-docker build -f apps/hermes-service/Dockerfile -t 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-hermes:latest .
-docker push 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-hermes:latest
-MSYS_NO_PATHCONV=1 aws ecs update-service --cluster bess-platform-cluster --service bess-platform-hermes-svc --force-new-deployment --region ap-southeast-1
 ```
 
-### 3. 机制竞价 — Nova Pro prompt tuning (lower priority)
+### 4. 机制竞价 — Nova Pro prompt tuning (lower priority)
 
-- Model: `apac.amazon.nova-pro-v1:0` (ap-southeast-1, NOT tool use)
-- Edit `_BIDS_PROMPT` / `_UPCOMING_PROMPT` in `services/knowledge_pool/jizhi_extractor.py`
-- Edge case: multi-page PPTX charts → incomplete JSON output
+Edit `_BIDS_PROMPT` / `_UPCOMING_PROMPT` in
+`services/knowledge_pool/jizhi_extractor.py`.
+Model: `apac.amazon.nova-pro-v1:0` (ap-southeast-1). Edge case: multi-page PPTX.
 
-### 4. KB backlog drain (ongoing)
+---
 
-348 docs pending synthesis. Nightly hermes job drains 30/night. To drain faster:
+## Exchange Reports — How Ingestion Works
+
+**Automatic trigger:** Send file via Feishu → Hermes detects `is_exchange_report()`
+→ `ingest_report()` → KB + `staging.exchange_monthly_reports` → Feishu confirms "已入库"
+
+**Manual bulk trigger:**
 ```powershell
-py -c "import requests; r = requests.post('https://bess-platform-alb-1158505371.ap-southeast-1.elb.amazonaws.com/hermes/knowledge/digest', verify=False); print(r.status_code, r.text)"
+cd C:\Users\dipeng.chen\OneDrive\ETRM\bess-platform
+PGURL=$(py -c "from dotenv import load_dotenv; load_dotenv('config/.env'); import os; print(os.getenv('PGURL',''))") \
+  py scripts/ingest_exchange_reports.py
 ```
-Call repeatedly with ~2 min gap.
+
+**Nightly KB digest (18:07 UTC / 02:07 Beijing):** Synthesises already-ingested docs
+into `kp_expert_insights`. Does NOT scan folders.
+
+**Province lookup file:** `services/exchange_reports/ingestor.py`
+— `_FOLDER_TO_PROVINCE` (folder name → province) and `_NAME_TO_PROVINCE` (filename → province)
+— Now covers 23 provinces (10 original + 13 added today)
+— Still missing: 冀北, 天津, 山西, 全国/国网 (national scope — intentionally skipped)
+
+---
+
+## Key File Reference
+
+| File | Purpose | Notes |
+|------|---------|-------|
+| `apps/spot-market/app.py` | Main Streamlit app (~8240 lines) | All UI tabs + AI agent |
+| `apps/spot-market/Dockerfile` | Docker build | v90+: `COPY shared/`, `fastembed>=0.3` |
+| `services/exchange_reports/ingestor.py` | Exchange monthly report ETL | Province lookup fixed today |
+| `scripts/ingest_exchange_reports.py` | Bulk ingest CLI | Walks `data/exchange-monthly-reports/` |
+| `services/knowledge_pool/jizhi_extractor.py` | 机制竞价 Nova Pro extractor | |
+| `services/hermes/app.py` | Hermes scheduler + KB digest | `_run_kb_digest` at line 107 |
+| `shared/anthropic_client.py` | Bedrock-aware client factory | |
+
+### `apps/spot-market/app.py` — key line numbers
+
+| Line | What |
+|------|------|
+| ~712 | `__conn()` — `@st.cache_resource` DB connection |
+| ~3044 | Agent system prompt / tool instructions |
+| ~3139 | `_AGENT_TOOLS` definitions |
+| ~3383 | `_run_agent_turn()` — agentic loop |
+| **3391/3405** | `max_tokens=4096` — both streaming + non-streaming |
+| **3423** | `max_tokens` handler (fixed today) |
+| ~5080 | `tab_forecast` — 价格预测 tab |
+| **~5927** | **`_load_forecast_fundamentals` — defined, NOT YET WIRED** |
 
 ---
 
@@ -142,13 +199,12 @@ Call repeatedly with ~2 min gap.
 docker build -f apps/spot-market/Dockerfile `
   -t 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-spot-markets:v92 .
 
-# 2. ECR login + push
+# 2. Push
 aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com
 docker push 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-spot-markets:v92
 
-# 3. Strip task def + update image tag
+# 3. Patch task def
 MSYS_NO_PATHCONV=1 aws ecs describe-task-definition --task-definition bess-platform-spot-markets:124 --region ap-southeast-1 --query 'taskDefinition' --output json > C:/tmp/td_spot.json
-
 py -3 -c "
 import json
 with open('C:/tmp/td_spot.json', encoding='utf-8') as f: td = json.load(f)
@@ -156,48 +212,16 @@ for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatib
     td.pop(k, None)
 td['containerDefinitions'][0]['image'] = td['containerDefinitions'][0]['image'].replace(':v91', ':v92')
 with open('C:/tmp/td_spot_new.json', 'w') as f: json.dump(td, f, indent=2)
-print('done')
 "
-
 MSYS_NO_PATHCONV=1 aws ecs register-task-definition --cli-input-json file://C:/tmp/td_spot_new.json --region ap-southeast-1 --query 'taskDefinition.revision'
 
-# 4. Update service (replace :NNN with new revision from step 3)
+# 4. Deploy (replace NNN with new revision)
 MSYS_NO_PATHCONV=1 aws ecs update-service --cluster bess-platform-cluster --service bess-platform-spot-markets-svc --task-definition bess-platform-spot-markets:NNN --force-new-deployment --region ap-southeast-1
 ```
 
-**BEDROCK_REGION must be `ap-southeast-1`** — `global.anthropic.*` profiles only work from inside AWS ap-southeast-1.
-
 ---
 
-## DB Connection / Key Tables
-
-```python
-# Pattern (lines ~712, ~723)
-@st.cache_resource
-def __conn(): ...   # cache_resource
-
-def _conn():        # reconnect wrapper
-    conn = __conn()
-    try: conn.cursor().execute("SELECT 1")
-    except: __conn.clear(); conn = __conn()
-    return conn
-```
-
-Key env var: `PGURL` (or `DATABASE_URL`).
-
-| Table | Content |
-|-------|---------|
-| `marketdata.spot_prices_hourly` | Hourly spot prices (mixed units — nanmedian>5 → /1000) |
-| `marketdata.spot_prices_daily` | Daily DA/RT summaries |
-| `marketdata.spot_fundamentals_hourly` | Load/wind/solar/net_export per province per hour |
-| `staging.jizhi_bids` | 机制竞价 historical bids |
-| `staging.jizhi_upcoming` | 机制竞价 upcoming auctions |
-| `staging.spot_knowledge_chunks` | KB text chunks (FTS + vector) |
-| `staging.kp_expert_insights` | AI-extracted expert insights |
-
----
-
-## ECR / AWS Quick Reference
+## AWS / ECR Quick Reference
 
 | Item | Value |
 |------|-------|
@@ -209,16 +233,13 @@ Key env var: `PGURL` (or `DATABASE_URL`).
 | Spot-markets service | `bess-platform-spot-markets-svc` |
 | Hermes service | `bess-platform-hermes-svc` |
 | ALB DNS | `bess-platform-alb-1158505371.ap-southeast-1.elb.amazonaws.com` |
-| Task role | `bess-platform-task-role` (has `bedrock:InvokeModel`) |
+| Task role | `bess-platform-task-role` (`bedrock:InvokeModel`) |
 | MSYS prefix | `MSYS_NO_PATHCONV=1 aws ...` (Windows Git Bash) |
 
----
-
-## Version History (recent)
+## Version History
 
 | Version | Task Def | Change |
 |---------|----------|--------|
-| v88 | :120 | Pre-Bedrock; 401 errors |
-| v89 | — | FAILED — `ModuleNotFoundError: No module named 'shared'` |
-| v90 | :123 | Fixed Dockerfile (`COPY shared/`, `fastembed>=0.3`); Bedrock live |
-| **v91** | **:124** | **Fix: AI Agent returns partial answer on `max_tokens` instead of error** |
+| v90 | :123 | Dockerfile fix (`COPY shared/`, `fastembed>=0.3`); Bedrock live |
+| **v91** | **:124** | **AI Agent shows partial answer on `max_tokens` instead of error** |
+| v92 | — | Next code change (ARIMA wiring or metrics endpoint) |
