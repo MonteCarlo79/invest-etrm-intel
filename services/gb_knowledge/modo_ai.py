@@ -336,6 +336,14 @@ class ModoAIConnector(BaseConnector):
             return False
 
         page.wait_for_timeout(3_000)
+        # Wait for email input to appear — React SPA may need extra time to hydrate
+        try:
+            page.wait_for_selector(
+                'input[type="email"], input[name="email"], input[autocomplete="email"]',
+                timeout=12_000,
+            )
+        except Exception:
+            pass  # fall through; _first_visible() will handle not-found case
         _save_screenshot(page, "01_after_nav")
 
         if self._is_authenticated(page):
