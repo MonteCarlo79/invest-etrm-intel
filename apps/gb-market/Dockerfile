@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir \
     "scipy>=1.12" \
     "statsmodels>=0.14" \
     "playwright>=1.44" \
-    "playwright-stealth>=1.0"
+    "playwright-stealth==1.0.6"
 
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
