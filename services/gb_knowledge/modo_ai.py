@@ -145,14 +145,13 @@ class ModoAIConnector(BaseConnector):
             # Suppress noisy console messages from the React app
             page.on("console", lambda _: None)
 
-            # Patch headless fingerprint so navigator.webdriver = false,
-            # missing browser APIs are shimmed, etc.
-            try:
-                from playwright_stealth import stealth_sync
-                stealth_sync(page)
-                logger.info("[modo_ai] Stealth mode applied")
-            except ImportError:
-                logger.warning("[modo_ai] playwright-stealth not installed — running without stealth")
+            # NOTE: playwright-stealth was removed because it conflicts with modoenergy.com's
+            # Cloudflare JS challenge and causes blank page body (body=''), preventing any
+            # form interaction.  Without stealth, password login Flow A works correctly
+            # (confirmed via CloudWatch v92 logs).  The magic-link emails that prompted
+            # adding stealth were caused by the modo_reports scraper (now removed from the
+            # 3:30 AM knowledge job) — not by the password login itself.
+            logger.info("[modo_ai] Stealth mode disabled (intentional — see comment above)")
 
             try:
                 logged_in = False
@@ -335,7 +334,12 @@ class ModoAIConnector(BaseConnector):
             logger.warning("[modo_ai] Could not load modoenergy.com/sign-in: %s", exc)
             return False
 
-        page.wait_for_timeout(3_000)
+        # Wait for network to settle so React SPA fully renders
+        try:
+            page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(2_000)
         # Wait for email input to appear — React SPA may need extra time to hydrate
         try:
             page.wait_for_selector(
@@ -762,11 +766,7 @@ class ModoAIConnector(BaseConnector):
             )
             page = ctx.new_page()
             page.on("console", lambda _: None)
-            try:
-                from playwright_stealth import stealth_sync
-                stealth_sync(page)
-            except ImportError:
-                pass
+            # stealth mode removed — see comment in fetch() for rationale
 
             try:
                 logged_in = False
@@ -1211,11 +1211,7 @@ def request_magic_link_email(email: str | None = None) -> dict:
             )
             page = ctx.new_page()
             page.on("console", lambda _: None)
-            try:
-                from playwright_stealth import stealth_sync
-                stealth_sync(page)
-            except ImportError:
-                pass
+            # stealth mode removed — see comment in fetch() for rationale
 
             # Use a connector instance so we can call _dismiss_cookie_banner
             connector = ModoAIConnector(email=_email)
@@ -1225,10 +1221,24 @@ def request_magic_link_email(email: str | None = None) -> dict:
                     timeout=_NAV_TIMEOUT,
                     wait_until="domcontentloaded",
                 )
-                page.wait_for_timeout(3_000)
+                # Wait for network to settle so React SPA fully renders
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15_000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(2_000)
                 # Dismiss cookie banner immediately — it can block button clicks
                 connector._dismiss_cookie_banner(page)
                 page.wait_for_timeout(500)
+                # Wait for React SPA to hydrate
+                try:
+                    page.wait_for_selector(
+                        'input[type="email"], input[name="email"], input[autocomplete="email"]',
+                        timeout=15_000,
+                    )
+                except Exception:
+                    pass  # fall through; _first_visible() will handle not-found case
+                _save_screenshot(page, "request_link_after_wait")
 
                 email_sel = _first_visible(page, [
                     'input[type="email"]',
@@ -1239,6 +1249,13 @@ def request_magic_link_email(email: str | None = None) -> dict:
                 ])
                 if not email_sel:
                     _save_screenshot(page, "request_link_no_email_input")
+                    # Dump page body for diagnosis
+                    try:
+                        body = page.evaluate("() => document.body.innerText.slice(0, 600)")
+                        logger.error("[modo_ai] request_magic_link: email input not found. URL=%s body=%r",
+                                     page.url, body[:300])
+                    except Exception:
+                        pass
                     return {"success": False, "message": "Email input not found on sign-in page"}
 
                 page.fill(email_sel, _email)
@@ -1337,11 +1354,7 @@ def authenticate_with_password() -> dict:
             )
             page = ctx.new_page()
             page.on("console", lambda _: None)
-            try:
-                from playwright_stealth import stealth_sync
-                stealth_sync(page)
-            except ImportError:
-                pass
+            # stealth mode removed — see comment in fetch() for rationale
 
             try:
                 connector = ModoAIConnector()
@@ -1437,11 +1450,7 @@ def authenticate_with_magic_link(url: str) -> dict:
             )
             page = ctx.new_page()
             page.on("console", lambda _: None)
-            try:
-                from playwright_stealth import stealth_sync
-                stealth_sync(page)
-            except ImportError:
-                pass
+            # stealth mode removed — see comment in fetch() for rationale
 
             try:
                 connector = ModoAIConnector()

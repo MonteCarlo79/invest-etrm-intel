@@ -549,6 +549,8 @@ _scheduler_lock = __import__("threading").Lock()
 
 # Module-level dict for background-thread auth result (st.session_state not accessible from threads)
 _PW_AUTH_STATE: dict = {"running": False, "result": None, "start": 0.0}
+_MA_AUTH_STATE: dict = {"running": False, "result": None, "start": 0.0}
+_RL_AUTH_STATE: dict = {"running": False, "result": None, "start": 0.0}
 _BACKFILL_STATE: dict = {"running": False, "result": None, "start": 0.0}
 _KB_INGEST_STATE: dict = {"running": False, "result": None, "start": 0.0}
 
@@ -4035,16 +4037,32 @@ with tab_mgmt:
             "triggering a magic link or SSO email."
         )
         if st.button("Send magic link email", key="modo_request_link_btn"):
-            with st.spinner("Opening Modo sign-in page and submitting email…"):
-                try:
-                    from services.gb_knowledge.modo_ai import request_magic_link_email
-                    _rl_result = request_magic_link_email()
-                except Exception as _rl_exc:
-                    _rl_result = {"success": False, "message": str(_rl_exc)}
-            if _rl_result["success"]:
-                st.success(_rl_result["message"])
+            if not _RL_AUTH_STATE["running"]:
+                _RL_AUTH_STATE["running"] = True
+                _RL_AUTH_STATE["result"] = None
+                _RL_AUTH_STATE["start"] = time.monotonic()
+                def _run_rl_auth():
+                    try:
+                        from services.gb_knowledge.modo_ai import request_magic_link_email
+                        r = request_magic_link_email()
+                    except Exception as _e:
+                        r = {"success": False, "message": str(_e)}
+                    _RL_AUTH_STATE["result"] = r
+                    _RL_AUTH_STATE["running"] = False
+                __import__("threading").Thread(target=_run_rl_auth, daemon=True).start()
+                st.rerun()
+
+        if _RL_AUTH_STATE["running"]:
+            _rl_elapsed = time.monotonic() - _RL_AUTH_STATE["start"]
+            st.info(f"Submitting email to Modo sign-in… ({_rl_elapsed:.0f}s)")
+            time.sleep(2)
+            st.rerun()
+        elif _RL_AUTH_STATE["result"] is not None:
+            _rl_r = _RL_AUTH_STATE["result"]
+            if _rl_r["success"]:
+                st.success(_rl_r["message"])
             else:
-                st.error(_rl_result["message"])
+                st.error(_rl_r["message"])
 
     with _reauth_col2:
         st.markdown("**Step 2 — Paste the link from the email**")
@@ -4060,17 +4078,33 @@ with tab_mgmt:
         if st.button("Authenticate & Save Session", type="primary", key="modo_auth_btn"):
             if not _magic_url.strip():
                 st.warning("Paste the magic link URL first.")
-            else:
-                with st.spinner("Navigating to magic link and saving session…"):
+            elif not _MA_AUTH_STATE["running"]:
+                _MA_AUTH_STATE["running"] = True
+                _MA_AUTH_STATE["result"] = None
+                _MA_AUTH_STATE["start"] = time.monotonic()
+                _ma_url_capture = _magic_url.strip()
+                def _run_ma_auth():
                     try:
                         from services.gb_knowledge.modo_ai import authenticate_with_magic_link
-                        _ma_result = authenticate_with_magic_link(_magic_url.strip())
-                    except Exception as _ma_exc:
-                        _ma_result = {"success": False, "message": str(_ma_exc)}
-                if _ma_result["success"]:
-                    st.success(_ma_result["message"])
-                else:
-                    st.error(_ma_result["message"])
+                        r = authenticate_with_magic_link(_ma_url_capture)
+                    except Exception as _e:
+                        r = {"success": False, "message": str(_e)}
+                    _MA_AUTH_STATE["result"] = r
+                    _MA_AUTH_STATE["running"] = False
+                __import__("threading").Thread(target=_run_ma_auth, daemon=True).start()
+                st.rerun()
+
+        if _MA_AUTH_STATE["running"]:
+            _ma_elapsed = time.monotonic() - _MA_AUTH_STATE["start"]
+            st.info(f"Navigating to magic link and saving session… ({_ma_elapsed:.0f}s)")
+            time.sleep(2)
+            st.rerun()
+        elif _MA_AUTH_STATE["result"] is not None:
+            _ma_r = _MA_AUTH_STATE["result"]
+            if _ma_r["success"]:
+                st.success(_ma_r["message"])
+            else:
+                st.error(_ma_r["message"])
 
     # ── Password auth status — full-width, below columns ─────────────────────
     if _PW_AUTH_STATE["running"]:
