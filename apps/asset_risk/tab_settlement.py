@@ -32,6 +32,39 @@ def render_settlement(engine):
         else:
             _process_excel(uploaded, book_id, settlement_month, engine)
 
+    # Auto-scan from invoice folders
+    st.divider()
+    st.subheader("Auto-Scan Invoice Folders")
+    st.caption("Scan `data/raw/settlement/invoices/` for new PDFs and ingest automatically.")
+    col_scan1, col_scan2 = st.columns([1, 1])
+    with col_scan1:
+        dry_run = st.checkbox("Dry run (preview only)", value=True)
+    with col_scan2:
+        if st.button("Scan & Ingest", type="primary"):
+            with st.spinner("Scanning invoice folders..."):
+                from services.settlement_ingest.scanner import scan_and_ingest
+                results = scan_and_ingest(dry_run=dry_run)
+                ingested = [r for r in results if r.get("status") == "ingested"]
+                already = [r for r in results if r.get("status") == "already_ingested"]
+                errors = [r for r in results if r.get("status") == "error"]
+                skipped = [r for r in results if r.get("status") == "skipped"]
+                dry = [r for r in results if r.get("status") == "dry_run"]
+
+                if dry_run:
+                    st.info(f"Dry run: {len(dry)} new files found, {len(already)} already ingested, {len(skipped)} skipped.")
+                    if dry:
+                        st.dataframe(pd.DataFrame(dry)[["path", "asset", "month", "type"]],
+                                     use_container_width=True, hide_index=True)
+                else:
+                    st.success(f"Ingested {len(ingested)} files. Already done: {len(already)}. Errors: {len(errors)}.")
+                    if ingested:
+                        st.dataframe(pd.DataFrame(ingested)[["path", "asset", "month", "type", "items"]],
+                                     use_container_width=True, hide_index=True)
+                    if errors:
+                        st.error("Errors:")
+                        st.dataframe(pd.DataFrame(errors)[["path", "asset", "error"]],
+                                     use_container_width=True, hide_index=True)
+
     st.divider()
     st.subheader("Settlement Analytics")
     _render_analytics(book_id, engine)
