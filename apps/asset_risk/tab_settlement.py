@@ -21,14 +21,58 @@ def render_settlement(engine):
 
     book_id = st.selectbox("Book", books["id"].tolist(),
                            format_func=lambda x: books[books["id"] == x]["name"].iloc[0])
-    settlement_month = st.date_input("Settlement Month (1st of month)")
+
+    month_mode = st.radio("Month detection", ["Auto-detect from filename", "Manual override"],
+                          horizontal=True, key="month_mode")
+    manual_month = None
+    if month_mode == "Manual override":
+        manual_month = st.date_input("Settlement Month (1st of month)")
+
+    overwrite = st.checkbox("Overwrite existing data for same book+month", value=True)
 
     uploaded = st.file_uploader("Upload settlement file(s)", type=["xlsx", "xls", "csv", "pdf"],
                                 accept_multiple_files=True)
 
     if uploaded and st.button("Process File(s)"):
         for f in uploaded:
-            st.caption(f"Processing: **{f.name}**")
+            # Auto-detect month from filename
+            if month_mode == "Auto-detect from filename":
+                from services.settlement_ingest.scanner import extract_month_from_filename
+                detected = extract_month_from_filename(f.name)
+                if detected and not detected.startswith("NEED_YEAR"):
+                    settlement_month = detected
+                elif detected:
+                    # Default to current year if only month found
+                    import datetime
+                    settlement_month = detected.replace("NEED_YEAR", str(datetime.datetime.now().year))
+                else:
+                    st.warning(f"Cannot detect month from '{f.name}'. Skipping.")
+                    continue
+            else:
+                settlement_month = manual_month.strftime("%Y-%m-%d") if manual_month else None
+                if not settlement_month:
+                    st.warning("Please select a settlement month.")
+                    continue
+
+            st.caption(f"Processing: **{f.name}** → month: {settlement_month}")
+
+            # Overwrite: delete existing settlement for this book+month+filename pattern
+            if overwrite:
+                with engine.begin() as conn:
+                    # Delete items first (FK), then settlement record
+                    conn.execute(text("""
+                        DELETE FROM marketdata.rm_settlement_items
+                        WHERE settlement_id IN (
+                            SELECT id FROM marketdata.rm_settlements
+                            WHERE book_id = :bid AND settlement_month = :month
+                            AND file_name = :fname
+                        )
+                    """), {"bid": book_id, "month": settlement_month, "fname": f.name})
+                    conn.execute(text("""
+                        DELETE FROM marketdata.rm_settlements
+                        WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
+                    """), {"bid": book_id, "month": settlement_month, "fname": f.name})
+
             file_type = f.name.split(".")[-1].lower()
             if file_type == "pdf":
                 _process_pdf(f, book_id, settlement_month, engine)
