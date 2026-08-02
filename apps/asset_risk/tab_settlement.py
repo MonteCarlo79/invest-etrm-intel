@@ -23,14 +23,17 @@ def render_settlement(engine):
                            format_func=lambda x: books[books["id"] == x]["name"].iloc[0])
     settlement_month = st.date_input("Settlement Month (1st of month)")
 
-    uploaded = st.file_uploader("Upload settlement file", type=["xlsx", "xls", "csv", "pdf"])
+    uploaded = st.file_uploader("Upload settlement file(s)", type=["xlsx", "xls", "csv", "pdf"],
+                                accept_multiple_files=True)
 
-    if uploaded and st.button("Process File"):
-        file_type = uploaded.name.split(".")[-1].lower()
-        if file_type == "pdf":
-            _process_pdf(uploaded, book_id, settlement_month, engine)
-        else:
-            _process_excel(uploaded, book_id, settlement_month, engine)
+    if uploaded and st.button("Process File(s)"):
+        for f in uploaded:
+            st.caption(f"Processing: **{f.name}**")
+            file_type = f.name.split(".")[-1].lower()
+            if file_type == "pdf":
+                _process_pdf(f, book_id, settlement_month, engine)
+            else:
+                _process_excel(f, book_id, settlement_month, engine)
 
     # Auto-scan from invoice folders
     st.divider()
@@ -71,11 +74,39 @@ def render_settlement(engine):
 
 
 def _process_pdf(uploaded, book_id: int, settlement_month, engine):
-    """Process uploaded PDF settlement (上网电费结算单)."""
+    """Process uploaded PDF settlement — auto-detects text vs scanned image."""
     import io
-    from libs.settlement.parser import parse_pdf_settlement
+    import pdfplumber
 
-    items = parse_pdf_settlement(io.BytesIO(uploaded.read()))
+    pdf_bytes = uploaded.read()
+    buf = io.BytesIO(pdf_bytes)
+
+    # Detect if PDF is scanned (image-based) or has extractable text
+    pdf = pdfplumber.open(buf)
+    page = pdf.pages[0]
+    is_scanned = len(page.chars) == 0 and len(page.images) > 0
+    pdf.close()
+
+    if is_scanned:
+        # Use Claude Vision parser for scanned discharge settlement PDFs
+        st.info("Detected scanned PDF — using AI Vision to extract data...")
+        try:
+            import tempfile, os
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(pdf_bytes)
+                tmp_path = tmp.name
+            from services.settlement_ingest.parser_discharge import parse_discharge_settlement_pdf
+            items = parse_discharge_settlement_pdf(tmp_path)
+            os.unlink(tmp_path)
+        except Exception as e:
+            st.error(f"Vision parsing failed: {e}")
+            return
+    else:
+        # Use text-based parser for charging cost PDFs
+        buf.seek(0)
+        from libs.settlement.parser import parse_pdf_settlement
+        items = parse_pdf_settlement(buf)
+
     if not items:
         st.warning("No settlement items extracted from PDF. Check file format.")
         return
