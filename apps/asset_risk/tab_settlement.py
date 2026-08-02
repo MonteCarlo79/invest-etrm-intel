@@ -193,39 +193,77 @@ def _process_excel(uploaded, book_id: int, settlement_month, engine):
 
 
 def _render_analytics(book_id: int, engine):
-    """Render settlement analytics for selected book."""
+    """Render settlement analytics for selected book — monthly breakdown."""
+    import plotly.graph_objects as go
+
     with engine.connect() as conn:
         items_df = pd.read_sql(text("""
-            SELECT si.category, si.peak_period, si.volume_mwh, si.amount_cny,
+            SELECT si.category, si.volume_mwh, si.amount_cny,
                    si.amount_receivable_cny, si.amount_settled_cny, si.amount_diff_cny,
                    s.settlement_month
             FROM marketdata.rm_settlement_items si
             JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
             WHERE s.book_id = :bid
-            ORDER BY s.settlement_month DESC, si.category
+            ORDER BY s.settlement_month, si.category
         """), conn, params={"bid": book_id})
 
     if items_df.empty:
         st.info("No settlement data yet for this book.")
         return
 
+    # Convert settlement_month to period string for display
+    items_df["month"] = pd.to_datetime(items_df["settlement_month"]).dt.strftime("%Y-%m")
+
+    # Summary metrics (all time)
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Amount", f"¥{items_df['amount_cny'].sum():,.0f}")
-    col2.metric("Total Volume", f"{items_df['volume_mwh'].sum():,.1f} MWh")
-    if items_df["volume_mwh"].sum() > 0:
-        avg_price = items_df["amount_cny"].sum() / items_df["volume_mwh"].sum()
-        col3.metric("Avg Price", f"¥{avg_price:,.1f}/MWh")
+    total_vol = items_df["volume_mwh"].sum()
+    col2.metric("Total Volume", f"{total_vol:,.1f} MWh")
+    if total_vol and total_vol != 0:
+        col3.metric("Avg Price", f"¥{items_df['amount_cny'].sum() / total_vol:,.1f}/MWh")
 
-    st.dataframe(
-        items_df.groupby("category").agg(
-            total_amount=("amount_cny", "sum"),
-            total_volume=("volume_mwh", "sum"),
-        ).sort_values("total_amount", ascending=False),
-        use_container_width=True,
+    # Monthly summary table (pivot: month × category)
+    st.subheader("Monthly Breakdown")
+    monthly = items_df.groupby(["month", "category"]).agg(
+        amount=("amount_cny", "sum"),
+        volume=("volume_mwh", "sum"),
+    ).reset_index()
+
+    # Pivot for display
+    pivot = monthly.pivot_table(index="month", columns="category", values="amount", aggfunc="sum", fill_value=0)
+    pivot["NET TOTAL"] = pivot.sum(axis=1)
+    pivot = pivot.sort_index()
+    st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
+
+    # Monthly bar chart (stacked by category)
+    fig = go.Figure()
+    categories = [c for c in pivot.columns if c != "NET TOTAL"]
+    for cat in categories:
+        fig.add_trace(go.Bar(
+            x=pivot.index, y=pivot[cat], name=cat,
+        ))
+    fig.add_trace(go.Scatter(
+        x=pivot.index, y=pivot["NET TOTAL"], name="Net Total",
+        mode="lines+markers", line=dict(color="black", width=2),
+    ))
+    fig.update_layout(
+        barmode="relative", title="Settlement by Month & Category",
+        xaxis_title="Month", yaxis_title="CNY", height=400, legend=dict(orientation="h", y=-0.2),
     )
+    st.plotly_chart(fig, use_container_width=True)
 
+    # Category totals (all months combined)
+    st.subheader("Category Totals (All Months)")
+    cat_totals = items_df.groupby("category").agg(
+        total_amount=("amount_cny", "sum"),
+        total_volume=("volume_mwh", "sum"),
+    ).sort_values("total_amount", ascending=False)
+    st.dataframe(cat_totals.style.format({"total_amount": "¥{:,.0f}", "total_volume": "{:,.1f}"}),
+                 use_container_width=True)
+
+    # Reconciliation
     recon = items_df[items_df["amount_diff_cny"].notna() & (items_df["amount_diff_cny"] != 0)]
     if not recon.empty:
         st.subheader("Reconciliation (应收 vs 实际结算)")
-        st.dataframe(recon[["category", "amount_receivable_cny", "amount_settled_cny", "amount_diff_cny"]],
+        st.dataframe(recon[["month", "category", "amount_receivable_cny", "amount_settled_cny", "amount_diff_cny"]],
                      use_container_width=True, hide_index=True)
