@@ -334,6 +334,17 @@ def _render_analytics(book_id: int, engine):
         pivot["度电价差 (元/MWh)"] = pivot["度电价差 (元/MWh)"].replace([float("inf"), float("-inf")], 0).fillna(0)
 
     pivot = pivot.sort_index()
+
+    # Add YTD subtotal row
+    ytd_row = pivot.sum(axis=0)
+    ytd_row.name = "YTD 合计"
+    # Recalculate 度电价差 for YTD (total spread / total charge volume)
+    if "度电价差 (元/MWh)" in pivot.columns and "价差收入" in pivot.columns:
+        total_charge_vol = monthly[monthly["category_cn"] == "充电电费"]["volume"].sum()
+        if total_charge_vol > 0:
+            ytd_row["度电价差 (元/MWh)"] = ytd_row["价差收入"] / total_charge_vol
+    pivot = pd.concat([pivot, ytd_row.to_frame().T])
+
     st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
 
     # Monthly bar chart (stacked by category)
