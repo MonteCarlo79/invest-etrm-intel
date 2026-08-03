@@ -838,7 +838,11 @@ with tab_data_mgmt:
             "Add it to `config/.env`."
         )
 
-    _ALL_MARKETS = ["蒙西", "山西", "山东", "陕西", "湖南", "浙江", "云南", "贵州", "广东", "广西", "海南", "甘肃"]
+    _ALL_MARKETS = [
+        "蒙西", "山西", "山东", "陕西", "湖南", "浙江", "云南", "贵州",
+        "广东", "广西", "海南", "甘肃",
+        "安徽", "江西", "河北南网", "湖北", "辽宁", "黑龙江",
+    ]
 
     _fx_markets = st.multiselect(
         "Markets",
@@ -1041,10 +1045,14 @@ with tab_data_mgmt:
         except Exception as _fx_prev_exc:
             st.info(f"Table not yet created or empty. ({_fx_prev_exc})")
 
-    # ── Section 8: Ingest local CSV files → RDS ──────────────────────────────
+    # ── Section 8: Ingest local CSV files → RDS (legacy one-time backfill) ────
     st.markdown("---")
     st.subheader("8 · Ingest local nodal CSV files → RDS")
-    st.caption("Scan `data/nodal/` for downloaded CSV files and upsert into `marketdata.md_shanxi_nodal_price_96`.")
+    st.caption(
+        "One-time backfill: scan `data/nodal/` for already-downloaded CSV files and upsert into "
+        "`marketdata.md_shanxi_nodal_price_96`.  "
+        "**For ongoing data collection use ⬇ Download → DB above** (fetches directly from LingFeng API, no local files needed)."
+    )
 
     def _scan_nodal_csvs(nodal_root: str) -> list[dict]:
         """Return list of {province, filename, month, path, size_kb} for all *_YYYY-MM.csv files."""
@@ -1076,7 +1084,7 @@ with tab_data_mgmt:
     _csv_entries = _scan_nodal_csvs(_ingest_nodal_root)
 
     if not _csv_entries:
-        st.info(f"No `*_YYYY-MM.csv` files found under `{_ingest_nodal_root}`. Use Section 7 above to download files first.")
+        st.info(f"No `*_YYYY-MM.csv` files found under `{_ingest_nodal_root}`.")
     else:
         import pandas as _pd_ingest
 

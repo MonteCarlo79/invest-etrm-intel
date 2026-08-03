@@ -32,10 +32,16 @@ def _load_wind_farm_data(start: str, end: str) -> pd.DataFrame:
     with engine.connect() as conn:
         df = pd.read_sql(
             text("""
-                SELECT plant_name, dispatch_unit_name, datetime,
-                       cleared_energy_mwh, cleared_price
+                SELECT
+                    plant_name,
+                    MAX(dispatch_unit_name)                          AS dispatch_unit_name,
+                    SUM(GREATEST(cleared_energy_mwh, 0))             AS total_gen_mwh,
+                    SUM(GREATEST(cleared_energy_mwh, 0) * COALESCE(cleared_price, 0)) AS total_revenue_cny,
+                    MAX(cleared_energy_mwh)                          AS max_dispatch_mwh_15min,
+                    COUNT(DISTINCT datetime::date)                   AS days_active
                 FROM marketdata.md_id_cleared_energy
                 WHERE datetime >= :start AND datetime < :end
+                GROUP BY plant_name
             """),
             conn,
             params={"start": start, "end": end},
@@ -43,26 +49,13 @@ def _load_wind_farm_data(start: str, end: str) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    # Classify asset type
+    # Classify asset type and filter to wind
     df["asset_type"] = df["dispatch_unit_name"].apply(infer_asset_type)
     wind_df = df[df["asset_type"] == "wind"].copy()
     if wind_df.empty:
         return pd.DataFrame()
 
-    # Aggregate (generation = positive energy)
-    wind_df["gen_mwh"]     = wind_df["cleared_energy_mwh"].clip(lower=0)
-    wind_df["revenue_cny"] = wind_df["gen_mwh"] * wind_df["cleared_price"]
-
-    agg = (
-        wind_df.groupby("plant_name").agg(
-            dispatch_unit_name=("dispatch_unit_name", "first"),
-            total_gen_mwh=("gen_mwh", "sum"),
-            total_revenue_cny=("revenue_cny", "sum"),
-            max_dispatch_mwh_15min=("cleared_energy_mwh", "max"),
-            days_active=("datetime", lambda x: x.dt.date.nunique()),
-        )
-        .reset_index()
-    )
+    agg = wind_df.reset_index(drop=True)
 
     # 15-min → MW capacity estimate (÷ 4 missing: max_dispatch is already in MWh per 15 min,
     # × 4 gives hourly equivalent MW)
