@@ -165,10 +165,14 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine):
             st.error(f"Vision parsing failed: {e}")
             return
     else:
-        # Use text-based parser for charging cost PDFs
-        buf.seek(0)
-        from libs.settlement.parser import parse_pdf_settlement
-        items = parse_pdf_settlement(buf)
+        # Use regex-based parser for text-extractable charging cost PDFs
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(pdf_bytes)
+            tmp_path = tmp.name
+        from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
+        items = parse_charging_cost_pdf(tmp_path)
+        os.unlink(tmp_path)
 
     if not items:
         st.warning("No settlement items extracted from PDF. Check file format.")
