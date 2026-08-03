@@ -1597,16 +1597,26 @@ def create_app() -> FastAPI:
         if "challenge" in payload:
             return {"challenge": payload["challenge"]}
 
-        open_id = payload.get("open_id", "")
-        action  = payload.get("action", {})
-        value   = action.get("value") or {}
-        act     = value.get("act", "")
+        # Support both old format (top-level fields) and new 事件与回调 format
+        # (nested under payload["event"]).
+        _event     = payload.get("event") or payload
+        open_id    = (_event.get("operator") or {}).get("open_id", "") or payload.get("open_id", "")
+        action     = _event.get("action") or payload.get("action", {})
+        value      = action.get("value") or {}
+        act        = value.get("act", "")
+        # message_id: top-level (old), or event.context (new)
+        _ctx       = _event.get("context") or {}
+        _open_msg_id = (
+            _ctx.get("open_message_id", "")
+            or payload.get("open_message_id", "")
+        )
+        logger.info("feishu-card act=%s open_id=%s mid=%s payload_keys=%s", act, open_id, _open_msg_id, list(payload.keys()))
 
         # ── Routing-card actions ──────────────────────────────────────────────
         if act == "done_task":
             task_id    = value.get("task_id", "")
             title      = value.get("title", "任务")
-            message_id = payload.get("open_message_id", "")
+            message_id = _open_msg_id
 
             async def _bg_done_task(
                 _task_id=task_id, _title=title, _message_id=message_id
@@ -1778,7 +1788,7 @@ def create_app() -> FastAPI:
 
         if act == "set_llm":
             model_alias  = value.get("model", "auto")
-            message_id   = payload.get("open_message_id", "")
+            message_id   = _open_msg_id
             if open_id:
                 # Resolve alias with dict lookup only — no I/O, safe within 3s window
                 canon = agent._MODEL_ALIASES.get(model_alias.lower())
