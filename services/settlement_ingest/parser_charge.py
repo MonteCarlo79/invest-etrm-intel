@@ -19,10 +19,52 @@ Structure (Mengxi BESS):
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
 import pdfplumber
+
+
+def extract_billing_period(file_path_or_text: str) -> str | None:
+    """Extract the billing period (YYYY-MM-01) from a charging cost PDF.
+
+    Looks for date patterns like '2026-01-01' to '2026-01-31' on page 1,
+    or '结算周期: 2026-01' in the text.
+
+    Args:
+        file_path_or_text: Either a file path or already-extracted text
+
+    Returns:
+        Settlement month as 'YYYY-MM-01' string, or None if not found.
+    """
+    if os.path.exists(file_path_or_text):
+        pdf = pdfplumber.open(file_path_or_text)
+        text = ""
+        for page in pdf.pages[:2]:
+            t = page.extract_text()
+            if t:
+                text += t + "\n"
+        pdf.close()
+    else:
+        text = file_path_or_text
+
+    # Pattern: 结算周期: YYYY-MM or 结算周期：YYYY-MM
+    m = re.search(r'结算周期[：:]\s*(\d{4})-(\d{1,2})', text)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-01"
+
+    # Pattern: YYYY-MM-01 (billing start date on page 1)
+    m = re.search(r'(\d{4})-(\d{2})-01', text)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-01"
+
+    # Pattern: YYYY年MM月 in text
+    m = re.search(r'(\d{4})年(\d{1,2})月', text)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-01"
+
+    return None
 
 
 def parse_charging_cost_pdf(file_path: str) -> list[dict[str, Any]]:
