@@ -48,25 +48,49 @@ def classify_pdf(filename: str) -> str:
 
     Returns: 'charge', 'discharge', or 'unknown'
     """
-    name = filename.lower()
-    # Discharge: 电费结算单 (but not 电费清单), 上网, 上
-    if "电费结算单" in filename and "清单" not in filename:
-        return "discharge"
+    # Skip invoice copies (发票) — not settlement data
+    if "发票" in filename:
+        return "skip"
+
+    # === Discharge (上网 = power sold to grid) ===
+    # Explicit 上网 keyword
     if "上网" in filename:
         return "discharge"
-    # Some use 上/下 convention: 上=discharge(上网), 下=charge(下网)
-    if "【" in filename and "上" in filename and "下" not in filename:
+    # 【B-X-上】 bracket convention (e.g. 【B-7-上】, 【B-11-上】)
+    if "上】" in filename or "-上】" in filename or "上]" in filename:
         return "discharge"
-    # Charge: 电费清单, 下网, 下
-    if "电费清单" in filename or "清单" in filename:
-        return "charge"
+    # "上网结算单" without brackets (e.g. B-11四子王旗2026-03月上网结算单)
+    # Already caught by 上网 above
+
+    # === Charge (下网 = power bought from grid) ===
+    # Explicit 下网 keyword
     if "下网" in filename:
         return "charge"
-    if "【" in filename and "下" in filename and "上" not in filename:
+    # 农网 (agricultural grid) = charging cost variant
+    if "农网" in filename:
         return "charge"
-    # Filename contains month pattern like X月份
-    if "月份" in filename or "月" in filename:
+    # 【B-X-下】 bracket convention
+    if "下】" in filename or "-下】" in filename or "下]" in filename:
         return "charge"
+    # 电费清单 = charging cost detailed bill
+    if "电费清单" in filename or "清单" in filename:
+        return "charge"
+    # "下网结算单" without brackets (e.g. B-11四子王旗2026-03月下网结算单)
+    # Already caught by 下网 above
+    # Files with just 下 + month (e.g. "1月【B-11-下】四子王旗.pdf")
+    if "【" in filename and "下" in filename:
+        return "charge"
+
+    # === Fallback heuristics ===
+    # 电费结算单 without 上/下/清单 = discharge (e.g. 内蒙古悦杭...电费结算单)
+    if "电费结算单" in filename or "结算单" in filename:
+        return "discharge"
+    # Just "下网电费" or similar fragments
+    if "下" in filename and ("电费" in filename or "结算" in filename):
+        return "charge"
+    if "上" in filename and ("电费" in filename or "结算" in filename):
+        return "discharge"
+
     return "unknown"
 
 
