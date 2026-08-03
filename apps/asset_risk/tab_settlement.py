@@ -259,6 +259,24 @@ def _render_analytics(book_id: int, engine):
     """Render settlement analytics for selected book — monthly breakdown."""
     import plotly.graph_objects as go
 
+    # Chinese category labels
+    CATEGORY_CN = {
+        "charge_energy": "充电电费",
+        "discharge_energy": "放电收入",
+        "capacity_compensation": "容量补偿/非市场化",
+        "transmission": "输配电费",
+        "system_operation": "上网线损费",
+        "coal_capacity_charge": "系统运行费",
+        "basic_fee": "基本电费/力调",
+        "govt_surcharges": "政府基金及附加",
+        "frequency": "调频",
+        "penalty": "偏差费用",
+        "subsidy": "补贴",
+        "rebate": "返还",
+        "other": "其他",
+        "generation_revenue": "发电收入",
+    }
+
     with engine.connect() as conn:
         items_df = pd.read_sql(text("""
             SELECT si.category, si.volume_mwh, si.amount_cny,
@@ -271,62 +289,80 @@ def _render_analytics(book_id: int, engine):
         """), conn, params={"bid": book_id})
 
     if items_df.empty:
-        st.info("No settlement data yet for this book.")
+        st.info("暂无结算数据，请先上传结算文件。")
         return
+
+    # Map category to Chinese
+    items_df["category_cn"] = items_df["category"].map(CATEGORY_CN).fillna(items_df["category"])
 
     # Convert settlement_month to period string for display
     items_df["month"] = pd.to_datetime(items_df["settlement_month"]).dt.strftime("%Y-%m")
 
     # Summary metrics (all time)
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total Amount", f"¥{items_df['amount_cny'].sum():,.0f}")
-    total_vol = items_df["volume_mwh"].sum()
-    col2.metric("Total Volume", f"{total_vol:,.1f} MWh")
-    if total_vol and total_vol != 0:
-        col3.metric("Avg Price", f"¥{items_df['amount_cny'].sum() / total_vol:,.1f}/MWh")
+    # Only count volume from discharge/generation (revenue side)
+    revenue_vol = items_df[items_df["category"].isin(["discharge_energy", "generation_revenue"])]["volume_mwh"].sum()
+    col1.metric("结算总额", f"¥{items_df['amount_cny'].sum():,.0f}")
+    col2.metric("放电总量", f"{revenue_vol:,.1f} MWh")
+    if revenue_vol and revenue_vol != 0:
+        col3.metric("放电均价", f"¥{items_df[items_df['category'].isin(['discharge_energy','generation_revenue'])]['amount_cny'].sum() / revenue_vol:,.1f}/MWh")
 
-    # Monthly summary table (pivot: month × category)
-    st.subheader("Monthly Breakdown")
-    monthly = items_df.groupby(["month", "category"]).agg(
+    # Monthly summary table (pivot: month × category_cn)
+    st.subheader("月度明细")
+    monthly = items_df.groupby(["month", "category_cn"]).agg(
         amount=("amount_cny", "sum"),
         volume=("volume_mwh", "sum"),
     ).reset_index()
 
     # Pivot for display
-    pivot = monthly.pivot_table(index="month", columns="category", values="amount", aggfunc="sum", fill_value=0)
-    pivot["NET TOTAL"] = pivot.sum(axis=1)
+    pivot = monthly.pivot_table(index="month", columns="category_cn", values="amount", aggfunc="sum", fill_value=0)
+    pivot["净利润"] = pivot.sum(axis=1)
+
+    # Add spread columns: 价差收入 = 放电收入 + 充电电费 (charge is negative)
+    discharge_col = "放电收入" if "放电收入" in pivot.columns else None
+    charge_col = "充电电费" if "充电电费" in pivot.columns else None
+    if discharge_col and charge_col:
+        pivot["价差收入"] = pivot[discharge_col] + pivot[charge_col]
+        # Get monthly charge volume for per-MWh spread
+        charge_vol = monthly[monthly["category_cn"] == "充电电费"].set_index(
+            monthly[monthly["category_cn"] == "充电电费"]["month"])["volume"].reindex(pivot.index).fillna(0)
+        pivot["度电价差 (元/MWh)"] = pivot["价差收入"] / charge_vol.values
+        pivot["度电价差 (元/MWh)"] = pivot["度电价差 (元/MWh)"].replace([float("inf"), float("-inf")], 0).fillna(0)
+
     pivot = pivot.sort_index()
     st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
 
     # Monthly bar chart (stacked by category)
     fig = go.Figure()
-    categories = [c for c in pivot.columns if c != "NET TOTAL"]
+    categories = [c for c in pivot.columns if c != "净利润"]
     for cat in categories:
         fig.add_trace(go.Bar(
             x=pivot.index, y=pivot[cat], name=cat,
         ))
     fig.add_trace(go.Scatter(
-        x=pivot.index, y=pivot["NET TOTAL"], name="Net Total",
+        x=pivot.index, y=pivot["净利润"], name="净利润",
         mode="lines+markers", line=dict(color="black", width=2),
     ))
     fig.update_layout(
-        barmode="relative", title="Settlement by Month & Category",
-        xaxis_title="Month", yaxis_title="CNY", height=400, legend=dict(orientation="h", y=-0.2),
+        barmode="relative", title="月度结算分类",
+        xaxis_title="月份", yaxis_title="元 (CNY)", height=400,
+        legend=dict(orientation="h", y=-0.2),
     )
     st.plotly_chart(fig, use_container_width=True)
 
     # Category totals (all months combined)
-    st.subheader("Category Totals (All Months)")
-    cat_totals = items_df.groupby("category").agg(
+    st.subheader("分类汇总 (全部月份)")
+    cat_totals = items_df.groupby("category_cn").agg(
         total_amount=("amount_cny", "sum"),
         total_volume=("volume_mwh", "sum"),
     ).sort_values("total_amount", ascending=False)
-    st.dataframe(cat_totals.style.format({"total_amount": "¥{:,.0f}", "total_volume": "{:,.1f}"}),
+    cat_totals.columns = ["金额 (元)", "电量 (MWh)"]
+    st.dataframe(cat_totals.style.format({"金额 (元)": "¥{:,.0f}", "电量 (MWh)": "{:,.1f}"}),
                  use_container_width=True)
 
     # Reconciliation
     recon = items_df[items_df["amount_diff_cny"].notna() & (items_df["amount_diff_cny"] != 0)]
     if not recon.empty:
-        st.subheader("Reconciliation (应收 vs 实际结算)")
-        st.dataframe(recon[["month", "category", "amount_receivable_cny", "amount_settled_cny", "amount_diff_cny"]],
+        st.subheader("对账 (应收 vs 实际结算)")
+        st.dataframe(recon[["month", "category_cn", "amount_receivable_cny", "amount_settled_cny", "amount_diff_cny"]],
                      use_container_width=True, hide_index=True)
