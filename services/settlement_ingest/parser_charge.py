@@ -104,7 +104,7 @@ def parse_charging_cost_pdf(file_path: str) -> list[dict[str, Any]]:
     # Extract each category amount
     # 1. 电能电费
     amt = _extract_amount(full_text, r'电能电费元\s+([\d,.]+|-[\d,.]+)')
-    if amt is not None:
+    if amt and amt != 0:
         items.append({"category": "charge_energy", "volume_mwh": volume_mwh, "amount_cny": amt, "notes": "电能电费(市场化购电)"})
 
     # Market adjustment fee
@@ -159,19 +159,38 @@ def parse_charging_cost_pdf(file_path: str) -> list[dict[str, Any]]:
 
     # 9. 政府基金及附加
     amt = _extract_amount(full_text, r'政府基金及附加元\s+([\d,.]+|-[\d,.]+)')
-    if amt is not None:
+    if amt and amt != 0:
         items.append({"category": "govt_surcharges", "amount_cny": amt, "notes": "政府基金及附加"})
 
-    # Total for validation
-    total_amt = _extract_amount(full_text, r'总电费\(元\)\s*([\d,.]+|-[\d,.]+)')
+    # 10. 退补电费 (refund/supplement — sometimes the only non-zero line)
+    # Pattern: "退补电费" section with a number, or the row "目录/输配电费 容量电费 ... <amount>"
+    amt = _extract_amount(full_text, r'退补电费\s*\n.*?([\d,]+\.\d{2})')
+    if not amt:
+        # Alternative: look for the summary row after "退补电费" heading
+        m = re.search(r'目录/输配电费\s+容量电费.*?([\d,]+\.\d{2})\s*$', full_text, re.MULTILINE)
+        if m:
+            amt = _parse_number(m.group(1))
+    if amt and amt != 0:
+        items.append({"category": "charge_energy", "amount_cny": amt, "notes": "退补电费"})
+
+    # Total for validation — try multiple patterns
+    total_amt = _extract_amount(full_text, r'总电费\s*[（(]元[)）]\s*\n?\s*([\d,.]+|-[\d,.]+)')
+    if not total_amt:
+        total_amt = _extract_amount(full_text, r'=总电费\(元\)\s*([\d,.]+|-[\d,.]+)')
+    if not total_amt:
+        # "电费构成 AMOUNT" on page 1
+        total_amt = _extract_amount(full_text, r'电费构成\s+([\d,.]+|-[\d,.]+)')
+
     if total_amt:
-        # Validate: sum of items should be close to total
         item_sum = sum(i["amount_cny"] for i in items)
         if abs(item_sum - total_amt) > 1.0:
-            # Add residual as "other"
             residual = total_amt - item_sum
             if abs(residual) > 0.01:
-                items.append({"category": "other", "amount_cny": residual, "notes": f"Residual (total={total_amt}, sum={item_sum})"})
+                items.append({"category": "charge_energy", "amount_cny": residual, "notes": f"总电费差额 (total={total_amt:,.0f})"})
+
+    # If still no items found, use the total directly
+    if not items and total_amt and total_amt != 0:
+        items.append({"category": "charge_energy", "amount_cny": total_amt, "volume_mwh": volume_mwh, "notes": "总电费(全额)"})
 
     # Negate all amounts (charging = cost = negative for P&L)
     for item in items:
