@@ -322,27 +322,44 @@ def _render_analytics(book_id: int, engine):
     pivot = monthly.pivot_table(index="month", columns="category_cn", values="amount", aggfunc="sum", fill_value=0)
     pivot["净利润"] = pivot.sum(axis=1)
 
-    # Add spread columns: 价差收入 = 放电收入 + 充电电费 (charge is negative)
+    # Add spread columns
     discharge_col = "放电收入" if "放电收入" in pivot.columns else None
     charge_col = "充电电费" if "充电电费" in pivot.columns else None
+    cap_col = "容量补偿/非市场化" if "容量补偿/非市场化" in pivot.columns else None
+
+    # Get monthly discharge volume for per-MWh calculations
+    discharge_vol = monthly[monthly["category_cn"] == "放电收入"].set_index(
+        monthly[monthly["category_cn"] == "放电收入"]["month"])["volume"].reindex(pivot.index).fillna(0)
+
     if discharge_col and charge_col:
-        pivot["价差收入"] = pivot[discharge_col] + pivot[charge_col]
-        # Get monthly charge volume for per-MWh spread
-        charge_vol = monthly[monthly["category_cn"] == "充电电费"].set_index(
-            monthly[monthly["category_cn"] == "充电电费"]["month"])["volume"].reindex(pivot.index).fillna(0)
-        pivot["度电价差 (元/MWh)"] = pivot["价差收入"] / charge_vol.values
-        pivot["度电价差 (元/MWh)"] = pivot["度电价差 (元/MWh)"].replace([float("inf"), float("-inf")], 0).fillna(0)
+        # 总价差收入 = 放电收入 + 容量补偿 + 充电电费 (charge is negative)
+        cap_amount = pivot[cap_col] if cap_col else 0
+        pivot["价差收入"] = pivot[discharge_col] + cap_amount + pivot[charge_col]
+
+        # 度电总价差 = 价差收入 / 放电电量
+        pivot["度电总价差"] = (pivot["价差收入"] / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+
+        # 容量补偿价差 = 容量补偿 / 放电电量
+        if cap_col:
+            pivot["容量补偿价差"] = (pivot[cap_col] / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+
+        # 套利价差 = (放电收入 + 充电电费) / 放电电量 (即扣除容量补偿的充放价差)
+        arb_spread = pivot[discharge_col] + pivot[charge_col]
+        pivot["套利价差"] = (arb_spread / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
 
     pivot = pivot.sort_index()
 
     # Add YTD subtotal row
     ytd_row = pivot.sum(axis=0)
     ytd_row.name = "YTD 合计"
-    # Recalculate 度电价差 for YTD (total spread / total charge volume)
-    if "度电价差 (元/MWh)" in pivot.columns and "价差收入" in pivot.columns:
-        total_charge_vol = monthly[monthly["category_cn"] == "充电电费"]["volume"].sum()
-        if total_charge_vol > 0:
-            ytd_row["度电价差 (元/MWh)"] = ytd_row["价差收入"] / total_charge_vol
+    # Recalculate per-MWh metrics for YTD
+    total_discharge_vol = monthly[monthly["category_cn"] == "放电收入"]["volume"].sum()
+    if total_discharge_vol > 0 and "价差收入" in pivot.columns:
+        ytd_row["度电总价差"] = ytd_row["价差收入"] / total_discharge_vol
+        if cap_col and "容量补偿价差" in pivot.columns:
+            ytd_row["容量补偿价差"] = ytd_row[cap_col] / total_discharge_vol
+        if "套利价差" in pivot.columns and discharge_col and charge_col:
+            ytd_row["套利价差"] = (ytd_row[discharge_col] + ytd_row[charge_col]) / total_discharge_vol
     pivot = pd.concat([pivot, ytd_row.to_frame().T])
 
     st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
