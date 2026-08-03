@@ -1001,6 +1001,78 @@ def _save_session_state(ctx) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Session keep-alive
+# ---------------------------------------------------------------------------
+
+def keepalive_session() -> bool:
+    """Refresh the saved Modo session by navigating to /home with existing cookies.
+
+    If the session is still valid Playwright updates the cookies (server renews
+    them), and we re-save the storage state so the next run finds a fresh
+    24-hour window.  Returns True if the session was alive and refreshed,
+    False if not (caller should NOT attempt a fresh login — that fires a
+    magic-link email; the nightly _modo_ai_job handles fresh logins itself).
+    """
+    saved_state = _load_session_state()
+    if not saved_state:
+        logger.info("[modo_ai] keepalive: no saved session — skipping")
+        return False
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("[modo_ai] keepalive: playwright not installed")
+        return False
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            ctx = browser.new_context(
+                storage_state=saved_state,
+                viewport={"width": 1280, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                ),
+                locale="en-GB",
+                timezone_id="Asia/Singapore",
+            )
+            page = ctx.new_page()
+            page.on("console", lambda _: None)
+            try:
+                page.goto(
+                    "https://modoenergy.com/home",
+                    timeout=30_000,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(3_000)
+                connector = ModoAIConnector()
+                if connector._is_authenticated(page):
+                    _save_session_state(ctx)
+                    logger.info("[modo_ai] keepalive: session still valid — cookies refreshed")
+                    return True
+                else:
+                    logger.info(
+                        "[modo_ai] keepalive: session expired (URL: %s) — "
+                        "skipping (nightly job will re-login at 20:00 SGT)",
+                        page.url,
+                    )
+                    return False
+            finally:
+                try:
+                    ctx.close()
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.warning("[modo_ai] keepalive: error — %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Alert helpers
 # ---------------------------------------------------------------------------
 

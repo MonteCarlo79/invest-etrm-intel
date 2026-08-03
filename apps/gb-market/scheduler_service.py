@@ -138,6 +138,22 @@ def _kb_digest_job():
         logger.error("KB digest failed: %s", exc)
 
 
+def _modo_keepalive_job():
+    """Refresh Modo session cookies 6 h before the nightly distillation job.
+
+    Navigates to modoenergy.com/home with the saved session.  If still valid
+    the server renews the cookies and we re-save them, so the 20:00 SGT job
+    finds a live session and skips the password login — preventing Modo from
+    sending a magic-link security email.
+    """
+    try:
+        from services.gb_knowledge.modo_ai import keepalive_session
+        refreshed = keepalive_session()
+        logger.info("Modo session keep-alive: %s", "refreshed" if refreshed else "session expired (nightly job will re-login)")
+    except Exception as exc:
+        logger.warning("Modo session keep-alive failed: %s", exc)
+
+
 def _modo_ai_job():
     try:
         from services.gb_knowledge.modo_ai import ModoAIConnector
@@ -250,6 +266,8 @@ def start_scheduler():
                       id="gb_daily_knowledge", misfire_grace_time=3600)
     scheduler.add_job(_kb_digest_job,       "cron", hour=3, minute=45,
                       id="gb_kb_digest",       misfire_grace_time=3600)
+    scheduler.add_job(_modo_keepalive_job,   "cron", hour=14, minute=0,
+                      id="gb_modo_keepalive",  misfire_grace_time=3600)
     scheduler.add_job(_modo_ai_job,         "cron", hour=20, minute=0,
                       id="gb_modo_ai",         misfire_grace_time=3600)
     scheduler.add_job(_pricing_batch_job,   "cron", hour=4, minute=30,
