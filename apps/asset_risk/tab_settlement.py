@@ -302,14 +302,27 @@ def _render_analytics(book_id: int, engine):
     # Convert settlement_month to period string for display
     items_df["month"] = pd.to_datetime(items_df["settlement_month"]).dt.strftime("%Y-%m")
 
-    # Summary metrics (all time)
-    col1, col2, col3 = st.columns(3)
-    # Only count volume from discharge/generation (revenue side)
+    # Summary metrics
     revenue_vol = items_df[items_df["category"].isin(["discharge_energy", "generation_revenue"])]["volume_mwh"].sum()
+    charge_vol_total = items_df[items_df["category"] == "charge_energy"]["volume_mwh"].sum()
+    charge_amt_total = items_df[items_df["category"] == "charge_energy"]["amount_cny"].sum()
+    discharge_amt_total = items_df[items_df["category"].isin(["discharge_energy", "generation_revenue"])]["amount_cny"].sum()
+
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("结算总额", f"¥{items_df['amount_cny'].sum():,.0f}")
     col2.metric("放电总量", f"{revenue_vol:,.1f} MWh")
-    if revenue_vol and revenue_vol != 0:
-        col3.metric("放电均价", f"¥{items_df[items_df['category'].isin(['discharge_energy','generation_revenue'])]['amount_cny'].sum() / revenue_vol:,.1f}/MWh")
+    col3.metric("放电均价", f"¥{discharge_amt_total / revenue_vol:,.1f}/MWh" if revenue_vol else "N/A")
+    col4.metric("充电总量", f"{charge_vol_total:,.1f} MWh")
+    col5.metric("充电均价", f"¥{abs(charge_amt_total / charge_vol_total):,.1f}/MWh" if charge_vol_total else "N/A")
+
+    # Get asset capacity for cycle calculation
+    with engine.connect() as conn:
+        cap_df = pd.read_sql(text("""
+            SELECT a.capacity_mw FROM marketdata.rm_assets a
+            JOIN marketdata.rm_books b ON b.asset_id = a.id
+            WHERE b.id = :bid
+        """), conn, params={"bid": book_id})
+    installed_capacity_mwh = float(cap_df["capacity_mw"].iloc[0]) if not cap_df.empty else None
 
     # Monthly summary table (pivot: month × category_cn)
     st.subheader("月度明细")
@@ -347,6 +360,21 @@ def _render_analytics(book_id: int, engine):
         arb_spread = pivot[discharge_col] + pivot[charge_col]
         pivot["套利价差"] = (arb_spread / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
 
+    # 日均充放次数 = 月充电总量 / 装机容量 / 当月天数
+    if installed_capacity_mwh and installed_capacity_mwh > 0:
+        import calendar
+        charge_vol_monthly = monthly[monthly["category_cn"] == "充电电费"].set_index(
+            monthly[monthly["category_cn"] == "充电电费"]["month"])["volume"].reindex(pivot.index).fillna(0)
+        days_in_month = []
+        for m in pivot.index:
+            try:
+                year, mon = int(m[:4]), int(m[5:7])
+                days_in_month.append(calendar.monthrange(year, mon)[1])
+            except (ValueError, IndexError):
+                days_in_month.append(30)
+        pivot["日均充放次数"] = (charge_vol_monthly.values / installed_capacity_mwh / pd.Series(days_in_month, index=pivot.index).values).round(2)
+        pivot["日均充放次数"] = pivot["日均充放次数"].replace([float("inf"), float("-inf")], 0).fillna(0)
+
     pivot = pivot.sort_index()
 
     # Add YTD subtotal row
@@ -354,12 +382,17 @@ def _render_analytics(book_id: int, engine):
     ytd_row.name = "YTD 合计"
     # Recalculate per-MWh metrics for YTD
     total_discharge_vol = monthly[monthly["category_cn"] == "放电收入"]["volume"].sum()
+    total_charge_vol = monthly[monthly["category_cn"] == "充电电费"]["volume"].sum()
     if total_discharge_vol > 0 and "价差收入" in pivot.columns:
         ytd_row["度电总价差"] = ytd_row["价差收入"] / total_discharge_vol
         if cap_col and "容量补偿价差" in pivot.columns:
             ytd_row["容量补偿价差"] = ytd_row[cap_col] / total_discharge_vol
         if "套利价差" in pivot.columns and discharge_col and charge_col:
             ytd_row["套利价差"] = (ytd_row[discharge_col] + ytd_row[charge_col]) / total_discharge_vol
+    # YTD 日均充放次数 = total charge volume / capacity / total days
+    if installed_capacity_mwh and installed_capacity_mwh > 0 and "日均充放次数" in pivot.columns:
+        total_days = sum(days_in_month)
+        ytd_row["日均充放次数"] = round(total_charge_vol / installed_capacity_mwh / total_days, 2) if total_days > 0 else 0
     pivot = pd.concat([pivot, ytd_row.to_frame().T])
 
     st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
