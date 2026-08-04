@@ -498,8 +498,8 @@ class HermesAgent:
                 history = mem.load_history(chat_id)
                 if history:
                     hist_lines = [
-                        f"{t['role'].capitalize()}: {t['content'][:300]}"
-                        for t in history[-8:]
+                        f"{t['role'].capitalize()}: {t['content'][:1500]}"
+                        for t in history[-6:]
                     ]
                     system += (
                         "\n\n--- RECENT CONVERSATION HISTORY (shown for context only) ---\n"
@@ -527,35 +527,44 @@ class HermesAgent:
                     pass
             return None
 
-        def _save_raw_to_history(json_text: str) -> None:
-            """Save the raw JSON response as the assistant turn so history
-            shows JSON format and Claude doesn't mimic plain-text next time."""
+        def _save_to_history(reply_text: str) -> None:
+            """Save the reply TEXT (not raw JSON) so continuation works.
+            Storing raw JSON meant history was 'Assistant: {"action":"REPLY",...}'
+            truncated to 300 chars — the LLM couldn't see what it had written."""
             if chat_id and mem:
                 try:
-                    mem.save_turn(chat_id, "assistant", json_text)
+                    mem.save_turn(chat_id, "assistant", reply_text)
                 except Exception:
                     pass
 
         # Try direct parse
         result = _try_parse(raw)
         if result:
-            _save_raw_to_history(raw)
+            _save_to_history(result.reply or raw)
             return result
         # Extract JSON from markdown fences
         m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
         if m:
             result = _try_parse(m.group(1))
             if result:
-                _save_raw_to_history(m.group(1))
+                _save_to_history(result.reply or m.group(1))
                 return result
         # Last resort: find any JSON object in the response
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         if m:
             result = _try_parse(m.group(0))
             if result:
-                _save_raw_to_history(m.group(0))
+                _save_to_history(result.reply or m.group(0))
                 return result
-        raise ValueError(f"No valid JSON in Claude response: {raw[:300]}")
+        # All JSON parsing failed (usually max_tokens cut the JSON mid-string).
+        # Return partial content as a REPLY rather than crashing with ❌.
+        logger.warning("JSON parse failed (likely max_tokens truncation), returning partial REPLY")
+        partial = raw.strip()
+        _save_to_history(partial)
+        return Action(
+            action="REPLY", params={},
+            reply=partial + "\n\n_（内容可能未完成，回复「继续」可续写）_",
+        )
 
     def execute(self, action: Action) -> str:
         """Execute the action and return an optional supplementary reply."""
