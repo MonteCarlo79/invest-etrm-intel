@@ -340,9 +340,15 @@ def _render_analytics(book_id: int, engine):
     charge_col = "充电电费" if "充电电费" in pivot.columns else None
     cap_col = "容量补偿/非市场化" if "容量补偿/非市场化" in pivot.columns else None
 
-    # Get monthly discharge volume for per-MWh calculations
+    # Get monthly volumes for calculations
     discharge_vol = monthly[monthly["category_cn"] == "放电收入"].set_index(
         monthly[monthly["category_cn"] == "放电收入"]["month"])["volume"].reindex(pivot.index).fillna(0)
+    charge_vol_monthly = monthly[monthly["category_cn"] == "充电电费"].set_index(
+        monthly[monthly["category_cn"] == "充电电费"]["month"])["volume"].reindex(pivot.index).fillna(0)
+
+    # Add volume columns
+    pivot["放电量(MWh)"] = discharge_vol.values
+    pivot["充电量(MWh)"] = charge_vol_monthly.values
 
     if discharge_col and charge_col:
         # 总价差收入 = 放电收入 + 容量补偿 + 充电电费 (charge is negative)
@@ -361,17 +367,15 @@ def _render_analytics(book_id: int, engine):
         pivot["套利价差"] = (arb_spread / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
 
     # 日均充放次数 = 月充电总量 / 装机容量 / 当月天数
+    import calendar
+    days_in_month = []
+    for m in pivot.index:
+        try:
+            year, mon = int(m[:4]), int(m[5:7])
+            days_in_month.append(calendar.monthrange(year, mon)[1])
+        except (ValueError, IndexError):
+            days_in_month.append(30)
     if installed_capacity_mwh and installed_capacity_mwh > 0:
-        import calendar
-        charge_vol_monthly = monthly[monthly["category_cn"] == "充电电费"].set_index(
-            monthly[monthly["category_cn"] == "充电电费"]["month"])["volume"].reindex(pivot.index).fillna(0)
-        days_in_month = []
-        for m in pivot.index:
-            try:
-                year, mon = int(m[:4]), int(m[5:7])
-                days_in_month.append(calendar.monthrange(year, mon)[1])
-            except (ValueError, IndexError):
-                days_in_month.append(30)
         pivot["日均充放次数"] = (charge_vol_monthly.values / installed_capacity_mwh / pd.Series(days_in_month, index=pivot.index).values).round(2)
         pivot["日均充放次数"] = pivot["日均充放次数"].replace([float("inf"), float("-inf")], 0).fillna(0)
 
@@ -394,6 +398,17 @@ def _render_analytics(book_id: int, engine):
         total_days = sum(days_in_month)
         ytd_row["日均充放次数"] = round(total_charge_vol / installed_capacity_mwh / total_days, 2) if total_days > 0 else 0
     pivot = pd.concat([pivot, ytd_row.to_frame().T])
+
+    # Reorder columns: 净利润, 容量补偿, 价差收入, 调频, 系统运行费, 基本电费/力调, 放电收入, 充电电费, 放电量, 充电量, 度电总价差, 容量补偿价差, 套利价差, 日均充放次数
+    desired_order = [
+        "净利润", "容量补偿/非市场化", "价差收入", "调频", "系统运行费", "上网线损费",
+        "基本电费/力调", "放电收入", "充电电费", "放电量(MWh)", "充电量(MWh)",
+        "度电总价差", "容量补偿价差", "套利价差", "日均充放次数",
+    ]
+    # Keep only columns that exist, then append any remaining
+    ordered_cols = [c for c in desired_order if c in pivot.columns]
+    remaining = [c for c in pivot.columns if c not in ordered_cols]
+    pivot = pivot[ordered_cols + remaining]
 
     st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
 

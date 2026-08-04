@@ -91,13 +91,39 @@ def parse_charging_cost_pdf(file_path: str) -> list[dict[str, Any]]:
 
     items = []
 
-    # Extract total volume (计费电量) from first section
-    total_volume_kwh = _extract_first_number(full_text, r'计费电量kWh\s+电价标准.*?元\s+([\d,.]+)')
+    # Extract total charging volume (计费电量 kWh)
+    # Strategy: find lines with pattern "VOLUME PRICE AMOUNT" where volume > 10000
+    # (typical BESS monthly charge volume is 500,000 - 30,000,000 kWh)
+    total_volume_kwh = None
+
+    # Pattern 1: data rows "NUMBER.N NUMBER.NNNNNN NUMBER.NN" (volume, price, amount)
+    # These appear after "工商业输配" or similar category labels
+    data_rows = re.findall(r'([\d,]+\.?\d*)\s+([\d.]+)\s+([\d,.]+\.\d{2})', full_text)
+    if data_rows:
+        # Filter for plausible volumes (> 10000 kWh = 10 MWh minimum)
+        volumes = []
+        for vol_str, price_str, amt_str in data_rows:
+            vol = _parse_number(vol_str)
+            if vol and vol > 10000:  # > 10 MWh in kWh
+                volumes.append(vol)
+        if volumes:
+            total_volume_kwh = max(volumes)
+
+    # Pattern 2: page 1 header "= 计费电量" newline NUMBER
     if not total_volume_kwh:
-        # Try alternative: first large number after 计费电量
-        m = re.search(r'([\d,]+\.\d)\s+[\d.]+\s+[\d,.]+\.\d{2}', full_text)
+        m = re.search(r'=\s*计费电量\s*\n\s*([\d,]+)', full_text)
         if m:
-            total_volume_kwh = _parse_number(m.group(1))
+            v = _parse_number(m.group(1))
+            if v and v > 1000:
+                total_volume_kwh = v
+
+    # Pattern 3: after "计费电量" in table header, the number on the next few lines
+    if not total_volume_kwh:
+        m = re.search(r'计费电量\s*\n.*?\n.*?([\d,]+)\s', full_text, re.DOTALL)
+        if m:
+            v = _parse_number(m.group(1))
+            if v and v > 1000:
+                total_volume_kwh = v
 
     volume_mwh = total_volume_kwh / 1000.0 if total_volume_kwh else None
 
