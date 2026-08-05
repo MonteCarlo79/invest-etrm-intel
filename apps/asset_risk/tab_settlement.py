@@ -324,11 +324,14 @@ def _render_analytics(book_id: int, engine):
     # Get asset capacity for cycle calculation
     with engine.connect() as conn:
         cap_df = pd.read_sql(text("""
-            SELECT a.capacity_mw FROM marketdata.rm_assets a
+            SELECT a.capacity_mw, a.bess_duration_h FROM marketdata.rm_assets a
             JOIN marketdata.rm_books b ON b.asset_id = a.id
             WHERE b.id = :bid
         """), conn, params={"bid": book_id})
-    installed_capacity_mwh = float(cap_df["capacity_mw"].iloc[0]) if not cap_df.empty else None
+    capacity_mw = float(cap_df["capacity_mw"].iloc[0]) if not cap_df.empty else None
+    duration_h = float(cap_df["bess_duration_h"].iloc[0]) if (not cap_df.empty and cap_df["bess_duration_h"].iloc[0]) else 4.0
+    # Energy per cycle (MWh) = MW × hours
+    energy_per_cycle_mwh = capacity_mw * duration_h if capacity_mw else None
 
     # Monthly summary table (pivot: month × category_cn)
     st.subheader("月度明细")
@@ -381,8 +384,8 @@ def _render_analytics(book_id: int, engine):
             days_in_month.append(calendar.monthrange(year, mon)[1])
         except (ValueError, IndexError):
             days_in_month.append(30)
-    if installed_capacity_mwh and installed_capacity_mwh > 0:
-        pivot["日均充放次数"] = (charge_vol_monthly.values / installed_capacity_mwh / pd.Series(days_in_month, index=pivot.index).values).round(2)
+    if energy_per_cycle_mwh and energy_per_cycle_mwh > 0:
+        pivot["日均充放次数"] = (charge_vol_monthly.values / energy_per_cycle_mwh / pd.Series(days_in_month, index=pivot.index).values).round(2)
         pivot["日均充放次数"] = pivot["日均充放次数"].replace([float("inf"), float("-inf")], 0).fillna(0)
 
     # Add 电能转化率 per month
@@ -412,9 +415,9 @@ def _render_analytics(book_id: int, engine):
         if "套利价差" in pivot.columns and discharge_col and charge_col:
             ytd_row["套利价差"] = (ytd_row[discharge_col] + ytd_row[charge_col]) / total_discharge_vol
     # YTD 日均充放次数
-    if installed_capacity_mwh and installed_capacity_mwh > 0 and "日均充放次数" in pivot.columns:
+    if energy_per_cycle_mwh and energy_per_cycle_mwh > 0 and "日均充放次数" in pivot.columns:
         ytd_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(current_year))
-        ytd_row["日均充放次数"] = round(total_charge_vol / installed_capacity_mwh / ytd_days, 2) if ytd_days > 0 else 0
+        ytd_row["日均充放次数"] = round(total_charge_vol / energy_per_cycle_mwh / ytd_days, 2) if ytd_days > 0 else 0
     # YTD 转化率
     if total_charge_vol > 0:
         ytd_row["转化率"] = total_discharge_vol / total_charge_vol
