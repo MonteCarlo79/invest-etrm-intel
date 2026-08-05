@@ -103,7 +103,7 @@ _MENGXI_HIST_TABLES = [
 ]
 
 _FENGXING_TABLES = [
-    ("marketdata.md_shanxi_nodal_price_96", "data_date"),
+    ("marketdata.md_shanxi_nodal_price_96", "metric_time::date"),
 ]
 
 

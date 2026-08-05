@@ -56,7 +56,9 @@ from sqlalchemy import create_engine, text
 
 try:
     from dotenv import load_dotenv  # type: ignore
-    load_dotenv()
+    from pathlib import Path as _Path
+    _env = _Path(__file__).resolve().parents[2] / "config" / ".env"
+    load_dotenv(dotenv_path=str(_env) if _env.exists() else None)
 except Exception:
     pass
 

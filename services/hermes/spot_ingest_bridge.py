@@ -36,6 +36,7 @@ PROVINCES_MAP: dict[str, str] = {
     "河北": "Hebei",
     "冀北": "Hebei-North",
     "冀南": "Hebei-South",
+    "河北南网": "Hebei-South",
     "青海": "Qinghai",
     "江西": "Jiangxi",
     "海南": "Hainan",

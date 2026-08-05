@@ -69,13 +69,6 @@ def _bulk_upsert(path: Path, engine) -> int:
     df["node_name"] = df["node_name"].astype(str)
     df["market_name"] = df["market_name"].fillna("").astype(str)
 
-    print(f"  serialising to buffer ...", end=" ", flush=True)
-    t = time.time()
-    buf = io.StringIO()
-    df.to_csv(buf, index=False, header=False, na_rep="")
-    buf.seek(0)
-    print(f"{time.time()-t:.1f}s")
-
     staging = f"stg_nodal_{int(time.time() * 1000) % 2_000_000_000}"
 
     print(f"  connecting to DB ...", end=" ", flush=True)
@@ -83,10 +76,13 @@ def _bulk_upsert(path: Path, engine) -> int:
     raw = engine.raw_connection()
     print(f"{time.time()-t:.1f}s")
 
+    # Chunk size: 100k rows ≈ 7 MB per COPY call — avoids hanging on large files
+    _CHUNK = 100_000
+    n_chunks = (len(df) - 1) // _CHUNK + 1
+
     try:
         cur = raw.cursor()
-        # Set statement timeout so DB ops can't hang indefinitely
-        cur.execute("SET statement_timeout = '300s'")
+        cur.execute("SET statement_timeout = '120s'")
 
         cur.execute(f"""
             CREATE TEMP TABLE "{staging}" (
@@ -98,10 +94,18 @@ def _bulk_upsert(path: Path, engine) -> int:
             )
         """)
 
-        print(f"  COPY to staging ...", end=" ", flush=True)
+        print(f"  COPY to staging ({n_chunks} chunk(s)) ...")
         t = time.time()
-        cur.copy_expert(f'COPY "{staging}" FROM STDIN WITH (FORMAT CSV)', buf)
-        print(f"{time.time()-t:.1f}s")
+        for ci, start_row in enumerate(range(0, len(df), _CHUNK), 1):
+            chunk = df.iloc[start_row: start_row + _CHUNK]
+            buf = io.StringIO()
+            chunk.to_csv(buf, index=False, header=False, na_rep="")
+            buf.seek(0)
+            print(f"    chunk {ci}/{n_chunks} ({len(chunk):,} rows) ...", end=" ", flush=True)
+            tc = time.time()
+            cur.copy_expert(f'COPY "{staging}" FROM STDIN WITH (FORMAT CSV)', buf)
+            print(f"{time.time()-tc:.1f}s")
+        print(f"  COPY done in {time.time()-t:.1f}s total")
 
         print(f"  INSERT ON CONFLICT ...", end=" ", flush=True)
         t = time.time()
