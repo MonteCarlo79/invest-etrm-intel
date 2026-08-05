@@ -15,6 +15,10 @@ import datetime as dt
 import tempfile
 from pathlib import Path
 from typing import Optional
+from irr_helpers import (
+    _compute_irr, _compute_npv, build_cashflows,
+    _irr_defaults_for_province, _build_extra_rev_map,
+)
 
 import json
 
@@ -1397,74 +1401,7 @@ def _chart_bess_revenue_map_inner(sub, rev_map, label_map, geojson,
     return fig
 
 
-# ── IRR computation ────────────────────────────────────────────────────────────
-def _compute_irr(cashflows: list) -> Optional[float]:
-    """Newton-Raphson IRR. Returns None if no solution found."""
-    if not cashflows or cashflows[0] >= 0:
-        return None
-    r = 0.1
-    for _ in range(300):
-        npv  = sum(cf / (1 + r) ** t for t, cf in enumerate(cashflows))
-        dnpv = sum(-t * cf / (1 + r) ** (t + 1) for t, cf in enumerate(cashflows))
-        if abs(dnpv) < 1e-12:
-            break
-        r -= npv / dnpv
-        if r <= -1:
-            return None
-    return r if -1 < r < 10 else None
-
-def _compute_npv(cashflows: list, rate: float = 0.08) -> float:
-    return sum(cf / (1 + rate) ** t for t, cf in enumerate(cashflows))
-
-def build_cashflows(
-    theo_per_mwh_day: float,
-    capture_rate: float,
-    duration_h: float,
-    capex_per_kwh: float,
-    rte: float,
-    om_per_kw_yr: float,
-    subsidy_per_mwh: float,
-    degradation: float,
-    equity_pct: float,
-    loan_rate: float,
-    loan_tenure: int,
-    project_life: int,
-    power_mw: float = 1.0,
-) -> tuple[list, dict]:
-    """Returns (cashflows_list, annual_breakdown_dict) — normalised to 1 MW / N-hour plant."""
-    e_cap = power_mw * duration_h          # MWh capacity
-    capex = capex_per_kwh * e_cap * 1000   # yuan (1 MW = 1000 kW)
-    equity_capex = capex * equity_pct
-    debt = capex * (1 - equity_pct)
-    ann_debt = (
-        debt * loan_rate / (1 - (1 + loan_rate) ** (-loan_tenure))
-        if debt > 0 and loan_rate > 0 else
-        (debt / loan_tenure if loan_tenure > 0 else 0)
-    )
-    om_annual = om_per_kw_yr * power_mw          # om_per_kw_yr is actually ¥/MW/yr (param renamed for back-compat)
-    # Approx: ~1 effective full cycle per day; discharge MWh ≈ e_cap × RTE
-    daily_discharge = e_cap * rte
-    base_rev_daily = (
-        theo_per_mwh_day * capture_rate * e_cap
-        + subsidy_per_mwh * daily_discharge
-    )
-
-    cfs = [-equity_capex]
-    breakdown = {}
-    for yr in range(1, project_life + 1):
-        rev  = base_rev_daily * 365 * (1 - degradation) ** (yr - 1)
-        ds   = ann_debt if yr <= loan_tenure else 0.0
-        net  = rev - om_annual - ds
-        cfs.append(net)
-        breakdown[yr] = {"revenue": rev, "om": om_annual, "debt_svc": ds, "net": net}
-
-    # Scale breakdown to per-MWh capacity for readability
-    scale = 1.0 / e_cap if e_cap > 0 else 1.0
-    bd_scaled = {
-        yr: {k: v * scale for k, v in row.items()}
-        for yr, row in breakdown.items()
-    }
-    return cfs, bd_scaled
+# ── IRR computation — functions imported from irr_helpers ─────────────────────
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
