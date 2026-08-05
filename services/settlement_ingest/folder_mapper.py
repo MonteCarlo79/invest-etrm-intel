@@ -1,8 +1,12 @@
-"""Map invoice folder names to asset names in rm_assets."""
+"""Map invoice folder names to asset names in rm_assets.
+
+Reads mapping from rm_assets.invoice_folder column (configurable via UI).
+Falls back to hardcoded map if DB is unavailable.
+"""
 from __future__ import annotations
 
-# Folder name → rm_assets.name
-FOLDER_ASSET_MAP: dict[str, str | None] = {
+# Fallback hardcoded map (used if DB unavailable)
+_FALLBACK_MAP: dict[str, str | None] = {
     "B-8 内蒙杭锦旗": "悦杭独贵",
     "B-7 内蒙乌拉特": "远景乌拉特",
     "B-11 内蒙四子王旗": "四子王旗",
@@ -10,23 +14,38 @@ FOLDER_ASSET_MAP: dict[str, str | None] = {
     "B-9 内蒙巴盟": "景怡查干哈达",
     "B-10谷山梁": "裕昭沙子坝",
     "B-1 乌兰察布": "景通四益堂",
-    "B-【外】乌海储能": None,  # external asset, skip
+    "B-【外】乌海储能": None,
 }
+
+
+def _load_map_from_db() -> dict[str, str]:
+    """Load folder→asset mapping from rm_assets.invoice_folder."""
+    try:
+        from shared.agents.db import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT invoice_folder, name FROM marketdata.rm_assets WHERE invoice_folder IS NOT NULL")
+                return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception:
+        return {}
 
 
 def resolve_folder_to_asset(folder_name: str) -> str | None:
     """Resolve a folder name to an asset name.
 
-    Tries exact match first, then partial match on the key.
-    Returns None if no match or if the asset is marked as skip (None value).
+    Reads from DB (rm_assets.invoice_folder) first, falls back to hardcoded map.
     """
-    # Exact match
-    if folder_name in FOLDER_ASSET_MAP:
-        return FOLDER_ASSET_MAP[folder_name]
+    # Load from DB
+    db_map = _load_map_from_db()
+    full_map = {**_FALLBACK_MAP, **db_map}
 
-    # Partial match (folder_name contains key or key contains folder_name)
-    for key, asset in FOLDER_ASSET_MAP.items():
-        if key in folder_name or folder_name in key:
+    # Exact match
+    if folder_name in full_map:
+        return full_map[folder_name]
+
+    # Partial match
+    for key, asset in full_map.items():
+        if key and asset and (key in folder_name or folder_name in key):
             return asset
 
     return None

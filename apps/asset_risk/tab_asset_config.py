@@ -14,7 +14,7 @@ def render_asset_config(engine):
         assets_df = pd.read_sql(text("""
             SELECT a.id, a.name, a.asset_type, a.province, a.capacity_mw,
                    a.bess_duration_h, a.bess_dod_pct, a.status, a.commission_date,
-                   b.id as book_id, b.name as book_name
+                   a.invoice_folder, b.id as book_id, b.name as book_name
             FROM marketdata.rm_assets a
             LEFT JOIN marketdata.rm_books b ON b.asset_id = a.id
             ORDER BY a.name
@@ -24,6 +24,31 @@ def render_asset_config(engine):
         st.dataframe(assets_df, use_container_width=True, hide_index=True)
     else:
         st.info("No assets registered yet. Add one below.")
+
+    # Invoice folder mapping
+    if not assets_df.empty:
+        st.subheader("Invoice Folder Mapping")
+        st.caption("Configure which invoice folder each asset reads from (e.g. `B-8 内蒙杭锦旗`)")
+        with st.form("folder_mapping"):
+            updates = {}
+            cols = st.columns(2)
+            for i, (_, row) in enumerate(assets_df.drop_duplicates(subset=["id"]).iterrows()):
+                with cols[i % 2]:
+                    val = st.text_input(
+                        row["name"],
+                        value=row.get("invoice_folder") or "",
+                        key=f"folder_{row['id']}",
+                    )
+                    updates[row["id"]] = val
+
+            if st.form_submit_button("Save Mappings"):
+                with engine.begin() as conn:
+                    for asset_id, folder in updates.items():
+                        conn.execute(text(
+                            "UPDATE marketdata.rm_assets SET invoice_folder = :folder WHERE id = :id"
+                        ), {"folder": folder if folder.strip() else None, "id": asset_id})
+                st.success("Folder mappings saved.")
+                st.rerun()
 
     st.subheader("Add Asset")
     with st.form("add_asset"):
