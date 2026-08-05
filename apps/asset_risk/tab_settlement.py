@@ -386,7 +386,10 @@ def _render_analytics(book_id: int, engine):
         pivot["日均充放次数"] = pivot["日均充放次数"].replace([float("inf"), float("-inf")], 0).fillna(0)
 
     # Add 电能转化率 per month
-    pivot["转化率"] = (discharge_vol.values / charge_vol_monthly.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+    import numpy as np
+    with np.errstate(divide='ignore', invalid='ignore'):
+        conversion_arr = np.where(charge_vol_monthly.values > 0, discharge_vol.values / charge_vol_monthly.values, 0)
+    pivot["转化率"] = conversion_arr
 
     pivot = pivot.sort_index()
 
