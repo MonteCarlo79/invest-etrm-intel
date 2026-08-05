@@ -308,12 +308,18 @@ def _render_analytics(book_id: int, engine):
     charge_amt_total = items_df[items_df["category"] == "charge_energy"]["amount_cny"].sum()
     discharge_amt_total = items_df[items_df["category"].isin(["discharge_energy", "generation_revenue"])]["amount_cny"].sum()
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Conversion efficiency
+    conversion_rate = revenue_vol / charge_vol_total if charge_vol_total else None
+
+    col1, col2, col3 = st.columns(3)
     col1.metric("结算总额", f"¥{items_df['amount_cny'].sum():,.0f}")
     col2.metric("放电总量", f"{revenue_vol:,.1f} MWh")
-    col3.metric("放电均价", f"¥{discharge_amt_total / revenue_vol:,.1f}/MWh" if revenue_vol else "N/A")
-    col4.metric("充电总量", f"{charge_vol_total:,.1f} MWh")
+    col3.metric("充电总量", f"{charge_vol_total:,.1f} MWh")
+
+    col4, col5, col6 = st.columns(3)
+    col4.metric("放电均价", f"¥{discharge_amt_total / revenue_vol:,.1f}/MWh" if revenue_vol else "N/A")
     col5.metric("充电均价", f"¥{abs(charge_amt_total / charge_vol_total):,.1f}/MWh" if charge_vol_total else "N/A")
+    col6.metric("电能转化率", f"{conversion_rate:.2%}" if conversion_rate else "N/A")
 
     # Get asset capacity for cycle calculation
     with engine.connect() as conn:
@@ -379,38 +385,89 @@ def _render_analytics(book_id: int, engine):
         pivot["日均充放次数"] = (charge_vol_monthly.values / installed_capacity_mwh / pd.Series(days_in_month, index=pivot.index).values).round(2)
         pivot["日均充放次数"] = pivot["日均充放次数"].replace([float("inf"), float("-inf")], 0).fillna(0)
 
+    # Add 电能转化率 per month
+    pivot["转化率"] = (discharge_vol.values / charge_vol_monthly.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+
     pivot = pivot.sort_index()
 
-    # Add YTD subtotal row
-    ytd_row = pivot.sum(axis=0)
+    # YTD: only current year rows
+    import datetime
+    current_year = str(datetime.datetime.now().year)
+    ytd_months = [m for m in pivot.index if m.startswith(current_year)]
+    ytd_pivot = pivot.loc[ytd_months]
+
+    ytd_row = ytd_pivot.sum(axis=0)
     ytd_row.name = "YTD 合计"
-    # Recalculate per-MWh metrics for YTD
-    total_discharge_vol = monthly[monthly["category_cn"] == "放电收入"]["volume"].sum()
-    total_charge_vol = monthly[monthly["category_cn"] == "充电电费"]["volume"].sum()
+    # Recalculate per-MWh metrics for YTD (current year only)
+    ytd_monthly = monthly[monthly["month"].str.startswith(current_year)]
+    total_discharge_vol = ytd_monthly[ytd_monthly["category_cn"] == "放电收入"]["volume"].sum()
+    total_charge_vol = ytd_monthly[ytd_monthly["category_cn"] == "充电电费"]["volume"].sum()
     if total_discharge_vol > 0 and "价差收入" in pivot.columns:
         ytd_row["度电总价差"] = ytd_row["价差收入"] / total_discharge_vol
         if cap_col and "容量补偿价差" in pivot.columns:
             ytd_row["容量补偿价差"] = ytd_row[cap_col] / total_discharge_vol
         if "套利价差" in pivot.columns and discharge_col and charge_col:
             ytd_row["套利价差"] = (ytd_row[discharge_col] + ytd_row[charge_col]) / total_discharge_vol
-    # YTD 日均充放次数 = total charge volume / capacity / total days
+    # YTD 日均充放次数
     if installed_capacity_mwh and installed_capacity_mwh > 0 and "日均充放次数" in pivot.columns:
-        total_days = sum(days_in_month)
-        ytd_row["日均充放次数"] = round(total_charge_vol / installed_capacity_mwh / total_days, 2) if total_days > 0 else 0
+        ytd_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(current_year))
+        ytd_row["日均充放次数"] = round(total_charge_vol / installed_capacity_mwh / ytd_days, 2) if ytd_days > 0 else 0
+    # YTD 转化率
+    if total_charge_vol > 0:
+        ytd_row["转化率"] = total_discharge_vol / total_charge_vol
     pivot = pd.concat([pivot, ytd_row.to_frame().T])
 
-    # Reorder columns: 净利润, 容量补偿, 价差收入, 调频, 系统运行费, 基本电费/力调, 放电收入, 充电电费, 放电量, 充电量, 度电总价差, 容量补偿价差, 套利价差, 日均充放次数
+    # Reorder columns
     desired_order = [
         "净利润", "容量补偿/非市场化", "价差收入", "调频", "系统运行费", "上网线损费",
         "基本电费/力调", "放电收入", "充电电费", "放电量(MWh)", "充电量(MWh)",
-        "度电总价差", "容量补偿价差", "套利价差", "日均充放次数",
+        "度电总价差", "容量补偿价差", "套利价差", "日均充放次数", "转化率",
     ]
-    # Keep only columns that exist, then append any remaining
     ordered_cols = [c for c in desired_order if c in pivot.columns]
     remaining = [c for c in pivot.columns if c not in ordered_cols]
     pivot = pivot[ordered_cols + remaining]
 
-    st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
+    # Format: ¥ for money columns, plain number for others
+    money_cols = ["净利润", "容量补偿/非市场化", "价差收入", "调频", "系统运行费", "上网线损费",
+                  "基本电费/力调", "放电收入", "充电电费", "度电总价差", "容量补偿价差", "套利价差"]
+    vol_cols = ["放电量(MWh)", "充电量(MWh)"]
+    fmt = {}
+    for c in pivot.columns:
+        if c in money_cols:
+            fmt[c] = "¥{:,.0f}"
+        elif c in vol_cols:
+            fmt[c] = "{:,.0f}"
+        elif c == "日均充放次数":
+            fmt[c] = "{:.2f}"
+        elif c == "转化率":
+            fmt[c] = "{:.1%}"
+        else:
+            fmt[c] = "¥{:,.0f}"
+
+    # Color: red headers for cost, green for revenue, neutral for derived
+    cost_cols = ["充电电费", "系统运行费", "上网线损费", "基本电费/力调", "调频"]
+    revenue_cols = ["放电收入", "容量补偿/非市场化"]
+
+    def color_headers(styler):
+        styles = []
+        for col in styler.columns:
+            if col in cost_cols:
+                styles.append(f"th.col_heading:contains('{col}') {{ color: red; }}")
+            elif col in revenue_cols:
+                styles.append(f"th.col_heading:contains('{col}') {{ color: green; }}")
+        return styler
+
+    styled = pivot.style.format(fmt)
+    # Apply column header colors via set_table_styles
+    header_styles = []
+    for i, col in enumerate(pivot.columns):
+        if col in cost_cols:
+            header_styles.append({"selector": f"th.col{i}", "props": [("color", "#e74c3c")]})
+        elif col in revenue_cols:
+            header_styles.append({"selector": f"th.col{i}", "props": [("color", "#27ae60")]})
+    styled = styled.set_table_styles(header_styles, overwrite=False)
+
+    st.dataframe(styled, use_container_width=True)
 
     # Monthly bar chart (stacked by category)
     fig = go.Figure()
