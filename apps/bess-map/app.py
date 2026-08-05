@@ -1340,24 +1340,52 @@ def _load_china_geojson_bess() -> tuple[dict | None, str | None]:
 def chart_bess_revenue_map(rank_df: pd.DataFrame, duration_h: float,
                            col: str, geojson: dict | None,
                            capex_per_kwh: float = 600.0,
-                           title: str | None = None) -> plt.Figure:
-    """Choropleth coloured by simple capex payback period (years)."""
+                           title: str | None = None,
+                           extra_rev_map: "dict[str, float] | None" = None) -> plt.Figure:
+    """Choropleth coloured by simple capex payback period (years).
+
+    extra_rev_map: optional {province_name: annual ¥/MWh adjustment}.
+    Positive = additional revenue (shorter payback), negative = cost (longer payback).
+    """
     sub = rank_df[abs(rank_df["duration_h"] - duration_h) < 0.01].copy()
     sub["adcode"] = sub["province"].map(_ZH_PROV_ADCODE)
     sub = sub.dropna(subset=["adcode", col])
 
-    rev_map: dict[int, float | None] = {
-        int(row["adcode"]): float(row[col]) if pd.notna(row[col]) else None
+    # Build province → adcode lookup for applying extra_rev_map
+    prov_to_adcode: dict[str, int] = {
+        row["province"]: int(row["adcode"])
         for _, row in sub.iterrows()
+        if pd.notna(row.get("adcode"))
     }
-    # label: revenue + payback years
+    extra_by_adcode: dict[int, float] = {}
+    if extra_rev_map:
+        for prov, adj in extra_rev_map.items():
+            acode = prov_to_adcode.get(prov)
+            if acode is not None:
+                extra_by_adcode[acode] = adj
+
+    rev_map: dict[int, float | None] = {}
     label_map: dict[int, str] = {}
     for _, row in sub.iterrows():
         acode = int(row["adcode"])
         rev = float(row[col]) if pd.notna(row[col]) else None
+        adj = extra_by_adcode.get(acode, 0.0)
+        adj_rev = (rev + adj) if rev is not None else None
+
+        # Use adjusted revenue for colour
+        rev_map[acode] = adj_rev
+
         if rev is not None and rev > 0:
-            pb = capex_per_kwh * 1000.0 / rev
-            label_map[acode] = f"{rev:,.0f}\n({pb:.1f}yr)"
+            orig_pb = capex_per_kwh * 1000.0 / rev
+            if adj_rev is not None and adj_rev > 0 and adj != 0.0:
+                adj_pb = capex_per_kwh * 1000.0 / adj_rev
+                sign = "+" if adj >= 0 else ""
+                label_map[acode] = (
+                    f"{rev:,.0f} ({sign}{adj:,.0f})\n"
+                    f"({orig_pb:.1f}yr→{adj_pb:.1f}yr)"
+                )
+            else:
+                label_map[acode] = f"{rev:,.0f}\n({orig_pb:.1f}yr)"
         elif rev is not None:
             label_map[acode] = f"{rev:,.0f}"
 
