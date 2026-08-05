@@ -31,7 +31,7 @@ def render_settlement(engine):
     overwrite = st.checkbox("Overwrite existing data for same book+month", value=True)
 
     uploaded = st.file_uploader("Upload settlement file(s)", type=["xlsx", "xls", "csv", "pdf"],
-                                accept_multiple_files=True)
+                                accept_multiple_files=True, key=f"upload_{book_id}")
 
     if uploaded and st.button("Process File(s)"):
         for f in uploaded:
