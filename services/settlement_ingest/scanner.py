@@ -145,14 +145,21 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
     if not root_path.exists():
         return [{"error": f"Root path not found: {root}"}]
 
+    # If root is a specific asset folder (not the parent), use its name for resolution
+    root_folder_name = root_path.name
+    root_is_asset_folder = resolve_folder_to_asset(root_folder_name) is not None
+
     for pdf_path in sorted(root_path.rglob("*.pdf")):
         if pdf_path.name.startswith("~"):
             continue
 
         rel_path = str(pdf_path.relative_to(root_path))
         # Resolve asset from folder
-        folder_parts = rel_path.split(os.sep)
-        asset_folder = folder_parts[0] if folder_parts else ""
+        if root_is_asset_folder:
+            asset_folder = root_folder_name
+        else:
+            folder_parts = rel_path.split(os.sep)
+            asset_folder = folder_parts[0] if folder_parts else ""
         asset_name = resolve_folder_to_asset(asset_folder)
 
         if asset_name is None:

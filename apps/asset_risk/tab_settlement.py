@@ -98,38 +98,55 @@ def render_settlement(engine):
             else:
                 _process_excel(f, book_id, settlement_month, engine)
 
-    # Auto-scan from invoice folders
+    # Auto-scan from invoice folder for selected asset
     st.divider()
-    st.subheader("Auto-Scan Invoice Folders")
-    st.caption("Scan `data/raw/settlement/invoices/` for new PDFs and ingest automatically.")
-    col_scan1, col_scan2 = st.columns([1, 1])
-    with col_scan1:
-        dry_run = st.checkbox("Dry run (preview only)", value=True)
-    with col_scan2:
-        if st.button("Scan & Ingest", type="primary"):
-            with st.spinner("Scanning invoice folders..."):
-                from services.settlement_ingest.scanner import scan_and_ingest
-                results = scan_and_ingest(dry_run=dry_run)
-                ingested = [r for r in results if r.get("status") == "ingested"]
-                already = [r for r in results if r.get("status") == "already_ingested"]
-                errors = [r for r in results if r.get("status") == "error"]
-                skipped = [r for r in results if r.get("status") == "skipped"]
-                dry = [r for r in results if r.get("status") == "dry_run"]
+    # Get invoice_folder for selected book's asset
+    with engine.connect() as conn:
+        folder_df = pd.read_sql(text("""
+            SELECT a.invoice_folder, a.name as asset_name FROM marketdata.rm_assets a
+            JOIN marketdata.rm_books b ON b.asset_id = a.id
+            WHERE b.id = :bid
+        """), conn, params={"bid": book_id})
+    invoice_folder = folder_df["invoice_folder"].iloc[0] if (not folder_df.empty and folder_df["invoice_folder"].iloc[0]) else None
+    asset_name = folder_df["asset_name"].iloc[0] if not folder_df.empty else ""
 
-                if dry_run:
-                    st.info(f"Dry run: {len(dry)} new files found, {len(already)} already ingested, {len(skipped)} skipped.")
-                    if dry:
-                        st.dataframe(pd.DataFrame(dry)[["path", "asset", "month", "type"]],
-                                     use_container_width=True, hide_index=True)
-                else:
-                    st.success(f"Ingested {len(ingested)} files. Already done: {len(already)}. Errors: {len(errors)}.")
-                    if ingested:
-                        st.dataframe(pd.DataFrame(ingested)[["path", "asset", "month", "type", "items"]],
-                                     use_container_width=True, hide_index=True)
-                    if errors:
-                        st.error("Errors:")
-                        st.dataframe(pd.DataFrame(errors)[["path", "asset", "error"]],
-                                     use_container_width=True, hide_index=True)
+    st.subheader(f"Scan & Ingest: {asset_name}")
+    if invoice_folder:
+        import os
+        from services.settlement_ingest.scanner import INVOICE_ROOT
+        scan_path = os.path.join(INVOICE_ROOT, invoice_folder)
+        st.caption(f"Invoice folder: `{invoice_folder}/`")
+
+        col_scan1, col_scan2 = st.columns([1, 1])
+        with col_scan1:
+            dry_run = st.checkbox("Dry run (preview only)", value=False)
+        with col_scan2:
+            if st.button("Scan & Ingest", type="primary"):
+                with st.spinner(f"Scanning {invoice_folder}..."):
+                    from services.settlement_ingest.scanner import scan_and_ingest
+                    results = scan_and_ingest(root=scan_path, dry_run=dry_run)
+                    ingested = [r for r in results if r.get("status") == "ingested"]
+                    already = [r for r in results if r.get("status") == "already_ingested"]
+                    errors = [r for r in results if r.get("status") == "error"]
+                    skipped = [r for r in results if r.get("status") == "skipped"]
+                    dry = [r for r in results if r.get("status") == "dry_run"]
+
+                    if dry_run:
+                        st.info(f"Dry run: {len(dry)} new files, {len(already)} already ingested, {len(skipped)} skipped.")
+                        if dry:
+                            st.dataframe(pd.DataFrame(dry)[["path", "asset", "month", "type"]],
+                                         use_container_width=True, hide_index=True)
+                    else:
+                        st.success(f"Ingested {len(ingested)} files. Already done: {len(already)}. Errors: {len(errors)}.")
+                        if ingested:
+                            st.dataframe(pd.DataFrame(ingested)[["path", "asset", "month", "type", "items"]],
+                                         use_container_width=True, hide_index=True)
+                        if errors:
+                            st.error("Errors:")
+                            st.dataframe(pd.DataFrame(errors)[["path", "asset", "error"]],
+                                         use_container_width=True, hide_index=True)
+    else:
+        st.warning("No invoice folder configured for this asset. Set it in the Asset Config tab.")
 
     st.divider()
     st.subheader("Settlement Analytics")
