@@ -1729,6 +1729,11 @@ def load_monthly_gaps(_eng_key):
     return results["capcomp"], results["fr_market"], results["installed"]
 
 
+# Pre-load market data used across multiple tabs (sysopfee, aux, irr, geo)
+_sof_df = load_sysopfee(_ENG_KEY)
+_cc_df  = load_cap_comp(_ENG_KEY)
+_fr_df  = load_fr_market(_ENG_KEY)
+
 # ── Tab 1: Province Ranking ───────────────────────────────────────────────────
 with tab_ranking:
     st.subheader(_t("rank_title"))
@@ -1845,6 +1850,35 @@ with tab_geo:
     )
     geo_capex = st.slider("Assumed capex for payback (¥/kWh)", 400, 900, 600, step=25,
                           key="geo_capex")
+
+    # ── Extra overlay items ───────────────────────────────────────────────────
+    _geo_extra_options = {
+        "sysopfee": _t("geo_extra_sysopfee"),
+        "cap_comp":  _t("geo_extra_cap_comp"),
+        "fr":        _t("geo_extra_fr"),
+    }
+    _geo_sel_labels = st.multiselect(
+        _t("geo_extra_items"),
+        options=list(_geo_extra_options.values()),
+        default=[],
+        key="geo_extra_sel",
+    )
+    # Map labels back to keys
+    _label_to_key = {v: k for k, v in _geo_extra_options.items()}
+    _geo_sel_keys = [_label_to_key[lbl] for lbl in _geo_sel_labels]
+
+    _geo_fr_util = 0.30
+    if "fr" in _geo_sel_keys:
+        _geo_fr_util = st.slider(_t("geo_fr_util"), 5, 80, 30, step=5, key="geo_fr_util") / 100.0
+
+    # Build extra_rev_map from already-loaded DataFrames
+    _geo_extra_map = _build_extra_rev_map(
+        _sof_df, _cc_df, _fr_df,
+        duration_h=4.0,
+        selected_items=_geo_sel_keys,
+        fr_util_pct=_geo_fr_util,
+    ) if _geo_sel_keys else {}
+
     geo_rank_df = load_province_ranking(_ENG_KEY, sel_start, sel_end, sel_model)
     _geojson_bess, _geo_err = _load_china_geojson_bess()
     if _geo_err:
@@ -1858,6 +1892,7 @@ with tab_geo:
                 geo_rank_df, 2.0, rank_annual_col, _geojson_bess,
                 capex_per_kwh=geo_capex,
                 title=_t("geo_2h_title"),
+                extra_rev_map=_geo_extra_map if _geo_extra_map else None,
             )
             st.pyplot(fig_geo2, use_container_width=True)
             plt.close(fig_geo2)
@@ -1867,6 +1902,7 @@ with tab_geo:
                 geo_rank_df, 4.0, rank_annual_col, _geojson_bess,
                 capex_per_kwh=geo_capex,
                 title=_t("geo_4h_title"),
+                extra_rev_map=_geo_extra_map if _geo_extra_map else None,
             )
             st.pyplot(fig_geo4, use_container_width=True)
             plt.close(fig_geo4)
@@ -2682,8 +2718,6 @@ with tab_sysopfee:
     st.subheader(_t("sysopfee_title"))
     st.caption(_t("sysopfee_caption"))
 
-    _sof_df = load_sysopfee(_ENG_KEY)
-
     if _sof_df.empty:
         st.info(_t("sysopfee_no_data"))
     else:
@@ -2870,8 +2904,6 @@ with tab_aux:
         st.rerun()
 
     # Load data
-    _cc_df = load_cap_comp(_ENG_KEY)
-    _fr_df = load_fr_market(_ENG_KEY)
     _inst_df = load_installed_capacity(_ENG_KEY)
 
     # Province filter (union of all three tables)
