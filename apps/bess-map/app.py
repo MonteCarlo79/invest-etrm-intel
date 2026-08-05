@@ -3357,8 +3357,32 @@ with tab_irr:
         capex   = st.slider(_t("irr_capex"),        400, 900, 600, step=25)
         rte_pct = st.slider(_t("irr_rte"),          70,  95,  85, step=1)
         om      = st.number_input(_t("irr_om"),      value=24000, step=1000)
-        subsidy = st.number_input(_t("irr_subsidy"), value=0,     step=50)
         dgrad   = st.slider(_t("irr_degradation"),  0,   5,   2,  step=1) / 100.0
+
+        # ── Revenue/cost components expander ─────────────────────────────────
+        with st.expander(_t("irr_components_title"), expanded=False):
+            _irr_fr_util = st.slider(
+                _t("irr_fr_util"), 5, 80, 30, step=5, key="irr_fr_util"
+            ) / 100.0
+            _defs = _irr_defaults_for_province(
+                irr_prov, irr_dur_h, _sof_df, _cc_df, _fr_df,
+                rte=rte_pct / 100.0, fr_util_pct=_irr_fr_util,
+            )
+            sysopfee_input = st.number_input(
+                f"系统运行费 ¥/MWh/day  [{_defs['sysopfee_src']}]",
+                value=round(_defs["sysopfee_day"], 4),
+                step=0.01, format="%.4f", key="irr_sysopfee",
+            )
+            cap_comp_input = st.number_input(
+                f"容量补偿 ¥/MWh/day  [{_defs['cap_comp_src']}]",
+                value=round(_defs["cap_comp_day"], 4),
+                step=0.01, format="%.4f", key="irr_cap_comp",
+            )
+            fr_input = st.number_input(
+                f"调频 ¥/MWh/day  [{_defs['fr_src']}]",
+                value=round(_defs["fr_day"], 4),
+                step=0.01, format="%.4f", key="irr_fr",
+            )
 
         st.divider()
         equity  = st.slider(_t("irr_equity"),       20,  100, 30, step=5) / 100.0
@@ -3377,12 +3401,14 @@ with tab_irr:
                 capex_per_kwh=capex,
                 rte=rte_pct / 100.0,
                 om_per_kw_yr=om,
-                subsidy_per_mwh=subsidy,
                 degradation=dgrad,
                 equity_pct=equity,
                 loan_rate=lr_pct,
                 loan_tenure=tenure,
                 project_life=life,
+                sysopfee_per_mwh_day=sysopfee_input,
+                cap_comp_per_mwh_day=cap_comp_input,
+                fr_per_mwh_day=fr_input,
             )
 
             irr_val  = _compute_irr(cfs)
@@ -3408,19 +3434,28 @@ with tab_irr:
 
             # Cashflow waterfall
             years  = list(bd.keys())
-            rev_s  = [bd[y]["revenue"]  for y in years]
-            om_s   = [-bd[y]["om"]       for y in years]
-            debt_s = [-bd[y]["debt_svc"] for y in years]
-            net_s  = [bd[y]["net"]       for y in years]
+            spot_s    = [bd[y]["spot"]     for y in years]
+            cap_s     = [bd[y]["cap_comp"] for y in years]
+            fr_s      = [bd[y]["fr"]       for y in years]
+            sof_s     = [bd[y]["sysopfee"] for y in years]  # already negative
+            om_s      = [-bd[y]["om"]      for y in years]
+            debt_s    = [-bd[y]["debt_svc"] for y in years]
+            net_s     = [bd[y]["net"]      for y in years]
 
             st.subheader(_t("irr_cashflow_title"))
             fig_cf = go.Figure()
-            fig_cf.add_bar(x=years, y=rev_s,  name=_t("irr_cf_revenue"),
-                           marker_color="#4CAF50")
+            fig_cf.add_bar(x=years, y=spot_s, name=_t("irr_cf_spot"),
+                           marker_color="#2ecc71")
+            fig_cf.add_bar(x=years, y=cap_s,  name=_t("irr_cf_cap_comp"),
+                           marker_color="#1abc9c")
+            fig_cf.add_bar(x=years, y=fr_s,   name=_t("irr_cf_fr"),
+                           marker_color="#27ae60")
+            fig_cf.add_bar(x=years, y=sof_s,  name=_t("irr_cf_sysopfee"),
+                           marker_color="#e67e22")
             fig_cf.add_bar(x=years, y=om_s,   name=_t("irr_cf_om"),
-                           marker_color="#E53935")
+                           marker_color="#e74c3c")
             fig_cf.add_bar(x=years, y=debt_s, name=_t("irr_cf_debt"),
-                           marker_color="#FF7043")
+                           marker_color="#c0392b")
             fig_cf.add_scatter(x=years, y=net_s, name=_t("irr_cf_net"),
                                line=dict(color="navy", width=2), mode="lines+markers")
             fig_cf.update_layout(barmode="relative", height=320,
@@ -3440,17 +3475,19 @@ with tab_irr:
                 for rm in rev_multipliers:
                     cfs_s, _ = build_cashflows(
                         theo_per_mwh_day=irr_rev_day * rm,
-                        capture_rate=irr_cap_rate,      # always 1.0 — irr_rev_day already captures method
+                        capture_rate=irr_cap_rate,
                         duration_h=irr_dur_h,
                         capex_per_kwh=cx,
                         rte=rte_pct / 100.0,
                         om_per_kw_yr=om,
-                        subsidy_per_mwh=subsidy,
                         degradation=dgrad,
                         equity_pct=equity,
                         loan_rate=lr_pct,
                         loan_tenure=tenure,
                         project_life=life,
+                        sysopfee_per_mwh_day=sysopfee_input,
+                        cap_comp_per_mwh_day=cap_comp_input,
+                        fr_per_mwh_day=fr_input,
                     )
                     irr_s = _compute_irr(cfs_s)
                     row[f"{rm*100:.0f}%"] = f"{irr_s*100:.1f}%" if irr_s is not None else "N/A"
