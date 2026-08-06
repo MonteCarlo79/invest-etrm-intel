@@ -96,3 +96,6 @@ bm_td_deploy.json
 bm_td_src.json
 infra/terraform/terraform.tfvars
 container-def.json
+
+# Transferred Claude Code session transcripts + memory backup (local only)
+memo/
