@@ -269,6 +269,13 @@ def run_mengxi_query(question: str, api_key: str, pg_url: str = "") -> str:
             system += f"\n\n{mem_block}"
     except Exception:
         pass
+    try:
+        from services.knowledge_pool import vault_reader
+        vault_ctx = vault_reader.retrieve_vault_context(question)
+        if vault_ctx:
+            system += f"\n\n{vault_ctx}"
+    except Exception:
+        pass
 
     messages = [{"role": "user", "content": question}]
     while True:

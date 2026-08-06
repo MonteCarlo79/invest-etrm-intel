@@ -440,6 +440,13 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
     except Exception:
         pass
     try:
+        from services.knowledge_pool import vault_reader
+        vault_ctx = vault_reader.retrieve_vault_context(question)
+        if vault_ctx:
+            system += f"\n\n{vault_ctx}"
+    except Exception:
+        pass
+    try:
         from services.knowledge_pool.expert_memory import get_relevant_insights, inject_expert_memory
         insights = get_relevant_insights(question, limit=5)
         mem_block = inject_expert_memory(insights)
