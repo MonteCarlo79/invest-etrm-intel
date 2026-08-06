@@ -4,6 +4,27 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## docker push to ECR fails: broken pipe through Docker Desktop proxy (Mac)
+
+**What didn't work:**
+1. `docker push` retry loop — large blobs (~100–300 MB) died mid-upload with `write tcp ...->192.168.65.1:3128: write: broken pipe`; the same blob failed 3×. docker resumes at layer granularity (whole blob restarts), so big blobs never complete.
+2. Restarting Docker Desktop — no change. The 3128 proxy is Docker Desktop's built-in (`http.docker.internal:3128` in `docker info`); macOS had no system proxy and no proxy app running.
+
+**What worked:**
+- `docker save <img> -o /tmp/img.tar`, then push from the HOST network with **crane** (bypasses the Docker VM proxy entirely, and crane resumes *within* a blob via PATCH on broken pipes):
+  ```bash
+  curl -sL -o /tmp/g.tar.gz https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Darwin_arm64.tar.gz
+  tar -xzf /tmp/g.tar.gz -C /tmp crane
+  aws ecr get-login-password --region ap-southeast-1 | /tmp/crane auth login --username AWS --password-stdin 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com
+  /tmp/crane push /tmp/img.tar 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<repo>:latest
+  ```
+- Then run only the ECS section of the deploy script manually (register-task-definition + update-service) — re-running the full script would hit the broken `docker push` again.
+- Verify: running task's `imageDigest` must equal crane's reported manifest digest.
+
+**Note for next time:** On the Mac, if docker push to ECR dies with broken pipe to `192.168.65.x:3128`, skip retries — go straight to crane. First observed 2026-08-06 during hermes :163 deploy. **crane v0.21.9 is permanently installed at `~/.local/bin/crane`** (no Homebrew on this Mac) — skip the download steps, just `docker save` + `crane auth login` + `crane push`.
+
+---
+
 ## matplotlib font cache not picking up newly installed CJK font
 
 **What didn't work:**
