@@ -174,16 +174,14 @@ Automated daily data collection from LingFeng SaaS (`https://lingfeng-saas.tradi
 
 **29 markets:** 河南, 新疆, 吉林, 海南, 湖北, 四川, 黑龙江, 福建, 浙江, 江苏, 广西, 安徽, 陕西, 贵州, 云南, 广东, 蒙东, 湖南, 宁夏, 辽宁, 河北南网, 甘肃, 蒙西, 山东, 山西, 冀北, 广州, 青海, 江西
 
-**Scheduled run (06:00):** `python run_daily.py --markets all --models ols_rt_time_v1,naive_rt_ar17,ols_fundamentals_v1`
+**Scheduled runs:**
+- **Primary — ECS** `bess-platform-lingfeng-ingest-svc`: daily 20:00 UTC (04:00 CST); trigger check every 15 min (Feishu/Telegram backfills)
+- **Fallback — MacBook launchd** agent `ai.pjh-etrm.lingfeng-daily`: daily 04:00 local, all 29 markets + 3 models. Register with `bash services/lingfeng/setup_schedule_launchd.sh`. Prereq: venv at `~/.venvs/bess-platform` + `python -m playwright install chromium`
+- Windows Task Scheduler version (`setup_schedule.ps1`) retired 2026-08-06 with the workstation move
 
 **Manual backfill example:**
 ```bash
 python services/lingfeng/run_daily.py --markets 山东,山西 --start-date 2026-01-01 --end-date 2026-04-30 --chunk-days 30
-```
-
-**Re-register Task Scheduler (after any change to schedule or args):**
-```powershell
-.\services\lingfeng\setup_schedule.ps1
 ```
 
 **Ops log table:** `marketdata.data_ops_log` — visible in Portal (Data Operations Status) and bess-map Data Management tab (Data Operations Log section).

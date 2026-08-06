@@ -237,16 +237,29 @@ async def _collect_async(
         if _is_new_page:
             logger.info("Clicking 查询 (ant-btn-primary) …")
             await page.locator("button.ant-btn-primary").first.click()
-            await page.wait_for_timeout(1500)
+            # Export handler no-ops until query data has rendered into the
+            # store — fixed short waits are unreliable on slow networks.
+            try:
+                await page.wait_for_load_state("networkidle", timeout=20_000)
+            except PWTimeout:
+                pass
+            await page.wait_for_timeout(1_000)
             logger.info("Clicking 导出 (span.down-load-container) …")
-            async with page.expect_download(timeout=60_000) as dl_info:
-                await _export_span.first.click()
+            # JS click (trusted .click() is silently swallowed on some renders)
+            # + retry loop: the export builds a client-side blob, no network
+            # request fires, so a too-early click fails silently.
+            download_future = asyncio.ensure_future(
+                page.wait_for_event("download", timeout=60_000)
+            )
+            while not download_future.done():
+                await _export_span.first.evaluate("el => el.click()")
+                await page.wait_for_timeout(5_000)
+            download = await download_future
         else:
-            # Old page: 导出 is the only primary button; clicking it triggers download
             logger.info("Old-page detected — clicking 导出 (button.ant-btn-primary) …")
             async with page.expect_download(timeout=60_000) as dl_info:
                 await page.locator("button.ant-btn-primary").first.click()
-        download = await dl_info.value
+            download = await dl_info.value
 
         suggested = download.suggested_filename or ""
         dest_name = suggested if suggested.endswith(".xlsx") else (
@@ -440,15 +453,28 @@ async def _collect_province_async(
                 if _is_new_page:
                     logger.info(f"[{market}] Clicking 查询 (ant-btn-primary) …")
                     await page.locator("button.ant-btn-primary").first.click()
-                    await page.wait_for_timeout(1500)
+                    # Export handler no-ops until query data has rendered into
+                    # the store — fixed short waits are unreliable on slow networks.
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=20_000)
+                    except PWTimeout:
+                        pass
+                    await page.wait_for_timeout(1_000)
                     logger.info(f"[{market}] Clicking 导出 (span.down-load-container) …")
-                    async with page.expect_download(timeout=60_000) as dl_info:
-                        await _export_span.first.click()
+                    # JS click + retry loop: export builds a client-side blob;
+                    # a too-early click fails silently (no network request).
+                    download_future = asyncio.ensure_future(
+                        page.wait_for_event("download", timeout=60_000)
+                    )
+                    while not download_future.done():
+                        await _export_span.first.evaluate("el => el.click()")
+                        await page.wait_for_timeout(5_000)
+                    download = await download_future
                 else:
                     logger.info(f"[{market}] Old-page detected — clicking 导出 (button.ant-btn-primary) …")
                     async with page.expect_download(timeout=60_000) as dl_info:
                         await page.locator("button.ant-btn-primary").first.click()
-                download = await dl_info.value
+                    download = await dl_info.value
 
                 # Always include date range in filename to avoid collisions across chunks
                 suggested = download.suggested_filename or ""
