@@ -25,6 +25,21 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## Bulk DB loads from Mac/home network die mid-transfer (RDS blackholed connections)
+
+**What didn't work:**
+1. `scripts/ingest_nodal_csvs.py` original design: one connection per file → TEMP staging table → chunked COPY → single INSERT ON CONFLICT. A 3.5M-row file died at 31 min with `psycopg2.OperationalError: could not receive data from server: Operation timed out / SSL SYSCALL error` — the whole file lost (TEMP staging vanishes with the connection).
+2. Per-chunk fresh connections ALONE (first patch) — chunks then *hung indefinitely*: the network blackholes sockets silently and macOS takes 15+ min on TCP retransmits before erroring. Retry logic never fired because no error was raised yet.
+
+**What worked:**
+- Per-chunk idempotent upserts (`execute_values` + `ON CONFLICT`, 100k rows, fresh connection per chunk, retry once) — a dead connection costs one chunk.
+- **Plus** libpq client-side timeouts in `create_engine(connect_args={...})`: `tcp_user_timeout=120000` (error after 2 min of unacked data), `keepalives_idle=30 / interval=10 / count=3`, `connect_timeout=15`. Without `tcp_user_timeout` the hangs persist.
+- Vendor CSV quirks handled at load: mixed date-only/`+08:00` metric_time formats and doubled rows (陕西 2026) → reconstruct metric_time as CST midnight + 15min×(slot−1) (same convention as `services/fengxing/nodal_price.py`), dedupe keep-last.
+
+**Note for next time:** On this network, any single DB transaction >10 min will eventually die. Design bulk loads as per-chunk idempotent from the start, and always set `tcp_user_timeout` — server-side `statement_timeout` does nothing for a client stuck SENDING data.
+
+---
+
 ## matplotlib font cache not picking up newly installed CJK font
 
 **What didn't work:**

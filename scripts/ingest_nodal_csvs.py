@@ -2,9 +2,11 @@
 One-time backfill: read all *_YYYY-MM.csv files under data/nodal/<province>/
 and upsert into marketdata.md_shanxi_nodal_price_96.
 
-Uses PostgreSQL COPY protocol (streams the whole file in one shot, then a
-single bulk INSERT ... ON CONFLICT from a TEMP staging table) which is
-~100x faster than individual INSERT statements.
+Per-chunk upserts, each on a fresh DB connection: the home-network path to
+RDS drops long-lived connections after ~30 min (SSL SYSCALL timeout), and
+TEMP staging tables don't survive a reconnect — so every 100k-row chunk is
+its own short idempotent transaction (INSERT ... ON CONFLICT), retried once
+on connection errors. Slower than single-shot COPY, but it actually finishes.
 
 Run from repo root:
     py scripts/ingest_nodal_csvs.py
@@ -17,11 +19,11 @@ Optional filters:
 from __future__ import annotations
 
 import argparse
-import io
 import os
 import re
 import sys
 import time
+from datetime import timedelta, timezone
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -36,7 +38,9 @@ if _env_file.exists():
         pass
 
 import pandas as pd
-from sqlalchemy import create_engine, text
+import psycopg2
+from psycopg2.extras import execute_values
+from sqlalchemy import create_engine
 
 from services.fengxing.nodal_price import init_table
 
@@ -69,67 +73,69 @@ def _bulk_upsert(path: Path, engine) -> int:
     df["node_name"] = df["node_name"].astype(str)
     df["market_name"] = df["market_name"].fillna("").astype(str)
 
-    staging = f"stg_nodal_{int(time.time() * 1000) % 2_000_000_000}"
+    # Normalise metric_time to the API-path convention (tz-aware CST midnight
+    # + 15min*(slot-1)). Some CSVs (e.g. 陕西 2026) mix date-only and full
+    # "+08:00" timestamp formats and list the same data twice — reconstructing
+    # from date+slot unifies formats; exact duplicates are then dropped.
+    _CST = timezone(timedelta(hours=8))
+    day = pd.to_datetime(df["metric_time"].astype(str).str[:10], errors="coerce")
+    valid = day.notna() & df["time_order_96"].between(1, 96)
+    n_invalid = int((~valid).sum())
+    df = df[valid].copy()
+    df["metric_time"] = day[valid].dt.tz_localize(_CST) + pd.to_timedelta(
+        15 * (df["time_order_96"] - 1), unit="min")
+    before = len(df)
+    df = df.drop_duplicates(subset=["node_name", "metric_time", "time_order_96"], keep="last")
+    if n_invalid or len(df) < before:
+        print(f"  normalised metric_time; dropped {n_invalid:,} invalid + {before - len(df):,} duplicate rows")
 
-    print(f"  connecting to DB ...", end=" ", flush=True)
-    t = time.time()
-    raw = engine.raw_connection()
-    print(f"{time.time()-t:.1f}s")
-
-    # Chunk size: 100k rows ≈ 7 MB per COPY call — avoids hanging on large files
+    # Each chunk upserts straight into the target table on its own connection.
+    # A dead connection now costs at most one chunk (retried once), not the
+    # whole file — and ON CONFLICT keeps re-runs idempotent.
     _CHUNK = 100_000
     n_chunks = (len(df) - 1) // _CHUNK + 1
+    _UPSERT_SQL = """
+        INSERT INTO marketdata.md_shanxi_nodal_price_96
+            (node_name, metric_time, time_order_96, market_name, avg_node_price)
+        VALUES %s
+        ON CONFLICT (node_name, metric_time, time_order_96) DO UPDATE SET
+            market_name    = EXCLUDED.market_name,
+            avg_node_price = EXCLUDED.avg_node_price,
+            inserted_at    = NOW()
+    """
 
-    try:
-        cur = raw.cursor()
-        cur.execute("SET statement_timeout = '120s'")
-
-        cur.execute(f"""
-            CREATE TEMP TABLE "{staging}" (
-                node_name      TEXT,
-                metric_time    TIMESTAMPTZ,
-                time_order_96  SMALLINT,
-                market_name    TEXT,
-                avg_node_price NUMERIC(12,4)
-            )
-        """)
-
-        print(f"  COPY to staging ({n_chunks} chunk(s)) ...")
-        t = time.time()
-        for ci, start_row in enumerate(range(0, len(df), _CHUNK), 1):
-            chunk = df.iloc[start_row: start_row + _CHUNK]
-            buf = io.StringIO()
-            chunk.to_csv(buf, index=False, header=False, na_rep="")
-            buf.seek(0)
-            print(f"    chunk {ci}/{n_chunks} ({len(chunk):,} rows) ...", end=" ", flush=True)
-            tc = time.time()
-            cur.copy_expert(f'COPY "{staging}" FROM STDIN WITH (FORMAT CSV)', buf)
-            print(f"{time.time()-tc:.1f}s")
-        print(f"  COPY done in {time.time()-t:.1f}s total")
-
-        print(f"  INSERT ON CONFLICT ...", end=" ", flush=True)
-        t = time.time()
-        cur.execute(f"""
-            INSERT INTO marketdata.md_shanxi_nodal_price_96
-                (node_name, metric_time, time_order_96, market_name, avg_node_price)
-            SELECT node_name, metric_time, time_order_96, market_name, avg_node_price
-            FROM "{staging}"
-            ON CONFLICT (node_name, metric_time, time_order_96) DO UPDATE SET
-                market_name    = EXCLUDED.market_name,
-                avg_node_price = EXCLUDED.avg_node_price,
-                inserted_at    = NOW()
-        """)
-        n = cur.rowcount
-        print(f"{n:,} rows in {time.time()-t:.1f}s")
-
-        raw.commit()
-        return n
-
-    except Exception:
-        raw.rollback()
-        raise
-    finally:
-        raw.close()
+    total = 0
+    print(f"  upserting ({n_chunks} chunk(s), fresh connection per chunk) ...")
+    t = time.time()
+    for ci, start_row in enumerate(range(0, len(df), _CHUNK), 1):
+        chunk = df.iloc[start_row: start_row + _CHUNK]
+        rows = list(chunk.itertuples(index=False, name=None))
+        print(f"    chunk {ci}/{n_chunks} ({len(chunk):,} rows) ...", end=" ", flush=True)
+        tc = time.time()
+        last_exc = None
+        for attempt in (1, 2):
+            raw = None
+            try:
+                raw = engine.raw_connection()
+                cur = raw.cursor()
+                cur.execute("SET statement_timeout = '180s'")
+                execute_values(cur, _UPSERT_SQL, rows, page_size=10_000)
+                raw.commit()
+                last_exc = None
+                break
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+                last_exc = exc
+                print(f"\n    chunk {ci} attempt {attempt} lost connection ({exc.__class__.__name__}); retrying on fresh connection ...", flush=True)
+                time.sleep(5)
+            finally:
+                if raw is not None:
+                    raw.close()
+        if last_exc is not None:
+            raise last_exc
+        total += len(rows)
+        print(f"{time.time()-tc:.1f}s")
+    print(f"  upsert done in {time.time()-t:.1f}s total")
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +187,21 @@ def main() -> None:
     if not pgurl:
         sys.exit("PGURL not set — check config/.env")
 
-    engine = create_engine(pgurl, pool_pre_ping=True)
+    # Blackholed connections (this network drops them silently) must die fast:
+    # tcp_user_timeout makes the client error out after 2 min of unacked data
+    # instead of hanging for 15+ min on TCP retransmits.
+    engine = create_engine(
+        pgurl,
+        pool_pre_ping=True,
+        connect_args={
+            "connect_timeout": 15,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+            "tcp_user_timeout": 120000,
+        },
+    )
     init_table(engine)
 
     nodal_root = _REPO / "data" / "nodal"
