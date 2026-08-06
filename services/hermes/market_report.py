@@ -1006,6 +1006,17 @@ def _get_report_llm_provider(pg_url: str) -> str:
         return "auto"
 
 
+def _report_to_markdown(report: dict, period_str: str) -> str:
+    """Render the structured daily-report dict as a markdown vault note body."""
+    lines = [f"# 电力市场日报 — {period_str}", "", report.get("executive_summary", "")]
+    for section in report.get("sections", []):
+        lines += ["", f"## {section.get('title', '')}", "", section.get("content", "")]
+        for item in section.get("items", []) or []:
+            src = f"（{item.get('source')}, {item.get('date')}）" if item.get("source") else ""
+            lines.append(f"- **{item.get('title', '')}**{src}：{item.get('content', '')}")
+    return "\n".join(lines).strip() + "\n"
+
+
 def send_daily_report(
     pg_url: str,
     api_key: str,
@@ -1065,6 +1076,13 @@ def send_daily_report(
         )
         feishu.send_file(owner_open_id, file_key)
         logger.info("Daily report sent: %s (%d bytes)", filename, len(pdf_bytes))
+        try:
+            from services.knowledge_pool import vault_writer
+            vault_writer.write_briefing_note(
+                "daily_report", _report_to_markdown(report, period_str)
+            )
+        except Exception as exc2:
+            logger.debug("Daily report vault note failed: %s", exc2)
 
     except Exception as exc:
         logger.error("Daily report failed: %s", exc, exc_info=True)
