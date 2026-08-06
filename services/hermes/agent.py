@@ -469,6 +469,13 @@ class HermesAgent:
 
         # Inject KB context when available
         kb_ctx = self._retrieve_kb_context(msg.text)
+        try:
+            from services.knowledge_pool import vault_reader
+            vault_ctx = vault_reader.retrieve_vault_context(msg.text)
+            if vault_ctx:
+                kb_ctx = (kb_ctx + "\n\n" + vault_ctx) if kb_ctx else vault_ctx
+        except Exception:
+            pass
         if kb_ctx:
             system = (
                 date_header
