@@ -461,7 +461,7 @@ def run_bess_map_query(question: str, api_key: str, pg_url: str) -> str:
             # Extract and store new insights (WRITE path)
             try:
                 from services.knowledge_pool.expert_memory import extract_spot_insights
-                extract_spot_insights(user_msg=question, agent_reply=answer, api_key=api_key)
+                extract_spot_insights(user_msg=question, agent_reply=answer, api_key=api_key, source_app="bess_map")
             except Exception:
                 pass
             return answer

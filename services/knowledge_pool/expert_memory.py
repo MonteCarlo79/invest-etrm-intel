@@ -302,7 +302,7 @@ If no durable insights are found, return {"insights": []}.
 """
 
 
-def extract_spot_insights(user_msg: str, agent_reply: str, api_key: str) -> int:
+def extract_spot_insights(user_msg: str, agent_reply: str, api_key: str, source_app: str = "spot_market") -> int:
     """
     Extract durable insights from a single Strategist conversation turn and store them.
 
@@ -334,6 +334,7 @@ def extract_spot_insights(user_msg: str, agent_reply: str, api_key: str) -> int:
         return 0
 
     stored = 0
+    stored_items: list[dict] = []
     with get_conn() as conn:
         with conn.cursor() as cur:
             for item in insights:
@@ -354,9 +355,25 @@ def extract_spot_insights(user_msg: str, agent_reply: str, api_key: str) -> int:
                         ),
                     )
                     stored += 1
+                    stored_items.append(item)
                 except Exception as exc:
                     logger.debug("Failed to store insight: %s", exc)
         conn.commit()
+
+    # Mirror to vault inbox (Stage 4 review loop) — never raises
+    if stored_items:
+        try:
+            from services.knowledge_pool import vault_writer
+            for item in stored_items:
+                vault_writer.write_insight_note(
+                    category=item.get("type", "other"),
+                    content=item.get("insight", "")[:1000],
+                    source_app=source_app,
+                    province=item.get("province") or "",
+                    confidence=item.get("confidence", "medium"),
+                )
+        except Exception as exc:
+            logger.debug("Vault insight mirror failed: %s", exc)
 
     return stored
 
