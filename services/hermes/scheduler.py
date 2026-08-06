@@ -255,6 +255,22 @@ def build_task_card(
     }
 
 
+def _card_to_markdown(card: dict) -> str:
+    """Flatten a Feishu card into plain markdown for vault persistence."""
+    parts = []
+    title = card.get("header", {}).get("title", {}).get("content", "")
+    if title:
+        parts.append(f"# {title}")
+    for el in card.get("elements", []):
+        if el.get("tag") == "hr":
+            parts.append("---")
+            continue
+        text = el.get("text", {}).get("content") or el.get("content") or ""
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
 def send_morning_briefing(
     tasks: TasksClient,
     feishu: Optional[FeishuClient] = None,
@@ -287,6 +303,11 @@ def send_morning_briefing(
 
     try:
         feishu.send_card(open_id=feishu_owner_open_id, card=card)
+        try:
+            from services.knowledge_pool import vault_writer
+            vault_writer.write_briefing_note("morning", _card_to_markdown(card))
+        except Exception as exc2:
+            logger.debug("Briefing vault note failed: %s", exc2)
     except Exception as exc:
         logger.error("Morning briefing card failed: %s", exc)
         date_str  = f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS_CN[now.weekday()]}"
