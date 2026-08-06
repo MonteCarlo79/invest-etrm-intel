@@ -329,3 +329,82 @@ class OneDriveClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+
+# ── Shared client factory (used by knowledge_pool vault_reader/vault_writer) ──
+
+import os
+
+_SHARED_CLIENT: Optional["OneDriveClient"] = None
+_SHARED_LOCK = Lock()
+
+
+def _load_setting(pg_url: str, key: str) -> str:
+    """Read a value from hermes_settings. Returns '' on any error."""
+    url = pg_url or os.environ.get("PGURL", "")
+    if not url:
+        return ""
+    try:
+        import psycopg2
+        with psycopg2.connect(url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM hermes_settings WHERE key = %s", (key,))
+                row = cur.fetchone()
+                return row[0] if row else ""
+    except Exception as exc:
+        logger.debug("hermes_settings read failed (%s): %s", key, exc)
+        return ""
+
+
+def _save_setting(pg_url: str, key: str, value: str) -> None:
+    url = pg_url or os.environ.get("PGURL", "")
+    if not url:
+        return
+    try:
+        import psycopg2
+        with psycopg2.connect(url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO hermes_settings (key, value, updated_at) VALUES (%s, %s, NOW())
+                       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+                    (key, value),
+                )
+            conn.commit()
+    except Exception as exc:
+        logger.warning("hermes_settings write failed (%s): %s", key, exc)
+
+
+def get_shared_onedrive_client(pg_url: str = "") -> Optional["OneDriveClient"]:
+    """Lazily build a process-wide OneDriveClient from env + hermes_settings.
+
+    Returns None if OneDrive is not configured (or on any error) — callers
+    must treat knowledge I/O as optional.
+    """
+    global _SHARED_CLIENT
+    with _SHARED_LOCK:
+        if _SHARED_CLIENT is not None:
+            return _SHARED_CLIENT
+        client_id = os.environ.get("ONEDRIVE_CLIENT_ID", "")
+        client_secret = os.environ.get("ONEDRIVE_CLIENT_SECRET", "")
+        if not client_id or not client_secret:
+            return None
+        refresh_token = _load_setting(pg_url, "onedrive_refresh_token") or os.environ.get(
+            "ONEDRIVE_REFRESH_TOKEN", ""
+        )
+        if not refresh_token:
+            return None
+
+        def _rotated(new_token: str) -> None:
+            _save_setting(pg_url, "onedrive_refresh_token", new_token)
+
+        try:
+            _SHARED_CLIENT = OneDriveClient(
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
+                on_token_rotated=_rotated,
+            )
+        except Exception as exc:
+            logger.warning("Shared OneDriveClient init failed: %s", exc)
+            return None
+        return _SHARED_CLIENT
