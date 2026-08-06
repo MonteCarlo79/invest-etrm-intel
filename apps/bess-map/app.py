@@ -1601,6 +1601,22 @@ def load_fr_market(_eng_key):
 
 
 @st.cache_data(ttl=1800)
+def load_sysopfee(_eng_key) -> "pd.DataFrame":
+    """Load all province_sysopfee_monthly data."""
+    try:
+        sql = sql_text("""
+            SELECT province, year_month, fee_yuan_kwh
+            FROM province_sysopfee_monthly
+            ORDER BY year_month, province
+        """)
+        df = pd.read_sql(sql, _eng())
+        df["year_month"] = pd.to_datetime(df["year_month"])
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["province", "year_month", "fee_yuan_kwh"])
+
+
+@st.cache_data(ttl=1800)
 def load_installed_capacity(_eng_key):
     """Load province_installed_monthly — all rows with bess_mw, ordered by province + month DESC."""
     import pandas as _pd
@@ -2485,15 +2501,15 @@ with tab_demand:
                     _t("demand_fr_rule"):      _rule_desc,
                 })
             if _fr_rows:
-                _fr_df = pd.DataFrame(_fr_rows).set_index(_t("demand_province"))
-                st.dataframe(_fr_df, use_container_width=True)
+                _fr_demand_df = pd.DataFrame(_fr_rows).set_index(_t("demand_province"))
+                st.dataframe(_fr_demand_df, use_container_width=True)
 
                 # Bar chart of FR requirement
                 fig_fr = go.Figure(go.Bar(
-                    x=_fr_df.index.tolist(),
-                    y=_fr_df[_t("demand_fr_req_mw")].tolist(),
+                    x=_fr_demand_df.index.tolist(),
+                    y=_fr_demand_df[_t("demand_fr_req_mw")].tolist(),
                     marker_color="#F58518",
-                    text=[f"{v:,.0f}" for v in _fr_df[_t("demand_fr_req_mw")]],
+                    text=[f"{v:,.0f}" for v in _fr_demand_df[_t("demand_fr_req_mw")]],
                     textposition="outside",
                 ))
                 fig_fr.update_layout(
@@ -2697,22 +2713,6 @@ with tab_demand:
                 st.dataframe(_cmp_df, use_container_width=True)
 
 # ── Tab 5: System Operation Fee ───────────────────────────────────────────────
-
-@st.cache_data(ttl=1800)
-def load_sysopfee(_eng_key) -> "pd.DataFrame":
-    """Load all province_sysopfee_monthly data."""
-    try:
-        sql = sql_text("""
-            SELECT province, year_month, fee_yuan_kwh
-            FROM province_sysopfee_monthly
-            ORDER BY year_month, province
-        """)
-        df = pd.read_sql(sql, _eng())
-        df["year_month"] = pd.to_datetime(df["year_month"])
-        return df
-    except Exception:
-        return pd.DataFrame(columns=["province", "year_month", "fee_yuan_kwh"])
-
 
 with tab_sysopfee:
     st.subheader(_t("sysopfee_title"))
