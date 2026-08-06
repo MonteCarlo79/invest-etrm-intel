@@ -50,6 +50,38 @@ def render_asset_config(engine):
                 st.success("Folder mappings saved.")
                 st.rerun()
 
+    # Inline edit for capacity/duration
+    if not assets_df.empty:
+        st.subheader("Edit Asset Parameters")
+        st.caption("Update capacity and BESS duration for existing assets.")
+        with st.form("edit_assets"):
+            edit_data = {}
+            cols = st.columns(3)
+            deduped = assets_df.drop_duplicates(subset=["id"])
+            for i, (_, row) in enumerate(deduped.iterrows()):
+                with cols[i % 3]:
+                    st.markdown(f"**{row['name']}**")
+                    cap = st.number_input(
+                        "Capacity (MW)", min_value=0.0, step=0.5,
+                        value=float(row["capacity_mw"] or 0),
+                        key=f"cap_{row['id']}",
+                    )
+                    dur = st.number_input(
+                        "Duration (h)", min_value=0.0, step=0.5,
+                        value=float(row["bess_duration_h"] or 0),
+                        key=f"dur_{row['id']}",
+                    )
+                    edit_data[row["id"]] = {"cap": cap, "dur": dur}
+
+            if st.form_submit_button("Save Asset Parameters"):
+                with engine.begin() as conn:
+                    for asset_id, vals in edit_data.items():
+                        conn.execute(text(
+                            "UPDATE marketdata.rm_assets SET capacity_mw = :cap, bess_duration_h = :dur WHERE id = :id"
+                        ), {"cap": vals["cap"] or None, "dur": vals["dur"] or None, "id": asset_id})
+                st.success("Asset parameters saved.")
+                st.rerun()
+
     st.subheader("Add Asset")
     with st.form("add_asset"):
         col1, col2, col3 = st.columns(3)
