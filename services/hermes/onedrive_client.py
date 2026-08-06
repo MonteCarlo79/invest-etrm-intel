@@ -339,6 +339,19 @@ _SHARED_CLIENT: Optional["OneDriveClient"] = None
 _SHARED_LOCK = Lock()
 
 
+def set_shared_onedrive_client(client: Optional["OneDriveClient"]) -> None:
+    """Register an externally-built client as the process-wide shared one.
+
+    app.py builds the chat OneDrive client at startup; registering it here
+    keeps exactly one client (one refresh-token lineage) per process — two
+    clients sharing a rotating MSA refresh token kill each other on the
+    first rotation.
+    """
+    global _SHARED_CLIENT
+    with _SHARED_LOCK:
+        _SHARED_CLIENT = client
+
+
 def _load_setting(pg_url: str, key: str) -> str:
     """Read a value from hermes_settings. Returns '' on any error."""
     url = pg_url or os.environ.get("PGURL", "")
@@ -371,7 +384,11 @@ def _save_setting(pg_url: str, key: str, value: str) -> None:
                 )
             conn.commit()
     except Exception as exc:
-        logger.warning("hermes_settings write failed (%s): %s", key, exc)
+        logger.warning(
+            "hermes_settings write failed (%s): %s"
+            " — run: python scripts/auth_microsoft_mail.py to refresh OneDrive credentials",
+            key, exc,
+        )
 
 
 def get_shared_onedrive_client(pg_url: str = "") -> Optional["OneDriveClient"]:
@@ -405,6 +422,10 @@ def get_shared_onedrive_client(pg_url: str = "") -> Optional["OneDriveClient"]:
                 on_token_rotated=_rotated,
             )
         except Exception as exc:
-            logger.warning("Shared OneDriveClient init failed: %s", exc)
+            logger.warning(
+                "Shared OneDriveClient init failed: %s"
+                " — run: python scripts/auth_microsoft_mail.py to refresh OneDrive credentials",
+                exc,
+            )
             return None
         return _SHARED_CLIENT

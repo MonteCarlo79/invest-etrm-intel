@@ -57,3 +57,12 @@ def test_write_returns_none_on_upload_error(monkeypatch):
             raise RuntimeError("network down")
     monkeypatch.setattr(vault_writer, "_client", lambda: Boom())
     assert vault_writer.write_briefing_note("morning", "x") is None
+
+
+def test_insight_filename_has_time_component(monkeypatch):
+    import re
+    fake = FakeOneDrive()
+    monkeypatch.setattr(vault_writer, "_client", lambda: fake)
+    vault_writer.write_insight_note(category="t", content="测试内容甲乙丙", source_app="x")
+    _, filename, _ = fake.uploads[0]
+    assert re.match(r"^\d{4}-\d{2}-\d{2}-\d{6}-.+\.md$", filename)

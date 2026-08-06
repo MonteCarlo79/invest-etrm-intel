@@ -694,6 +694,8 @@ def _make_clients():
             refresh_token=_od_refresh_token,
             on_token_rotated=_on_token_rotated,
         )
+        from services.hermes.onedrive_client import set_shared_onedrive_client
+        set_shared_onedrive_client(onedrive)
 
     outlook: Optional[OutlookClient] = None
     _outlook_rt = (

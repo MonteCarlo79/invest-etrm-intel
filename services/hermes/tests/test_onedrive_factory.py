@@ -40,3 +40,11 @@ def test_db_token_wins_over_env(monkeypatch):
     client = odc.get_shared_onedrive_client(pg_url="postgres://x")
     assert client._refresh_token == "rt-db"
     _reset()
+
+
+def test_set_shared_client_registers_instance(monkeypatch):
+    odc._SHARED_CLIENT = None
+    sentinel = odc.OneDriveClient(client_id="a", client_secret="b", refresh_token="t")
+    odc.set_shared_onedrive_client(sentinel)
+    assert odc.get_shared_onedrive_client() is sentinel
+    odc._SHARED_CLIENT = None

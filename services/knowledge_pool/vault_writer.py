@@ -103,4 +103,4 @@ def write_insight_note(
         created=now.isoformat(timespec="seconds"),
     )
     body = fm + f"\n\n# {category}: {_slug(content, 48)}\n\n{content.strip()}\n"
-    return _upload(INBOX_AREA, f"{date_str}-{slug}.md", body)
+    return _upload(INBOX_AREA, f"{date_str}-{now.strftime('%H%M%S')}-{slug}.md", body)
