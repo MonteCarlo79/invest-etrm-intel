@@ -149,7 +149,23 @@ def test_irr_defaults_sysopfee_conversion():
     # expected: -(0.05 × 1000 / 0.85 / 365) ≈ -0.1612
     assert d["sysopfee_day"] == pytest.approx(-(0.05 * 1000 / 0.85 / 365), rel=1e-4)
     assert d["sysopfee_day"] < 0
-    assert "12月" in d["sysopfee_src"]
+
+
+def test_irr_defaults_sysopfee_uses_2026_average():
+    # 12 months of 2025 at 0.10 + 7 months of 2026 at 0.05 → must use 2026 only
+    sof_2025 = _make_sof_df("广东", fee=0.10, months=12)
+    sof_2026 = _make_sof_df("广东", fee=0.05, months=19).iloc[12:]  # 2026-01..2026-07
+    sof = pd.concat([sof_2025, sof_2026], ignore_index=True)
+    d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
+    assert d["sysopfee_day"] == pytest.approx(-(0.05 * 1000 / 0.85 / 365), rel=1e-4)
+    assert "2026" in d["sysopfee_src"]
+
+
+def test_irr_defaults_sysopfee_falls_back_when_no_2026():
+    sof = _make_sof_df("广东", fee=0.08, months=12)  # all 2025
+    d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
+    assert d["sysopfee_day"] == pytest.approx(-(0.08 * 1000 / 0.85 / 365), rel=1e-4)
+    assert "2026" in d["sysopfee_src"]  # label must disclose the fallback
 
 def test_irr_defaults_cap_comp_conversion():
     cc = _make_cc_df("广东", 200.0)

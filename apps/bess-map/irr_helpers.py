@@ -133,18 +133,26 @@ def _irr_defaults_for_province(
         "fr_src":       "无数据",
     }
 
-    # ── 系统运行费: average of last 12 available months ───────────────────────
+    # ── 系统运行费: 2026 year-to-date average; fallback = latest ≤12 months ───
     if not sof_df.empty and province in sof_df["province"].values:
-        prov_sof = (
-            sof_df[sof_df["province"] == province]
-            .sort_values("year_month", ascending=False)
-            .head(12)
+        prov_sof = sof_df[sof_df["province"] == province].sort_values(
+            "year_month", ascending=False
         )
-        if not prov_sof.empty:
-            avg_fee = float(prov_sof["fee_yuan_kwh"].mean())
+        sof_cur = prov_sof[prov_sof["year_month"].dt.year == 2026]
+        if not sof_cur.empty:
+            avg_fee = float(sof_cur["fee_yuan_kwh"].mean())
+            result["sysopfee_src"] = f"2026均值 ({len(sof_cur)}个月)"
+        elif not prov_sof.empty:
+            recent = prov_sof.head(12)
+            avg_fee = float(recent["fee_yuan_kwh"].mean())
+            result["sysopfee_src"] = (
+                f"无2026数据，取至{recent['year_month'].max():%Y-%m}均值"
+            )
+        else:
+            avg_fee = None
+        if avg_fee is not None:
             # fee(¥/kWh) × 1000(kWh/MWh capacity) / RTE / 365 days
             result["sysopfee_day"] = -(avg_fee * 1000.0 / rte / 365.0)
-            result["sysopfee_src"] = f"市场均值 ({len(prov_sof)}月)"
 
     # ── 容量补偿: most recent row with standard ¥/kW value ───────────────────
     if not cc_df.empty and province in cc_df["province"].values:

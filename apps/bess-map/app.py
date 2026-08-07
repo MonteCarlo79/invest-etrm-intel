@@ -3497,6 +3497,8 @@ with tab_irr:
             st.dataframe(sens_df, use_container_width=True)
         elif not calc:
             st.info(_t("irr_calc_btn") + " ←")
+        elif theo_day == 0:
+            st.warning(_t("irr_no_data"))
 
 # ── Tab 4: Data Management ────────────────────────────────────────────────────
 with tab_mgmt:
