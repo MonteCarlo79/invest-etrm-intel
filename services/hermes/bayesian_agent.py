@@ -92,7 +92,7 @@ and proceed to search_exchange_reports or give_posterior.
    Do NOT use search_kb for price levels or market statistics — use search_exchange_reports instead.
 
 5. POSTERIOR FORMAT for price outlook questions must include:
-   - Monthly price range estimate (¥/kWh, DA and RT separately if asked)
+   - Monthly price range estimate (¥/MWh, DA and RT separately if asked)
    - Key upside risks (heat wave, hydro deficit, coal price spike)
    - Key downside risks (surplus imports, renewable curtailment period, demand slowdown)
    - Confidence level (Low/Medium/High) with reasoning
@@ -102,6 +102,15 @@ Rules:
 - Do NOT skip straight to tools without articulating the prior.
 - The posterior must reference specific evidence, not just repeat the prior.
 - If evidence is absent or thin, say so explicitly and widen the uncertainty band.
+- UNIT DISCIPLINE: state ALL price levels in ¥/MWh. The pre-fetched spot_daily and interprov
+  tables are already converted to ¥/MWh. If you cite a raw spot_daily value in ¥/kWh
+  (e.g. 0.45), convert it (×1000) before using it anywhere. Never mix the two units.
+- CONSISTENCY CHECK: your posterior monthly ranges must reconcile with the pre-fetched
+  historical monthly averages. If your forecast diverges from the recent 3-month average
+  by more than ±30%, you MUST explicitly name the structural driver (policy change, market
+  launch, fuel shock); otherwise re-anchor to the observed levels.
+- If a pre-fetched table shows "(no rows returned)" or mostly days=0, say so explicitly and
+  anchor on exchange_monthly_metrics instead of inventing a history.
 - You ARE permitted to give calibrated price estimates (ranges, not point forecasts). Do not refuse
   to estimate — instead, widen the range and state uncertainty clearly.
 - MANDATORY: You MUST call give_posterior after 2–3 rounds of evidence. Do NOT keep gathering more
@@ -255,6 +264,13 @@ class BayesianAnalystAgent:
 
     # ── Tools ─────────────────────────────────────────────────────────────────
 
+    # Province names as they appear in exchange-report filenames. Keep in sync with
+    # the ingested corpus (staging.exchange_monthly_reports provinces).
+    _KNOWN_PROVINCES = ("上海", "山东", "安徽", "江苏", "浙江", "广东", "福建",
+                        "广西", "青海", "蒙西", "冀南", "河北南网")
+    # Filename alias pairs that refer to the same province
+    _PROVINCE_ALIASES = {"冀南": ("河北南网",), "河北南网": ("冀南",)}
+
     def _tool_search_exchange_reports(self, query: str, top_k: int = 5) -> str:
         """Targeted search within monthly_report category only."""
         try:
@@ -267,6 +283,19 @@ class BayesianAnalystAgent:
             )
             if not results:
                 return "No exchange reports found for this query."
+            # Province hard-filter: if the query names a province, drop hits whose
+            # filename names a DIFFERENT province. Filename is the province signal
+            # (staging.spot_knowledge_docs.region_province is NULL).
+            target = next((p for p in self._KNOWN_PROVINCES if p in query), None)
+            if target:
+                accepted_names = (target,) + self._PROVINCE_ALIASES.get(target, ())
+                filtered = [
+                    h for h in results
+                    if any(a in h["file_name"] for a in accepted_names)
+                    or not any(p in h["file_name"] for p in self._KNOWN_PROVINCES if p not in accepted_names)
+                ]
+                if filtered:
+                    results = filtered
             parts = []
             for i, hit in enumerate(results, 1):
                 parts.append(
@@ -384,21 +413,21 @@ class BayesianAnalystAgent:
                 break
 
         try:
-            # 1. Monthly averages (all available history)
+            # 1. Monthly averages (all available history) — converted to ¥/MWh
             monthly = self._tool_query_db(
                 "SELECT DATE_TRUNC('month', report_date)::date AS month, "
-                "ROUND(AVG(da_avg)::numeric, 4) AS avg_da, "
-                "ROUND(AVG(rt_avg)::numeric, 4) AS avg_rt, "
+                "ROUND((AVG(da_avg) * 1000)::numeric, 1) AS avg_da_yuan_mwh, "
+                "ROUND((AVG(rt_avg) * 1000)::numeric, 1) AS avg_rt_yuan_mwh, "
                 "COUNT(*) FILTER (WHERE da_avg IS NOT NULL) AS days "
                 "FROM public.spot_daily "
                 f"WHERE province_en = '{province_en}' "
                 "GROUP BY 1 ORDER BY 1"
             )
-            # 2. Recent interprov flows (last 6 months)
+            # 2. Recent interprov flows (last 6 months) — converted to ¥/MWh
             interprov = self._tool_query_db(
                 "SELECT DATE_TRUNC('month', report_date)::date AS month, "
                 "direction, "
-                "ROUND(AVG(price_yuan_kwh)::numeric, 4) AS avg_price, "
+                "ROUND((AVG(price_yuan_kwh) * 1000)::numeric, 1) AS avg_price_yuan_mwh, "
                 "ROUND(AVG(province_share)::numeric, 1) AS avg_share "
                 "FROM staging.spot_interprov_flow "
                 f"WHERE province_cn = '{province_cn}' "
@@ -419,8 +448,8 @@ class BayesianAnalystAgent:
             )
             return (
                 "\n\n---\n**PRE-FETCHED DATA (use this — do NOT re-query the same tables):**\n\n"
-                f"**{province_cn}月度现货均价 (public.spot_daily):**\n{monthly}\n\n"
-                f"**{province_cn}近6个月省间流量 (staging.spot_interprov_flow):**\n{interprov}\n\n"
+                f"**{province_cn}月度现货均价 (public.spot_daily, 已换算为 ¥/MWh):**\n{monthly}\n\n"
+                f"**{province_cn}近6个月省间流量 (staging.spot_interprov_flow, 价格已换算为 ¥/MWh):**\n{interprov}\n\n"
                 f"**{province_cn}电力交易月报结构化指标 (staging.exchange_monthly_metrics, 单位MWh/GWh/GW):**\n{exchange}\n"
                 "---\n"
             )
@@ -506,8 +535,14 @@ class BayesianAnalystAgent:
 
                 result = self._dispatch(block.name, block.input)
                 rationale = block.input.get("rationale", "")
+                # Sanitize failures for the user-facing trail; the LLM still gets
+                # the raw result below (it needs the error text to self-correct).
+                display_result = result[:600]
+                if result.startswith(("DB error:", "ERROR:", "Exchange report search error:",
+                                      "KB search error:", "Market agent error:")):
+                    display_result = "（查询失败，已跳过 — 详细错误见服务端日志）"
                 evidence_trail.append(
-                    f"**[{block.name}]** {rationale or block.input.get('query', block.input.get('sql', ''))[:120]}\n{result[:600]}"
+                    f"**[{block.name}]** {rationale or block.input.get('query', block.input.get('sql', ''))[:120]}\n{display_result}"
                 )
                 tool_results.append({
                     "type": "tool_result",
