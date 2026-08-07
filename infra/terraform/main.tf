@@ -194,6 +194,7 @@ resource "aws_db_instance" "pg" {
   backup_retention_period      = 7
   performance_insights_enabled = true
   max_allocated_storage        = 1000   # storage auto-scaling cap; set in AWS, reconciled here
+  apply_immediately            = true   # 2026-08-07: instance changes apply now, not at the weekly window
 }
 
 # -------------------------
@@ -748,11 +749,31 @@ resource "aws_ecs_task_definition" "bess_map" {
       },
       {
         name  = "BEDROCK_REGION"
-        value = "us-east-1"
+        value = "ap-southeast-1"
       },
       {
         name  = "S3_BUCKET"
         value = var.uploads_bucket_name
+      },
+      {
+        name  = "HERMES_URL"
+        value = "https://www.pjh-etrm.ai"
+      },
+      {
+        name  = "DEEPSEEK_API_KEY"
+        value = var.deepseek_api_key
+      },
+      {
+        name  = "OPENAI_API_KEY"
+        value = var.openai_api_key
+      },
+      {
+        name  = "LINGFENG_USERNAME"
+        value = var.lingfeng_username
+      },
+      {
+        name  = "LINGFENG_PASSWORD"
+        value = var.lingfeng_password
       }
     ]
 

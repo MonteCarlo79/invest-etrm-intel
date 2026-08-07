@@ -417,6 +417,26 @@ variable "openai_api_key" {
   default   = ""
 }
 
+variable "deepseek_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "lingfeng_username" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Lingfeng portal username (bess-map in-app backfill)"
+}
+
+variable "lingfeng_password" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Lingfeng portal password (bess-map in-app backfill)"
+}
+
 variable "slack_webhook_url" {
   type      = string
   sensitive = true
