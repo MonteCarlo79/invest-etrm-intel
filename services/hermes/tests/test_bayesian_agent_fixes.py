@@ -54,6 +54,24 @@ def test_province_filter_graceful_when_nothing_survives():
     assert "山东电力市场" in out
 
 
+def test_province_filter_catches_full_corpus_provinces():
+    # 河南/新疆/云南/内蒙古 are in the corpus but were missing from the
+    # first-pass province list — regression test for the 2026-08-07 leak.
+    agent = _agent()
+    hits = _results([
+        "河南-2026年6月电力市场信息披露报告.pdf",
+        "新疆-2026年6月电力市场信息披露报告.pdf",
+        "云南-2026年6月电力交易月报.pdf",
+        "内蒙古电力多边交易市场结算概况2026年第5期.pdf",
+        "上海市2026年一季度电力市场交易信息.pdf",
+    ])
+    with patch("services.knowledge_pool.knowledge_docs.search_reference_docs", return_value=hits):
+        out = agent._tool_search_exchange_reports("上海 2026年 现货价格 夏季")
+    assert "上海市2026年一季度" in out
+    for bad in ("河南", "新疆", "云南", "内蒙古"):
+        assert bad not in out
+
+
 def test_evidence_trail_sanitizes_db_error():
     # The sanitization happens inline in run(); test the mechanism via the
     # same prefix rule used there.

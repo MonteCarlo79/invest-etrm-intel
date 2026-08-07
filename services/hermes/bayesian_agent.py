@@ -264,10 +264,17 @@ class BayesianAnalystAgent:
 
     # ── Tools ─────────────────────────────────────────────────────────────────
 
-    # Province names as they appear in exchange-report filenames. Keep in sync with
-    # the ingested corpus (staging.exchange_monthly_reports provinces).
-    _KNOWN_PROVINCES = ("上海", "山东", "安徽", "江苏", "浙江", "广东", "福建",
-                        "广西", "青海", "蒙西", "冀南", "河北南网")
+    # Province/region names as they appear in exchange-report filenames. Full
+    # province-level list + market-specific names — anything outside this list
+    # passes as "generic". Keep in sync with the ingested corpus.
+    _KNOWN_PROVINCES = (
+        "上海", "北京", "天津", "重庆", "河北", "山西", "内蒙古", "辽宁", "吉林",
+        "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北",
+        "湖南", "广东", "广西", "海南", "四川", "贵州", "云南", "西藏", "陕西",
+        "甘肃", "青海", "宁夏", "新疆",
+        # market-specific region names
+        "冀南", "冀北", "河北南网", "蒙西", "蒙东", "广州",
+    )
     # Filename alias pairs that refer to the same province
     _PROVINCE_ALIASES = {"冀南": ("河北南网",), "河北南网": ("冀南",)}
 
@@ -276,17 +283,20 @@ class BayesianAnalystAgent:
         try:
             from services.knowledge_pool.knowledge_docs import search_reference_docs
             top_k = min(int(top_k), 10)
+            # Detect target province first — when set, over-fetch so enough
+            # on-province hits survive the hard filter below.
+            target = next((p for p in self._KNOWN_PROVINCES if p in query), None)
+            fetch_k = min(top_k * 2, 10) if target else top_k
             results = search_reference_docs(
                 query=query,
                 category="monthly_report",
-                limit=top_k,
+                limit=fetch_k,
             )
             if not results:
                 return "No exchange reports found for this query."
             # Province hard-filter: if the query names a province, drop hits whose
             # filename names a DIFFERENT province. Filename is the province signal
             # (staging.spot_knowledge_docs.region_province is NULL).
-            target = next((p for p in self._KNOWN_PROVINCES if p in query), None)
             if target:
                 accepted_names = (target,) + self._PROVINCE_ALIASES.get(target, ())
                 filtered = [
@@ -295,7 +305,7 @@ class BayesianAnalystAgent:
                     or not any(p in h["file_name"] for p in self._KNOWN_PROVINCES if p not in accepted_names)
                 ]
                 if filtered:
-                    results = filtered
+                    results = filtered[:top_k]
             parts = []
             for i, hit in enumerate(results, 1):
                 parts.append(
