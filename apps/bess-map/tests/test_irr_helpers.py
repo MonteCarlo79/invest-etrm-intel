@@ -118,13 +118,12 @@ def test_build_cashflows_subsidy_legacy_still_works():
 
 # ── _irr_defaults_for_province ────────────────────────────────────────────────
 
-def _make_sof_df(province, fee, months=12):
-    import datetime
+def _make_sof_df(province, fee, months=12, start="2026-01-01"):
     rows = []
     for i in range(months):
         rows.append({
             "province": province,
-            "year_month": pd.Timestamp("2025-01-01") + pd.DateOffset(months=i),
+            "year_month": pd.Timestamp(start) + pd.DateOffset(months=i),
             "fee_yuan_kwh": fee,
         })
     return pd.DataFrame(rows)
@@ -153,19 +152,33 @@ def test_irr_defaults_sysopfee_conversion():
 
 def test_irr_defaults_sysopfee_uses_2026_average():
     # 12 months of 2025 at 0.10 + 7 months of 2026 at 0.05 → must use 2026 only
-    sof_2025 = _make_sof_df("广东", fee=0.10, months=12)
-    sof_2026 = _make_sof_df("广东", fee=0.05, months=19).iloc[12:]  # 2026-01..2026-07
+    sof_2025 = _make_sof_df("广东", fee=0.10, months=12, start="2025-01-01")
+    sof_2026 = _make_sof_df("广东", fee=0.05, months=7)  # 2026-01..2026-07
     sof = pd.concat([sof_2025, sof_2026], ignore_index=True)
     d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
     assert d["sysopfee_day"] == pytest.approx(-(0.05 * 1000 / 0.85 / 365), rel=1e-4)
     assert "2026" in d["sysopfee_src"]
 
 
-def test_irr_defaults_sysopfee_falls_back_when_no_2026():
-    sof = _make_sof_df("广东", fee=0.08, months=12)  # all 2025
+def test_irr_defaults_sysopfee_caps_at_12_months():
+    # 14 rows from 2026-01 (fee = 0.01, 0.02, ..., 0.14) → latest 12 only (0.03..0.14)
+    rows = [
+        {"province": "广东",
+         "year_month": pd.Timestamp("2026-01-01") + pd.DateOffset(months=i),
+         "fee_yuan_kwh": 0.01 * (i + 1)}
+        for i in range(14)
+    ]
+    sof = pd.DataFrame(rows)
     d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
-    assert d["sysopfee_day"] == pytest.approx(-(0.08 * 1000 / 0.85 / 365), rel=1e-4)
-    assert "2026" in d["sysopfee_src"]  # label must disclose the fallback
+    latest12_mean = sum(0.01 * (i + 1) for i in range(2, 14)) / 12  # 0.085
+    assert d["sysopfee_day"] == pytest.approx(-(latest12_mean * 1000 / 0.85 / 365), rel=1e-4)
+
+
+def test_irr_defaults_sysopfee_no_data_without_2026_rows():
+    sof = _make_sof_df("广东", fee=0.08, months=12, start="2025-01-01")  # below floor
+    d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
+    assert d["sysopfee_day"] == 0.0
+    assert "无2026数据" in d["sysopfee_src"]
 
 def test_irr_defaults_cap_comp_conversion():
     cc = _make_cc_df("广东", 200.0)
