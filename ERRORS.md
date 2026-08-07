@@ -118,3 +118,23 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 - Translations: lazy per-item button inside expander; store result in session state; no automatic translation on render.
 
 **Note for next time:** In Streamlit, never use `st.rerun()` in a loop controlled by a persistent session state boolean without a one-shot guard flag. All tab code runs on every render — treat it as a single flat script, not isolated tab handlers.
+
+---
+
+## bess-map v60 production crash — def-order NameError + _fr_df shadowing (2026-08-07)
+
+**What happened:** v60 deployed with IRR revenue-mix feature crashed the entire app on load: `NameError: load_sysopfee is not defined`. Every user hit a traceback page.
+
+**Root causes (both from the same loader hoist):**
+1. `_sof_df = load_sysopfee(_ENG_KEY)` was hoisted to module level (line ~1733) so the geo-map tab could share it, but `def load_sysopfee` stayed at line ~2702 — Streamlit runs top-to-bottom, so the name didn't exist yet. `load_cap_comp`/`load_fr_market` defs were placed correctly; only this one was missed.
+2. Latent second crash: the FR-demand section reused `_fr_df` for a localized display frame (`set_index(_t("demand_province"))`), clobbering the shared frame the aux tab reads (`_fr_df["province"]` → KeyError) — only fires when FR market data is non-empty, so it would have hit prod as soon as bug 1 was fixed.
+
+**Why it shipped:** the 18 v60 tests only covered `irr_helpers.py`; nobody executed app.py once before deploy. Unit tests cannot catch module-level execution-order bugs.
+
+**What worked:**
+- Headless full-script execution via `streamlit.testing.v1.AppTest` (with env from config/.env) — reproduces module-level crashes locally without a browser. Now the standard pre-deploy smoke test for Streamlit apps.
+- Static regression guards in `apps/bess-map/tests/test_app_def_order.py`: (a) no module-level call may precede its def; (b) shared frames `_sof_df/_cc_df/_fr_df` may only be assigned once at module level.
+
+**Follow-up trap found during fix:** `terraform apply` for bess-map would have silently stripped 5 manually-added env vars (LINGFENG_*, OPENAI_API_KEY, DEEPSEEK_API_KEY, HERMES_URL) and reverted BEDROCK_REGION to us-east-1, because tfvars/main.tf had drifted from live (tfvars image was still v48). Reconciled into terraform config before applying. Lesson: after any out-of-band task-def edit, reconcile main.tf in the same session.
+
+**Also:** first v61 push failed to pull on Fargate — image built on arm64 Mac without `--platform linux/amd64`. Rebuild with the flag; verify with `docker buildx imagetools inspect`.
