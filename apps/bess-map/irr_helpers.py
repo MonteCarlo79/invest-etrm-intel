@@ -29,6 +29,22 @@ def _compute_npv(cashflows: list, rate: float = 0.08) -> float:
     return sum(cf / (1 + rate) ** t for t, cf in enumerate(cashflows))
 
 
+def _compute_payback(cashflows: list) -> Optional[int]:
+    """First project year whose cumulative cashflow (incl. initial outlay) ≥ 0.
+
+    cashflows[0] is the (negative) initial equity outlay. Returns None if the
+    investment never breaks even within the given horizon.
+    """
+    if not cashflows or cashflows[0] >= 0:
+        return None
+    cum = cashflows[0]
+    for yr, cf in enumerate(cashflows[1:], start=1):
+        cum += cf
+        if cum >= 0:
+            return yr
+    return None
+
+
 def build_cashflows(
     theo_per_mwh_day: float,
     capture_rate: float,

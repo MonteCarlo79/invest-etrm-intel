@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 from irr_helpers import (
-    _compute_irr, _compute_npv, build_cashflows,
+    _compute_irr, _compute_npv, _compute_payback, build_cashflows,
     _irr_defaults_for_province, _build_extra_rev_map,
 )
 
@@ -3413,12 +3413,7 @@ with tab_irr:
 
             irr_val  = _compute_irr(cfs)
             npv_val  = _compute_npv(cfs, 0.08)
-            cum = 0.0
-            payback = None
-            for yr, cf in enumerate(cfs[1:], start=1):
-                cum += cf
-                if cum >= 0 and payback is None:
-                    payback = yr
+            payback  = _compute_payback(cfs)
 
             # KPI strip
             r1, r2, r3 = st.columns(3)

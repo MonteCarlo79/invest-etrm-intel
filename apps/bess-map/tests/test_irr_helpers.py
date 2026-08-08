@@ -7,6 +7,7 @@ import pytest
 from irr_helpers import (
     _compute_irr,
     _compute_npv,
+    _compute_payback,
     build_cashflows,
     _irr_defaults_for_province,
     _build_extra_rev_map,
@@ -114,6 +115,23 @@ def test_build_cashflows_subsidy_legacy_still_works():
     # discharge = 1MW × 4h × 0.85 RTE = 3.4 MWh/day
     # subsidy annual = 100 × 3.4 × 365 = 124,100 ¥ → /4 MWh = 31,025 ¥/MWh/yr
     assert bd[1]["subsidy"] == pytest.approx(31_025.0, rel=1e-3)
+
+
+# ── _compute_payback ──────────────────────────────────────────────────────────
+
+def test_compute_payback_counts_initial_outlay():
+    # -100 outlay, +60/yr → cumulative turns positive in year 2
+    assert _compute_payback([-100.0, 60.0, 60.0, 60.0]) == 2
+
+def test_compute_payback_year_one_when_cf_exceeds_outlay():
+    assert _compute_payback([-100.0, 150.0]) == 1
+
+def test_compute_payback_none_when_never_repaid():
+    assert _compute_payback([-100.0, 10.0, 10.0, 10.0]) is None
+
+def test_compute_payback_none_for_no_investment():
+    assert _compute_payback([0.0, 50.0]) is None
+    assert _compute_payback([]) is None
 
 
 # ── _irr_defaults_for_province ────────────────────────────────────────────────
