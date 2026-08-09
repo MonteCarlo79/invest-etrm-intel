@@ -22,6 +22,7 @@ import argparse
 import os
 import re
 import sys
+import threading
 import time
 from datetime import timedelta, timezone
 from pathlib import Path
@@ -40,13 +41,32 @@ if _env_file.exists():
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from services.fengxing.nodal_price import init_table
 
-_PAT = re.compile(r"^(.+)_(\d{4}-\d{2})\.csv$")
+_PAT = re.compile(r"^(.+)_(\d{4}-\d{2})(?:\.part(\d{3}))?\.csv$")
 _DONE_LOG = _REPO / "scripts" / ".ingest_nodal_done"
 _COLS = ["node_name", "metric_time", "time_order_96", "market_name", "avg_node_price"]
+
+
+class _ChunkTimeout(Exception):
+    """Wall-clock watchdog: catches connections that LOOK alive (middlebox ACKs
+    keepalives) but never deliver a response — neither tcp_user_timeout nor
+    statement_timeout fire in that state."""
+
+
+def _force_close(pg_conn) -> None:
+    """shutdown() the socket from a watchdog thread — this reliably wakes a
+    recv blocked inside libpq (SIGALRM cannot: libpq retries EINTR internally,
+    so a Python signal handler never gets control)."""
+    import socket as _socket
+    try:
+        dup = _socket.fromfd(pg_conn.fileno(), _socket.AF_INET, _socket.SOCK_STREAM)
+        dup.shutdown(_socket.SHUT_RDWR)
+        dup.close()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -113,23 +133,33 @@ def _bulk_upsert(path: Path, engine) -> int:
         print(f"    chunk {ci}/{n_chunks} ({len(chunk):,} rows) ...", end=" ", flush=True)
         tc = time.time()
         last_exc = None
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             raw = None
             try:
                 raw = engine.raw_connection()
                 cur = raw.cursor()
-                cur.execute("SET statement_timeout = '180s'")
-                execute_values(cur, _UPSERT_SQL, rows, page_size=10_000)
-                raw.commit()
+                cur.execute("SET statement_timeout = '600s'")
+                # Watchdog: if this attempt exceeds 300s wall-clock, kill the
+                # socket from a timer thread (SIGALRM can't interrupt libpq).
+                wd = threading.Timer(300, _force_close, args=(raw.driver_connection,))
+                wd.start()
+                try:
+                    execute_values(cur, _UPSERT_SQL, rows, page_size=10_000)
+                    raw.commit()
+                finally:
+                    wd.cancel()
                 last_exc = None
                 break
-            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+            except (psycopg2.OperationalError, psycopg2.InterfaceError, _ChunkTimeout) as exc:
                 last_exc = exc
-                print(f"\n    chunk {ci} attempt {attempt} lost connection ({exc.__class__.__name__}); retrying on fresh connection ...", flush=True)
+                print(f"\n    chunk {ci} attempt {attempt} failed ({type(exc).__name__}); retrying on fresh connection ...", flush=True)
                 time.sleep(5)
             finally:
                 if raw is not None:
-                    raw.close()
+                    try:
+                        raw.close()
+                    except Exception:
+                        pass
         if last_exc is not None:
             raise last_exc
         total += len(rows)
@@ -156,8 +186,15 @@ def scan(nodal_root: Path, provinces: list[str] | None, since: str | None) -> li
             month = m.group(2)
             if since and month < since:
                 continue
-            entries.append({"province": prov_dir.name, "month": month, "path": f})
+            entries.append({"province": prov_dir.name, "month": month,
+                            "part": m.group(3), "path": f})
     return entries
+
+
+def _key(e: dict) -> str:
+    """Done-marker key: province/month[.partNNN] for split part-files."""
+    k = f"{e['province']}/{e['month']}"
+    return k + (f".part{e['part']}" if e.get("part") else "")
 
 
 def _load_done() -> set[str]:
@@ -187,6 +224,9 @@ def main() -> None:
     if not pgurl:
         sys.exit("PGURL not set — check config/.env")
 
+    # Wall-clock watchdog for silent network stalls (see _force_close) —
+    # armed per chunk attempt in _bulk_upsert.
+
     # Blackholed connections (this network drops them silently) must die fast:
     # tcp_user_timeout makes the client error out after 2 min of unacked data
     # instead of hanging for 15+ min on TCP retransmits.
@@ -202,7 +242,15 @@ def main() -> None:
             "tcp_user_timeout": 120000,
         },
     )
-    init_table(engine)
+    # init_table DDL (CREATE TABLE/INDEX IF NOT EXISTS) takes a ShareLock that
+    # blocks behind orphaned idle-in-transaction writers from killed runs —
+    # and this script has been killed a lot. The table already exists in
+    # practice, so skip the DDL when present (to_regclass is catalog-only).
+    with engine.connect() as _c:
+        _exists = _c.execute(text(
+            "SELECT to_regclass('marketdata.md_shanxi_nodal_price_96') IS NOT NULL")).scalar()
+    if not _exists:
+        init_table(engine)
 
     nodal_root = _REPO / "data" / "nodal"
     entries = scan(nodal_root, args.province, args.since)
@@ -212,7 +260,7 @@ def main() -> None:
         return
 
     done = set() if args.no_resume else _load_done()
-    pending = [e for e in entries if f"{e['province']}/{e['month']}" not in done]
+    pending = [e for e in entries if _key(e) not in done]
 
     print(f"Found {len(entries)} file(s) total, {len(pending)} to process.\n")
 
@@ -221,7 +269,7 @@ def main() -> None:
     t0_all = time.time()
 
     for i, e in enumerate(pending, 1):
-        label = f"{e['province']} / {e['month']}"
+        label = _key(e).replace("/", " / ")
         size_mb = e["path"].stat().st_size / 1024 / 1024
         print(f"[{i}/{len(pending)}] {label}  ({size_mb:.1f} MB)")
         t0 = time.time()
@@ -230,7 +278,7 @@ def main() -> None:
             elapsed = time.time() - t0
             total_rows += n
             print(f"  ✓ {n:,} rows  ({elapsed:.1f}s)")
-            _mark_done(f"{e['province']}/{e['month']}")
+            _mark_done(_key(e))
         except Exception as exc:
             elapsed = time.time() - t0
             print(f"  ✗ ERROR ({elapsed:.1f}s): {exc}")
