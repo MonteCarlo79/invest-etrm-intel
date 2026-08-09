@@ -276,6 +276,50 @@ def _process_excel(uploaded, book_id: int, settlement_month, engine):
     st.success(f"Processed {len(items)} settlement items.")
 
 
+def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh,
+                       discharge_col, charge_col, cap_col):
+    """Build one year's YTD subtotal row with per-unit metrics recalculated
+    from that year's own volumes. Returns a Series named "{year} YTD",
+    or None if the year has no months in pivot."""
+    months = [m for m in pivot.index if m.startswith(year)]
+    if not months:
+        return None
+    row = pivot.loc[months].sum(axis=0)
+    row.name = f"{year} YTD"
+
+    yr_monthly = monthly[monthly["month"].str.startswith(year)]
+    total_discharge_vol = yr_monthly[yr_monthly["category_cn"] == "放电收入"]["volume"].sum()
+    total_charge_vol = yr_monthly[yr_monthly["category_cn"] == "充电电费"]["volume"].sum()
+    if total_discharge_vol > 0 and "价差收入" in pivot.columns:
+        row["度电总价差"] = row["价差收入"] / total_discharge_vol
+        if cap_col and "容量补偿价差" in pivot.columns:
+            row["容量补偿价差"] = row[cap_col] / total_discharge_vol
+        if "套利价差" in pivot.columns and discharge_col and charge_col:
+            row["套利价差"] = (row[discharge_col] + row[charge_col]) / total_discharge_vol
+    if energy_per_cycle_mwh and energy_per_cycle_mwh > 0 and "日均充放次数" in pivot.columns:
+        yr_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(year))
+        row["日均充放次数"] = round(total_charge_vol / energy_per_cycle_mwh / yr_days, 2) if yr_days > 0 else 0
+    if total_charge_vol > 0:
+        row["转化率"] = total_discharge_vol / total_charge_vol
+    return row
+
+
+def _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
+                           discharge_col, charge_col, cap_col):
+    """Insert a "YYYY YTD" subtotal row after each year's last month row.
+    Extends automatically: any year present in the data gets a subtotal."""
+    years = sorted({m[:4] for m in pivot.index})
+    parts = []
+    for year in years:
+        months = [m for m in pivot.index if m.startswith(year)]
+        parts.append(pivot.loc[months])
+        row = _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh,
+                                 discharge_col, charge_col, cap_col)
+        if row is not None:
+            parts.append(row.to_frame().T)
+    return pd.concat(parts)
+
+
 def _render_analytics(book_id: int, engine):
     """Render settlement analytics for selected book — monthly breakdown."""
     import plotly.graph_objects as go
@@ -413,32 +457,9 @@ def _render_analytics(book_id: int, engine):
 
     pivot = pivot.sort_index()
 
-    # YTD: only current year rows
-    import datetime
-    current_year = str(datetime.datetime.now().year)
-    ytd_months = [m for m in pivot.index if m.startswith(current_year)]
-    ytd_pivot = pivot.loc[ytd_months]
-
-    ytd_row = ytd_pivot.sum(axis=0)
-    ytd_row.name = "YTD 合计"
-    # Recalculate per-MWh metrics for YTD (current year only)
-    ytd_monthly = monthly[monthly["month"].str.startswith(current_year)]
-    total_discharge_vol = ytd_monthly[ytd_monthly["category_cn"] == "放电收入"]["volume"].sum()
-    total_charge_vol = ytd_monthly[ytd_monthly["category_cn"] == "充电电费"]["volume"].sum()
-    if total_discharge_vol > 0 and "价差收入" in pivot.columns:
-        ytd_row["度电总价差"] = ytd_row["价差收入"] / total_discharge_vol
-        if cap_col and "容量补偿价差" in pivot.columns:
-            ytd_row["容量补偿价差"] = ytd_row[cap_col] / total_discharge_vol
-        if "套利价差" in pivot.columns and discharge_col and charge_col:
-            ytd_row["套利价差"] = (ytd_row[discharge_col] + ytd_row[charge_col]) / total_discharge_vol
-    # YTD 日均充放次数
-    if energy_per_cycle_mwh and energy_per_cycle_mwh > 0 and "日均充放次数" in pivot.columns:
-        ytd_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(current_year))
-        ytd_row["日均充放次数"] = round(total_charge_vol / energy_per_cycle_mwh / ytd_days, 2) if ytd_days > 0 else 0
-    # YTD 转化率
-    if total_charge_vol > 0:
-        ytd_row["转化率"] = total_discharge_vol / total_charge_vol
-    pivot = pd.concat([pivot, ytd_row.to_frame().T])
+    # Per-year YTD subtotal rows ("2025 YTD", "2026 YTD", ...)
+    pivot = _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
+                                   discharge_col, charge_col, cap_col)
 
     # Reorder columns
     desired_order = [
