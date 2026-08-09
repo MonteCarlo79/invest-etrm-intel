@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import hashlib
 from pathlib import Path
-from datetime import datetime
 
 from shared.agents.db import get_conn
 from services.settlement_ingest.folder_mapper import resolve_folder_to_asset
@@ -176,13 +175,17 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
         pdf_type = classify_pdf(pdf_path.name)
         month_str = extract_month_from_filename(pdf_path.name)
 
-        # Fix year if needed
+        # Fix year if needed — from folder path only. Never fall back to the
+        # current year: a yearless 2025 invoice scanned in 2026 would silently
+        # be stamped 2026 (observed 2026-08: 苏右/乌兰察布 phantom months).
         if month_str and month_str.startswith("NEED_YEAR"):
             year = extract_year_from_path(str(pdf_path))
             if year:
                 month_str = month_str.replace("NEED_YEAR", str(year))
             else:
-                month_str = month_str.replace("NEED_YEAR", str(datetime.now().year))
+                results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                                "error": "Cannot determine year from filename or folder path"})
+                continue
 
         if not month_str:
             results.append({"path": rel_path, "asset": asset_name, "status": "skipped", "error": "Cannot extract month from filename"})

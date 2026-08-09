@@ -42,12 +42,11 @@ def render_settlement(engine):
                 if detected and not detected.startswith("NEED_YEAR"):
                     settlement_month = detected
                 elif detected:
-                    # Month found but no year — try extracting from PDF content
-                    import datetime
-                    year = str(datetime.datetime.now().year)
+                    # Month found but no year — try extracting billing period from PDF content
+                    period = None
                     if f.name.lower().endswith(".pdf"):
                         try:
-                            import io, tempfile, os
+                            import tempfile, os
                             from services.settlement_ingest.parser_charge import extract_billing_period
                             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                                 tmp.write(f.read())
@@ -55,15 +54,20 @@ def render_settlement(engine):
                             f.seek(0)
                             period = extract_billing_period(tmp_path)
                             os.unlink(tmp_path)
-                            if period:
-                                settlement_month = period
-                                st.caption(f"  Detected period from PDF content: {period}")
-                            else:
-                                settlement_month = detected.replace("NEED_YEAR", year)
                         except Exception:
-                            settlement_month = detected.replace("NEED_YEAR", year)
+                            period = None
+                    if period:
+                        settlement_month = period
+                        st.caption(f"  Detected period from PDF content: {period}")
                     else:
-                        settlement_month = detected.replace("NEED_YEAR", year)
+                        # Never stamp the current year onto a yearless file — a 2025
+                        # invoice scanned in 2026 would silently land on 2026.
+                        st.warning(
+                            f"Cannot determine settlement YEAR for '{f.name}' — skipped. "
+                            "Rename the file to include the year (e.g. 2025-06 / 2025年6月) "
+                            "or use Manual override."
+                        )
+                        continue
                 else:
                     st.warning(f"Cannot detect month from '{f.name}'. Skipping.")
                     continue
