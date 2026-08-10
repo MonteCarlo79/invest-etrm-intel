@@ -81,14 +81,25 @@ def _normalize_units(volume: float | None, volume_unit: str,
 def parse_discharge_settlement_pdf(file_path: str) -> list[dict[str, Any]]:
     """Parse a discharge settlement PDF (scanned image) using Claude Vision.
 
+    Also accepts image files directly (PNG/JPG/WEBP) — e.g. phone screenshots
+    of settlement bills (observed: 苏右 2025-04 上网 exists only as a PNG).
+
     Args:
-        file_path: Path to the scanned PDF file
+        file_path: Path to the scanned PDF or image file
 
     Returns:
         List of settlement item dicts with: category, volume_mwh, price_cny_kwh, amount_cny, notes
     """
-    # Convert PDF page to image bytes
-    image_bytes = _pdf_page_to_image(file_path, page_num=0)
+    # Convert input to image bytes
+    ext = file_path.lower().rsplit(".", 1)[-1]
+    image_media_types = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
+    if ext in image_media_types:
+        with open(file_path, "rb") as f:
+            image_bytes = f.read()
+        media_type = image_media_types[ext]
+    else:
+        image_bytes = _pdf_page_to_image(file_path, page_num=0)
+        media_type = "image/png"
     if not image_bytes:
         return []
 
@@ -125,7 +136,7 @@ Do NOT include the 机组合计 (total) row. Return raw JSON only, no markdown."
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/png",
+                        "media_type": media_type,
                         "data": base64.b64encode(image_bytes).decode("utf-8"),
                     },
                 },
@@ -177,6 +188,7 @@ Do NOT include the 机组合计 (total) row. Return raw JSON only, no markdown."
             "volume_mwh": vol_mwh,
             "price_cny_kwh": price_kwh,
             "amount_cny": row.get("amount_cny", 0),
+            "month": row.get("month"),  # 电费年月 per row — needed for multi-month bills
             "notes": notes,
         })
 
