@@ -144,3 +144,26 @@ def test_upsert_writes_national_and_provinces():
     assert executed[0]["source_file"] == "test.pdf"
     assert executed[1]["province_en"] == "Shandong"
     fake_conn.commit.assert_called_once()
+
+
+from services.spot_ingest.monthly_report import ingest_monthly_report
+
+
+def test_ingest_yearless_raises_with_rename_hint():
+    with pytest.raises(ValueError, match="重命名"):
+        ingest_monthly_report("电力现货市场价格与运行月报（6月）.pdf", b"%PDF", "key")
+
+
+def test_ingest_full_flow():
+    data = _data()
+    with patch("services.spot_ingest.monthly_report.extract_pages_text", return_value="text"), \
+         patch("services.spot_ingest.monthly_report.extract_monthly_json", return_value=data), \
+         patch("services.spot_ingest.monthly_report.upsert_monthly_rows",
+               return_value={"national_written": True, "provinces_upserted": 25}) as mock_up:
+        result = ingest_monthly_report("电力现货市场价格与运行月报（2026年6月）.pdf", b"%PDF-bytes", "key")
+    assert result["month"] == "2026-06"
+    assert result["n_provinces"] == 25
+    assert result["national_rt_avg"] == 0.291
+    assert result["warnings"] == []
+    assert mock_up.call_args[0][2] == dt.date(2026, 6, 1)
+    assert mock_up.call_args[0][3] == "电力现货市场价格与运行月报（2026年6月）.pdf"

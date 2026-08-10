@@ -270,3 +270,43 @@ def upsert_monthly_rows(national: dict, provinces: list[dict], report_month: dt.
                 cur.execute(_UPSERT_PROVINCE_SQL, params)
         conn.commit()
     return {"national_written": True, "provinces_upserted": len(province_params)}
+
+
+def ingest_monthly_report(filename: str, pdf_bytes: bytes, api_key: str) -> dict:
+    """Parse a spot monthly report PDF and upsert into DB. Single entry point
+    used by the Hermes handlers and the backfill CLI.
+
+    Raises ValueError if the filename has no explicit year+month.
+    """
+    import tempfile
+    from pathlib import Path
+
+    report_month = infer_report_month(filename)
+    if report_month is None:
+        raise ValueError(
+            f"无法从文件名推断报告月份：{filename}。"
+            "请重命名为包含年份和月份的形式（如「（2026年6月）」）后重发。"
+        )
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(pdf_bytes)
+        tmp_path = Path(tmp.name)
+    try:
+        text = extract_pages_text(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    data = extract_monthly_json(text, report_month, api_key)
+    warnings = validate_monthly_data(data)
+    result = upsert_monthly_rows(data["national"], data["provinces"], report_month, filename)
+    logger.info(
+        "spot monthly: %s → %s, %d provinces, %d warnings",
+        filename, report_month, result["provinces_upserted"], len(warnings),
+    )
+    return {
+        "month": report_month.strftime("%Y-%m"),
+        "n_provinces": result["provinces_upserted"],
+        "national_rt_avg": data["national"].get("rt_avg_price"),
+        "provinces_upserted": result["provinces_upserted"],
+        "warnings": warnings,
+    }
