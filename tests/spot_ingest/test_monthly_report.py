@@ -119,3 +119,28 @@ def test_extract_monthly_json_raises_on_garbage():
     with patch("shared.anthropic_client.make_client", return_value=fake_client):
         with pytest.raises(ValueError):
             extract_monthly_json("page text", dt.date(2026, 6, 1), "key")
+
+
+from services.spot_ingest.monthly_report import upsert_monthly_rows
+
+
+def test_upsert_writes_national_and_provinces():
+    data = _data(n=2)
+    executed = []
+
+    fake_cur = MagicMock()
+    fake_cur.execute.side_effect = lambda sql, params: executed.append(params)
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value.__enter__.return_value = fake_cur
+    fake_get_conn = MagicMock()
+    fake_get_conn.return_value.__enter__.return_value = fake_conn
+
+    with patch("services.knowledge_pool.db.get_conn", fake_get_conn):
+        result = upsert_monthly_rows(data["national"], data["provinces"], dt.date(2026, 6, 1), "test.pdf")
+
+    assert result == {"national_written": True, "provinces_upserted": 2}
+    assert len(executed) == 3  # 1 national + 2 provinces
+    assert executed[0]["report_month"] == dt.date(2026, 6, 1)
+    assert executed[0]["source_file"] == "test.pdf"
+    assert executed[1]["province_en"] == "Shandong"
+    fake_conn.commit.assert_called_once()

@@ -182,3 +182,91 @@ def validate_monthly_data(data: dict) -> list[str]:
     if not kept:
         raise ValueError("所有省份行均无法识别")
     return warnings
+
+
+_UPSERT_NATIONAL_SQL = """
+INSERT INTO spot_monthly_national (
+    report_month, rt_total_volume_yi_kwh, rt_avg_price,
+    da_total_volume_yi_kwh, da_avg_price,
+    mlt_coverage_volume_yi_kwh, mlt_coverage_pct, mlt_avg_price, source_file
+) VALUES (
+    %(report_month)s, %(rt_total_volume_yi_kwh)s, %(rt_avg_price)s,
+    %(da_total_volume_yi_kwh)s, %(da_avg_price)s,
+    %(mlt_coverage_volume_yi_kwh)s, %(mlt_coverage_pct)s, %(mlt_avg_price)s, %(source_file)s
+)
+ON CONFLICT (report_month) DO UPDATE SET
+    rt_total_volume_yi_kwh     = COALESCE(EXCLUDED.rt_total_volume_yi_kwh, spot_monthly_national.rt_total_volume_yi_kwh),
+    rt_avg_price               = COALESCE(EXCLUDED.rt_avg_price, spot_monthly_national.rt_avg_price),
+    da_total_volume_yi_kwh     = COALESCE(EXCLUDED.da_total_volume_yi_kwh, spot_monthly_national.da_total_volume_yi_kwh),
+    da_avg_price               = COALESCE(EXCLUDED.da_avg_price, spot_monthly_national.da_avg_price),
+    mlt_coverage_volume_yi_kwh = COALESCE(EXCLUDED.mlt_coverage_volume_yi_kwh, spot_monthly_national.mlt_coverage_volume_yi_kwh),
+    mlt_coverage_pct           = COALESCE(EXCLUDED.mlt_coverage_pct, spot_monthly_national.mlt_coverage_pct),
+    mlt_avg_price              = COALESCE(EXCLUDED.mlt_avg_price, spot_monthly_national.mlt_avg_price),
+    source_file                = EXCLUDED.source_file,
+    ingested_at                = now();
+"""
+
+_UPSERT_PROVINCE_SQL = """
+INSERT INTO spot_monthly_province (
+    report_month, province_en, province_cn, run_status,
+    mlt_volume_yi_kwh, mlt_avg_price, mlt_coverage_pct,
+    rt_volume_yi_kwh, rt_avg_price, rt_mom_pct,
+    da_volume_yi_kwh, da_avg_price, da_mom_pct, source_file
+) VALUES (
+    %(report_month)s, %(province_en)s, %(province_cn)s, %(run_status)s,
+    %(mlt_volume_yi_kwh)s, %(mlt_avg_price)s, %(mlt_coverage_pct)s,
+    %(rt_volume_yi_kwh)s, %(rt_avg_price)s, %(rt_mom_pct)s,
+    %(da_volume_yi_kwh)s, %(da_avg_price)s, %(da_mom_pct)s, %(source_file)s
+)
+ON CONFLICT (report_month, province_en) DO UPDATE SET
+    province_cn       = EXCLUDED.province_cn,
+    run_status        = COALESCE(EXCLUDED.run_status, spot_monthly_province.run_status),
+    mlt_volume_yi_kwh = COALESCE(EXCLUDED.mlt_volume_yi_kwh, spot_monthly_province.mlt_volume_yi_kwh),
+    mlt_avg_price     = COALESCE(EXCLUDED.mlt_avg_price, spot_monthly_province.mlt_avg_price),
+    mlt_coverage_pct  = COALESCE(EXCLUDED.mlt_coverage_pct, spot_monthly_province.mlt_coverage_pct),
+    rt_volume_yi_kwh  = COALESCE(EXCLUDED.rt_volume_yi_kwh, spot_monthly_province.rt_volume_yi_kwh),
+    rt_avg_price      = COALESCE(EXCLUDED.rt_avg_price, spot_monthly_province.rt_avg_price),
+    rt_mom_pct        = COALESCE(EXCLUDED.rt_mom_pct, spot_monthly_province.rt_mom_pct),
+    da_volume_yi_kwh  = COALESCE(EXCLUDED.da_volume_yi_kwh, spot_monthly_province.da_volume_yi_kwh),
+    da_avg_price      = COALESCE(EXCLUDED.da_avg_price, spot_monthly_province.da_avg_price),
+    da_mom_pct        = COALESCE(EXCLUDED.da_mom_pct, spot_monthly_province.da_mom_pct),
+    source_file       = EXCLUDED.source_file,
+    ingested_at       = now();
+"""
+
+
+def upsert_monthly_rows(national: dict, provinces: list[dict], report_month: dt.date, source_file: str) -> dict:
+    """Upsert national + province monthly rows in a single transaction."""
+    from services.knowledge_pool.db import get_conn  # lazy, house style
+
+    national_params = {
+        "report_month": report_month,
+        "rt_total_volume_yi_kwh": national.get("rt_total_volume_yi_kwh"),
+        "rt_avg_price": national.get("rt_avg_price"),
+        "da_total_volume_yi_kwh": national.get("da_total_volume_yi_kwh"),
+        "da_avg_price": national.get("da_avg_price"),
+        "mlt_coverage_volume_yi_kwh": national.get("mlt_coverage_volume_yi_kwh"),
+        "mlt_coverage_pct": national.get("mlt_coverage_pct"),
+        "mlt_avg_price": national.get("mlt_avg_price"),
+        "source_file": source_file,
+    }
+    province_params = []
+    for row in provinces:
+        params = {k: row.get(k) for k in (
+            "run_status", "mlt_volume_yi_kwh", "mlt_avg_price", "mlt_coverage_pct",
+            "rt_volume_yi_kwh", "rt_avg_price", "rt_mom_pct",
+            "da_volume_yi_kwh", "da_avg_price", "da_mom_pct",
+        )}
+        params["report_month"] = report_month
+        params["province_cn"] = row["province_cn"]
+        params["province_en"] = PROVINCES_MAP[row["province_cn"]]
+        params["source_file"] = source_file
+        province_params.append(params)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_UPSERT_NATIONAL_SQL, national_params)
+            for params in province_params:
+                cur.execute(_UPSERT_PROVINCE_SQL, params)
+        conn.commit()
+    return {"national_written": True, "provinces_upserted": len(province_params)}
