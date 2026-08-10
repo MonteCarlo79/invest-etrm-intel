@@ -7700,11 +7700,11 @@ with tab_mgmt:
                     with _emr_t1:
                         _emr_c1 = {
                             "province": "省份",
-                            "total_volume_gwh": "总成交量(亿kWh)",
+                            "total_volume_gwh": "总成交量(GWh)",
                             "volume_yoy_pct": "同比(%)",
                             "avg_price_yuan_mwh": "结算均价(元/MWh)",
                             "contract_avg_price_yuan_mwh": "合约均价",
-                            "spot_volume_gwh": "现货量(亿kWh)",
+                            "spot_volume_gwh": "现货量(GWh)",
                             "spot_avg_price_yuan_mwh": "现货均价",
                             "peak_price_yuan_mwh": "峰段价",
                             "valley_price_yuan_mwh": "谷段价",
@@ -7759,7 +7759,7 @@ with tab_mgmt:
                             _emr_mdf[_a3].rename(columns=_emr_c3).set_index("省份"),
                             use_container_width=True,
                         )
-                        st.caption("单位: 亿kWh")
+                        st.caption("单位: GWh")
 
                     with _emr_t4:
                         _emr_c4 = {
@@ -7781,7 +7781,7 @@ with tab_mgmt:
                     with _emr_t5:
                         _emr_c5 = {
                             "province": "省份",
-                            "retailer_volume_gwh": "零售交易量(亿kWh)",
+                            "retailer_volume_gwh": "零售交易量(GWh)",
                             "retailer_settlement_price_yuan_mwh": "零售结算均价(元/MWh)",
                             "retailer_service_fee_million_yuan": "代理服务费(百万元)",
                         }
@@ -7888,7 +7888,7 @@ with tab_mgmt:
                     if _vol_avail:
                         _vol_plot = _emr_tsdf[list(_vol_avail.keys())].rename(columns=_vol_avail)
                         st.line_chart(_vol_plot, use_container_width=True)
-                        st.caption(f"{_emr_trend_prov} 各类型电量趋势 (亿kWh)")
+                        st.caption(f"{_emr_trend_prov} 各类型电量趋势 (GWh)")
                     else:
                         st.info("No volume data available.")
 

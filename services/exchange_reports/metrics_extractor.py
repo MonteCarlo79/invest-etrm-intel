@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS staging.exchange_monthly_metrics (
     report_type                 TEXT NOT NULL DEFAULT 'monthly',
 
     -- Volume
-    total_volume_gwh            NUMERIC(12,2),   -- 总成交/用电量 (亿千瓦时)
+    total_volume_gwh            NUMERIC(12,2),   -- 总成交/用电量 (GWh; 1 亿千瓦时 = 100 GWh)
     volume_yoy_pct              NUMERIC(6,2),    -- 同比变化 (%)
     spot_volume_gwh             NUMERIC(12,2),   -- 现货成交量
     medium_longterm_volume_gwh  NUMERIC(12,2),   -- 中长期成交量
@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS staging.exchange_monthly_metrics (
     nuclear_settlement_price_yuan_mwh    NUMERIC(8,2),   -- 核电结算均价
     bess_settlement_price_yuan_mwh       NUMERIC(8,2),   -- 储能结算均价
 
-    -- Generation volumes by fuel type (亿千瓦时)
+    -- Generation volumes by fuel type (GWh)
     thermal_volume_gwh          NUMERIC(12,2),   -- 火电上网/结算电量
     wind_volume_gwh             NUMERIC(12,2),   -- 风电上网/结算电量
     solar_volume_gwh            NUMERIC(12,2),   -- 光伏上网/结算电量
@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS staging.exchange_monthly_metrics (
     nuclear_volume_gwh          NUMERIC(12,2),   -- 核电上网电量
     bess_traded_volume_gwh      NUMERIC(12,2),   -- 储能成交/上网电量
 
-    -- Interprovincial flows (亿千瓦时)
+    -- Interprovincial flows (GWh)
     incoming_volume_gwh         NUMERIC(12,2),   -- 外来电/省间受入
     outgoing_volume_gwh         NUMERIC(12,2),   -- 外送电量
 
@@ -213,8 +213,9 @@ _TOOL_SCHEMA = {
         "properties": {
             "total_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Total electricity traded/consumed this month in 亿千瓦时 (GWh×100). "
-                               "Look for 总成交量, 总用电量, 全社会用电量. Report in 亿千瓦时.",
+                "description": "Total electricity traded/consumed this month in GWh "
+                               "(multiply 亿千瓦时 figures by 100). "
+                               "Look for 总成交量, 总用电量, 全社会用电量.",
             },
             "volume_yoy_pct": {
                 "type": ["number", "null"],
@@ -222,11 +223,11 @@ _TOOL_SCHEMA = {
             },
             "spot_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Spot market traded volume in 亿千瓦时. Look for 现货成交量, 日前+实时成交.",
+                "description": "Spot market traded volume in GWh (multiply 亿千瓦时 figures by 100). Look for 现货成交量, 日前+实时成交.",
             },
             "medium_longterm_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Medium-long term contract volume in 亿千瓦时. Look for 中长期成交量.",
+                "description": "Medium-long term contract volume in GWh (multiply 亿千瓦时 figures by 100). Look for 中长期成交量.",
             },
             "avg_price_yuan_mwh": {
                 "type": ["number", "null"],
@@ -328,43 +329,43 @@ _TOOL_SCHEMA = {
             # ── Generation volumes by fuel type ─────────────────────────
             "thermal_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Thermal power generation/settlement volume in 亿千瓦时. "
+                "description": "Thermal power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 火电上网电量, 火电结算电量, 煤电发电量.",
             },
             "wind_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Wind power generation/settlement volume in 亿千瓦时. "
+                "description": "Wind power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 风电上网电量, 风电结算电量.",
             },
             "solar_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Solar/PV generation/settlement volume in 亿千瓦时. "
+                "description": "Solar/PV generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 光伏上网电量, 光伏结算电量, 太阳能发电量.",
             },
             "hydro_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Hydro power generation/settlement volume in 亿千瓦时. "
+                "description": "Hydro power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 水电上网电量, 水电发电量.",
             },
             "nuclear_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Nuclear power generation/settlement volume in 亿千瓦时. "
+                "description": "Nuclear power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 核电上网电量, 核电发电量.",
             },
             "bess_traded_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Battery storage traded/settlement volume in 亿千瓦时. "
+                "description": "Battery storage traded/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 储能成交电量, 独立新型储能上网电量, 储能放电量.",
             },
             # ── Interprovincial flows ────────────────────────────────────
             "incoming_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Incoming electricity from other provinces (外来电/省间受入) in 亿千瓦时. "
+                "description": "Incoming electricity from other provinces (外来电/省间受入) in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 省间受入, 外来电量, 受西电/云电/北电, 外购电.",
             },
             "outgoing_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Outgoing electricity to other provinces in 亿千瓦时. "
+                "description": "Outgoing electricity to other provinces in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 外送电量, 省间送出, 送广东/海南/华东.",
             },
             # ── Capacity breakdown ───────────────────────────────────────
@@ -396,7 +397,7 @@ _TOOL_SCHEMA = {
             # ── Retailer trading ────────────────────────────────────────
             "retailer_volume_gwh": {
                 "type": ["number", "null"],
-                "description": "Volume traded by electricity retailers in 亿千瓦时. "
+                "description": "Volume traded by electricity retailers in GWh (multiply 亿千瓦时 figures by 100). "
                                "Look for 售电公司成交/结算电量, 售电公司代理电量.",
             },
             "retailer_settlement_price_yuan_mwh": {
@@ -451,11 +452,13 @@ def extract_metrics(
         "You are extracting structured data from a Chinese provincial power exchange "
         f"monthly market report. Province: {province}, Month: {report_month.strftime('%Y年%m月')}. "
         "Extract numerical values precisely as reported. "
-        "\n\nVOLUME UNIT CONVERSIONS (always output in 亿千瓦时):\n"
-        "- 亿千瓦时 → use directly\n"
-        "- 万千瓦时 → divide by 10000 (e.g. 62.84万千瓦时 = 0.006284 亿千瓦时)\n"
-        "- 亿kWh → use directly\n"
-        "- GWh → divide by 100\n"
+        "\n\nVOLUME UNIT CONVERSIONS (always output in GWh):\n"
+        "- 亿千瓦时 / 亿kWh → multiply by 100 (e.g. 389.6亿千瓦时 = 38960 GWh)\n"
+        "- 万千瓦时 → divide by 100 (e.g. 62.84万千瓦时 = 0.6284 GWh)\n"
+        "- GWh → use directly\n"
+        "\nIMPORTANT: extract SINGLE-MONTH values only. If a metric is only published "
+        "as a year-to-date cumulative figure (累计, 截至X月底, 1-N月合计), use null — "
+        "never store a cumulative value as the monthly figure.\n"
         "\n\nPRICE UNIT CONVERSIONS (always output in 元/兆瓦时 yuan/MWh):\n"
         "- 元/千瓦时 → multiply by 1000 (e.g. 0.3743 元/千瓦时 = 374.3 元/兆瓦时)\n"
         "- 分/千瓦时 → multiply by 10 (e.g. 35.4 分/千瓦时 = 354 元/兆瓦时)\n"
@@ -474,7 +477,7 @@ def extract_metrics(
         "solar_settlement_price → 光伏结算均价; "
         "nuclear_settlement_price → 核电结算均价; "
         "bess_settlement_price → 储能结算均价/独立新型储能结算均价. "
-        "\n\nFor generation volumes by type (in 亿千瓦时): "
+        "\n\nFor generation volumes by type (in GWh, 亿千瓦时 ×100): "
         "thermal_volume → 火电上网/发电/结算电量; "
         "wind_volume → 风电上网/发电/结算电量; "
         "solar_volume → 光伏上网/发电/结算电量; "

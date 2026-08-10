@@ -17,12 +17,12 @@ from typing import Optional
 
 # (db_col, display_zh, display_en, unit, fmt)
 _COLUMNS = [
-    ("total_volume_gwh",            "总成交量",         "Total Volume",       "亿kWh",   "{:.1f}"),
+    ("total_volume_gwh",            "总成交量",         "Total Volume",       "GWh",     "{:.0f}"),
     ("volume_yoy_pct",              "同比",             "YoY",                "%",       "{:+.1f}%"),
     ("avg_price_yuan_mwh",          "均价",             "Avg Price",          "元/MWh",  "{:.1f}"),
     ("peak_price_yuan_mwh",         "峰段价",           "Peak",               "元/MWh",  "{:.1f}"),
     ("valley_price_yuan_mwh",       "谷段价",           "Valley",             "元/MWh",  "{:.1f}"),
-    ("spot_volume_gwh",             "现货量",           "Spot Vol",           "亿kWh",   "{:.1f}"),
+    ("spot_volume_gwh",             "现货量",           "Spot Vol",           "GWh",     "{:.0f}"),
     ("spot_avg_price_yuan_mwh",     "现货均价",         "Spot Price",         "元/MWh",  "{:.1f}"),
     ("renewable_pct",               "新能源占比",       "Renewable%",         "%",       "{:.1f}%"),
     ("installed_capacity_gw",       "装机容量",         "Capacity",           "GW",      "{:.1f}"),
