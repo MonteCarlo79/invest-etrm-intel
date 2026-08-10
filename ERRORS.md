@@ -4,6 +4,27 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## docker build from OneDrive repo root: context stall + silently missing files (Mac)
+
+**What didn't work:**
+1. `docker build .` with the repo on OneDrive as context — hung at `[internal] load build context` (0% CPU, indefinite). OneDrive File Provider stat/hydration stalls the context walk.
+2. Staging the context with `rsync -a` — rsync uses `mmap` for reads, and mmap does NOT trigger hydration of dataless OneDrive files. Result: `mmap: Operation timed out` per file, rsync continues past them, and whole directories (e.g. `services/settlement_ingest/`) land in the context as EMPTY dirs. The build succeeds; the app deploys; the tab then dies with `ModuleNotFoundError` in prod. Inspecting `ls | head` of the staged dir is NOT a completeness check — the directory existing ≠ files inside it.
+
+**What worked:**
+- Stage the context on local disk with **ditto** (plain `read()` → File Provider hydrates properly), then build from the staged path:
+  ```bash
+  rm -rf /tmp/ctx && mkdir -p /tmp/ctx/apps
+  ditto apps/<app> /tmp/ctx/apps/<app>
+  for d in libs services shared auth; do ditto "$d" "/tmp/ctx/$d"; done
+  find /tmp/ctx -name "__pycache__" -type d -exec rm -rf {} + ; find /tmp/ctx -name "*Chen*" -delete
+  docker build --platform linux/amd64 -f /tmp/ctx/apps/<app>/Dockerfile -t <repo>:<vN> /tmp/ctx
+  ```
+- **Prove completeness before building:** `diff <(find apps/<app> libs services shared auth -type f | sort) <(cd /tmp/ctx && find ... | sort)` must be empty.
+- **Prove the image before pushing:** `docker run --rm --platform linux/amd64 <repo>:<vN> python -c "import <critical modules>"`.
+- Note: macOS stock rsync has no `--no-mmap` flag (that would also work where available). First observed 2026-08-10, asset-risk v29 → rebuilt as v30.
+
+---
+
 ## docker push to ECR fails: broken pipe through Docker Desktop proxy (Mac)
 
 **What didn't work:**
