@@ -39,3 +39,146 @@ def infer_report_month(filename: str) -> Optional[dt.date]:
         return dt.date(int(m.group(1)), int(m.group(2)), 1)
     except ValueError:
         return None
+
+
+def extract_pages_text(pdf_path, max_pages: int = 10) -> str:
+    """Extract text from the first max_pages pages. layout=True preserves column
+    positions, which the wrapped multi-line headers of 表2 require."""
+    import pdfplumber  # lazy — keeps recognizer tests free of the dependency
+
+    parts = []
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for i, page in enumerate(pdf.pages[:max_pages]):
+            text = page.extract_text(layout=True) or ""
+            parts.append(f"=== page {i + 1} ===\n{text}")
+    return "\n\n".join(parts)
+
+
+_EXTRACT_SYSTEM = """You are a data extraction assistant for China electricity market reports.
+The user provides text from 《电力现货市场价格与运行月报》 (national spot market monthly report), first pages only.
+
+Extract TWO things:
+1. 总体情况 (section 一, national summary): RT/DA total cleared volume & avg price, 中长期合约覆盖电量/占比/成交均价.
+2. 表2 连续运行地区运行情况一览表: one row per province/region.
+
+Return ONLY valid JSON, no markdown:
+{
+  "national": {
+    "rt_total_volume_yi_kwh": number|null, "rt_avg_price": number|null,
+    "da_total_volume_yi_kwh": number|null, "da_avg_price": number|null,
+    "mlt_coverage_volume_yi_kwh": number|null, "mlt_coverage_pct": number|null,
+    "mlt_avg_price": number|null
+  },
+  "provinces": [
+    {
+      "province_cn": "地区名(按原文)", "run_status": "正式运行/试运行|null",
+      "mlt_volume_yi_kwh": number|null, "mlt_avg_price": number|null,
+      "mlt_coverage_pct": number|null,
+      "rt_volume_yi_kwh": number|null, "rt_avg_price": number|null, "rt_mom_pct": number|null,
+      "da_volume_yi_kwh": number|null, "da_avg_price": number|null, "da_mom_pct": number|null
+    }
+  ]
+}
+
+Rules:
+- Volumes in 亿千瓦时, prices in 元/千瓦时, percentages as numbers (4.82 for 4.82%). Negative MoM keeps its sign.
+- mlt_volume_yi_kwh = 中长期市场成交电量 (NOT 合约覆盖电量); mlt_coverage_pct = 中长期合约覆盖电量占比.
+- "/" or unreadable/missing → null, never 0.
+- SKIP 表1 省间现货市场 (四川主网/灵绍配套电源/天中配套电源 etc. belong to 表1 — exclude them).
+- SKIP chart captions (图 N …) and narrative paragraphs.
+- provinces come ONLY from 表2 (连续运行地区)."""
+
+
+def extract_monthly_json(text: str, report_month: dt.date, api_key: str) -> dict:
+    """Structure extracted page text via Claude. Raises ValueError on bad output."""
+    import json
+
+    from shared.anthropic_client import make_client  # lazy, house style
+
+    client = make_client(api_key)
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
+        max_tokens=4000,
+        system=_EXTRACT_SYSTEM,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Report month: {report_month.strftime('%Y年%m月')} "
+                f"(all data is for {report_month.year}-{report_month.month:02d}).\n\n"
+                f"Content:\n{text[:30000]}"
+            ),
+        }],
+    )
+    raw = resp.content[0].text.strip()
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        raise ValueError(f"Claude returned no JSON: {raw[:200]}")
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Claude returned invalid JSON: {exc}: {raw[:200]}") from exc
+    if "provinces" not in data or "national" not in data:
+        raise ValueError(f"Claude JSON missing required keys: {list(data.keys())}")
+    return data
+
+
+_PRICE_FIELDS = ("rt_avg_price", "da_avg_price", "mlt_avg_price")
+_VOLUME_FIELDS = (
+    "rt_volume_yi_kwh", "da_volume_yi_kwh", "mlt_volume_yi_kwh",
+    "rt_total_volume_yi_kwh", "da_total_volume_yi_kwh", "mlt_coverage_volume_yi_kwh",
+)
+_PCT_FIELDS = ("rt_mom_pct", "da_mom_pct")
+
+
+def _clean_number(record: dict, field: str, lo: float, hi: float, label: str, warnings: list[str]) -> None:
+    val = record.get(field)
+    if val is None:
+        return
+    try:
+        val = float(val)
+    except (TypeError, ValueError):
+        record[field] = None
+        warnings.append(f"{label}: {field} 非数值已置空")
+        return
+    if not (lo <= val <= hi):
+        record[field] = None
+        warnings.append(f"{label}: {field}={val} 超出范围[{lo},{hi}]已置空")
+    else:
+        record[field] = val
+
+
+def validate_monthly_data(data: dict) -> list[str]:
+    """Validate in place. Returns warnings. Raises ValueError on hard failure."""
+    warnings: list[str] = []
+    provinces = data.get("provinces") or []
+    if not provinces:
+        raise ValueError("未提取到任何省份数据")
+    if len(provinces) < 20:
+        warnings.append(f"省份数量仅 {len(provinces)}（预期 ≥20）")
+
+    national = data.get("national") or {}
+    for f in _PRICE_FIELDS:
+        _clean_number(national, f, 0.0, 2.0, "全国", warnings)
+    for f in _VOLUME_FIELDS:
+        _clean_number(national, f, 0.0, 20000.0, "全国", warnings)
+    _clean_number(national, "mlt_coverage_pct", 0.0, 100.0, "全国", warnings)
+
+    kept = []
+    for row in provinces:
+        cn = (row.get("province_cn") or "").strip()
+        if cn not in PROVINCES_MAP:
+            warnings.append(f"无法识别地区「{cn}」，该行已丢弃")
+            continue
+        for f in _PRICE_FIELDS:
+            _clean_number(row, f, 0.0, 2.0, cn, warnings)
+        for f in _VOLUME_FIELDS:
+            if f in row:
+                _clean_number(row, f, 0.0, 20000.0, cn, warnings)
+        for f in _PCT_FIELDS:
+            _clean_number(row, f, -1000.0, 1000.0, cn, warnings)
+        _clean_number(row, "mlt_coverage_pct", 0.0, 100.0, cn, warnings)
+        kept.append(row)
+    data["provinces"] = kept
+    if not kept:
+        raise ValueError("所有省份行均无法识别")
+    return warnings
