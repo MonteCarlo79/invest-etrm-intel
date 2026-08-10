@@ -505,20 +505,32 @@ def extract_metrics(
         client, model_id, provider = _get_client(api_key=api_key)
 
         if provider == "deepseek":
-            # OpenAI-compatible function calling
-            resp = client.chat.completions.create(
-                model=model_id,
-                tools=[_TOOL_SCHEMA_OPENAI],
-                tool_choice={"type": "function", "function": {"name": "store_market_metrics"}},
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_message},
-                ],
-            )
-            tool_calls = resp.choices[0].message.tool_calls
-            if tool_calls:
-                result = json.loads(tool_calls[0].function.arguments)
-                return _sanity_check(result)
+            # OpenAI-compatible function calling. DeepSeek occasionally returns
+            # truncated/malformed tool-call JSON — retry once before giving up.
+            for attempt in (1, 2):
+                resp = client.chat.completions.create(
+                    model=model_id,
+                    max_tokens=4096,
+                    tools=[_TOOL_SCHEMA_OPENAI],
+                    tool_choice={"type": "function", "function": {"name": "store_market_metrics"}},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_message},
+                    ],
+                )
+                tool_calls = resp.choices[0].message.tool_calls
+                if tool_calls:
+                    try:
+                        result = json.loads(tool_calls[0].function.arguments)
+                        return _sanity_check(result)
+                    except json.JSONDecodeError as exc:
+                        logger.warning(
+                            "DeepSeek invalid JSON (attempt %d/2) for %s %s "
+                            "(finish_reason=%s, args_len=%d): %s",
+                            attempt, province, report_month,
+                            resp.choices[0].finish_reason,
+                            len(tool_calls[0].function.arguments), exc,
+                        )
 
         else:
             # Anthropic SDK (direct or Bedrock)
