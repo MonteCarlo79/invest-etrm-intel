@@ -23,6 +23,8 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 - **Prove the image before pushing:** `docker run --rm --platform linux/amd64 <repo>:<vN> python -c "import <critical modules>"`.
 - Note: macOS stock rsync has no `--no-mmap` flag (that would also work where available). First observed 2026-08-10, asset-risk v29 → rebuilt as v30.
 
+**Related (2026-08-11, asset-risk v33):** Docker Hub unreachable from this network (`TLS handshake timeout` on the `FROM python:3.11-slim` metadata Head — buildkit re-checks the registry even when the base image is cached locally). Fix: point the FROM line at AWS's official mirror **in the throwaway build context only** — `FROM public.ecr.aws/docker/library/python:3.11-slim` — and keep the committed Dockerfile on `python:3.11-slim`. Do NOT use third-party mirrors (daocloud etc.) without explicit approval.
+
 ---
 
 ## docker push to ECR fails: broken pipe through Docker Desktop proxy (Mac)
@@ -43,6 +45,8 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 - Verify: running task's `imageDigest` must equal crane's reported manifest digest.
 
 **Note for next time:** On the Mac, if docker push to ECR dies with broken pipe to `192.168.65.x:3128`, skip retries — go straight to crane. First observed 2026-08-06 during hermes :163 deploy. **crane v0.21.9 is permanently installed at `~/.local/bin/crane`** (no Homebrew on this Mac) — skip the download steps, just `docker save` + `crane auth login` + `crane push`.
+
+**Refinement (2026-08-10, spot-markets v92):** crane's in-blob PATCH resume does NOT always save a push — a 477 MB image over this link (flows die every ~25 min) exhausted crane's own retries and the process died mid-push. Two fixes that worked: (1) rerun `crane push` in a retry loop — already-committed blobs report `existing blob` and are skipped, only incomplete ones re-upload; (2) tag `:latest` server-side with `crane tag repo:v92 latest` (manifest-only, no second upload). Also: interactive zsh does NOT treat mid-line `#` as a comment (`interactivecomments` off) — keep comments out of pasted command lines.
 
 ---
 
