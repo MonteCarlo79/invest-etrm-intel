@@ -54,10 +54,20 @@ def _run_extract_metrics_only(folder: Path, pg_url: str, args) -> None:
     staging.exchange_monthly_metrics, extract and upsert metrics via Claude.
     """
     import hashlib
+    import datetime
     import psycopg2
 
     from services.exchange_reports.ingestor import infer_province, infer_report_month, infer_report_type
     from services.exchange_reports.metrics_extractor import extract_and_store, init_metrics_table
+
+    month_filter = None
+    if args.month:
+        try:
+            _y, _m = args.month.split("-")
+            month_filter = datetime.date(int(_y), int(_m), 1)
+        except ValueError:
+            logger.error("Invalid --month format: %s (expected YYYY-MM)", args.month)
+            sys.exit(1)
 
     # Accept any supported provider: DeepSeek > Bedrock > Anthropic
     api_key = (
@@ -84,9 +94,10 @@ def _run_extract_metrics_only(folder: Path, pg_url: str, args) -> None:
                 WHERE r.ingest_status = 'ingested'
                   AND m.id IS NULL
                   AND (%s IS NULL OR r.province = %s)
+                  AND (%s IS NULL OR r.report_month = %s)
                 ORDER BY r.province, r.report_month
                 """,
-                (args.province, args.province),
+                (args.province, args.province, month_filter, month_filter),
             )
             pending = cur.fetchall()
     finally:
@@ -168,6 +179,7 @@ def main():
     parser.add_argument("--folder", default=str(_DEFAULT_FOLDER),
                         help=f"Root folder (default: {_DEFAULT_FOLDER})")
     parser.add_argument("--province", help="Only ingest one province (e.g. 上海)")
+    parser.add_argument("--month", help="With --extract-metrics-only: only process reports for one month (YYYY-MM, e.g. 2026-06)")
     parser.add_argument("--dry-run", action="store_true", help="Print files without ingesting")
     parser.add_argument("--extract-metrics-only", action="store_true",
                         help="Re-extract metrics for already-ingested files that have no metrics row")
