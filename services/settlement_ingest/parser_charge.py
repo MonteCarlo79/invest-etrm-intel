@@ -89,6 +89,14 @@ def parse_charging_cost_pdf(file_path: str) -> list[dict[str, Any]]:
     if not full_text.strip():
         return []
 
+    return parse_charging_text(full_text)
+
+
+def parse_charging_text(full_text: str) -> list[dict[str, Any]]:
+    """Parse extracted text of a charging cost PDF into settlement items.
+
+    Separated from parse_charging_cost_pdf for unit testing.
+    """
     items = []
 
     # Extract total charging volume (计费电量 kWh)
@@ -99,15 +107,30 @@ def parse_charging_cost_pdf(file_path: str) -> list[dict[str, Any]]:
     # Pattern 1: data rows "NUMBER.N NUMBER.NNNNNN NUMBER.NN" (volume, price, amount)
     # These appear after "工商业输配" or similar category labels
     data_rows = re.findall(r'([\d,]+\.?\d*)\s+([\d.]+)\s+([\d,.]+\.\d{2})', full_text)
+
+    # 电能电费 amount is needed early: it disambiguates the volume candidate.
+    # Bills may contain decoy figures larger than 计费电量 (e.g. a 2x aggregate
+    # row — observed 苏右 2025-09: 48,973,160 decoy vs 24,486,580 true).
+    energy_amt = _extract_amount(full_text, r'电能电费元\s+([\d,.]+|-[\d,.]+)')
+
     if data_rows:
         # Filter for plausible volumes (> 10000 kWh = 10 MWh minimum)
-        volumes = []
+        candidates = []
         for vol_str, price_str, amt_str in data_rows:
             vol = _parse_number(vol_str)
+            amt = _parse_number(amt_str)
             if vol and vol > 10000:  # > 10 MWh in kWh
-                volumes.append(vol)
-        if volumes:
-            total_volume_kwh = max(volumes)
+                candidates.append((vol, amt))
+        if candidates:
+            # Prefer the candidate whose own row amount equals the 电能电费
+            # line amount; fall back to the largest candidate.
+            total_volume_kwh = None
+            if energy_amt:
+                matched = [c for c in candidates if c[1] is not None and abs(c[1] - abs(energy_amt)) < 1.0]
+                if matched:
+                    total_volume_kwh = matched[0][0]
+            if total_volume_kwh is None:
+                total_volume_kwh = max(c[0] for c in candidates)
 
     # Pattern 2: page 1 header "= 计费电量" newline NUMBER
     if not total_volume_kwh:
@@ -128,8 +151,8 @@ def parse_charging_cost_pdf(file_path: str) -> list[dict[str, Any]]:
     volume_mwh = total_volume_kwh / 1000.0 if total_volume_kwh else None
 
     # Extract each category amount
-    # 1. 电能电费
-    amt = _extract_amount(full_text, r'电能电费元\s+([\d,.]+|-[\d,.]+)')
+    # 1. 电能电费 (already extracted above for volume disambiguation)
+    amt = energy_amt
     if amt and amt != 0:
         items.append({"category": "charge_energy", "volume_mwh": volume_mwh, "amount_cny": amt, "notes": "电能电费(市场化购电)"})
 
