@@ -158,41 +158,59 @@ def render_settlement(engine):
 
 
 def _process_pdf(uploaded, book_id: int, settlement_month, engine):
-    """Process uploaded PDF settlement — auto-detects text vs scanned image."""
+    """Process uploaded PDF settlement.
+
+    Routing: filename semantics (上/下网) decide the parser — never send a
+    下网 charge bill to the discharge vision parser (observed 2026-08: a scanned
+    kWh-denominated 下网 bill was mis-extracted as discharge, 1000x unit error).
+    parser_charge needs a text layer; parser_discharge (vision) handles any PDF.
+    """
     import io
     import pdfplumber
+    from services.settlement_ingest.scanner import classify_pdf
 
     pdf_bytes = uploaded.read()
-    buf = io.BytesIO(pdf_bytes)
+
+    kind = classify_pdf(uploaded.name)
+    if kind == "skip":
+        st.info(f"{uploaded.name}: 发票 file — skipped (not settlement data).")
+        return
 
     # Detect if PDF is scanned (image-based) or has extractable text
+    buf = io.BytesIO(pdf_bytes)
     pdf = pdfplumber.open(buf)
     page = pdf.pages[0]
     is_scanned = len(page.chars) == 0 and len(page.images) > 0
     pdf.close()
 
-    if is_scanned:
-        # Use Claude Vision parser for scanned discharge settlement PDFs
-        st.info("Detected scanned PDF — using AI Vision to extract data...")
-        try:
-            import tempfile, os
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(pdf_bytes)
-                tmp_path = tmp.name
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(pdf_bytes)
+        tmp_path = tmp.name
+
+    try:
+        if kind == "discharge" or (kind == "unknown" and is_scanned):
+            # Discharge (上网) — vision parser handles scanned + text PDFs
+            if is_scanned:
+                st.info("Detected scanned PDF — using AI Vision to extract data...")
             from services.settlement_ingest.parser_discharge import parse_discharge_settlement_pdf
             items = parse_discharge_settlement_pdf(tmp_path)
-            os.unlink(tmp_path)
-        except Exception as e:
-            st.error(f"Vision parsing failed: {e}")
-            return
-    else:
-        # Use regex-based parser for text-extractable charging cost PDFs
-        import tempfile, os
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(pdf_bytes)
-            tmp_path = tmp.name
-        from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
-        items = parse_charging_cost_pdf(tmp_path)
+        elif kind == "charge" or kind == "unknown":
+            if is_scanned:
+                st.warning(
+                    f"**{uploaded.name}** looks like a 下网 charge bill but is a scanned image — "
+                    "the charge parser needs a text-layer PDF. Skipped: no data written. "
+                    "Use the scanner path or obtain the text version."
+                )
+                return
+            from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
+            items = parse_charging_cost_pdf(tmp_path)
+        else:
+            items = []
+    except Exception as e:
+        st.error(f"PDF parsing failed: {e}")
+        return
+    finally:
         os.unlink(tmp_path)
 
     if not items:
