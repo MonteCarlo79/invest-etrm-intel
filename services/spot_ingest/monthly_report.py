@@ -89,6 +89,11 @@ Rules:
 - provinces come ONLY from 表2 (连续运行地区)."""
 
 
+# Input cap for the Claude call. The 2026-06 report's 表2 ends ~36k chars in
+# (layout=True is whitespace-heavy); 45k covers denser future reports with margin.
+_EXTRACT_MAX_CHARS = 45_000
+
+
 def extract_monthly_json(text: str, report_month: dt.date, api_key: str) -> dict:
     """Structure extracted page text via Claude. Raises ValueError on bad output."""
     import json
@@ -105,7 +110,7 @@ def extract_monthly_json(text: str, report_month: dt.date, api_key: str) -> dict
             "content": (
                 f"Report month: {report_month.strftime('%Y年%m月')} "
                 f"(all data is for {report_month.year}-{report_month.month:02d}).\n\n"
-                f"Content:\n{text[:30000]}"
+                f"Content:\n{text[:_EXTRACT_MAX_CHARS]}"
             ),
         }],
     )
