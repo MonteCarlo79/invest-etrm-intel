@@ -2547,8 +2547,8 @@ def _handle_file_message(
                 ))
             else:
                 api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-                kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
-                feishu.send_text(open_id=sender_id, text=kb_reply)
+                # DB parse BEFORE KB ingest: KB synthesis (embeddings) runs heavy in
+                # background — if the task OOMs there, the DB write has already landed.
                 _sm = ingest_monthly_report(filename, file_bytes, api_key)
                 _sm_msg = (
                     f"📊 现货月报已入库（{_sm['month']}）\n"
@@ -2559,6 +2559,8 @@ def _handle_file_message(
                 if _sm["warnings"]:
                     _sm_msg += f"\n⚠️ 校验提示：{'；'.join(_sm['warnings'][:3])}"
                 feishu.send_text(open_id=sender_id, text=_sm_msg)
+                kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
+                feishu.send_text(open_id=sender_id, text=kb_reply)
         except Exception as exc:
             logger.error("Spot monthly ingest failed: %s", exc, exc_info=True)
             feishu.send_text(open_id=sender_id, text=f"⚠️ 现货月报入库失败：{exc}")
@@ -2777,8 +2779,7 @@ def _handle_telegram_file(
                     "⚠️ 现货月报文件名需包含年份和月份（如「（2026年6月）」），请重命名后重发。")
             else:
                 api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-                kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
-                telegram.send_text(chat_id, kb_reply)
+                # DB parse BEFORE KB ingest — same OOM-ordering rationale as Feishu branch.
                 _sm_tg = ingest_monthly_report(filename, file_bytes, api_key)
                 _sm_tg_msg = (
                     f"📊 现货月报已入库（{_sm_tg['month']}）\n"
@@ -2789,6 +2790,8 @@ def _handle_telegram_file(
                 if _sm_tg["warnings"]:
                     _sm_tg_msg += f"\n⚠️ 校验提示：{'；'.join(_sm_tg['warnings'][:3])}"
                 telegram.send_text(chat_id, _sm_tg_msg)
+                kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
+                telegram.send_text(chat_id, kb_reply)
         except Exception as exc:
             logger.error("Spot monthly ingest (Telegram) failed: %s", exc, exc_info=True)
             telegram.send_text(chat_id, f"⚠️ 现货月报入库失败：{exc}")
