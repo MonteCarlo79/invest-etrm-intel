@@ -60,6 +60,9 @@ from services.hermes.capacity_screener import screen_installed_capacity as _scre
 from services.hermes.market_report import send_daily_report as _send_daily_report, send_monthly_report as _send_monthly_report
 from services.hermes.nodal_scraper import scrape_daily as _scrape_nodal_daily, scrape_date as _scrape_nodal_date, format_summary as _nodal_summary
 from services.hermes.spot_ingest_bridge import is_spot_pdf, ingest_pdf_bytes
+from services.spot_ingest.monthly_report import (
+    infer_report_month, ingest_monthly_report, is_spot_monthly_pdf,
+)
 from services.hermes.market_classifier import classify_to_market_fundamentals, is_document_file
 from services.hermes.capacity_etl import upsert_capacity, is_capacity_file
 from services.hermes.sysopfee_etl import upsert_sysopfee, is_sysopfee_file
@@ -2532,9 +2535,37 @@ def _handle_file_message(
             logger.error("Daili ETL failed: %s", exc, exc_info=True)
             feishu.send_text(open_id=sender_id, text=f"⚠️ 代理购电入库失败：{exc}")
 
+    # Spot monthly report (电力现货市场价格与运行月报): KB ingest + DB parse.
+    # Must run BEFORE the exchange-report check below — these filenames also
+    # match the exchange 月报 keyword regex and were previously misrouted.
+    _is_spot_monthly = is_spot_monthly_pdf(filename) and resource_type == "file"
+    if _is_spot_monthly:
+        try:
+            if infer_report_month(filename) is None:
+                feishu.send_text(open_id=sender_id, text=(
+                    "⚠️ 现货月报文件名需包含年份和月份（如「（2026年6月）」），请重命名后重发。"
+                ))
+            else:
+                api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
+                feishu.send_text(open_id=sender_id, text=kb_reply)
+                _sm = ingest_monthly_report(filename, file_bytes, api_key)
+                _sm_msg = (
+                    f"📊 现货月报已入库（{_sm['month']}）\n"
+                    f"{_sm['n_provinces']} 省 + 全国汇总"
+                )
+                if _sm.get("national_rt_avg") is not None:
+                    _sm_msg += f"，全国实时均价 {_sm['national_rt_avg']:.3f} 元/kWh"
+                if _sm["warnings"]:
+                    _sm_msg += f"\n⚠️ 校验提示：{'；'.join(_sm['warnings'][:3])}"
+                feishu.send_text(open_id=sender_id, text=_sm_msg)
+        except Exception as exc:
+            logger.error("Spot monthly ingest failed: %s", exc, exc_info=True)
+            feishu.send_text(open_id=sender_id, text=f"⚠️ 现货月报入库失败：{exc}")
+
     # Auto ETL: exchange monthly report → shared KB
     _exchange_province = is_exchange_report(filename)
-    if _exchange_province:
+    if _exchange_province and not _is_spot_monthly:
         try:
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -2737,9 +2768,34 @@ def _handle_telegram_file(
         except Exception as exc:
             logger.error("Daili ETL (Telegram) failed: %s", exc, exc_info=True)
 
+    # Spot monthly report (电力现货市场价格与运行月报): KB ingest + DB parse (Telegram)
+    _is_spot_monthly_tg = is_spot_monthly_pdf(filename)
+    if _is_spot_monthly_tg:
+        try:
+            if infer_report_month(filename) is None:
+                telegram.send_text(chat_id,
+                    "⚠️ 现货月报文件名需包含年份和月份（如「（2026年6月）」），请重命名后重发。")
+            else:
+                api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                kb_reply = agent.ingest_file_to_kb(filename, file_bytes, category="research_report")
+                telegram.send_text(chat_id, kb_reply)
+                _sm_tg = ingest_monthly_report(filename, file_bytes, api_key)
+                _sm_tg_msg = (
+                    f"📊 现货月报已入库（{_sm_tg['month']}）\n"
+                    f"{_sm_tg['n_provinces']} 省 + 全国汇总"
+                )
+                if _sm_tg.get("national_rt_avg") is not None:
+                    _sm_tg_msg += f"，全国实时均价 {_sm_tg['national_rt_avg']:.3f} 元/kWh"
+                if _sm_tg["warnings"]:
+                    _sm_tg_msg += f"\n⚠️ 校验提示：{'；'.join(_sm_tg['warnings'][:3])}"
+                telegram.send_text(chat_id, _sm_tg_msg)
+        except Exception as exc:
+            logger.error("Spot monthly ingest (Telegram) failed: %s", exc, exc_info=True)
+            telegram.send_text(chat_id, f"⚠️ 现货月报入库失败：{exc}")
+
     # Auto ETL: exchange monthly report → shared KB (Telegram)
     _exchange_province_tg = is_exchange_report(filename)
-    if _exchange_province_tg:
+    if _exchange_province_tg and not _is_spot_monthly_tg:
         try:
             pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
