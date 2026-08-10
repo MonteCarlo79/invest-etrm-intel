@@ -161,7 +161,7 @@ def validate_monthly_data(data: dict) -> list[str]:
         _clean_number(national, f, 0.0, 2.0, "全国", warnings)
     for f in _VOLUME_FIELDS:
         _clean_number(national, f, 0.0, 20000.0, "全国", warnings)
-    _clean_number(national, "mlt_coverage_pct", 0.0, 100.0, "全国", warnings)
+    _clean_number(national, "mlt_coverage_pct", 0.0, 400.0, "全国", warnings)
 
     kept = []
     for row in provinces:
@@ -176,7 +176,8 @@ def validate_monthly_data(data: dict) -> list[str]:
                 _clean_number(row, f, 0.0, 20000.0, cn, warnings)
         for f in _PCT_FIELDS:
             _clean_number(row, f, -1000.0, 1000.0, cn, warnings)
-        _clean_number(row, "mlt_coverage_pct", 0.0, 100.0, cn, warnings)
+        _clean_number(row, "mlt_coverage_pct", 0.0, 400.0, cn, warnings)
+        row["province_cn"] = cn  # write back stripped name — upsert keys on raw value
         kept.append(row)
     data["provinces"] = kept
     if not kept:

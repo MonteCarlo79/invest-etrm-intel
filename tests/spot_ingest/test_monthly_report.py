@@ -86,10 +86,30 @@ def test_validate_price_out_of_range_nulled():
 
 def test_validate_coverage_pct_out_of_range_nulled():
     data = _data()
-    data["provinces"][0]["mlt_coverage_pct"] = 150.0
+    data["provinces"][0]["mlt_coverage_pct"] = 450.0
     warnings = validate_monthly_data(data)
     assert data["provinces"][0]["mlt_coverage_pct"] is None
     assert warnings
+
+
+def test_validate_coverage_pct_over_100_kept():
+    # 中长期合约覆盖电量占比 legitimately exceeds 100% when over-contracted
+    # (2026-06 report: 重庆 189.04%, 吉林 142.61%, 福建 137.87%)
+    data = _data()
+    data["provinces"][0]["mlt_coverage_pct"] = 189.04
+    warnings = validate_monthly_data(data)
+    assert data["provinces"][0]["mlt_coverage_pct"] == 189.04
+    assert not any("mlt_coverage_pct" in w for w in warnings)
+
+
+def test_validate_strips_padded_province_cn():
+    data = _data()
+    data["provinces"][0]["province_cn"] = "山东 "
+    warnings = validate_monthly_data(data)
+    assert data["provinces"][0]["province_cn"] == "山东"
+    # and the upsert mapping must accept the cleaned row
+    from services.spot_ingest.monthly_report import PROVINCES_MAP
+    assert PROVINCES_MAP[data["provinces"][0]["province_cn"]] == "Shandong"
 
 
 def test_validate_unknown_province_dropped():
