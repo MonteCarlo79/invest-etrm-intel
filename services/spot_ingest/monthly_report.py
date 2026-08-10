@@ -103,7 +103,7 @@ def extract_monthly_json(text: str, report_month: dt.date, api_key: str) -> dict
     client = make_client(api_key)
     resp = client.messages.create(
         model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
-        max_tokens=4000,
+        max_tokens=8000,  # 25 provinces × 11 fields ≈ 4.5–6k tokens; 8k covers denser future reports
         system=_EXTRACT_SYSTEM,
         messages=[{
             "role": "user",
