@@ -110,7 +110,7 @@ resource "aws_ecs_task_definition" "hermes" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = "512"
-  memory                   = "1024"
+  memory                   = "2048"  # 1024 OOM-killed (exit 137) on concurrent KB synthesis + monthly PDF parse, 2026-08-11
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task_role.arn
 
