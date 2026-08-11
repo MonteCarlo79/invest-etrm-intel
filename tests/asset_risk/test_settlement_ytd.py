@@ -19,7 +19,8 @@ def _sample_pivot():
         "放电收入": [0.0, 0.0, 800.0, 1000.0],
         "充电电费": [-300.0, -400.0, -300.0, -350.0],
         "容量补偿/非市场化": [0.0, 0.0, 80.0, 100.0],
-        "价差收入": [-300.0, -400.0, 580.0, 750.0],
+        # 价差收入 = 放电收入 + 充电电费 (容量补偿不计入, 2026-08-11 起)
+        "价差收入": [-300.0, -400.0, 500.0, 650.0],
         "放电量(MWh)": [0.0, 0.0, 10.0, 12.0],
         "充电量(MWh)": [30.0, 40.0, 11.0, 13.0],
         "度电总价差": [0.0, 0.0, 58.0, 62.5],
@@ -72,8 +73,10 @@ def test_subtotal_sums_are_per_year():
 def test_subtotal_metrics_use_own_year_volumes():
     pivot = _insert_year_subtotals(_sample_pivot(), _sample_monthly(), DAYS,
                                    ENERGY_PER_CYCLE, "放电收入", "充电电费", "容量补偿/非市场化")
-    # 2026: 价差收入 1330 / 放电量 22 = 60.45
+    # 2026: 度电总价差 = (价差收入 1150 + 容量补偿 180) / 放电量 22 = 60.45
     assert pivot.loc["2026 YTD", "度电总价差"] == pytest.approx(1330.0 / 22.0, rel=1e-3)
+    # 2026 套利价差 = 价差收入 1150 / 22 (纯充放, 不含容量补偿)
+    assert pivot.loc["2026 YTD", "套利价差"] == pytest.approx(1150.0 / 22.0, rel=1e-3)
     # 2026 转化率 = 22 / 24
     assert pivot.loc["2026 YTD", "转化率"] == pytest.approx(22.0 / 24.0, rel=1e-3)
     # 2025 has zero discharge volume -> per-MWh metrics stay 0, no NaN/inf

@@ -313,11 +313,13 @@ def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh
     total_discharge_vol = yr_monthly[yr_monthly["category_cn"] == "放电收入"]["volume"].sum()
     total_charge_vol = yr_monthly[yr_monthly["category_cn"] == "充电电费"]["volume"].sum()
     if total_discharge_vol > 0 and "价差收入" in pivot.columns:
-        row["度电总价差"] = row["价差收入"] / total_discharge_vol
+        # 价差收入 = 放电 + 充电 (不含容量补偿); 度电总价差 = (价差收入 + 容量补偿) / 放电量
+        cap_total = row[cap_col] if (cap_col and cap_col in pivot.columns) else 0
+        row["度电总价差"] = (row["价差收入"] + cap_total) / total_discharge_vol
         if cap_col and "容量补偿价差" in pivot.columns:
-            row["容量补偿价差"] = row[cap_col] / total_discharge_vol
-        if "套利价差" in pivot.columns and discharge_col and charge_col:
-            row["套利价差"] = (row[discharge_col] + row[charge_col]) / total_discharge_vol
+            row["容量补偿价差"] = cap_total / total_discharge_vol
+        if "套利价差" in pivot.columns:
+            row["套利价差"] = row["价差收入"] / total_discharge_vol
     if energy_per_cycle_mwh and energy_per_cycle_mwh > 0 and "日均充放次数" in pivot.columns:
         yr_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(year))
         row["日均充放次数"] = round(total_charge_vol / energy_per_cycle_mwh / yr_days, 2) if yr_days > 0 else 0
@@ -443,20 +445,19 @@ def _render_analytics(book_id: int, engine):
     pivot["充电量(MWh)"] = charge_vol_monthly.values
 
     if discharge_col and charge_col:
-        # 总价差收入 = 放电收入 + 容量补偿 + 充电电费 (charge is negative)
+        # 价差收入 = 放电收入 + 充电电费 (充电为负) — 容量补偿不计入 (2026-08-11: 容量补偿单列)
         cap_amount = pivot[cap_col] if cap_col else 0
-        pivot["价差收入"] = pivot[discharge_col] + cap_amount + pivot[charge_col]
+        pivot["价差收入"] = pivot[discharge_col] + pivot[charge_col]
 
-        # 度电总价差 = 价差收入 / 放电电量
-        pivot["度电总价差"] = (pivot["价差收入"] / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+        # 度电总价差 = (价差收入 + 容量补偿) / 放电电量 — 含容量补偿的综合度电收益
+        pivot["度电总价差"] = ((pivot["价差收入"] + cap_amount) / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
 
         # 容量补偿价差 = 容量补偿 / 放电电量
         if cap_col:
-            pivot["容量补偿价差"] = (pivot[cap_col] / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+            pivot["容量补偿价差"] = (cap_amount / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
 
-        # 套利价差 = (放电收入 + 充电电费) / 放电电量 (即扣除容量补偿的充放价差)
-        arb_spread = pivot[discharge_col] + pivot[charge_col]
-        pivot["套利价差"] = (arb_spread / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+        # 套利价差 = 价差收入 / 放电电量 (纯市场化充放价差)
+        pivot["套利价差"] = (pivot["价差收入"] / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
 
     # 日均充放次数 = 月充电总量 / 装机容量 / 当月天数
     import calendar
@@ -535,15 +536,20 @@ def _render_analytics(book_id: int, engine):
 
     st.dataframe(styled, use_container_width=True)
 
-    # Monthly bar chart (stacked by category)
+    # Monthly bar chart (stacked by money category; YTD subtotal rows excluded)
+    money_order = ["放电收入", "容量补偿/非市场化", "价差收入", "调频", "其他",
+                   "充电电费", "系统运行费", "上网线损费", "基本电费/力调"]
+    chart_pivot = pivot[[c for c in money_order if c in pivot.columns] + ["净利润"]]
+    chart_pivot = chart_pivot[~chart_pivot.index.astype(str).str.contains("YTD")]
+
     fig = go.Figure()
-    categories = [c for c in pivot.columns if c != "净利润"]
+    categories = [c for c in money_order if c in chart_pivot.columns]
     for cat in categories:
         fig.add_trace(go.Bar(
-            x=pivot.index, y=pivot[cat], name=cat,
+            x=chart_pivot.index, y=chart_pivot[cat], name=cat,
         ))
     fig.add_trace(go.Scatter(
-        x=pivot.index, y=pivot["净利润"], name="净利润",
+        x=chart_pivot.index, y=chart_pivot["净利润"], name="净利润",
         mode="lines+markers", line=dict(color="black", width=2),
     ))
     fig.update_layout(
