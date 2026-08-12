@@ -772,6 +772,7 @@ def search_reference_docs(
     category: Optional[str] = None,
     app: Optional[str] = None,
     limit: int = 5,
+    filename_contains: Optional[tuple[str, ...]] = None,
 ) -> list[dict]:
     """
     Full-text search over staging.spot_knowledge_chunks.
@@ -786,6 +787,9 @@ def search_reference_docs(
         app: When set, returns docs where app = :app OR app = 'shared'.
              Pass 'strategist' or 'trader' to exclude the other agent's
              private documents.  Omit (None) to search all docs.
+        filename_contains: When set, AND a file-name condition into the WHERE
+             clause: (d.file_name ILIKE %term1% OR d.file_name ILIKE %term2% ...).
+             Opt-in — no behavior change for existing callers.
 
     Returns list of dicts:
         doc_id, file_name, category, app, page_no, chunk_text, rank
@@ -838,6 +842,11 @@ def search_reference_docs(
     if app:
         conditions.append("(d.app = %s OR d.app = 'shared')")
         params.append(app)
+
+    if filename_contains:
+        fn_conds = " OR ".join("d.file_name ILIKE %s" for _ in filename_contains)
+        conditions.append(f"({fn_conds})")
+        params.extend(f"%{t}%" for t in filename_contains)
 
     where = " AND ".join(conditions)
     sql = f"""

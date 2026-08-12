@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 from shared.anthropic_client import make_client as _make_anthropic_client
@@ -269,6 +270,17 @@ Rules:
 - When user says "记录需求", "记录开发需求", "写需求文档", "save dev request", "development request", "dev request", use WRITE_DEV_REQUEST with the user's verbatim message in the message param.
 - Always match the user's language in the reply field. If the user writes in Chinese (Simplified), reply in Chinese (Simplified). If in English, reply in English.
 - Always respond with valid JSON only. No markdown fences, no extra text."""
+
+
+def _salvage_reply_text(raw: str) -> str:
+    """Last-ditch: salvage the reply field from a malformed REPLY envelope so the
+    user never sees the raw JSON wrapper. Returns the stripped raw text unchanged
+    when no reply field can be extracted."""
+    partial = raw.strip()
+    m2 = re.search(r'"reply"\s*:\s*"(.*)"\s*\}\s*$', partial, re.DOTALL)
+    if m2:
+        partial = m2.group(1).replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+    return partial
 
 
 class HermesAgent:
@@ -566,7 +578,9 @@ class HermesAgent:
         # All JSON parsing failed (usually max_tokens cut the JSON mid-string).
         # Return partial content as a REPLY rather than crashing with ❌.
         logger.warning("JSON parse failed (likely max_tokens truncation), returning partial REPLY")
-        partial = raw.strip()
+        # Last-ditch: salvage the reply field from a malformed REPLY envelope so the
+        # user never sees the raw JSON wrapper.
+        partial = _salvage_reply_text(raw)
         _save_to_history(partial)
         return Action(
             action="REPLY", params={},

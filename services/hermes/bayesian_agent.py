@@ -130,7 +130,8 @@ _TOOL_DEFS = [
             "market transaction volumes, settlement prices (spot/contract/BESS), load levels, "
             "renewable energy ratios, market participants, and year-on-year comparisons. "
             "Use this for qualitative and quantitative context FROM OFFICIAL EXCHANGE REPORTS. "
-            "Provinces available: 上海, 山东, 安徽, 江苏, 浙江, 广东, 福建, 冀南, 蒙西."
+            "Province coverage is partial and grows over time; if a province has no reports "
+            "the tool says so explicitly — do not substitute another province's report."
         ),
         "input_schema": {
             "type": "object",
@@ -181,6 +182,15 @@ _TOOL_DEFS = [
             "thermal_settlement_price_yuan_mwh, wind_settlement_price_yuan_mwh, solar_settlement_price_yuan_mwh). "
             "Province is in Chinese (e.g. '上海'). Covers 2024-01 to present. "
             "Some columns may be NULL for older rows — use COALESCE or IS NOT NULL filters.\n"
+            "  public.spot_monthly_province — national spot monthly report per province "
+            "(report_month DATE first-of-month, province_cn, province_en, run_status, "
+            "mlt_volume_yi_kwh, mlt_avg_price, mlt_coverage_pct, rt_volume_yi_kwh, rt_avg_price, rt_mom_pct, "
+            "da_volume_yi_kwh, da_avg_price, da_mom_pct). Prices ¥/kWh (×1000 for ¥/MWh), "
+            "volumes 亿kWh (×100 for GWh), percent columns store percent numbers (4.82 = 4.82%). "
+            "mlt_coverage_pct can legitimately exceed 100.\n"
+            "  public.spot_monthly_national — national aggregate per report_month "
+            "(rt_total_volume_yi_kwh, rt_avg_price, da_total_volume_yi_kwh, da_avg_price, "
+            "mlt_coverage_volume_yi_kwh, mlt_coverage_pct, mlt_avg_price). Same units.\n"
             "  marketdata.province_installed_monthly — columns: province (TEXT), year_month (DATE), "
             "wind_mw, solar_mw, thermal_mw, hydro_mw, nuclear_mw, bess_mw, total_mw (all NUMERIC). "
             "Filter by province name in Chinese (e.g. '上海'). No province_cn or energy_type column.\n"
@@ -283,18 +293,29 @@ class BayesianAnalystAgent:
         try:
             from services.knowledge_pool.knowledge_docs import search_reference_docs
             top_k = min(int(top_k), 10)
-            # Detect target province first — when set, over-fetch so enough
-            # on-province hits survive the hard filter below.
+            # Detect target province first — when set, push the province filter
+            # into the search SQL (file_name ILIKE) so term-broad off-province
+            # docs cannot starve on-province hits out of the top-N fetch.
             target = next((p for p in self._KNOWN_PROVINCES if p in query), None)
-            fetch_k = min(top_k * 2, 10) if target else top_k
             results = search_reference_docs(
                 query=query,
                 category="monthly_report",
-                limit=fetch_k,
+                limit=top_k,
+                filename_contains=(
+                    (target,) + self._PROVINCE_ALIASES.get(target, ())
+                    if target else None
+                ),
             )
             if not results:
+                if target:
+                    return (
+                        f"未检索到【{target}】的交易所月报（知识库暂无该省报告）。"
+                        "不要使用其他省份的报告代替；如需价格数据请改用 query_db 查询 "
+                        "spot_monthly_province 或 exchange_monthly_metrics。"
+                    )
                 return "No exchange reports found for this query."
-            # Province hard-filter: if the query names a province, drop hits whose
+            # Province hard-filter (backstop — the SQL already filters by filename
+            # when target is set): if the query names a province, drop hits whose
             # filename names a DIFFERENT province. Filename is the province signal
             # (staging.spot_knowledge_docs.region_province is NULL).
             if target:
