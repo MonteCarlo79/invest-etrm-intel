@@ -7,7 +7,7 @@ C. A malformed REPLY envelope (truncated JSON) must not leak the raw
 D. query_db tool description documents the new spot monthly tables.
 """
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -95,3 +95,66 @@ class TestQueryDbToolDescription:
         desc = next(t for t in _TOOL_DEFS if t["name"] == "query_db")["description"]
         assert "spot_monthly_province" in desc
         assert "spot_monthly_national" in desc
+
+
+def _capture_search_sql(query: str, **kwargs) -> tuple[str, list]:
+    """Run search_reference_docs with a mocked DB layer; return (sql, params)."""
+    from services.knowledge_pool import knowledge_docs as kd
+
+    captured: dict = {}
+    cursor = MagicMock()
+    cursor.description = [
+        ("doc_id",), ("file_name",), ("category",), ("app",),
+        ("page_no",), ("chunk_text",), ("rank",),
+    ]
+    cursor.fetchall.return_value = []
+    cursor.execute.side_effect = lambda sql, params: captured.update(
+        sql=sql, params=list(params)
+    )
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+
+    with patch.object(kd, "init_knowledge_tables"), patch.object(kd, "get_conn") as mock_gc:
+        mock_gc.return_value.__enter__.return_value = conn
+        kd.search_reference_docs(query, category="monthly_report", limit=5, **kwargs)
+    return captured["sql"], captured["params"]
+
+
+class TestFilenameContainsFilter:
+    """Province filter pushed into the search SQL (opt-in filename_contains)."""
+
+    def test_filename_contains_adds_ilike_condition_cjk(self):
+        sql, params = _capture_search_sql("新疆 现货市场", filename_contains=("新疆",))
+        assert "d.file_name ILIKE %s" in sql
+        assert "%新疆%" in params
+
+    def test_filename_contains_applies_to_latin_fts_branch(self):
+        sql, params = _capture_search_sql("xinjiang spot price", filename_contains=("新疆",))
+        assert "d.file_name ILIKE %s" in sql
+        assert "%新疆%" in params
+
+    def test_omitted_filename_contains_leaves_sql_without_it(self):
+        # Note: a CJK query still yields %bigram% params for chunk_text ILIKEs,
+        # so only the SQL shape (not the param values) distinguishes the filter.
+        sql, _ = _capture_search_sql("新疆 现货市场")
+        assert "file_name ILIKE" not in sql
+
+
+class TestExchangeReportSearchPushesProvinceIntoSql:
+    """_tool_search_exchange_reports passes filename_contains when a province is named."""
+
+    def test_province_query_pushes_filename_filter(self):
+        agent = _make_agent()
+        hits = [_hit("新疆电力市场2026年5月月报.pdf")]
+        with patch(_SEARCH_FN, return_value=hits) as mock_search:
+            agent._tool_search_exchange_reports("新疆 现货市场 峰谷价差 储能")
+        kwargs = mock_search.call_args.kwargs
+        assert kwargs["filename_contains"] == ("新疆",)
+        assert kwargs["limit"] == 5
+
+    def test_provinceless_query_passes_none(self):
+        agent = _make_agent()
+        with patch(_SEARCH_FN, return_value=[]) as mock_search:
+            result = agent._tool_search_exchange_reports("全国 现货 价格")
+        assert mock_search.call_args.kwargs["filename_contains"] is None
+        assert result == "No exchange reports found for this query."

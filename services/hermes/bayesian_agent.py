@@ -293,14 +293,18 @@ class BayesianAnalystAgent:
         try:
             from services.knowledge_pool.knowledge_docs import search_reference_docs
             top_k = min(int(top_k), 10)
-            # Detect target province first — when set, over-fetch so enough
-            # on-province hits survive the hard filter below.
+            # Detect target province first — when set, push the province filter
+            # into the search SQL (file_name ILIKE) so term-broad off-province
+            # docs cannot starve on-province hits out of the top-N fetch.
             target = next((p for p in self._KNOWN_PROVINCES if p in query), None)
-            fetch_k = min(top_k * 2, 10) if target else top_k
             results = search_reference_docs(
                 query=query,
                 category="monthly_report",
-                limit=fetch_k,
+                limit=top_k,
+                filename_contains=(
+                    (target,) + self._PROVINCE_ALIASES.get(target, ())
+                    if target else None
+                ),
             )
             if not results:
                 return "No exchange reports found for this query."
