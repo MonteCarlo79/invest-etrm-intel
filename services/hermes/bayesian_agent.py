@@ -307,8 +307,15 @@ class BayesianAnalystAgent:
                 ),
             )
             if not results:
+                if target:
+                    return (
+                        f"未检索到【{target}】的交易所月报（知识库暂无该省报告）。"
+                        "不要使用其他省份的报告代替；如需价格数据请改用 query_db 查询 "
+                        "spot_monthly_province 或 exchange_monthly_metrics。"
+                    )
                 return "No exchange reports found for this query."
-            # Province hard-filter: if the query names a province, drop hits whose
+            # Province hard-filter (backstop — the SQL already filters by filename
+            # when target is set): if the query names a province, drop hits whose
             # filename names a DIFFERENT province. Filename is the province signal
             # (staging.spot_knowledge_docs.region_province is NULL).
             if target:
@@ -320,12 +327,6 @@ class BayesianAnalystAgent:
                 ]
                 if filtered:
                     results = filtered[:top_k]
-                else:
-                    return (
-                        f"未检索到【{target}】的交易所月报（知识库暂无该省报告）。"
-                        "不要使用其他省份的报告代替；如需价格数据请改用 query_db 查询 "
-                        "spot_monthly_province 或 exchange_monthly_metrics。"
-                    )
             parts = []
             for i, hit in enumerate(results, 1):
                 parts.append(

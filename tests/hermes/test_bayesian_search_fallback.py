@@ -40,17 +40,16 @@ _SEARCH_FN = "services.knowledge_pool.knowledge_docs.search_reference_docs"
 class TestExchangeReportProvinceFallback:
     """Fix A — no silent province substitution."""
 
-    def test_off_province_hits_rejected_with_explicit_message(self):
+    def test_province_query_with_zero_results_returns_guidance(self):
+        """With the province filter pushed into SQL, zero results means the
+        province genuinely has no reports — the agent must get the
+        no-substitution guidance, not the generic English line."""
         agent = _make_agent()
-        hits = [
-            _hit("2025年9月份广东电力市场结算情况-附件.pdf"),
-            _hit("2025年8月份江苏电力市场月度报告.pdf"),
-        ]
-        with patch(_SEARCH_FN, return_value=hits):
+        with patch(_SEARCH_FN, return_value=[]):
             result = agent._tool_search_exchange_reports("新疆 现货市场 峰谷价差 储能")
         assert result.startswith("未检索到【新疆】")
-        assert "广东" not in result
-        assert "江苏" not in result
+        assert "spot_monthly_province" in result
+        assert "exchange_monthly_metrics" in result
 
     def test_on_province_hit_passes_filter(self):
         """Regression: the hard filter must keep genuine on-province hits."""
