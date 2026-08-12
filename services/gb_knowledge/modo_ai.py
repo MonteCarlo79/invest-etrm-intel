@@ -220,7 +220,10 @@ class ModoAIConnector(BaseConnector):
                         _notify_login_failure(2, page.url)
                     return
 
-                # Persist session so tomorrow's run (same container) skips login
+                # Persist session so tomorrow's run (same container) skips login.
+                # NOTE: this snapshot is re-saved at the end of the run (see the
+                # finally block) — mid-run token refreshes rotate the backend
+                # refresh token, orphaning this early snapshot by next morning.
                 _save_session_state(ctx)
 
                 all_questions = [
@@ -273,6 +276,15 @@ class ModoAIConnector(BaseConnector):
                         time.sleep(pause)
 
             finally:
+                # Re-save the session AFTER the Q&A loop.  The backend access
+                # token lives only ~10 min, so during the ~15-min question run
+                # NextAuth refreshes it and the refresh token is ROTATED in the
+                # live cookie jar.  The post-login snapshot above is therefore
+                # stale by tomorrow (restore -> RefreshAccessTokenError -> the
+                # SPA signs itself out -> fresh login -> magic-link email).
+                # Saving the final jar keeps tomorrow's restore/keepalive alive.
+                if logged_in:
+                    _save_session_state(ctx)
                 try:
                     ctx.close()
                     browser.close()
