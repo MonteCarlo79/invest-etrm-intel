@@ -22,7 +22,10 @@ _INTL_SCHEDULER = [
 SERVICES: dict[str, dict[str, Any]] = {
     "gb": {
         "svc": "bess-platform-gb-market-svc",
-        "family": "bess-platform-gb-market",
+        # Live family is bess-gb-market (bess-platform-gb-market is a DEAD family
+        # whose stale revisions reference the legacy ecsTaskRole — using it breaks
+        # RegisterTaskDefinition with an iam:PassRole AccessDenied).
+        "family": "bess-gb-market",
         "container": "gb-market",
         "has_scheduler": True,
         "scheduler_cmd": ["python", "apps/gb-market/scheduler_service.py"],
