@@ -1,9 +1,33 @@
 """Tab 2 — Settlement: file upload, parsing, analytics."""
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import text
+
+
+def _content_sha256(data: bytes) -> str:
+    """SHA-256 of uploaded file bytes (content follows bytes, not filename)."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _already_ingested(engine, book_id: int, settlement_month: str, file_hash: str) -> bool:
+    """True if an identical-content settlement exists at this book+month.
+
+    Guards the rename-reupload duplication: tab uploads historically stored no
+    hash, so a renamed re-upload bypassed both overwrite (name match) and the
+    scanner's hash check (observed 2026-08-17: 苏右/裕昭沙子坝/远景乌拉特 dupes).
+    """
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT 1 FROM marketdata.rm_settlements
+            WHERE book_id = :bid AND settlement_month = :month
+              AND raw_data->>'file_hash' = :h LIMIT 1
+        """), {"bid": book_id, "month": settlement_month, "h": file_hash}).first()
+    return row is not None
 
 
 def render_settlement(engine):
@@ -79,6 +103,13 @@ def render_settlement(engine):
 
             st.caption(f"Processing: **{f.name}** → month: {settlement_month}")
 
+            # Content-hash dedup: identical bytes already at this book+month → skip.
+            # Catches renamed re-uploads (filename guards can't see those).
+            fhash = _content_sha256(f.getvalue())
+            if _already_ingested(engine, book_id, settlement_month, fhash):
+                st.warning(f"**{f.name}**: identical content already ingested for {settlement_month} — skipped.")
+                continue
+
             # Overwrite: delete existing settlement for this book+month+filename pattern
             if overwrite:
                 with engine.begin() as conn:
@@ -98,9 +129,9 @@ def render_settlement(engine):
 
             file_type = f.name.split(".")[-1].lower()
             if file_type == "pdf":
-                _process_pdf(f, book_id, settlement_month, engine)
+                _process_pdf(f, book_id, settlement_month, engine, fhash)
             else:
-                _process_excel(f, book_id, settlement_month, engine)
+                _process_excel(f, book_id, settlement_month, engine, fhash)
 
     # Auto-scan from invoice folder for selected asset
     st.divider()
@@ -157,7 +188,7 @@ def render_settlement(engine):
     _render_analytics(book_id, engine)
 
 
-def _process_pdf(uploaded, book_id: int, settlement_month, engine):
+def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None):
     """Process uploaded PDF settlement.
 
     Routing: filename semantics (上/下网) decide the parser — never send a
@@ -219,10 +250,11 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine):
 
     with engine.begin() as conn:
         result = conn.execute(text("""
-            INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status)
-            VALUES (:bid, :month, :fname, 'pdf', 'processed')
+            INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
+            VALUES (:bid, :month, :fname, 'pdf', 'processed', :rd)
             RETURNING id
-        """), {"bid": book_id, "month": settlement_month, "fname": uploaded.name})
+        """), {"bid": book_id, "month": settlement_month, "fname": uploaded.name,
+               "rd": json.dumps({"file_hash": file_hash}) if file_hash else None})
         settlement_id = result.scalar()
 
         for item in items:
@@ -241,7 +273,7 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine):
     st.success(f"Processed {len(items)} settlement items from PDF.")
 
 
-def _process_excel(uploaded, book_id: int, settlement_month, engine):
+def _process_excel(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None):
     """Process uploaded Excel settlement file."""
     import io
     from libs.settlement.parser import detect_format, parse_trade_capture, parse_capacity_compensation
@@ -272,10 +304,11 @@ def _process_excel(uploaded, book_id: int, settlement_month, engine):
 
     with engine.begin() as conn:
         result = conn.execute(text("""
-            INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status)
-            VALUES (:bid, :month, :fname, :ftype, 'processed')
+            INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
+            VALUES (:bid, :month, :fname, :ftype, 'processed', :rd)
             RETURNING id
-        """), {"bid": book_id, "month": settlement_month, "fname": uploaded.name, "ftype": "excel"})
+        """), {"bid": book_id, "month": settlement_month, "fname": uploaded.name, "ftype": "excel",
+               "rd": json.dumps({"file_hash": file_hash}) if file_hash else None})
         settlement_id = result.scalar()
 
         for item in items:
