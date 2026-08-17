@@ -45,11 +45,17 @@ def is_already_ingested(file_hash: str) -> bool:
 def classify_pdf(filename: str) -> str:
     """Classify PDF as 'charge' or 'discharge' based on filename.
 
-    Returns: 'charge', 'discharge', or 'unknown'
+    Returns: 'charge', 'discharge', 'voucher', or 'unknown'
     """
     # Skip invoice copies (发票) — not settlement data
     if "发票" in filename:
         return "skip"
+
+    # Trading-center settlement vouchers (发电侧/用户侧结算凭证): their content
+    # duplicates the 上网/下网结算单 (same settlement, exchange version).
+    # Skip deliberately — ingesting both would double-count.
+    if "结算凭证" in filename:
+        return "voucher"
 
     # === Discharge (上网 = power sold to grid) ===
     # Explicit 上网 keyword
@@ -102,8 +108,8 @@ def extract_month_from_filename(filename: str) -> str | None:
     - 2026年1月上网电费结算单 → 2026-01-01
     """
     import re
-    # Pattern: YYYY-MM or YYYY-MM
-    m = re.search(r'(\d{4})-(\d{1,2})', filename)
+    # Pattern: YYYY-MM or YYYY.MM (vendor uses both separators)
+    m = re.search(r'(\d{4})[-.](\d{1,2})', filename)
     if m:
         return f"{m.group(1)}-{int(m.group(2)):02d}-01"
     # Pattern: YYYY年M月
@@ -123,6 +129,27 @@ def extract_year_from_path(path: str) -> int | None:
     import re
     m = re.search(r'[/\\](\d{4})', path)
     return int(m.group(1)) if m else None
+
+
+def resolve_settlement_month(pdf_path) -> str | None:
+    """Resolve settlement month (YYYY-MM-01) for an invoice PDF.
+
+    Ladder: filename date → filename month + folder year → PDF content
+    (extract_billing_period, lazy import so tests can patch it at its home).
+    Never stamps the current year — returns None when no source yields a date
+    (phantom-month rule, commit 1064925).
+    """
+    month_str = extract_month_from_filename(Path(pdf_path).name)
+    if month_str and month_str.startswith("NEED_YEAR"):
+        year = extract_year_from_path(str(pdf_path))
+        month_str = month_str.replace("NEED_YEAR", str(year)) if year else None
+    if month_str:
+        return month_str
+    try:
+        from services.settlement_ingest.parser_charge import extract_billing_period
+        return extract_billing_period(str(pdf_path))
+    except Exception:
+        return None
 
 
 def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict]:
@@ -171,24 +198,14 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
             results.append({"path": rel_path, "asset": asset_name, "status": "already_ingested"})
             continue
 
-        # Classify and extract month
+        # Classify and extract month (filename → folder year → PDF content;
+        # never stamps the current year — phantom-month rule, commit 1064925)
         pdf_type = classify_pdf(pdf_path.name)
-        month_str = extract_month_from_filename(pdf_path.name)
-
-        # Fix year if needed — from folder path only. Never fall back to the
-        # current year: a yearless 2025 invoice scanned in 2026 would silently
-        # be stamped 2026 (observed 2026-08: 苏右/乌兰察布 phantom months).
-        if month_str and month_str.startswith("NEED_YEAR"):
-            year = extract_year_from_path(str(pdf_path))
-            if year:
-                month_str = month_str.replace("NEED_YEAR", str(year))
-            else:
-                results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
-                                "error": "Cannot determine year from filename or folder path"})
-                continue
+        month_str = resolve_settlement_month(pdf_path)
 
         if not month_str:
-            results.append({"path": rel_path, "asset": asset_name, "status": "skipped", "error": "Cannot extract month from filename"})
+            results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                            "error": "Cannot determine month from filename, folder path, or PDF content"})
             continue
 
         if dry_run:
