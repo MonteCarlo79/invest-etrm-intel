@@ -144,9 +144,9 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
-| Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v22 |
-| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v38 (v39 pending) |
-| Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v5 |
+| Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v92 (td:125) |
+| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v63 (td:94) |
+| Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v13 (td:23) |
 | Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v11 (td:67) |
 | GB Market | Strategist + Quant | `bess-gb-market` | `/gb-market/*` | 8508 | v100 (td:17). Task-def family is `bess-gb-market` — `bess-platform-gb-market` is a DEAD family; never register against it |
 
