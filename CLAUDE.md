@@ -147,8 +147,8 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v22 |
 | Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v38 (v39 pending) |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v5 |
-| Portal | 4 Quick Ask personas | `portal` | `/portal/*` | 8500 | v24 (v25 pending) |
-| GB Market | Strategist + Quant | `bess-gb-market` | `/gb-market/*` | 8508 | pending first deploy |
+| Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v11 (td:67) |
+| GB Market | Strategist + Quant | `bess-gb-market` | `/gb-market/*` | 8508 | v100 (td:17). Task-def family is `bess-gb-market` — `bess-platform-gb-market` is a DEAD family; never register against it |
 
 **Local run (GB Market):**
 ```powershell
