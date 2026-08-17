@@ -6,6 +6,14 @@ import streamlit as st
 from sqlalchemy import text
 
 
+def _norm_folder(val) -> str | None:
+    """Normalize an invoice-folder input: blank / NaN / literal 'nan'/'none' → None."""
+    if val is None or pd.isna(val):
+        return None
+    s = str(val).strip()
+    return None if not s or s.lower() in ("nan", "none") else s
+
+
 def render_asset_config(engine):
     """Render asset configuration tab."""
     st.subheader("Asset Registry")
@@ -36,7 +44,7 @@ def render_asset_config(engine):
                 with cols[i % 2]:
                     val = st.text_input(
                         row["name"],
-                        value=row.get("invoice_folder") or "",
+                        value=_norm_folder(row.get("invoice_folder")) or "",
                         key=f"folder_{row['id']}",
                     )
                     updates[row["id"]] = val
@@ -46,7 +54,7 @@ def render_asset_config(engine):
                     for asset_id, folder in updates.items():
                         conn.execute(text(
                             "UPDATE marketdata.rm_assets SET invoice_folder = :folder WHERE id = :id"
-                        ), {"folder": folder if folder.strip() else None, "id": asset_id})
+                        ), {"folder": _norm_folder(folder), "id": asset_id})
                 st.success("Folder mappings saved.")
                 st.rerun()
 
@@ -96,6 +104,12 @@ def render_asset_config(engine):
             bess_duration = st.number_input("BESS Duration (h)", min_value=0.0, step=0.5)
             bess_dod = st.number_input("BESS DoD (%)", min_value=0.0, max_value=100.0, step=1.0)
 
+        invoice_folder = st.text_input(
+            "Invoice Folder (source file directory)",
+            placeholder="e.g. B-8 内蒙杭锦旗",
+            help="Folder under the settlement invoices root that this asset's bills live in. "
+                 "Used by Settlement tab → Scan & Ingest. Can also be set later via Invoice Folder Mapping.",
+        )
         notes = st.text_area("Notes", height=68)
         submitted = st.form_submit_button("Create Asset + Book")
 
@@ -104,14 +118,15 @@ def render_asset_config(engine):
                 result = conn.execute(text("""
                     INSERT INTO marketdata.rm_assets
                         (name, asset_type, province, capacity_mw, bess_duration_h,
-                         bess_dod_pct, commission_date, notes)
-                    VALUES (:name, :type, :prov, :cap, :dur, :dod, :cd, :notes)
+                         bess_dod_pct, commission_date, notes, invoice_folder)
+                    VALUES (:name, :type, :prov, :cap, :dur, :dod, :cd, :notes, :folder)
                     RETURNING id
                 """), {
                     "name": name, "type": asset_type, "prov": province,
                     "cap": capacity, "dur": bess_duration if asset_type == "bess" else None,
                     "dod": bess_dod if asset_type == "bess" else None,
                     "cd": commission_date, "notes": notes,
+                    "folder": _norm_folder(invoice_folder),
                 })
                 asset_id = result.scalar()
                 conn.execute(text("""
