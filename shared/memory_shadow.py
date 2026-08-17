@@ -18,9 +18,10 @@ from shared.local_llm import DEFAULT_MODEL, ollama_complete
 
 logger = logging.getLogger(__name__)
 
-# Same prompt as apps/bess-map/app.py::_extract_memories — the extraction task
-# being evaluated. One fixed prompt across all three apps so qwen3:8b is
-# measured on a single, stable task definition.
+# Default prompt, copied verbatim from apps/bess-map/app.py::_extract_memories.
+# Used only when the caller does not forward its own extraction prompt via the
+# system/user params — each app should shadow against its OWN prompt so the
+# comparison is like-for-like.
 _EXTRACT_SYSTEM = (
     "You extract key investment facts, views, and methodology decisions from "
     "BESS analyst conversations to build a persistent memory. "
@@ -63,14 +64,28 @@ def shadow_memory_extraction(
     agent_reply: str,
     haiku_items: list[dict],
     log_dir: Path | None = None,
+    system: str | None = None,
+    user: str | None = None,
 ) -> None:
     """Re-run this turn's memory extraction against local Ollama and log both.
 
     No-op unless LOCAL_LLM_SHADOW=1. Never raises — a shadow failure must not
     affect the app, and the Haiku result remains the only one used.
+
+    system/user: the app's own extraction prompt, forwarded verbatim so the
+    shadow compares like-for-like against the Haiku call. When either is
+    omitted, falls back to the bess-map prompt (_EXTRACT_SYSTEM /
+    _EXTRACT_USER_TEMPLATE).
     """
     if os.environ.get("LOCAL_LLM_SHADOW") != "1":
         return
+    if system is not None and user is not None:
+        sys_prompt, user_prompt = system, user
+    else:
+        sys_prompt = _EXTRACT_SYSTEM
+        user_prompt = _EXTRACT_USER_TEMPLATE.format(
+            user_msg=user_msg, agent_reply=agent_reply[:1500]
+        )
     now = datetime.now(timezone.utc)
     record = {
         "ts": now.isoformat(),
@@ -84,12 +99,7 @@ def shadow_memory_extraction(
     }
     try:
         t0 = time.monotonic()
-        raw = ollama_complete(
-            _EXTRACT_SYSTEM,
-            _EXTRACT_USER_TEMPLATE.format(
-                user_msg=user_msg, agent_reply=agent_reply[:1500]
-            ),
-        )
+        raw = ollama_complete(sys_prompt, user_prompt)
         record["ollama_latency_ms"] = int((time.monotonic() - t0) * 1000)
         if raw is None:
             record["error"] = "ollama_complete returned None"

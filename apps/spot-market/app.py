@@ -3109,21 +3109,20 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         if not _is_llm_available(api_key):
             return []
         try:
+            _sys = (
+                "Extract memorable analyst preferences or domain facts from the conversation. "
+                "Return a JSON array of objects with keys: category (string, e.g. 'preference', 'market_view', 'methodology'), "
+                "subject (short title ≤8 words), content (one sentence). "
+                "Only extract genuinely reusable insights — not one-off data points. "
+                "Return [] if nothing is worth remembering."
+            )
+            _user = f"User: {user_msg}\n\nAgent: {agent_reply}"
             haiku = _make_anthropic_client(api_key)
             resp = haiku.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=512,
-                system=(
-                    "Extract memorable analyst preferences or domain facts from the conversation. "
-                    "Return a JSON array of objects with keys: category (string, e.g. 'preference', 'market_view', 'methodology'), "
-                    "subject (short title ≤8 words), content (one sentence). "
-                    "Only extract genuinely reusable insights — not one-off data points. "
-                    "Return [] if nothing is worth remembering."
-                ),
-                messages=[{
-                    "role": "user",
-                    "content": f"User: {user_msg}\n\nAgent: {agent_reply}",
-                }],
+                system=_sys,
+                messages=[{"role": "user", "content": _user}],
             )
             raw = next((b.text for b in resp.content if hasattr(b, "text")), "[]")
             start, end = raw.find("["), raw.rfind("]")
@@ -3131,7 +3130,9 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                 return []
             items = _json.loads(raw[start:end + 1])
             from shared.memory_shadow import shadow_memory_extraction
-            shadow_memory_extraction("spot_market", user_msg, agent_reply, items)
+            shadow_memory_extraction(
+                "spot_market", user_msg, agent_reply, items, system=_sys, user=_user
+            )
             return items
         except Exception:
             return []

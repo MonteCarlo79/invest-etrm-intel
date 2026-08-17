@@ -7,7 +7,11 @@ tests; it is always patched.
 import json
 from unittest.mock import patch
 
-from shared.memory_shadow import parse_extraction_json, shadow_memory_extraction
+from shared.memory_shadow import (
+    _EXTRACT_SYSTEM,
+    parse_extraction_json,
+    shadow_memory_extraction,
+)
 
 
 class TestParseExtractionJson:
@@ -80,3 +84,34 @@ class TestShadowGate:
         rec = json.loads(files[0].read_text(encoding="utf-8").strip())
         assert "boom" in rec["error"]
         assert rec["ollama_items"] == []
+
+
+class TestPromptSelection:
+    def test_provided_prompt_forwarded_verbatim(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOCAL_LLM_SHADOW", "1")
+        with patch("shared.memory_shadow.ollama_complete", return_value="[]") as mock_oc:
+            shadow_memory_extraction(
+                "mengxi_trader", "u", "a", [],
+                log_dir=tmp_path, system="SYS-X", user="USER-Y",
+            )
+        mock_oc.assert_called_once_with("SYS-X", "USER-Y")
+
+    def test_default_prompt_when_omitted(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOCAL_LLM_SHADOW", "1")
+        with patch("shared.memory_shadow.ollama_complete", return_value="[]") as mock_oc:
+            shadow_memory_extraction(
+                "bess_map", "hello", "reply text", [], log_dir=tmp_path
+            )
+        args, _kwargs = mock_oc.call_args
+        assert args[0] == _EXTRACT_SYSTEM
+        assert "User said: hello" in args[1]
+        assert "Agent replied: reply text" in args[1]
+
+    def test_partial_prompt_falls_back_to_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOCAL_LLM_SHADOW", "1")
+        with patch("shared.memory_shadow.ollama_complete", return_value="[]") as mock_oc:
+            shadow_memory_extraction(
+                "bess_map", "hi", "reply", [], log_dir=tmp_path, system="SYS-ONLY"
+            )
+        args, _kwargs = mock_oc.call_args
+        assert args[0] == _EXTRACT_SYSTEM

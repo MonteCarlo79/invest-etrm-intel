@@ -1832,22 +1832,25 @@ with tab_trader:
     # ── auto-extract memories ─────────────────────────────────────────────────
     def _extract_trader_memories(user_msg: str, agent_reply: str) -> list[dict]:
         try:
+            _sys = (
+                "Extract key facts, operational observations, and decisions from "
+                "BESS trading conversations worth remembering long-term. "
+                "Output ONLY a JSON array (no markdown). Each item: "
+                "{\"category\": one of [pnl_insight, asset_note, market_view, "
+                "execution_gap, strategy_decision], "
+                "\"subject\": short title (≤60 chars), "
+                "\"content\": the key fact (≤200 chars)}. "
+                "Return [] if nothing worth persisting."
+            )
+            _user = (
+                f"User: {user_msg}\n\nTrader: {agent_reply[:1500]}\n\n"
+                "What facts or observations are worth persisting across sessions?"
+            )
             resp = _trader_client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=600,
-                system=(
-                    "Extract key facts, operational observations, and decisions from "
-                    "BESS trading conversations worth remembering long-term. "
-                    "Output ONLY a JSON array (no markdown). Each item: "
-                    "{\"category\": one of [pnl_insight, asset_note, market_view, "
-                    "execution_gap, strategy_decision], "
-                    "\"subject\": short title (≤60 chars), "
-                    "\"content\": the key fact (≤200 chars)}. "
-                    "Return [] if nothing worth persisting."
-                ),
-                messages=[{"role": "user", "content":
-                    f"User: {user_msg}\n\nTrader: {agent_reply[:1500]}\n\n"
-                    "What facts or observations are worth persisting across sessions?"}],
+                system=_sys,
+                messages=[{"role": "user", "content": _user}],
             )
             raw = resp.content[0].text.strip()
             if raw.startswith("```"):
@@ -1856,7 +1859,9 @@ with tab_trader:
                     raw = raw[4:]
             items = _json.loads(raw)
             from shared.memory_shadow import shadow_memory_extraction
-            shadow_memory_extraction("mengxi_trader", user_msg, agent_reply, items)
+            shadow_memory_extraction(
+                "mengxi_trader", user_msg, agent_reply, items, system=_sys, user=_user
+            )
             return items
         except Exception:
             return []
