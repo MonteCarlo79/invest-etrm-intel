@@ -206,6 +206,11 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
     if kind == "skip":
         st.info(f"{uploaded.name}: 发票 file — skipped (not settlement data).")
         return
+    if kind == "voucher":
+        st.info(f"**{uploaded.name}**: 结算凭证 (trading-center voucher) — skipped. "
+                "Its content duplicates the 上网/下网结算单; ingesting both would double-count. "
+                "No data written.")
+        return
 
     # Detect if PDF is scanned (image-based) or has extractable text
     buf = io.BytesIO(pdf_bytes)

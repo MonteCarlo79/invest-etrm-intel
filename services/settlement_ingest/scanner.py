@@ -218,6 +218,10 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                 items = parse_charging_cost_pdf(str(pdf_path))
             elif pdf_type == "discharge":
                 items = parse_discharge_settlement_pdf(str(pdf_path))
+            elif pdf_type == "voucher":
+                results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                                "error": "结算凭证 (trading-center voucher) — duplicates 结算单 data, not ingested"})
+                continue
             else:
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped", "error": f"Unknown PDF type: {pdf_type}"})
                 continue
