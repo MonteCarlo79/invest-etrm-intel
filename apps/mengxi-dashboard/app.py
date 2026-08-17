@@ -1854,7 +1854,10 @@ with tab_trader:
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
-            return _json.loads(raw)
+            items = _json.loads(raw)
+            from shared.memory_shadow import shadow_memory_extraction
+            shadow_memory_extraction("mengxi_trader", user_msg, agent_reply, items)
+            return items
         except Exception:
             return []
 

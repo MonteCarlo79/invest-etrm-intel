@@ -3129,7 +3129,10 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
             start, end = raw.find("["), raw.rfind("]")
             if start == -1:
                 return []
-            return _json.loads(raw[start:end + 1])
+            items = _json.loads(raw[start:end + 1])
+            from shared.memory_shadow import shadow_memory_extraction
+            shadow_memory_extraction("spot_market", user_msg, agent_reply, items)
+            return items
         except Exception:
             return []
 
