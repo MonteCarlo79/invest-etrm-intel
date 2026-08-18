@@ -3449,10 +3449,12 @@ with tab_knowledge:
 
 
 # ---- Shared LLM provider selector (used by Strategist + Quant) -------------
+# Default = first entry.  Claude first: the OpenAI key (sk-proj-…Q08A) was
+# revoked/invalid from 2026-08 — GPT-4o (OpenAI) 401s until a new key is set.
 _LLM_OPTIONS = {
+    "Claude (Anthropic)": ("anthropic", "claude-sonnet-4-6"),
     "GPT-4o (OpenAI)":    ("openai",   "gpt-4o"),
     "GPT-4o (Azure)":     ("azure",    os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")),
-    "Claude (Anthropic)": ("anthropic", "claude-sonnet-4-6"),
     "DeepSeek":           ("deepseek",  "deepseek-chat"),
 }
 
