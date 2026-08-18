@@ -14,4 +14,5 @@ def test_existing_classifications_unchanged():
     assert classify_pdf("2026年1月供电局电费账单.pdf") == "unknown"  # no keyword → unknown (text path handles)
     assert classify_pdf("杭锦旗1月份电费清单.pdf") == "charge"
     assert classify_pdf("某发票.pdf") == "skip"
-    assert classify_pdf("2026年6月电费核查清单.pdf") == "charge"  # 清单 rule
+    assert classify_pdf("2026年6月电费核查清单.pdf") == "skip"  # verification slip, not a bill
+    assert classify_pdf("2026年5月电费核查清单(2).pdf") == "skip"

@@ -51,6 +51,12 @@ def classify_pdf(filename: str) -> str:
     if "发票" in filename:
         return "skip"
 
+    # Skip verification slips (电费核查清单/核查票) — meter-reading support docs
+    # for the bill, not bills themselves; their fee figures are bill components
+    # and would partially double-count (observed 乌海 2026-04..06).
+    if "核查" in filename:
+        return "skip"
+
     # Trading-center settlement vouchers (发电侧/用户侧结算凭证): their content
     # duplicates the 上网/下网结算单 (same settlement, exchange version).
     # Skip deliberately — ingesting both would double-count.
