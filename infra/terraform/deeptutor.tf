@@ -144,8 +144,8 @@ resource "aws_ecs_task_definition" "deeptutor" {
   family                   = "${var.name}-deeptutor"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "2048"
-  memory                   = "4096"
+  cpu                      = "512"
+  memory                   = "1024"  # right-sized from 2048/4096 — 14d mem p100 9.4% (2026-08 audit); 1024/1024 is not a valid Fargate combo
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task_role.arn
 

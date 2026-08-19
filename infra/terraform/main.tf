@@ -1014,8 +1014,8 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   family                   = "${var.name}-inner-mongolia"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = 512
+  memory                   = 1024  # right-sized from 1024/2048 — 14d mem p100 2.1% (2026-08 audit)
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
