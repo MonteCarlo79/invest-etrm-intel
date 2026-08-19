@@ -1677,8 +1677,8 @@ resource "aws_ecs_task_definition" "gb_market" {
   family                   = "${var.name}-gb-market"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 1024
+  memory                   = 2048  # right-sized from live 2048/8192 — 14d mem p100 16.8% (2026-08 audit)
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
