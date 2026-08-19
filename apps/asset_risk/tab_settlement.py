@@ -30,6 +30,18 @@ def _already_ingested(engine, book_id: int, settlement_month: str, file_hash: st
     return row is not None
 
 
+def _has_category(engine, book_id: int, settlement_month: str, category: str) -> bool:
+    """True if any settlement item of this category exists at this book+month."""
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT 1 FROM marketdata.rm_settlement_items i
+            JOIN marketdata.rm_settlements s ON s.id = i.settlement_id
+            WHERE s.book_id = :bid AND s.settlement_month = :month
+              AND i.category = :cat LIMIT 1
+        """), {"bid": book_id, "month": settlement_month, "cat": category}).first()
+    return row is not None
+
+
 def render_settlement(engine):
     """Render settlement tab with upload panel and analytics."""
     st.subheader("Settlement Upload")
@@ -204,13 +216,21 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
 
     kind = classify_pdf(uploaded.name)
     if kind == "skip":
-        st.info(f"{uploaded.name}: 发票 file — skipped (not settlement data).")
+        st.info(f"{uploaded.name}: 发票/核查 file — skipped (not settlement data).")
         return
+
+    voucher_fallback = False
     if kind == "voucher":
-        st.info(f"**{uploaded.name}**: 结算凭证 (trading-center voucher) — skipped. "
-                "Its content duplicates the 上网/下网结算单; ingesting both would double-count. "
-                "No data written.")
-        return
+        # 发电侧凭证 fallback: if this book+month has no discharge data yet
+        # (no 上网结算单), the voucher is the only discharge source — use it.
+        # (observed 乌海 2026-01/02: vouchers are the sole discharge documents)
+        if "发电侧" in uploaded.name and not _has_category(engine, book_id, settlement_month, "discharge_energy"):
+            voucher_fallback = True
+        else:
+            st.info(f"**{uploaded.name}**: 结算凭证 (trading-center voucher) — skipped. "
+                    "Its content duplicates the 上网/下网结算单; ingesting both would double-count. "
+                    "No data written.")
+            return
 
     # Detect if PDF is scanned (image-based) or has extractable text
     buf = io.BytesIO(pdf_bytes)
@@ -225,7 +245,11 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
         tmp_path = tmp.name
 
     try:
-        if kind == "discharge" or (kind == "unknown" and is_scanned):
+        if voucher_fallback:
+            st.info("发电侧结算凭证 — no 上网结算单 for this month; using voucher as discharge source.")
+            from services.settlement_ingest.parser_voucher import parse_generation_voucher
+            items = parse_generation_voucher(tmp_path)
+        elif kind == "discharge" or (kind == "unknown" and is_scanned):
             # Discharge (上网) — vision parser handles scanned + text PDFs
             if is_scanned:
                 st.info("Detected scanned PDF — using AI Vision to extract data...")
