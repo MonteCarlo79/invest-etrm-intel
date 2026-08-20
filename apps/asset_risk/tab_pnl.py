@@ -1,6 +1,8 @@
 """Tab 3 — Realised P&L: single-book waterfall + KPIs, and portfolio view."""
 from __future__ import annotations
 
+import calendar
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -41,12 +43,19 @@ def _portfolio_matrix(items_df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([mat, total_row.to_frame().T])
 
 
+def _days_in_months(month_series) -> int:
+    """Total calendar days across the distinct months present in the series."""
+    months = pd.to_datetime(month_series).dt.to_period("M").unique()
+    return sum(calendar.monthrange(p.year, p.month)[1] for p in months)
+
+
 def _asset_summary(items_df: pd.DataFrame) -> pd.DataFrame:
     """Per-asset realised P&L summary.
 
     Returns DataFrame with columns: asset, net_profit, discharge_mwh,
     charge_mwh, arb_income, arb_spread (arb_income / discharge_mwh; None when
-    no discharge volume).
+    no discharge volume), cycles_per_day (charge_mwh / energy_per_cycle / days;
+    None when capacity data or days are unavailable).
     """
     rows = []
     for asset, g in items_df.groupby("asset"):
@@ -55,6 +64,18 @@ def _asset_summary(items_df: pd.DataFrame) -> pd.DataFrame:
         rev = float(g.loc[g["category"].isin(_REVENUE_CATS), "amount_cny"].sum())
         cost = float(g.loc[g["category"] == "charge_energy", "amount_cny"].sum())
         arb_income = rev + cost
+
+        # Daily average cycles over the months present (needs capacity x duration)
+        energy = None
+        if "capacity_mw" in g.columns:
+            cap = g["capacity_mw"].iloc[0]
+            dur = g["bess_duration_h"].iloc[0] if "bess_duration_h" in g.columns else None
+            if pd.notna(cap) and cap:
+                dur_val = float(dur) if (dur is not None and pd.notna(dur) and dur) else 4.0
+                energy = float(cap) * dur_val
+        days = _days_in_months(g["settlement_month"])
+        cycles = (chg_vol / energy / days) if (energy and days) else None
+
         rows.append({
             "asset": asset,
             "net_profit": float(g["amount_cny"].sum()),
@@ -62,6 +83,7 @@ def _asset_summary(items_df: pd.DataFrame) -> pd.DataFrame:
             "charge_mwh": chg_vol,
             "arb_income": arb_income,
             "arb_spread": arb_income / dis_vol if dis_vol else None,
+            "cycles_per_day": cycles,
         })
     return pd.DataFrame(rows)
 
@@ -177,8 +199,8 @@ def _render_portfolio(engine):
     """Portfolio view: KPI strip, asset×month matrix, waterfall, per-asset bars."""
     with engine.connect() as conn:
         items = pd.read_sql(text("""
-            SELECT a.name AS asset, s.settlement_month, si.category,
-                   si.amount_cny, si.volume_mwh
+            SELECT a.name AS asset, a.capacity_mw, a.bess_duration_h,
+                   s.settlement_month, si.category, si.amount_cny, si.volume_mwh
             FROM marketdata.rm_settlement_items si
             JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
             JOIN marketdata.rm_books b ON b.id = s.book_id
@@ -235,18 +257,26 @@ def _render_portfolio(engine):
     # --- Per-asset comparison bars ---
     st.markdown("#### 分资产对比")
     comp = summary.sort_values("net_profit", ascending=False)
-    col_l, col_r = st.columns(2)
+    col_l, col_m, col_r = st.columns(3)
     with col_l:
         fig_n = go.Figure(go.Bar(x=comp["asset"], y=comp["net_profit"],
                                  marker_color="#3498db"))
         fig_n.update_layout(title="净利润 by 资产", yaxis_title="CNY", height=350,
                             showlegend=False)
         st.plotly_chart(fig_n, use_container_width=True)
-    with col_r:
-        comp_s = comp.dropna(subset=["arb_spread"])
+    with col_m:
+        comp_s = comp.dropna(subset=["arb_spread"]).sort_values("arb_spread", ascending=False)
         if not comp_s.empty:
             fig_s = go.Figure(go.Bar(x=comp_s["asset"], y=comp_s["arb_spread"],
                                      marker_color="#2ecc71"))
             fig_s.update_layout(title="套利价差 by 资产", yaxis_title="¥/MWh",
                                 height=350, showlegend=False)
             st.plotly_chart(fig_s, use_container_width=True)
+    with col_r:
+        comp_c = comp.dropna(subset=["cycles_per_day"]).sort_values("cycles_per_day", ascending=False)
+        if not comp_c.empty:
+            fig_c = go.Figure(go.Bar(x=comp_c["asset"], y=comp_c["cycles_per_day"],
+                                     marker_color="#e67e22"))
+            fig_c.update_layout(title="日均充放次数 by 资产", yaxis_title="次/天",
+                                height=350, showlegend=False)
+            st.plotly_chart(fig_c, use_container_width=True)

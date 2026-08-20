@@ -65,3 +65,22 @@ class TestAssetSummary:
         ])
         s = _asset_summary(df).set_index("asset")
         assert s.loc["C", "arb_spread"] is None or pd.isna(s.loc["C", "arb_spread"])
+
+
+class TestCyclesPerDay:
+    def test_cycles_uses_capacity_and_calendar_days(self):
+        """cycles_per_day = charge_mwh / (capacity x duration) / days-in-months-present."""
+        rows = []
+        # Asset D: 100MW x 4h = 400 MWh/cycle; charge 23,600 MWh across Jan+Feb 2026 (59 days)
+        for month, vol in [("2026-01-01", 12000.0), ("2026-02-01", 11600.0)]:
+            rows.append({"asset": "D", "capacity_mw": 100.0, "bess_duration_h": 4.0,
+                         "settlement_month": month, "category": "charge_energy",
+                         "amount_cny": -1.0, "volume_mwh": vol})
+        s = _asset_summary(pd.DataFrame(rows)).set_index("asset")
+        assert s.loc["D", "cycles_per_day"] == pytest.approx(23600.0 / 400.0 / 59.0, rel=1e-3)
+
+    def test_cycles_none_without_capacity(self):
+        """No capacity columns -> cycles_per_day is None, other fields unaffected."""
+        s = _asset_summary(_sample_items()).set_index("asset")
+        assert s.loc["A", "cycles_per_day"] is None or pd.isna(s.loc["A", "cycles_per_day"])
+        assert s.loc["A", "net_profit"] == pytest.approx(100.0)
