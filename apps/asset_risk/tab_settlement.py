@@ -71,79 +71,14 @@ def render_settlement(engine):
 
     if uploaded and st.button("Process File(s)"):
         for f in uploaded:
-            # Auto-detect month from filename
-            if month_mode == "Auto-detect from filename":
-                from services.settlement_ingest.scanner import extract_month_from_filename
-                detected = extract_month_from_filename(f.name)
-                if detected and not detected.startswith("NEED_YEAR"):
-                    settlement_month = detected
-                elif detected:
-                    # Month found but no year — try extracting billing period from PDF content
-                    period = None
-                    if f.name.lower().endswith(".pdf"):
-                        try:
-                            import tempfile, os
-                            from services.settlement_ingest.parser_charge import extract_billing_period
-                            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                                tmp.write(f.read())
-                                tmp_path = tmp.name
-                            f.seek(0)
-                            period = extract_billing_period(tmp_path)
-                            os.unlink(tmp_path)
-                        except Exception:
-                            period = None
-                    if period:
-                        settlement_month = period
-                        st.caption(f"  Detected period from PDF content: {period}")
-                    else:
-                        # Never stamp the current year onto a yearless file — a 2025
-                        # invoice scanned in 2026 would silently land on 2026.
-                        st.warning(
-                            f"Cannot determine settlement YEAR for '{f.name}' — skipped. "
-                            "Rename the file to include the year (e.g. 2025-06 / 2025年6月) "
-                            "or use Manual override."
-                        )
-                        continue
-                else:
-                    st.warning(f"Cannot detect month from '{f.name}'. Skipping.")
-                    continue
-            else:
-                settlement_month = manual_month.strftime("%Y-%m-%d") if manual_month else None
-                if not settlement_month:
-                    st.warning("Please select a settlement month.")
-                    continue
-
-            st.caption(f"Processing: **{f.name}** → month: {settlement_month}")
-
-            # Content-hash dedup: identical bytes already at this book+month → skip.
-            # Catches renamed re-uploads (filename guards can't see those).
-            fhash = _content_sha256(f.getvalue())
-            if _already_ingested(engine, book_id, settlement_month, fhash):
-                st.warning(f"**{f.name}**: identical content already ingested for {settlement_month} — skipped.")
+            try:
+                _process_one_upload(f, book_id, month_mode, manual_month, overwrite, engine)
+            except Exception as e:
+                # One bad file must not kill the batch (observed 2026-08-21:
+                # a DatetimeFieldOverflow aborted the whole upload loop)
+                st.error(f"**{f.name}** processing failed: {e}")
                 continue
 
-            # Overwrite: delete existing settlement for this book+month+filename pattern
-            if overwrite:
-                with engine.begin() as conn:
-                    # Delete items first (FK), then settlement record
-                    conn.execute(text("""
-                        DELETE FROM marketdata.rm_settlement_items
-                        WHERE settlement_id IN (
-                            SELECT id FROM marketdata.rm_settlements
-                            WHERE book_id = :bid AND settlement_month = :month
-                            AND file_name = :fname
-                        )
-                    """), {"bid": book_id, "month": settlement_month, "fname": f.name})
-                    conn.execute(text("""
-                        DELETE FROM marketdata.rm_settlements
-                        WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
-                    """), {"bid": book_id, "month": settlement_month, "fname": f.name})
-
-            file_type = f.name.split(".")[-1].lower()
-            if file_type == "pdf":
-                _process_pdf(f, book_id, settlement_month, engine, fhash)
-            else:
-                _process_excel(f, book_id, settlement_month, engine, fhash)
 
     # Auto-scan from invoice folder for selected asset
     st.divider()
@@ -198,6 +133,96 @@ def render_settlement(engine):
     st.divider()
     st.subheader("Settlement Analytics")
     _render_analytics(book_id, engine)
+
+
+def _process_one_upload(f, book_id, month_mode, manual_month, overwrite, engine):
+    # Template files are not settlement data
+    if "模版" in f.name or "模板" in f.name:
+        st.info(f"**{f.name}**: template file — skipped (not settlement data).")
+        return
+
+    # Auto-detect month from filename
+    if month_mode == "Auto-detect from filename":
+        from services.settlement_ingest.scanner import extract_month_from_filename
+        detected = extract_month_from_filename(f.name)
+        if detected and not detected.startswith("NEED_YEAR"):
+            settlement_month = detected
+        elif detected:
+            # Month found but no year — try extracting billing period from PDF content
+            period = None
+            if f.name.lower().endswith(".pdf"):
+                try:
+                    import tempfile, os
+                    from services.settlement_ingest.parser_charge import extract_billing_period
+                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                        tmp.write(f.read())
+                        tmp_path = tmp.name
+                    f.seek(0)
+                    period = extract_billing_period(tmp_path)
+                    os.unlink(tmp_path)
+                except Exception:
+                    period = None
+            if period:
+                settlement_month = period
+                st.caption(f"  Detected period from PDF content: {period}")
+            else:
+                # Never stamp the current year onto a yearless file — a 2025
+                # invoice scanned in 2026 would silently land on 2026.
+                st.warning(
+                    f"Cannot determine settlement YEAR for '{f.name}' — skipped. "
+                    "Rename the file to include the year (e.g. 2025-06 / 2025年6月) "
+                    "or use Manual override."
+                )
+                return
+        else:
+            st.warning(f"Cannot detect month from '{f.name}'. Skipping.")
+            return
+    else:
+        settlement_month = manual_month.strftime("%Y-%m-%d") if manual_month else None
+        if not settlement_month:
+            st.warning("Please select a settlement month.")
+            return
+
+    # Validate before any DB use (a bad month string crashed the batch on
+    # DatetimeFieldOverflow — e.g. "1001-20-01" from a serial-number filename)
+    import re as _re
+    _mv = _re.match(r'^(\d{4})-(\d{2})-\d{2}$', settlement_month or "")
+    if not _mv or not (2015 <= int(_mv.group(1)) <= 2100) or not (1 <= int(_mv.group(2)) <= 12):
+        st.warning(f"**{f.name}**: invalid settlement month '{settlement_month}' — skipped.")
+        return
+
+    st.caption(f"Processing: **{f.name}** → month: {settlement_month}")
+
+    # Content-hash dedup: identical bytes already at this book+month → skip.
+    # Catches renamed re-uploads (filename guards can't see those).
+    fhash = _content_sha256(f.getvalue())
+    if _already_ingested(engine, book_id, settlement_month, fhash):
+        st.warning(f"**{f.name}**: identical content already ingested for {settlement_month} — skipped.")
+        return
+
+    # Overwrite: delete existing settlement for this book+month+filename pattern
+    if overwrite:
+        with engine.begin() as conn:
+            # Delete items first (FK), then settlement record
+            conn.execute(text("""
+                DELETE FROM marketdata.rm_settlement_items
+                WHERE settlement_id IN (
+                    SELECT id FROM marketdata.rm_settlements
+                    WHERE book_id = :bid AND settlement_month = :month
+                    AND file_name = :fname
+                )
+            """), {"bid": book_id, "month": settlement_month, "fname": f.name})
+            conn.execute(text("""
+                DELETE FROM marketdata.rm_settlements
+                WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
+            """), {"bid": book_id, "month": settlement_month, "fname": f.name})
+
+    file_type = f.name.split(".")[-1].lower()
+    if file_type == "pdf":
+        _process_pdf(f, book_id, settlement_month, engine, fhash)
+    else:
+        _process_excel(f, book_id, settlement_month, engine, fhash)
+
 
 
 def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None):

@@ -57,9 +57,15 @@ def classify_pdf(filename: str) -> str:
     if "核查" in filename:
         return "skip"
 
-    # Trading-center settlement vouchers (发电侧/用户侧结算凭证): their content
-    # duplicates the 上网/下网结算单 (same settlement, exchange version).
-    # Skip deliberately — ingesting both would double-count.
+    # Exchange settlement vouchers under ANY naming: the 发电侧/用户侧 marker
+    # identifies the trading-center voucher regardless of 结算/凭证/清单 suffix
+    # (2026 names: "发电侧结算凭证"; 2025 names: "发电侧结算", "DC...（发电侧）").
+    # Content duplicates the 上网/下网结算单 — see tab fallback for the exception.
+    if "发电侧" in filename or "用户侧" in filename:
+        return "voucher"
+
+    # Trading-center settlement vouchers (结算凭证 without side marker):
+    # same duplication logic.
     if "结算凭证" in filename:
         return "voucher"
 
@@ -112,16 +118,23 @@ def extract_month_from_filename(filename: str) -> str | None:
     - 2026-01电费结算单 → 2026-01-01
     - 杭锦旗1月份电费清单 → requires year from parent folder
     - 2026年1月上网电费结算单 → 2026-01-01
+
+    Boundary-guarded: a digit run inside a serial number must not match
+    (DC047300001001-2025-09-01 → 2025-09-01, NOT "1001-20" — observed crash
+    2026-08-21: DatetimeFieldOverflow from year 1001). Month must be 1-12,
+    year 2015-2100; invalid candidates are skipped, not returned.
     """
     import re
     # Pattern: YYYY-MM or YYYY.MM (vendor uses both separators)
-    m = re.search(r'(\d{4})[-.](\d{1,2})', filename)
-    if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}-01"
+    for m in re.finditer(r'(?<!\d)(\d{4})[-.](\d{1,2})(?!\d)', filename):
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 2015 <= y <= 2100 and 1 <= mo <= 12:
+            return f"{y}-{mo:02d}-01"
     # Pattern: YYYY年M月
-    m = re.search(r'(\d{4})年(\d{1,2})月', filename)
-    if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}-01"
+    for m in re.finditer(r'(?<!\d)(\d{4})年(\d{1,2})月', filename):
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 2015 <= y <= 2100 and 1 <= mo <= 12:
+            return f"{y}-{mo:02d}-01"
     # Pattern: N月份 (need year from context)
     m = re.search(r'(\d{1,2})月份?', filename)
     if m:
