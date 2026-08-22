@@ -57,11 +57,16 @@ def classify_pdf(filename: str) -> str:
     if "核查" in filename:
         return "skip"
 
+    # Provincial capacity-compensation table — multi-station document whose rows
+    # span many books; ingested via curated per-station backfill, never auto.
+    if "容量补偿" in filename and "统计表" in filename:
+        return "capcomp_table"
+
     # Exchange settlement vouchers under ANY naming: the 发电侧/用户侧 marker
     # identifies the trading-center voucher regardless of 结算/凭证/清单 suffix
-    # (2026 names: "发电侧结算凭证"; 2025 names: "发电侧结算", "DC...（发电侧）").
-    # Content duplicates the 上网/下网结算单 — see tab fallback for the exception.
-    if "发电侧" in filename or "用户侧" in filename:
+    # (2026 names: "发电侧结算凭证"; 2025 names: "发电侧结算", "DC...（发电侧）",
+    # "发电厂结算"). Content duplicates the 上网/下网结算单 — see tab fallback.
+    if "发电侧" in filename or "用户侧" in filename or "发电厂结算" in filename:
         return "voucher"
 
     # Trading-center settlement vouchers (结算凭证 without side marker):
@@ -240,6 +245,10 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
             elif pdf_type == "voucher":
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
                                 "error": "结算凭证 (trading-center voucher) — duplicates 结算单 data, not ingested"})
+                continue
+            elif pdf_type == "capcomp_table":
+                results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                                "error": "provincial capacity-comp table — per-station backfill only, not auto-ingested"})
                 continue
             else:
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped", "error": f"Unknown PDF type: {pdf_type}"})

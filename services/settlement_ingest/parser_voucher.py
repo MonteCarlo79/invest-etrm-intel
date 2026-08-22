@@ -66,3 +66,29 @@ def parse_generation_voucher_text(text: str) -> list[dict[str, Any]]:
         "amount_cny": amt,
         "notes": "发电侧结算凭证: 电能电费",
     }]
+
+
+def parse_capcomp_table_text(text: str, station_name: str) -> float | None:
+    """Extract one station's capacity compensation from a provincial 统计表.
+
+    The 储能容量补偿费用统计表 is a province-wide document listing every storage
+    station's monthly compensation. Two row layouts exist:
+      2025-04..11: "6 <公司> <电站> 7,125,694.16 7,125,694.16"
+      2025-12:     "6 <公司> <电站> - 6,421,466.08 6,421,466.08"  (dash = no prior clearing)
+    Returns the 补偿费用 (first numeric after the station name), or None.
+    """
+    m = re.search(re.escape(station_name) + r"\s+(?:-\s+)?([\d,]+\.\d{2})", text)
+    return _num(m.group(1)) if m else None
+
+
+def parse_capcomp_table(file_path: str, station_name: str) -> float | None:
+    """File-level wrapper for parse_capcomp_table_text."""
+    import pdfplumber
+    pdf = pdfplumber.open(file_path)
+    text = ""
+    for page in pdf.pages:
+        t = page.extract_text()
+        if t:
+            text += t + "\n"
+    pdf.close()
+    return parse_capcomp_table_text(text, station_name)
