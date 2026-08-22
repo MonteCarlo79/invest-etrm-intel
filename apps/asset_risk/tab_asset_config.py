@@ -90,6 +90,37 @@ def render_asset_config(engine):
                 st.success("Asset parameters saved.")
                 st.rerun()
 
+    # Single-asset editor for type + commission date
+    if not assets_df.empty:
+        st.subheader("Edit Asset Details")
+        st.caption("Correct asset type or commission date for one asset.")
+        deduped = assets_df.drop_duplicates(subset=["id"])
+        with st.form("edit_asset_details"):
+            sel_id = st.selectbox(
+                "Asset", deduped["id"].tolist(),
+                format_func=lambda x: deduped[deduped["id"] == x]["name"].iloc[0],
+                key="edit_detail_asset",
+            )
+            sel_row = deduped[deduped["id"] == sel_id].iloc[0]
+            types = ["wind", "solar", "bess", "thermal"]
+            c1, c2 = st.columns(2)
+            with c1:
+                new_type = st.selectbox("Asset Type", types,
+                                        index=types.index(sel_row["asset_type"]),
+                                        key="edit_detail_type")
+            with c2:
+                cur_date = (pd.to_datetime(sel_row["commission_date"]).date()
+                            if pd.notna(sel_row["commission_date"]) else None)
+                new_date = st.date_input("Commission Date", value=cur_date,
+                                         key="edit_detail_date")
+            if st.form_submit_button("Save Details"):
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "UPDATE marketdata.rm_assets SET asset_type = :t, commission_date = :d WHERE id = :id"
+                    ), {"t": new_type, "d": new_date, "id": sel_id})
+                st.success(f"Updated {sel_row['name']}: type={new_type}, commission={new_date}.")
+                st.rerun()
+
     st.subheader("Add Asset")
     with st.form("add_asset"):
         col1, col2, col3 = st.columns(3)
