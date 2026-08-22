@@ -194,6 +194,45 @@ def render_pnl(engine):
             st.plotly_chart(fig, use_container_width=True)
 
 
+def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    """Month × asset matrix for a per-unit metric.
+
+    metric: "容量补偿价差" (capcomp ¥/MWh), "套利价差" (arb ¥/MWh),
+            "日均充放次数" (cycles/day via capacity × duration and calendar days),
+            "转化率" (round-trip efficiency = discharge / charge).
+    """
+    df = items_df.copy()
+    df["month"] = pd.to_datetime(df["settlement_month"]).dt.strftime("%Y-%m")
+    rows = []
+    for (asset, month), g in df.groupby(["asset", "month"]):
+        dis_vol = float(g.loc[g["category"].isin(_REVENUE_CATS), "volume_mwh"].sum())
+        val = None
+        if metric in ("容量补偿价差", "套利价差"):
+            if dis_vol:
+                if metric == "容量补偿价差":
+                    cap_amt = float(g.loc[g["category"] == "capacity_compensation", "amount_cny"].sum())
+                    val = cap_amt / dis_vol
+                else:
+                    rev = float(g.loc[g["category"].isin(_REVENUE_CATS), "amount_cny"].sum())
+                    cost = float(g.loc[g["category"] == "charge_energy", "amount_cny"].sum())
+                    val = (rev + cost) / dis_vol
+        elif metric == "转化率":
+            chg_vol = float(g.loc[g["category"] == "charge_energy", "volume_mwh"].sum())
+            val = dis_vol / chg_vol if chg_vol else None
+        elif metric == "日均充放次数":
+            chg_vol = float(g.loc[g["category"] == "charge_energy", "volume_mwh"].sum())
+            cap = g["capacity_mw"].iloc[0] if "capacity_mw" in g.columns else None
+            dur = g["bess_duration_h"].iloc[0] if "bess_duration_h" in g.columns else None
+            if pd.notna(cap) and cap:
+                energy = float(cap) * (float(dur) if (dur is not None and pd.notna(dur) and dur) else 4.0)
+                days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1]
+                val = chg_vol / energy / days if energy and days else None
+        rows.append({"asset": asset, "month": month, "value": val})
+    mat = pd.DataFrame(rows).pivot_table(index="month", columns="asset",
+                                         values="value", aggfunc="first")
+    return mat.sort_index()
+
+
 def _render_portfolio(engine, book_ids: list[int] | None = None):
     """Portfolio view: KPI strip, asset×month matrix, waterfall, per-asset bars.
 
@@ -246,6 +285,17 @@ def _render_portfolio(engine, book_ids: list[int] | None = None):
     mat = _portfolio_matrix(items)
     st.dataframe(mat.style.format("¥{:,.0f}"), use_container_width=True)
 
+    # --- Per-unit metric matrices ---
+    for title, metric, fmt in [
+        ("资产 × 日均充放次数", "日均充放次数", "{:.2f}"),
+        ("资产 × 转化率 (RTE)", "转化率", "{:.1%}"),
+        ("资产 × 度电容量补偿 (¥/MWh)", "容量补偿价差", "¥{:,.0f}"),
+        ("资产 × 套利度电价差 (¥/MWh)", "套利价差", "¥{:,.0f}"),
+    ]:
+        st.markdown(f"#### {title}")
+        m = _asset_month_metric(items, metric)
+        st.dataframe(m.style.format(fmt, na_rep="—"), use_container_width=True)
+
     # --- Portfolio waterfall ---
     st.markdown("#### 组合 P&L 瀑布")
     cat = items.groupby("category")["amount_cny"].sum().sort_values(ascending=False)
@@ -267,24 +317,30 @@ def _render_portfolio(engine, book_ids: list[int] | None = None):
     comp = summary.sort_values("net_profit", ascending=False)
     col_l, col_m, col_r = st.columns(3)
     with col_l:
-        fig_n = go.Figure(go.Bar(x=comp["asset"], y=comp["net_profit"],
-                                 marker_color="#3498db"))
+        fig_n = go.Figure(go.Bar(
+            x=comp["asset"], y=comp["net_profit"],
+            text=[f"{v/1e6:,.0f}M" for v in comp["net_profit"]],
+            textposition="auto", marker_color="#3498db"))
         fig_n.update_layout(title="净利润 by 资产", yaxis_title="CNY", height=350,
                             showlegend=False)
         st.plotly_chart(fig_n, use_container_width=True)
     with col_m:
         comp_s = comp.dropna(subset=["arb_spread"]).sort_values("arb_spread", ascending=False)
         if not comp_s.empty:
-            fig_s = go.Figure(go.Bar(x=comp_s["asset"], y=comp_s["arb_spread"],
-                                     marker_color="#2ecc71"))
+            fig_s = go.Figure(go.Bar(
+                x=comp_s["asset"], y=comp_s["arb_spread"],
+                text=[f"¥{v:.0f}" for v in comp_s["arb_spread"]],
+                textposition="auto", marker_color="#2ecc71"))
             fig_s.update_layout(title="套利价差 by 资产", yaxis_title="¥/MWh",
                                 height=350, showlegend=False)
             st.plotly_chart(fig_s, use_container_width=True)
     with col_r:
         comp_c = comp.dropna(subset=["cycles_per_day"]).sort_values("cycles_per_day", ascending=False)
         if not comp_c.empty:
-            fig_c = go.Figure(go.Bar(x=comp_c["asset"], y=comp_c["cycles_per_day"],
-                                     marker_color="#e67e22"))
+            fig_c = go.Figure(go.Bar(
+                x=comp_c["asset"], y=comp_c["cycles_per_day"],
+                text=[f"{v:.2f}" for v in comp_c["cycles_per_day"]],
+                textposition="auto", marker_color="#e67e22"))
             fig_c.update_layout(title="日均充放次数 by 资产", yaxis_title="次/天",
                                 height=350, showlegend=False)
             st.plotly_chart(fig_c, use_container_width=True)

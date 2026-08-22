@@ -2,7 +2,7 @@
 import pandas as pd
 import pytest
 
-from apps.asset_risk.tab_pnl import _portfolio_matrix, _asset_summary
+from apps.asset_risk.tab_pnl import _portfolio_matrix, _asset_summary, _asset_month_metric
 
 
 def _sample_items():
@@ -84,3 +84,49 @@ class TestCyclesPerDay:
         s = _asset_summary(_sample_items()).set_index("asset")
         assert s.loc["A", "cycles_per_day"] is None or pd.isna(s.loc["A", "cycles_per_day"])
         assert s.loc["A", "net_profit"] == pytest.approx(100.0)
+
+
+class TestAssetMonthMetric:
+    def _metric_items(self):
+        rows = [
+            # Asset D Jan: discharge 100 MWh @ 500, charge 110 MWh @ -250, capcomp 30
+            {"asset": "D", "capacity_mw": 100.0, "bess_duration_h": 4.0,
+             "settlement_month": "2026-01-01", "category": "discharge_energy",
+             "amount_cny": 500.0, "volume_mwh": 100.0},
+            {"asset": "D", "capacity_mw": 100.0, "bess_duration_h": 4.0,
+             "settlement_month": "2026-01-01", "category": "charge_energy",
+             "amount_cny": -250.0, "volume_mwh": 110.0},
+            {"asset": "D", "capacity_mw": 100.0, "bess_duration_h": 4.0,
+             "settlement_month": "2026-01-01", "category": "capacity_compensation",
+             "amount_cny": 30.0, "volume_mwh": 0.0},
+        ]
+        return pd.DataFrame(rows)
+
+    def test_arb_spread_matrix(self):
+        mat = _asset_month_metric(self._metric_items(), "套利价差")
+        # (500 - 250) / 100 = 2.5
+        assert mat.loc["2026-01", "D"] == pytest.approx(2.5)
+
+    def test_capcomp_spread_matrix(self):
+        mat = _asset_month_metric(self._metric_items(), "容量补偿价差")
+        # 30 / 100 = 0.3
+        assert mat.loc["2026-01", "D"] == pytest.approx(0.3)
+
+    def test_cycles_matrix(self):
+        mat = _asset_month_metric(self._metric_items(), "日均充放次数")
+        # 110 / (100*4) / 31 days
+        assert mat.loc["2026-01", "D"] == pytest.approx(110.0 / 400.0 / 31.0, rel=1e-3)
+
+    def test_rte_matrix(self):
+        mat = _asset_month_metric(self._metric_items(), "转化率")
+        # 100 / 110
+        assert mat.loc["2026-01", "D"] == pytest.approx(100.0 / 110.0, rel=1e-3)
+
+    def test_zero_discharge_gives_nan(self):
+        df = pd.DataFrame([
+            {"asset": "E", "capacity_mw": 50.0, "bess_duration_h": 2.0,
+             "settlement_month": "2026-01-01", "category": "charge_energy",
+             "amount_cny": -100.0, "volume_mwh": 10.0},
+        ])
+        mat = _asset_month_metric(df, "套利价差")
+        assert pd.isna(mat.loc["2026-01", "E"])
