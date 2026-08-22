@@ -194,6 +194,21 @@ def _elexon_ops_job():
         logger.error("Elexon ops ingest failed: %s", exc)
 
 
+def _remit_job():
+    """03:05 SGT daily: ingest last 48h of Elexon REMIT messages + KB digest."""
+    try:
+        from services.gb_knowledge import elexon_remit
+        from services.gb_knowledge.base import get_db_conn
+        conn = get_db_conn()
+        try:
+            n = elexon_remit.run(conn)
+            logger.info("REMIT ingest: %d messages upserted", n)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.error("REMIT job failed: %s", exc)
+
+
 def _daily_report_job():
     if not _is_report_enabled():
         logger.info("Daily report disabled for GB — skipping")
@@ -262,6 +277,8 @@ def start_scheduler():
     scheduler = BackgroundScheduler(timezone="Asia/Singapore")
     scheduler.add_job(_daily_market_job,   "cron", hour=3,  minute=0,
                       id="gb_daily_market",    misfire_grace_time=3600)
+    scheduler.add_job(_remit_job,            "cron", hour=3, minute=5,
+                      id="gb_remit",          misfire_grace_time=3600)
     scheduler.add_job(_daily_knowledge_job, "cron", hour=3, minute=30,
                       id="gb_daily_knowledge", misfire_grace_time=3600)
     scheduler.add_job(_kb_digest_job,       "cron", hour=3, minute=45,
