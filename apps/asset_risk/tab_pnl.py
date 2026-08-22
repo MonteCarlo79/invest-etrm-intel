@@ -8,8 +8,6 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
-_PORTFOLIO_LABEL = "📊 Portfolio (all books)"
-
 _CATEGORY_CN = {
     "charge_energy": "充电电费",
     "discharge_energy": "放电收入",
@@ -102,24 +100,25 @@ def render_pnl(engine):
         st.warning("No books found.")
         return
 
-    options = [0] + books["id"].tolist()
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        book_id = st.selectbox(
-            "Book", options,
-            format_func=lambda x: _PORTFOLIO_LABEL if x == 0
-            else books[books["id"] == x]["name"].iloc[0],
-            key="pnl_book",
-        )
+    # Multi-select: all books = portfolio; any subset = filtered portfolio;
+    # exactly one = single-book view (user request 2026-08-22)
+    selected_names = st.multiselect(
+        "Book (select one for single view, multiple for portfolio)",
+        books["name"].tolist(), default=books["name"].tolist(), key="pnl_books",
+    )
+    if not selected_names:
+        st.info("Select one or more books to see P&L.")
+        return
+    sel_ids = books[books["name"].isin(selected_names)]["id"].tolist()
 
-    if book_id == 0:
-        _render_portfolio(engine)
+    if len(sel_ids) > 1:
+        _render_portfolio(engine, sel_ids)
         return
 
-    with col2:
-        date_range = st.date_input("Date Range", value=[], key="pnl_dates")
-
+    book_id = sel_ids[0]
     asset_type = books[books["id"] == book_id]["asset_type"].iloc[0] or "bess"
+
+    date_range = st.date_input("Date Range", value=[], key="pnl_dates")
 
     with engine.connect() as conn:
         items_df = pd.read_sql(text("""
@@ -195,17 +194,26 @@ def render_pnl(engine):
             st.plotly_chart(fig, use_container_width=True)
 
 
-def _render_portfolio(engine):
-    """Portfolio view: KPI strip, asset×month matrix, waterfall, per-asset bars."""
+def _render_portfolio(engine, book_ids: list[int] | None = None):
+    """Portfolio view: KPI strip, asset×month matrix, waterfall, per-asset bars.
+
+    book_ids: restrict to a subset of books (multi-select); None = all books.
+    """
+    query = """
+        SELECT a.name AS asset, a.capacity_mw, a.bess_duration_h,
+               s.settlement_month, si.category, si.amount_cny, si.volume_mwh
+        FROM marketdata.rm_settlement_items si
+        JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
+        JOIN marketdata.rm_books b ON b.id = s.book_id
+        JOIN marketdata.rm_assets a ON a.id = b.asset_id
+    """
+    params = {}
+    if book_ids:
+        query += " WHERE b.id = ANY(:ids)"
+        params["ids"] = book_ids
+
     with engine.connect() as conn:
-        items = pd.read_sql(text("""
-            SELECT a.name AS asset, a.capacity_mw, a.bess_duration_h,
-                   s.settlement_month, si.category, si.amount_cny, si.volume_mwh
-            FROM marketdata.rm_settlement_items si
-            JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
-            JOIN marketdata.rm_books b ON b.id = s.book_id
-            JOIN marketdata.rm_assets a ON a.id = b.asset_id
-        """), conn)
+        items = pd.read_sql(text(query), conn, params=params)
 
     if items.empty:
         st.info("No settlement data yet.")
