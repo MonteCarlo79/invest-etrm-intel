@@ -1,4 +1,4 @@
-"""Tab 1 — Asset Configuration: CRUD for rm_assets and rm_books."""
+"""Tab 1 — Asset Configuration: editable registry table + Add Asset."""
 from __future__ import annotations
 
 import pandas as pd
@@ -12,6 +12,44 @@ def _norm_folder(val) -> str | None:
         return None
     s = str(val).strip()
     return None if not s or s.lower() in ("nan", "none") else s
+
+
+# Columns users may edit inline in the registry table (id/name/book_* are read-only).
+_EDITABLE_COLS = {"asset_type", "province", "capacity_mw", "bess_duration_h",
+                  "bess_dod_pct", "status", "commission_date", "invoice_folder"}
+
+
+def _save_table_edits(engine, orig_df: pd.DataFrame):
+    """Write st.data_editor edits back to rm_assets (whitelisted columns only)."""
+    state = st.session_state.get("asset_editor", {})
+    edited_rows = state.get("edited_rows", {})
+    if not edited_rows:
+        st.info("No changes to save.")
+        return
+
+    n = 0
+    for idx_str, cols in edited_rows.items():
+        row_id = int(orig_df.iloc[int(idx_str)]["id"])
+        clean = {}
+        for col, val in cols.items():
+            if col not in _EDITABLE_COLS:
+                continue
+            if col == "invoice_folder":
+                clean[col] = _norm_folder(val)
+            elif col == "commission_date":
+                clean[col] = pd.to_datetime(val).date() if val is not None and not pd.isna(val) else None
+            elif val is None or (isinstance(val, float) and pd.isna(val)):
+                clean[col] = None
+            else:
+                clean[col] = val
+        if not clean:
+            continue
+        sets = ", ".join(f"{c} = :{c}" for c in clean)
+        with engine.begin() as conn:
+            conn.execute(text(f"UPDATE marketdata.rm_assets SET {sets} WHERE id = :id"),
+                         {**clean, "id": row_id})
+        n += 1
+    st.success(f"Saved changes to {n} asset(s).")
 
 
 def render_asset_config(engine):
@@ -28,98 +66,36 @@ def render_asset_config(engine):
             ORDER BY a.name
         """), conn)
 
-    if not assets_df.empty:
-        st.dataframe(assets_df, use_container_width=True, hide_index=True)
-    else:
+    if assets_df.empty:
         st.info("No assets registered yet. Add one below.")
-
-    # Invoice folder mapping
-    if not assets_df.empty:
-        st.subheader("Invoice Folder Mapping")
-        st.caption("Configure which invoice folder each asset reads from (e.g. `B-8 内蒙杭锦旗`)")
-        with st.form("folder_mapping"):
-            updates = {}
-            cols = st.columns(2)
-            for i, (_, row) in enumerate(assets_df.drop_duplicates(subset=["id"]).iterrows()):
-                with cols[i % 2]:
-                    val = st.text_input(
-                        row["name"],
-                        value=_norm_folder(row.get("invoice_folder")) or "",
-                        key=f"folder_{row['id']}",
-                    )
-                    updates[row["id"]] = val
-
-            if st.form_submit_button("Save Mappings"):
-                with engine.begin() as conn:
-                    for asset_id, folder in updates.items():
-                        conn.execute(text(
-                            "UPDATE marketdata.rm_assets SET invoice_folder = :folder WHERE id = :id"
-                        ), {"folder": _norm_folder(folder), "id": asset_id})
-                st.success("Folder mappings saved.")
-                st.rerun()
-
-    # Inline edit for capacity/duration
-    if not assets_df.empty:
-        st.subheader("Edit Asset Parameters")
-        st.caption("Update capacity and BESS duration for existing assets.")
-        with st.form("edit_assets"):
-            edit_data = {}
-            cols = st.columns(3)
-            deduped = assets_df.drop_duplicates(subset=["id"])
-            for i, (_, row) in enumerate(deduped.iterrows()):
-                with cols[i % 3]:
-                    st.markdown(f"**{row['name']}**")
-                    cap = st.number_input(
-                        "Capacity (MW)", min_value=0.0, step=0.5,
-                        value=float(row["capacity_mw"] or 0),
-                        key=f"cap_{row['id']}",
-                    )
-                    dur = st.number_input(
-                        "Duration (h)", min_value=0.0, step=0.5,
-                        value=float(row["bess_duration_h"] or 0),
-                        key=f"dur_{row['id']}",
-                    )
-                    edit_data[row["id"]] = {"cap": cap, "dur": dur}
-
-            if st.form_submit_button("Save Asset Parameters"):
-                with engine.begin() as conn:
-                    for asset_id, vals in edit_data.items():
-                        conn.execute(text(
-                            "UPDATE marketdata.rm_assets SET capacity_mw = :cap, bess_duration_h = :dur WHERE id = :id"
-                        ), {"cap": vals["cap"] or None, "dur": vals["dur"] or None, "id": asset_id})
-                st.success("Asset parameters saved.")
-                st.rerun()
-
-    # Single-asset editor for type + commission date
-    if not assets_df.empty:
-        st.subheader("Edit Asset Details")
-        st.caption("Correct asset type or commission date for one asset.")
-        deduped = assets_df.drop_duplicates(subset=["id"])
-        with st.form("edit_asset_details"):
-            sel_id = st.selectbox(
-                "Asset", deduped["id"].tolist(),
-                format_func=lambda x: deduped[deduped["id"] == x]["name"].iloc[0],
-                key="edit_detail_asset",
-            )
-            sel_row = deduped[deduped["id"] == sel_id].iloc[0]
-            types = ["wind", "solar", "bess", "thermal"]
-            c1, c2 = st.columns(2)
-            with c1:
-                new_type = st.selectbox("Asset Type", types,
-                                        index=types.index(sel_row["asset_type"]),
-                                        key="edit_detail_type")
-            with c2:
-                cur_date = (pd.to_datetime(sel_row["commission_date"]).date()
-                            if pd.notna(sel_row["commission_date"]) else None)
-                new_date = st.date_input("Commission Date", value=cur_date,
-                                         key="edit_detail_date")
-            if st.form_submit_button("Save Details"):
-                with engine.begin() as conn:
-                    conn.execute(text(
-                        "UPDATE marketdata.rm_assets SET asset_type = :t, commission_date = :d WHERE id = :id"
-                    ), {"t": new_type, "d": new_date, "id": sel_id})
-                st.success(f"Updated {sel_row['name']}: type={new_type}, commission={new_date}.")
-                st.rerun()
+    else:
+        st.caption("Edit cells directly in the table, then click **Save Table Changes**. "
+                   "Type and status are dropdowns; id/name/book are read-only.")
+        st.data_editor(
+            assets_df,
+            column_config={
+                "id": st.column_config.NumberColumn(disabled=True, width="small"),
+                "name": st.column_config.TextColumn(disabled=True),
+                "asset_type": st.column_config.SelectboxColumn(
+                    options=["wind", "solar", "bess", "thermal"], width="small"),
+                "status": st.column_config.SelectboxColumn(
+                    options=["active", "retired"], width="small"),
+                "capacity_mw": st.column_config.NumberColumn(width="small"),
+                "bess_duration_h": st.column_config.NumberColumn(width="small"),
+                "bess_dod_pct": st.column_config.NumberColumn(width="small"),
+                "commission_date": st.column_config.DateColumn(width="medium"),
+                "province": st.column_config.TextColumn(),
+                "invoice_folder": st.column_config.TextColumn(),
+                "book_id": st.column_config.NumberColumn(disabled=True, width="small"),
+                "book_name": st.column_config.TextColumn(disabled=True),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="asset_editor",
+        )
+        if st.button("Save Table Changes", type="primary"):
+            _save_table_edits(engine, assets_df)
+            st.rerun()
 
     st.subheader("Add Asset")
     with st.form("add_asset"):
@@ -139,7 +115,7 @@ def render_asset_config(engine):
             "Invoice Folder (source file directory)",
             placeholder="e.g. B-8 内蒙杭锦旗",
             help="Folder under the settlement invoices root that this asset's bills live in. "
-                 "Used by Settlement tab → Scan & Ingest. Can also be set later via Invoice Folder Mapping.",
+                 "Used by Settlement tab → Scan & Ingest. Can also be set later via the table.",
         )
         notes = st.text_area("Notes", height=68)
         submitted = st.form_submit_button("Create Asset + Book")
