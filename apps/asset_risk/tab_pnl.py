@@ -248,6 +248,8 @@ def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
 
     mat = pd.DataFrame(rows).pivot_table(index="month", columns="asset",
                                          values="value", aggfunc="first")
+    if mat.empty:
+        return mat
 
     # YTD rows: sum of numerators ÷ sum of denominators
     ytd_rows = {}
