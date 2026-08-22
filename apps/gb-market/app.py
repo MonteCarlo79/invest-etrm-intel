@@ -3333,10 +3333,9 @@ with tab_map:
 # ---- REMIT -----------------------------------------------------------------
 with tab_remit:
     st.header("REMIT — GB Generation Unavailability")
-    conn = _get_conn()
     try:
-        _remit_count = pd.read_sql(
-            "SELECT count(*) AS n FROM intl_market.gb_remit_messages", conn)["n"][0]
+        _remit_count = _query(
+            "SELECT count(*) AS n FROM intl_market.gb_remit_messages")["n"][0]
     except Exception:
         _remit_count = 0
 
@@ -3345,7 +3344,7 @@ with tab_remit:
     else:
         # ── 1. Off-line now ──────────────────────────────────────────────
         st.subheader("Off-line now")
-        active = pd.read_sql(
+        active = _query(
             """
             SELECT asset_name, fuel_type, affected_mw, event_start, event_end,
                    outage_type, cause
@@ -3353,32 +3352,32 @@ with tab_remit:
             WHERE event_start <= NOW()
               AND (event_end IS NULL OR event_end >= NOW())
             ORDER BY affected_mw DESC NULLS LAST;
-            """, conn)
+            """)
         if active.empty:
             st.caption("No active outages in the REMIT feed right now.")
         else:
             by_fuel = (active.groupby("fuel_type")["affected_mw"]
                        .sum().sort_values(ascending=False))
-            cols = st.columns(min(len(by_fuel), 6))
-            for col, (fuel, mw) in zip(cols, by_fuel.items()):
-                col.metric(fuel, f"{mw:,.0f} MW")
+            if not by_fuel.empty:
+                cols = st.columns(min(len(by_fuel), 6))
+                for col, (fuel, mw) in zip(cols, by_fuel.items()):
+                    col.metric(fuel, f"{mw:,.0f} MW")
             st.dataframe(active, use_container_width=True, hide_index=True)
 
         # ── 2. Next 7 days ───────────────────────────────────────────────
         st.subheader("Unavailable MW — next 7 days")
-        fwd = pd.read_sql(
+        fwd = _query(
             """
             SELECT d::date AS day, m.fuel_type, SUM(m.affected_mw) AS mw
             FROM intl_market.gb_remit_messages m
-            JOIN generate_series(CURRENT_DATE, CURRENT_DATE + 7, interval '1 day') d
+            JOIN generate_series(CURRENT_DATE, CURRENT_DATE + 6, interval '1 day') d
               ON m.event_start::date <= d::date
              AND (m.event_end IS NULL OR m.event_end::date >= d::date)
             GROUP BY 1, 2 ORDER BY 1;
-            """, conn)
+            """)
         if fwd.empty:
             st.caption("No outages scheduled in the next 7 days.")
         else:
-            import plotly.express as px
             fig = px.bar(fwd, x="day", y="mw", color="fuel_type",
                          labels={"mw": "Unavailable MW", "day": "", "fuel_type": "Fuel"})
             fig.update_layout(barmode="stack", height=360,
@@ -3387,14 +3386,14 @@ with tab_remit:
 
         # ── 3. Latest messages ───────────────────────────────────────────
         st.subheader("Latest messages")
-        msgs = pd.read_sql(
+        msgs = _query(
             """
             SELECT published_at, asset_name, fuel_type, affected_mw,
                    outage_type, event_start, event_end, cause
             FROM intl_market.gb_remit_messages
             ORDER BY published_at DESC NULLS LAST
             LIMIT 200;
-            """, conn)
+            """)
         fuels = sorted(msgs["fuel_type"].dropna().unique())
         sel_fuels = st.multiselect("Fuel", fuels, default=fuels, key="remit_fuels")
         sel_types = st.multiselect("Outage type", ["planned", "unplanned", "unknown"],
