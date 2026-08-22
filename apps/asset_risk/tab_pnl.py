@@ -195,42 +195,85 @@ def render_pnl(engine):
 
 
 def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """Month × asset matrix for a per-unit metric.
+    """Month × asset matrix for a per-unit metric, with per-year YTD rows.
 
     metric: "容量补偿价差" (capcomp ¥/MWh), "套利价差" (arb ¥/MWh),
             "日均充放次数" (cycles/day via capacity × duration and calendar days),
             "转化率" (round-trip efficiency = discharge / charge).
+
+    YTD rows are volume-weighted aggregates (sum of numerators ÷ sum of
+    denominators over the year's months), NOT averages of monthly ratios.
     """
     df = items_df.copy()
     df["month"] = pd.to_datetime(df["settlement_month"]).dt.strftime("%Y-%m")
     rows = []
+    ytd = {}  # (asset, year) -> accumulators
+
     for (asset, month), g in df.groupby(["asset", "month"]):
         dis_vol = float(g.loc[g["category"].isin(_REVENUE_CATS), "volume_mwh"].sum())
-        val = None
-        if metric in ("容量补偿价差", "套利价差"):
-            if dis_vol:
-                if metric == "容量补偿价差":
-                    cap_amt = float(g.loc[g["category"] == "capacity_compensation", "amount_cny"].sum())
-                    val = cap_amt / dis_vol
-                else:
-                    rev = float(g.loc[g["category"].isin(_REVENUE_CATS), "amount_cny"].sum())
-                    cost = float(g.loc[g["category"] == "charge_energy", "amount_cny"].sum())
-                    val = (rev + cost) / dis_vol
+        chg_vol = float(g.loc[g["category"] == "charge_energy", "volume_mwh"].sum())
+        cap_amt = float(g.loc[g["category"] == "capacity_compensation", "amount_cny"].sum())
+        rev = float(g.loc[g["category"].isin(_REVENUE_CATS), "amount_cny"].sum())
+        cost = float(g.loc[g["category"] == "charge_energy", "amount_cny"].sum())
+
+        cap = g["capacity_mw"].iloc[0] if "capacity_mw" in g.columns else None
+        dur = g["bess_duration_h"].iloc[0] if "bess_duration_h" in g.columns else None
+        energy = None
+        if pd.notna(cap) and cap:
+            energy = float(cap) * (float(dur) if (dur is not None and pd.notna(dur) and dur) else 4.0)
+        days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1]
+
+        # Monthly value
+        if metric == "容量补偿价差":
+            val = cap_amt / dis_vol if dis_vol else None
+        elif metric == "套利价差":
+            val = (rev + cost) / dis_vol if dis_vol else None
         elif metric == "转化率":
-            chg_vol = float(g.loc[g["category"] == "charge_energy", "volume_mwh"].sum())
             val = dis_vol / chg_vol if chg_vol else None
-        elif metric == "日均充放次数":
-            chg_vol = float(g.loc[g["category"] == "charge_energy", "volume_mwh"].sum())
-            cap = g["capacity_mw"].iloc[0] if "capacity_mw" in g.columns else None
-            dur = g["bess_duration_h"].iloc[0] if "bess_duration_h" in g.columns else None
-            if pd.notna(cap) and cap:
-                energy = float(cap) * (float(dur) if (dur is not None and pd.notna(dur) and dur) else 4.0)
-                days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1]
-                val = chg_vol / energy / days if energy and days else None
+        else:  # 日均充放次数
+            val = chg_vol / energy / days if (energy and days) else None
         rows.append({"asset": asset, "month": month, "value": val})
+
+        # Accumulate for YTD
+        acc = ytd.setdefault((asset, month[:4]), {
+            "dis_vol": 0.0, "chg_vol": 0.0, "cap_amt": 0.0,
+            "rev": 0.0, "cost": 0.0, "days": 0, "energy": energy,
+        })
+        acc["dis_vol"] += dis_vol
+        acc["chg_vol"] += chg_vol
+        acc["cap_amt"] += cap_amt
+        acc["rev"] += rev
+        acc["cost"] += cost
+        acc["days"] += days
+
     mat = pd.DataFrame(rows).pivot_table(index="month", columns="asset",
                                          values="value", aggfunc="first")
-    return mat.sort_index()
+
+    # YTD rows: sum of numerators ÷ sum of denominators
+    ytd_rows = {}
+    for (asset, year), acc in ytd.items():
+        if metric == "容量补偿价差":
+            val = acc["cap_amt"] / acc["dis_vol"] if acc["dis_vol"] else None
+        elif metric == "套利价差":
+            val = (acc["rev"] + acc["cost"]) / acc["dis_vol"] if acc["dis_vol"] else None
+        elif metric == "转化率":
+            val = acc["dis_vol"] / acc["chg_vol"] if acc["chg_vol"] else None
+        else:  # 日均充放次数
+            val = (acc["chg_vol"] / acc["energy"] / acc["days"]
+                   if (acc["energy"] and acc["days"]) else None)
+        if val is not None:
+            ytd_rows.setdefault(f"{year} YTD", {})[asset] = val
+
+    # Assemble: each year's months followed by its YTD row
+    years = sorted({m[:4] for m in mat.index})
+    parts = []
+    for year in years:
+        months = [m for m in mat.index if m.startswith(year)]
+        parts.append(mat.loc[months])
+        label = f"{year} YTD"
+        if label in ytd_rows and ytd_rows[label]:
+            parts.append(pd.DataFrame([ytd_rows[label]], index=[label]))
+    return pd.concat(parts)
 
 
 def _render_portfolio(engine, book_ids: list[int] | None = None):

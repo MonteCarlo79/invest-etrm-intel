@@ -122,6 +122,53 @@ class TestAssetMonthMetric:
         # 100 / 110
         assert mat.loc["2026-01", "D"] == pytest.approx(100.0 / 110.0, rel=1e-3)
 
+
+class TestMetricYTD:
+    def _two_month_items(self):
+        """Two months with values chosen so volume-weighted YTD != mean of ratios."""
+        rows = []
+        data = [
+            # (month, dis_vol, chg_vol, rev, cost, cap_amt)
+            ("2026-01-01", 100.0, 110.0, 500.0, -250.0, 30.0),
+            ("2026-02-01", 50.0, 55.0, 100.0, -50.0, 20.0),
+        ]
+        for month, dv, cv, rev, cost, cap in data:
+            rows += [
+                {"asset": "D", "capacity_mw": 100.0, "bess_duration_h": 4.0,
+                 "settlement_month": month, "category": "discharge_energy",
+                 "amount_cny": rev, "volume_mwh": dv},
+                {"asset": "D", "capacity_mw": 100.0, "bess_duration_h": 4.0,
+                 "settlement_month": month, "category": "charge_energy",
+                 "amount_cny": cost, "volume_mwh": cv},
+                {"asset": "D", "capacity_mw": 100.0, "bess_duration_h": 4.0,
+                 "settlement_month": month, "category": "capacity_compensation",
+                 "amount_cny": cap, "volume_mwh": 0.0},
+            ]
+        return pd.DataFrame(rows)
+
+    def test_ytd_row_position(self):
+        mat = _asset_month_metric(self._two_month_items(), "套利价差")
+        assert list(mat.index) == ["2026-01", "2026-02", "2026 YTD"]
+
+    def test_arb_spread_ytd_is_volume_weighted(self):
+        mat = _asset_month_metric(self._two_month_items(), "套利价差")
+        # (600 - 300) / 150 = 2.0; mean of monthly ratios (2.5, 1.0) would be 1.75
+        assert mat.loc["2026 YTD", "D"] == pytest.approx(2.0)
+
+    def test_rte_ytd_is_volume_weighted(self):
+        mat = _asset_month_metric(self._two_month_items(), "转化率")
+        assert mat.loc["2026 YTD", "D"] == pytest.approx(150.0 / 165.0, rel=1e-3)
+
+    def test_capcomp_spread_ytd_is_volume_weighted(self):
+        mat = _asset_month_metric(self._two_month_items(), "容量补偿价差")
+        # 50 / 150 = 0.3333; mean of monthly (0.3, 0.4) would be 0.35
+        assert mat.loc["2026 YTD", "D"] == pytest.approx(50.0 / 150.0, rel=1e-3)
+
+    def test_cycles_ytd_uses_total_days(self):
+        mat = _asset_month_metric(self._two_month_items(), "日均充放次数")
+        # (110 + 55) / 400 / (31 + 28)
+        assert mat.loc["2026 YTD", "D"] == pytest.approx(165.0 / 400.0 / 59.0, rel=1e-3)
+
     def test_zero_discharge_excluded_from_spread_table(self):
         """Asset with no discharge anywhere is absent from the spread matrix."""
         df = pd.DataFrame([
