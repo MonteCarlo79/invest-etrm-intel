@@ -38,6 +38,16 @@ _WECHAT_HEADERS = {
 
 _48H_AGO = lambda: datetime.now(timezone.utc) - timedelta(hours=72)  # 72h window to avoid missing articles near boundary
 
+# Keyword pre-filter: an article whose title contains NONE of these is scored 0
+# without an LLM call. Matching is generous — title only, case-insensitive.
+_RELEVANCE_KEYWORDS = (
+    "储能", "电力市场", "现货", "新能源", "调频", "峰谷", "电价", "交易",
+    "消纳", "容量", "辅助服务", "energy storage", "power market", "battery",
+)
+
+_SCORE_CAP = 40         # max articles scored by Claude per run (after pre-filter)
+_SCORE_BATCH_SIZE = 10  # articles per Claude call in batch scoring
+
 _AI_PROMPT = """\
 You are an energy-sector news analyst focused on China's electricity market and battery energy storage (BESS).
 
@@ -411,6 +421,7 @@ def backfill_source(
 
     ingested = skipped = errors = 0
     captcha_hits = 0
+    pending: list[dict] = []
     for art in articles:
         import time as _time
         url = art.get("url", "")
@@ -442,23 +453,34 @@ def backfill_source(
 
             art["body"] = body
             art["title"] = title
-
-            ai_result = _score_article(title, body, api_key) if api_key else {
-                "relevance": None, "region_bucket": source.get("region_bucket"),
-                "region_province": None, "category": source.get("category_hint"), "summary": None,
-            }
-
-            _doc_id, is_new = _ingest_article(source, art, ai_result, pg_url, api_key)
-            if is_new:
-                ingested += 1
-            else:
-                skipped += 1
+            pending.append(art)
 
             # Polite delay between article fetches to avoid Sogou rate limiting
             _time.sleep(2)
 
         except Exception as exc:
             logger.warning("Backfill error for %s: %s", url[:80], exc)
+            errors += 1
+
+    # Score (keyword pre-filter + cap + batched Claude calls), then ingest
+    if api_key:
+        _apply_ai_scoring(pending, api_key)
+    else:
+        for art in pending:
+            art["ai_result"] = {
+                "relevance": None, "region_bucket": source.get("region_bucket"),
+                "region_province": None, "category": source.get("category_hint"), "summary": None,
+            }
+
+    for art in pending:
+        try:
+            _doc_id, is_new = _ingest_article(source, art, art["ai_result"], pg_url, api_key)
+            if is_new:
+                ingested += 1
+            else:
+                skipped += 1
+        except Exception as exc:
+            logger.warning("Backfill ingest error for %s: %s", art.get("url", "")[:80], exc)
             errors += 1
 
     summary = {"discovered": len(articles), "ingested": ingested, "skipped": skipped, "errors": errors}
@@ -791,6 +813,176 @@ def _score_article(title: str, body: str, api_key: str) -> dict:
         }
 
 
+def _prefilter_null_result() -> dict:
+    """ai_result for articles skipped without an LLM call (no keywords / over cap)."""
+    return {
+        "relevance": 0,
+        "region_bucket": None,
+        "region_province": None,
+        "category": None,
+        "summary": None,
+    }
+
+
+def _keyword_hits(title: str) -> int:
+    """Count of _RELEVANCE_KEYWORDS present in the title (case-insensitive)."""
+    t = (title or "").lower()
+    return sum(1 for kw in _RELEVANCE_KEYWORDS if kw.lower() in t)
+
+
+_BATCH_AI_PROMPT = """\
+You are an energy-sector news analyst focused on China's electricity market and battery energy storage (BESS).
+
+Below are {n} numbered articles. Rate EACH article's relevance to China's power sector and energy storage industry.
+
+{blocks}
+
+SCORING GUIDE (be generous — err toward higher scores when in doubt):
+  9–10 : Directly about BESS dispatch/operations, electricity spot prices, power market trading rules, capacity market, or major national energy policy with direct market impact
+  7–8  : China energy storage industry news, power market reforms, grid operations, renewable energy integration, provincial/regional electricity pricing, EV battery/storage technology with grid applications
+  5–6  : General China electricity / energy industry news, power company announcements, energy transition, coal/gas power, transmission infrastructure, energy regulatory updates
+  3–4  : Tangential — manufacturing news, EV batteries without grid angle, general business in energy sector, international energy with some China reference
+  1–2  : Barely relevant — other industries, broad technology news with minor energy mention
+  0    : Completely unrelated
+
+IMPORTANT: If an article's excerpt is empty or very short (title-only scoring), be GENEROUS based on the title alone:
+  - A title clearly about 储能 (energy storage), 电力市场 (power market), 新能源 (new energy), 调频 (frequency regulation), 峰谷 (peak-valley pricing), 碳市场 (carbon market), or similar key terms should score at least 6–7.
+  - Official sources (国家能源局, 中电联, 电力报, 能源局) should score at least 5 even for general articles.
+
+Respond ONLY with a valid JSON array of exactly {n} objects, in the same order as the articles above (no markdown, no code block):
+[
+  {{
+    "relevance": <0-10 integer>,
+    "region_bucket": "<华北|华东|华南|西北|西南|东北|全国>",
+    "region_province": "<province name in Chinese or null>",
+    "category": "<policy|market_rules|market_analytics|technology|industry_news|other>",
+    "summary": "<1-2 sentence Chinese summary; if body is empty, describe the likely topic based on title>"
+  }},
+  ...
+]
+"""
+
+
+def _score_articles_batch(articles: list[dict], api_key: str) -> list[dict]:
+    """
+    Score articles with Claude in batches of up to _SCORE_BATCH_SIZE per call.
+    Each article dict needs "title" and "body" keys (same inputs _score_article uses).
+
+    Returns a list of ai_result dicts aligned 1:1 by index with `articles`, each
+    the same shape as _score_article's output. Malformed JSON → one retry with the
+    same batch → per-article _score_article fallback. On any Claude exception,
+    returns null-result dicts (same shape as _score_article's error path),
+    preserving order.
+    """
+    from shared.anthropic_client import make_client as _make_anthropic_client
+
+    def _null() -> dict:
+        return {
+            "relevance": None,
+            "region_bucket": None,
+            "region_province": None,
+            "category": None,
+            "summary": None,
+        }
+
+    if not articles:
+        return []
+
+    try:
+        client = _make_anthropic_client(api_key)
+    except Exception as exc:
+        logger.warning("Batch scoring: failed to create Claude client: %s", exc)
+        return [_null() for _ in articles]
+
+    results: list[dict] = []
+
+    for start in range(0, len(articles), _SCORE_BATCH_SIZE):
+        chunk = articles[start:start + _SCORE_BATCH_SIZE]
+        blocks = "\n\n".join(
+            f"Article {i}\nTitle: {a.get('title', '')}\n\n"
+            f"Excerpt (first 800 chars):\n{(a.get('body') or '')[:800]}"
+            for i, a in enumerate(chunk, 1)
+        )
+        prompt = _BATCH_AI_PROMPT.format(n=len(chunk), blocks=blocks)
+
+        parsed: Optional[list] = None
+        for attempt in (1, 2):
+            try:
+                msg = client.messages.create(
+                    model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
+                    max_tokens=max(256, 300 * len(chunk)),
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = msg.content[0].text.strip()
+                # Strip markdown code fences if present
+                text = re.sub(r"^```[a-z]*\n?", "", text)
+                text = re.sub(r"\n?```$", "", text)
+                data = json.loads(text)
+                if (
+                    isinstance(data, list)
+                    and len(data) == len(chunk)
+                    and all(isinstance(d, dict) for d in data)
+                ):
+                    parsed = data
+                    break
+                logger.warning(
+                    "Batch scoring malformed payload (attempt %d): expected %d objects, got %s",
+                    attempt, len(chunk),
+                    f"{len(data)} items" if isinstance(data, list) else type(data).__name__,
+                )
+            except json.JSONDecodeError as exc:
+                logger.warning("Batch scoring invalid JSON (attempt %d): %s", attempt, exc)
+            except Exception as exc:
+                logger.warning("Batch scoring call failed: %s", exc)
+                parsed = [_null() for _ in chunk]
+                break
+
+        if parsed is None:
+            logger.warning(
+                "Batch of %d malformed after retry — falling back to per-article scoring",
+                len(chunk),
+            )
+            parsed = [
+                _score_article(a.get("title", ""), a.get("body") or "", api_key)
+                for a in chunk
+            ]
+        results.extend(parsed)
+
+    return results
+
+
+def _apply_ai_scoring(articles: list[dict], api_key: str) -> None:
+    """
+    Attach an ai_result dict to every article, in place:
+      1. Pre-filter: a title containing no relevance keyword is scored 0 with no LLM call.
+      2. Cap: at most _SCORE_CAP candidates per run, chosen by keyword-hit count
+         descending (stable sort — ties keep discovery/source order). Articles
+         beyond the cap get the null ai_result (not scored).
+      3. Survivors are scored via _score_articles_batch.
+    """
+    candidates: list[dict] = []
+    for art in articles:
+        if _keyword_hits(art.get("title", "")) == 0:
+            art["ai_result"] = _prefilter_null_result()
+        else:
+            candidates.append(art)
+
+    if len(candidates) > _SCORE_CAP:
+        ranked = sorted(
+            candidates, key=lambda a: _keyword_hits(a.get("title", "")), reverse=True,
+        )
+        for art in ranked[_SCORE_CAP:]:
+            art["ai_result"] = _prefilter_null_result()
+        candidates = ranked[:_SCORE_CAP]
+        logger.info(
+            "News screener: %d keyword-matched articles exceed cap — scoring top %d",
+            len(ranked), _SCORE_CAP,
+        )
+
+    for art, res in zip(candidates, _score_articles_batch(candidates, api_key)):
+        art["ai_result"] = res
+
+
 # ── Ingest ────────────────────────────────────────────────────────────────────
 
 def _ingest_article(
@@ -1003,6 +1195,7 @@ def screen_news_sources(
     total_errors = 0
     sources_failed = 0
     all_results: list[dict] = []
+    pending: list[tuple[dict, dict]] = []  # (source, article) fetched, awaiting scoring + ingest
 
     conn_update = psycopg2.connect(pg_url, options="-c statement_timeout=10000")
 
@@ -1019,7 +1212,8 @@ def screen_news_sources(
                 else:
                     articles = _discover_web_articles(source)
 
-                # 2. Fetch + process each article
+                # 2. Fetch each article's body; scoring + ingest happen after all
+                #    sources are collected (scoring is batched across the whole run)
                 for art in articles:
                     url = art.get("url", "")
                     if not url:
@@ -1042,38 +1236,13 @@ def screen_news_sources(
                             title = title or fetched_title
                         art["body"] = body
                         art["title"] = title
-
-                        # 3. AI scoring
-                        ai_result = _score_article(art["title"], body, api_key) if api_key else {
-                            "relevance": None, "region_bucket": source.get("region_bucket"),
-                            "region_province": None, "category": source.get("category_hint"),
-                            "summary": None,
-                        }
-
-                        # 4. Ingest
-                        doc_id, is_new = _ingest_article(source, art, ai_result, pg_url, api_key)
-
-                        all_results.append({
-                            "title": art["title"],
-                            "url": art.get("url", url),  # use resolved URL if available
-                            "source_name": source["name"],
-                            "relevance": ai_result.get("relevance"),
-                            "category": ai_result.get("category"),
-                            "region_bucket": ai_result.get("region_bucket") or source.get("region_bucket"),
-                            "summary": ai_result.get("summary"),
-                            "published_at": art.get("published_at"),
-                            "is_new": is_new,
-                        })
-                        if is_new:
-                            total_ingested += 1
-                        else:
-                            total_skipped += 1
+                        pending.append((source, art))
 
                     except Exception as exc:
                         logger.warning("Error processing article %s: %s", url[:80], exc)
                         total_errors += 1
 
-                # 5. Update last_scraped_at + reset consecutive failures
+                # 3. Update last_scraped_at + reset consecutive failures
                 with conn_update.cursor() as cur:
                     cur.execute(
                         "UPDATE hermes.news_sources SET last_scraped_at = NOW(), consecutive_failures = 0 WHERE id = %s",
@@ -1110,6 +1279,43 @@ def screen_news_sources(
                             )
                         except Exception:
                             pass
+
+        # 4. AI scoring — keyword pre-filter, 40-article cap, batched Claude calls
+        if api_key:
+            _apply_ai_scoring([art for _, art in pending], api_key)
+        else:
+            for source, art in pending:
+                art["ai_result"] = {
+                    "relevance": None, "region_bucket": source.get("region_bucket"),
+                    "region_province": None, "category": source.get("category_hint"),
+                    "summary": None,
+                }
+
+        # 5. Ingest
+        for source, art in pending:
+            try:
+                ai_result = art["ai_result"]
+                doc_id, is_new = _ingest_article(source, art, ai_result, pg_url, api_key)
+
+                all_results.append({
+                    "title": art["title"],
+                    "url": art.get("url", ""),  # resolved URL if available
+                    "source_name": source["name"],
+                    "relevance": ai_result.get("relevance"),
+                    "category": ai_result.get("category"),
+                    "region_bucket": ai_result.get("region_bucket") or source.get("region_bucket"),
+                    "summary": ai_result.get("summary"),
+                    "published_at": art.get("published_at"),
+                    "is_new": is_new,
+                })
+                if is_new:
+                    total_ingested += 1
+                else:
+                    total_skipped += 1
+
+            except Exception as exc:
+                logger.warning("Error ingesting article %s: %s", art.get("url", "")[:80], exc)
+                total_errors += 1
 
     finally:
         conn_update.close()
