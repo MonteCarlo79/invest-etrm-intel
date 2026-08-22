@@ -2429,9 +2429,9 @@ with st.sidebar:
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_overview, tab_ancillary, tab_bess, tab_pricing, tab_map, tab_strategist, tab_quant, tab_knowledge, tab_library, tab_mgmt = st.tabs([
+tab_overview, tab_ancillary, tab_bess, tab_pricing, tab_map, tab_remit, tab_strategist, tab_quant, tab_knowledge, tab_library, tab_mgmt = st.tabs([
     "Market Overview", "Ancillary Markets", "BESS Benchmarking",
-    "Pricing", "Asset Map", "Strategist", "Quant", "Knowledge Base", "Library", "Data Management",
+    "Pricing", "Asset Map", "REMIT", "Strategist", "Quant", "Knowledge Base", "Library", "Data Management",
 ])
 
 # ---- Market Overview -------------------------------------------------------
@@ -3329,6 +3329,79 @@ with tab_map:
                 "commissioning_date": "Commissioned", "dno": "DNO",
             }, inplace=True)
             st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+# ---- REMIT -----------------------------------------------------------------
+with tab_remit:
+    st.header("REMIT — GB Generation Unavailability")
+    conn = _get_conn()
+    try:
+        _remit_count = pd.read_sql(
+            "SELECT count(*) AS n FROM intl_market.gb_remit_messages", conn)["n"][0]
+    except Exception:
+        _remit_count = 0
+
+    if not _remit_count:
+        st.info("No REMIT data yet — ingestion runs daily at 03:05 SGT.")
+    else:
+        # ── 1. Off-line now ──────────────────────────────────────────────
+        st.subheader("Off-line now")
+        active = pd.read_sql(
+            """
+            SELECT asset_name, fuel_type, affected_mw, event_start, event_end,
+                   outage_type, cause
+            FROM intl_market.gb_remit_messages
+            WHERE event_start <= NOW()
+              AND (event_end IS NULL OR event_end >= NOW())
+            ORDER BY affected_mw DESC NULLS LAST;
+            """, conn)
+        if active.empty:
+            st.caption("No active outages in the REMIT feed right now.")
+        else:
+            by_fuel = (active.groupby("fuel_type")["affected_mw"]
+                       .sum().sort_values(ascending=False))
+            cols = st.columns(min(len(by_fuel), 6))
+            for col, (fuel, mw) in zip(cols, by_fuel.items()):
+                col.metric(fuel, f"{mw:,.0f} MW")
+            st.dataframe(active, use_container_width=True, hide_index=True)
+
+        # ── 2. Next 7 days ───────────────────────────────────────────────
+        st.subheader("Unavailable MW — next 7 days")
+        fwd = pd.read_sql(
+            """
+            SELECT d::date AS day, m.fuel_type, SUM(m.affected_mw) AS mw
+            FROM intl_market.gb_remit_messages m
+            JOIN generate_series(CURRENT_DATE, CURRENT_DATE + 7, interval '1 day') d
+              ON m.event_start::date <= d::date
+             AND (m.event_end IS NULL OR m.event_end::date >= d::date)
+            GROUP BY 1, 2 ORDER BY 1;
+            """, conn)
+        if fwd.empty:
+            st.caption("No outages scheduled in the next 7 days.")
+        else:
+            import plotly.express as px
+            fig = px.bar(fwd, x="day", y="mw", color="fuel_type",
+                         labels={"mw": "Unavailable MW", "day": "", "fuel_type": "Fuel"})
+            fig.update_layout(barmode="stack", height=360,
+                              margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+
+        # ── 3. Latest messages ───────────────────────────────────────────
+        st.subheader("Latest messages")
+        msgs = pd.read_sql(
+            """
+            SELECT published_at, asset_name, fuel_type, affected_mw,
+                   outage_type, event_start, event_end, cause
+            FROM intl_market.gb_remit_messages
+            ORDER BY published_at DESC NULLS LAST
+            LIMIT 200;
+            """, conn)
+        fuels = sorted(msgs["fuel_type"].dropna().unique())
+        sel_fuels = st.multiselect("Fuel", fuels, default=fuels, key="remit_fuels")
+        sel_types = st.multiselect("Outage type", ["planned", "unplanned", "unknown"],
+                                   default=["planned", "unplanned", "unknown"],
+                                   key="remit_types")
+        view = msgs[msgs["fuel_type"].isin(sel_fuels) & msgs["outage_type"].isin(sel_types)]
+        st.dataframe(view, use_container_width=True, hide_index=True)
 
 # ---- Knowledge Base --------------------------------------------------------
 with tab_knowledge:
