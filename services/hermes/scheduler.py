@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Optional
 from services.hermes.tasks_client import TasksClient
 from services.hermes.wecom_client import WeComClient
 from services.hermes.feishu_client import FeishuClient
+from shared.usage_meter import with_usage_tag
 
 if TYPE_CHECKING:
     from services.hermes.outlook_client import OutlookClient
@@ -271,6 +272,7 @@ def _card_to_markdown(card: dict) -> str:
     return "\n\n".join(parts)
 
 
+@with_usage_tag("morning_briefing")
 def send_morning_briefing(
     tasks: TasksClient,
     feishu: Optional[FeishuClient] = None,

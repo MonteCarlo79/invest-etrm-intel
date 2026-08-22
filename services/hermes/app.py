@@ -107,6 +107,10 @@ def _digest_spot_kb_docs(api_key: str, limit: int = 30) -> int:
     return digest_spot_kb_docs(api_key=api_key, limit=limit)
 
 
+from shared.usage_meter import with_usage_tag as _with_usage_tag
+
+
+@_with_usage_tag("kb_digest")
 def _run_kb_digest(api_key: str, limit: int = 30) -> dict:
     """
     Run the two-stage KB pipeline: synthesis then digest.
@@ -161,6 +165,7 @@ def _jizhi_save_upcoming(records: list[dict], pg_url: str) -> int:
     return save_upcoming(records=records, pg_url=pg_url)
 
 
+@_with_usage_tag("jizhi_scan")
 def _run_jizhi_scan(api_key: str, feishu=None) -> dict:
     """
     Nightly internet scan for 机制竞价 bid announcements.

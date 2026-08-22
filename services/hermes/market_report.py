@@ -23,6 +23,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from shared.usage_meter import with_usage_tag
+
 import psycopg2
 
 logger = logging.getLogger(__name__)
@@ -1017,6 +1019,7 @@ def _report_to_markdown(report: dict, period_str: str) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+@with_usage_tag("daily_report")
 def send_daily_report(
     pg_url: str,
     api_key: str,

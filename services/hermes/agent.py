@@ -6,6 +6,7 @@ import re
 from typing import Optional
 
 from shared.anthropic_client import make_client as _make_anthropic_client
+from shared.usage_meter import with_usage_tag
 
 from services.hermes.models import Action, InboundMessage
 from services.hermes.tasks_client import TasksClient
@@ -456,6 +457,7 @@ class HermesAgent:
     # Keywords that unambiguously mean "search the internet"
     _INTERNET_PREFIXES = ("搜索", "帮我搜", "上网搜", "网上搜", "google", "search for", "web search")
 
+    @with_usage_tag("hermes_chat")
     def process(self, msg: InboundMessage, chat_id: str = "") -> Action:
         import re
         from datetime import datetime, timezone, timedelta

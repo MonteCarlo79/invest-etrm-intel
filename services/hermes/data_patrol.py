@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal, Optional
 
+from shared.usage_meter import with_usage_tag
+
 logger = logging.getLogger(__name__)
 
 _BJ = timezone(timedelta(hours=8))
@@ -532,6 +534,7 @@ def build_fill_card(fill_table: str, fill_province: str, fill_month: str) -> dic
 _last_report: Optional[PatrolReport] = None
 
 
+@with_usage_tag("patrol")
 def run_patrol(
     pg_url: str,
     feishu,

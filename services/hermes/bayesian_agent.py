@@ -12,6 +12,7 @@ from typing import Optional
 
 import psycopg2
 from shared.anthropic_client import make_client as _make_anthropic_client
+from shared.usage_meter import with_usage_tag
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +491,7 @@ class BayesianAnalystAgent:
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
+    @with_usage_tag("bayesian")
     def run(self, question: str) -> str:
         """
         Run the Bayesian reasoning loop and return the full analysis as a string.

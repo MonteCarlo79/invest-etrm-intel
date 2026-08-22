@@ -21,6 +21,8 @@ from typing import Optional
 import psycopg2
 import requests
 
+from shared.usage_meter import with_usage_tag
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -1169,6 +1171,7 @@ def _build_feishu_card(date_str: str, results: list[dict], api_key: str = "") ->
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
+@with_usage_tag("news_screener")
 def screen_news_sources(
     pg_url: str,
     api_key: str,

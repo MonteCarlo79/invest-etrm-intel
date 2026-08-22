@@ -42,6 +42,16 @@ _BEDROCK_MODEL_MAP: dict[str, str] = {
 }
 
 
+def _meter(model: str, resp) -> None:
+    """Best-effort token metering; see shared.usage_meter. Never raises."""
+    try:
+        from shared.usage_meter import enabled, log_usage
+        if enabled():
+            log_usage(model, getattr(resp, "usage", None))
+    except Exception:
+        pass
+
+
 class _BedrockMessages:
     """Wraps AnthropicBedrock.messages with transparent direct→Bedrock model mapping."""
 
@@ -60,7 +70,9 @@ class _BedrockMessages:
     def create(self, *, model: str, **kwargs):
         bedrock_id = self._map(model)
         logger.debug("Bedrock create: %s → %s", model, bedrock_id)
-        return self._client.messages.create(model=bedrock_id, **kwargs)
+        resp = self._client.messages.create(model=bedrock_id, **kwargs)
+        _meter(bedrock_id, resp)
+        return resp
 
     def stream(self, *, model: str, **kwargs):
         bedrock_id = self._map(model)
@@ -79,7 +91,33 @@ class _BedrockWrapper:
         return getattr(self._client, name)
 
 
-def make_client(api_key: str | None = None) -> _anthropic.Anthropic | _BedrockWrapper:
+class _DirectMessages:
+    """Wraps a direct Anthropic client's messages with usage metering."""
+
+    def __init__(self, client: _anthropic.Anthropic) -> None:
+        self._client = client
+
+    def create(self, *, model: str, **kwargs):
+        resp = self._client.messages.create(model=model, **kwargs)
+        _meter(model, resp)
+        return resp
+
+    def stream(self, *, model: str, **kwargs):
+        return self._client.messages.stream(model=model, **kwargs)
+
+
+class _DirectWrapper:
+    """Thin wrapper that adds metering to a direct Anthropic client."""
+
+    def __init__(self, client: _anthropic.Anthropic) -> None:
+        self._client = client
+        self.messages = _DirectMessages(client)
+
+    def __getattr__(self, name: str):
+        return getattr(self._client, name)
+
+
+def make_client(api_key: str | None = None) -> _anthropic.Anthropic | _BedrockWrapper | _DirectWrapper:
     """Return an Anthropic-compatible client, preferring Bedrock when available.
 
     Args:
@@ -96,7 +134,7 @@ def make_client(api_key: str | None = None) -> _anthropic.Anthropic | _BedrockWr
         return _BedrockWrapper(client)
     key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     logger.debug("LLM client: direct Anthropic API")
-    return _anthropic.Anthropic(api_key=key)
+    return _DirectWrapper(_anthropic.Anthropic(api_key=key))
 
 
 def is_llm_available(api_key: str | None = None) -> bool:
