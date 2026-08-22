@@ -122,11 +122,12 @@ class TestAssetMonthMetric:
         # 100 / 110
         assert mat.loc["2026-01", "D"] == pytest.approx(100.0 / 110.0, rel=1e-3)
 
-    def test_zero_discharge_gives_nan(self):
+    def test_zero_discharge_excluded_from_spread_table(self):
+        """Asset with no discharge anywhere is absent from the spread matrix."""
         df = pd.DataFrame([
             {"asset": "E", "capacity_mw": 50.0, "bess_duration_h": 2.0,
              "settlement_month": "2026-01-01", "category": "charge_energy",
              "amount_cny": -100.0, "volume_mwh": 10.0},
         ])
         mat = _asset_month_metric(df, "套利价差")
-        assert pd.isna(mat.loc["2026-01", "E"])
+        assert "E" not in mat.columns
