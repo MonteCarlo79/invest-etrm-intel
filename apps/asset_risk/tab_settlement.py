@@ -623,9 +623,11 @@ def _render_analytics(book_id: int, engine):
 
     st.dataframe(styled, use_container_width=True)
 
-    # Monthly bar chart (stacked by money category; YTD subtotal rows excluded)
-    money_order = ["放电收入", "容量补偿/非市场化", "价差收入", "调频", "其他",
-                   "充电电费", "系统运行费", "上网线损费", "基本电费/力调"]
+    # Monthly bar chart (stacked by money category; YTD subtotal rows excluded).
+    # 放电收入/充电电费 are excluded: 价差收入 already = 放电收入 + 充电电费 —
+    # showing all three triple-counts (user note 2026-08-22).
+    money_order = ["容量补偿/非市场化", "价差收入", "调频", "其他",
+                   "系统运行费", "上网线损费", "基本电费/力调"]
     chart_pivot = pivot[[c for c in money_order if c in pivot.columns] + ["净利润"]]
     chart_pivot = chart_pivot[~chart_pivot.index.astype(str).str.contains("YTD")]
 
