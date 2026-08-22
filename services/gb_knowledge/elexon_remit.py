@@ -172,7 +172,75 @@ def upsert_messages(rows: list[dict], conn) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Entry point (digest lives in Task 2)
+# Daily KB digest
+# ---------------------------------------------------------------------------
+
+def significant(row: dict) -> bool:
+    """Digest inclusion rule: large (>300 MW) or unplanned outages."""
+    try:
+        big = row.get("affected_mw") is not None and float(row["affected_mw"]) > 300
+    except (TypeError, ValueError):
+        big = False
+    return big or row.get("outage_type") == "unplanned"
+
+
+def build_digest(rows: list[dict], today: date) -> str:
+    """Markdown digest of significant REMIT messages for one day."""
+    sig = [r for r in rows if significant(r)]
+    sig.sort(key=lambda r: float(r.get("affected_mw") or 0), reverse=True)
+    lines = [
+        f"# GB REMIT digest — {today.isoformat()}",
+        "",
+        f"{len(rows)} messages in table snapshot; {len(sig)} significant "
+        f"(>300 MW or unplanned).",
+        "",
+    ]
+    if not sig:
+        lines.append("No significant outages reported.")
+    for r in sig:
+        tag = "UNPLANNED" if r.get("outage_type") == "unplanned" else "planned"
+        mw = r.get("affected_mw")
+        mw_s = f"{float(mw):,.0f} MW" if mw is not None else "capacity n/a"
+        window = f"{r.get('event_start') or '?'} → {r.get('event_end') or 'open-ended'}"
+        lines.append(
+            f"- **[{tag}] {r.get('asset_name') or 'Unknown asset'}** "
+            f"({r.get('fuel_type') or 'fuel n/a'}) — {mw_s}, {window}. "
+            f"{r.get('cause') or ''}".rstrip()
+        )
+    return "\n".join(lines)
+
+
+def write_digest(conn, today: date) -> bool:
+    """Build today's digest from the table and upsert it as one KB doc per day."""
+    from services.gb_knowledge.base import upsert_doc
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT message_id, asset_name, fuel_type, affected_mw, outage_type,
+                   event_start, event_end, cause, published_at
+            FROM intl_market.gb_remit_messages
+            WHERE event_start <= NOW() + interval '7 days'
+              AND (event_end IS NULL OR event_end >= NOW() - interval '1 day')
+            ORDER BY published_at DESC NULLS LAST
+            LIMIT 200;
+            """
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    md = build_digest(rows, today)
+    return upsert_doc(
+        conn,
+        source="elexon_remit",
+        doc_type="remit_digest",
+        title=f"GB REMIT digest {today.isoformat()}",
+        url=f"remit://{today.isoformat()}",
+        published_date=today,
+        content=md,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
 # ---------------------------------------------------------------------------
 
 def run(conn, days_back: int = 2) -> int:
@@ -184,6 +252,11 @@ def run(conn, days_back: int = 2) -> int:
     rows = [r for r in (map_message(i) for i in items) if r]
     n = upsert_messages(rows, conn)
     logger.info("[remit] %d messages fetched, %d upserted", len(items), n)
+    try:
+        written = write_digest(conn, date.today())
+        logger.info("[remit] digest written: %s", written)
+    except Exception as exc:
+        logger.warning("[remit] digest failed (ingest unaffected): %s", exc)
     return n
 
 
