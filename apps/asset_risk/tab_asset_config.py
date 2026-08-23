@@ -19,16 +19,56 @@ _EDITABLE_COLS = {"asset_type", "province", "capacity_mw", "bess_duration_h",
                   "bess_dod_pct", "status", "commission_date", "invoice_folder"}
 
 
+def _delete_assets(engine, orig_df: pd.DataFrame, deleted_idx):
+    """Delete assets selected for deletion in the table — only when their
+    books hold no settlements (financial data is never cascade-deleted)."""
+    n = 0
+    for idx in deleted_idx:
+        row = orig_df.iloc[int(idx)]
+        name = row["name"]
+        with engine.begin() as conn:
+            book_ids = [r[0] for r in conn.execute(text(
+                "SELECT id FROM marketdata.rm_books WHERE asset_id = :aid"),
+                {"aid": int(row["id"])})]
+            blocked = False
+            for bid in book_ids:
+                cnt = conn.execute(text(
+                    "SELECT COUNT(*) FROM marketdata.rm_settlements WHERE book_id = :bid"),
+                    {"bid": bid}).scalar()
+                if cnt > 0:
+                    st.error(f"**{name}** (book {bid}) has {cnt} settlement(s) — not deleted. "
+                             "Delete or move its data first.")
+                    blocked = True
+                    break
+            if blocked:
+                continue
+            conn.execute(text("DELETE FROM marketdata.rm_books WHERE asset_id = :aid"),
+                         {"aid": int(row["id"])})
+            conn.execute(text("DELETE FROM marketdata.rm_assets WHERE id = :aid"),
+                         {"aid": int(row["id"])})
+            n += 1
+    if n:
+        st.success(f"Deleted {n} asset(s) and their empty book(s).")
+
+
 def _save_table_edits(engine, orig_df: pd.DataFrame):
     """Write st.data_editor edits back to rm_assets (whitelisted columns only)."""
     state = st.session_state.get("asset_editor", {})
+
+    deleted = state.get("deleted_rows", [])
+    if deleted:
+        _delete_assets(engine, orig_df, deleted)
+
     edited_rows = state.get("edited_rows", {})
     if not edited_rows:
-        st.info("No changes to save.")
+        if not deleted:
+            st.info("No changes to save.")
         return
 
     n = 0
     for idx_str, cols in edited_rows.items():
+        if idx_str in {str(i) for i in deleted}:
+            continue  # row deleted — don't resurrect it via an edit
         row_id = int(orig_df.iloc[int(idx_str)]["id"])
         clean = {}
         for col, val in cols.items():
@@ -70,9 +110,11 @@ def render_asset_config(engine):
         st.info("No assets registered yet. Add one below.")
     else:
         st.caption("Edit cells directly in the table, then click **Save Table Changes**. "
-                   "Type and status are dropdowns; id/name/book are read-only.")
+                   "Type and status are dropdowns; id/name/book are read-only. "
+                   "Rows can also be deleted (blocked when the book has settlement data).")
         st.data_editor(
             assets_df,
+            num_rows="dynamic",
             column_config={
                 "id": st.column_config.NumberColumn(disabled=True, width="small"),
                 "name": st.column_config.TextColumn(disabled=True),
