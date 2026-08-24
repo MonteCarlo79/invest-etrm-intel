@@ -67,17 +67,25 @@ def ensure_table(conn) -> None:
 
 def _api_get(session: requests.Session, url: str, params: dict | None = None):
     resp = session.get(url, params=params, headers=_HEADERS, timeout=_TIMEOUT)
+    if not resp.ok:
+        # Elexon 400s carry the reason in the body — log it for CloudWatch debugging
+        logger.warning("[remit] API %s %s -> %s: %s", url, params, resp.status_code, resp.text[:300])
     resp.raise_for_status()
     return resp.json()
 
 
 def fetch_messages(session: requests.Session, from_dt: datetime, to_dt: datetime) -> list[dict]:
-    """Fetch REMIT messages published in [from_dt, to_dt] (UTC)."""
+    """Fetch REMIT messages published in [from_dt, to_dt] (UTC).
+
+    Uses the documented GET /remit/list/by-publish endpoint with the API's
+    publishDateTimeFrom/To convention (same as WINDFOR in elexon_ops.py).
+    """
     params = {
-        "from": from_dt.strftime("%Y-%m-%dT%H:%MZ"),
-        "to":   to_dt.strftime("%Y-%m-%dT%H:%MZ"),
+        "publishDateTimeFrom": from_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "publishDateTimeTo":   to_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "format": "json",
     }
-    data = _api_get(session, f"{_API_BASE}/remit/list", params)
+    data = _api_get(session, f"{_API_BASE}/remit/list/by-publish", params)
     if isinstance(data, list):
         items = data
     else:
