@@ -25,6 +25,34 @@ from shared.usage_meter import with_usage_tag
 
 logger = logging.getLogger(__name__)
 
+
+def _scoring_calibration() -> str:
+    """Desk head's domain judgment (distilled profile §4) as extra scoring guidance.
+
+    Loaded once per process from skills/colleague/dipeng-chen/work.md — empty
+    when the profile is absent, so scoring runs unchanged without it.
+    """
+    import functools
+
+    @functools.lru_cache(maxsize=1)
+    def _load() -> str:
+        try:
+            from shared.persona_profile import profile_section
+            judgment = profile_section("经验知识库")
+        except Exception:
+            return ""
+        if not judgment:
+            return ""
+        return (
+            "\n\nADDITIONAL CALIBRATION — the desk head's investment judgment; apply it "
+            "when setting `relevance` (raise scores for items touching his priority "
+            "themes; discount hype that violates his red lines):\n" + judgment
+            + "\n\nRemember: respond ONLY with valid JSON as specified above."
+        )
+
+    return _load()
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _WECHAT_HEADERS = {
@@ -792,7 +820,7 @@ def _score_article(title: str, body: str, api_key: str) -> dict:
     from shared.anthropic_client import make_client as _make_anthropic_client
 
     client = _make_anthropic_client(api_key)
-    prompt = _AI_PROMPT.format(title=title, excerpt=body[:800])
+    prompt = _AI_PROMPT.format(title=title, excerpt=body[:800]) + _scoring_calibration()
     try:
         msg = client.messages.create(
             model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
@@ -905,7 +933,7 @@ def _score_articles_batch(articles: list[dict], api_key: str) -> list[dict]:
             f"Excerpt (first 800 chars):\n{(a.get('body') or '')[:800]}"
             for i, a in enumerate(chunk, 1)
         )
-        prompt = _BATCH_AI_PROMPT.format(n=len(chunk), blocks=blocks)
+        prompt = _BATCH_AI_PROMPT.format(n=len(chunk), blocks=blocks) + _scoring_calibration()
 
         parsed: Optional[list] = None
         for attempt in (1, 2):

@@ -278,6 +278,25 @@ logout_url = (
 # QUICK ASK — Anthropic one-shot helper
 # --------------------------------------------------
 
+def _deal_structurer_framework() -> str:
+    """Desk head's investment judgment framework for the Deal Structurer persona.
+
+    Loaded from the distilled profile (skills/colleague/dipeng-chen/work.md §4).
+    Empty when the profile is absent — the persona runs unchanged.
+    """
+    try:
+        from shared.persona_profile import profile_section
+        judgment = profile_section("经验知识库")
+    except Exception:
+        return ""
+    if not judgment:
+        return ""
+    return (
+        "\n\nApply the desk head's investment judgment framework when assessing deals:\n"
+        + judgment
+    )
+
+
 _QUICK_ASK_SYSTEM = {
     "strategist": (
         "You are the Strategist — China spot electricity market analyst. "
@@ -304,6 +323,7 @@ _QUICK_ASK_SYSTEM = {
         "market attractiveness assessment, IRR hurdle rates, equity/debt structure, "
         "and investment memorandum framing for China renewable assets. "
         "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
+        + _deal_structurer_framework()
     ),
     "gb_analyst": (
         "You are the GB Analyst — Great Britain BESS market intelligence specialist. "

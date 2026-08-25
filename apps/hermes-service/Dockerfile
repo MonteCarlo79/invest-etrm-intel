@@ -42,6 +42,8 @@ RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding('BAAI/bge
 # Copy hermes service code and shared modules
 COPY services/ /app/services/
 COPY shared/ /app/shared/
+# Distilled persona profile(s) consumed by shared/persona_profile.py at runtime
+COPY skills/colleague/ /app/skills/colleague/
 
 EXPOSE 8000
 
