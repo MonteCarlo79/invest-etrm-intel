@@ -163,3 +163,17 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 **Follow-up trap found during fix:** `terraform apply` for bess-map would have silently stripped 5 manually-added env vars (LINGFENG_*, OPENAI_API_KEY, DEEPSEEK_API_KEY, HERMES_URL) and reverted BEDROCK_REGION to us-east-1, because tfvars/main.tf had drifted from live (tfvars image was still v48). Reconciled into terraform config before applying. Lesson: after any out-of-band task-def edit, reconcile main.tf in the same session.
 
 **Also:** first v61 push failed to pull on Fargate — image built on arm64 Mac without `--platform linux/amd64`. Rebuild with the flag; verify with `docker buildx imagetools inspect`.
+
+---
+
+## Portal build fails "apps/portal: not found" with a temp-named Dockerfile (Mac, 2026-08-25)
+
+**What didn't work:**
+1. Building the portal image with a modified Dockerfile named `Dockerfile.mirror` / `Dockerfile.portal-overlay` at the context root — every COPY failed with `failed to compute cache key ... "/apps/portal": not found`, even with `--no-cache`. Looked like a context/cache problem; it was neither.
+
+**Root cause:** BuildKit resolves ignore rules from `<DockerfileName>.dockerignore` beside the Dockerfile, falling back to the context-root `.dockerignore`. The repo-root `.dockerignore` (141 lines, tuned per-image with `!` re-includes) **excludes `apps/portal/`** with no re-include. The stock build works because `apps/portal/Dockerfile` pairs with `apps/portal/Dockerfile.dockerignore` (which keeps apps/portal, shared, auth). A temp-named Dockerfile silently loses that pairing and inherits the root exclusions.
+
+**What worked:**
+- Copy the per-app ignore file to match the temp name: `cp apps/portal/Dockerfile.dockerignore Dockerfile.mirror.dockerignore`, then build with `-f Dockerfile.mirror`. Build succeeded.
+- Rule: in this repo, **a Dockerfile and its `<name>.dockerignore` are a pair** — always check/copy both when building with a modified or relocated Dockerfile.
+- Separate issue in the same build: **pypi.org times out from this network** (docker.io works). Fix: `-i https://pypi.tuna.tsinghua.edu.cn/simple` in the pip commands (temp Dockerfile only, not committed).
