@@ -88,3 +88,39 @@ def test_build_digest_content():
     assert "IFA2" in md
     assert "UNPLANNED" in md.upper()
     assert "Small Wind" not in md  # insignificant rows excluded
+
+
+# Real shape captured from GET /datasets/REMIT on 2026-08-25 (ECS probe)
+REAL_SHAPE = {
+    "dataset": "REMIT",
+    "mrid": "23X--140120-IQPW-NGET-RMT-00021096",
+    "revisionNumber": 30,
+    "publishTime": "2026-08-25T22:01:02Z",
+    "createdTime": "2026-08-25T23:00:02Z",
+    "messageType": "UnavailabilitiesOfElectricityFacilities",
+    "eventStartTime": "2026-08-26T05:00:00Z",
+    "eventEndTime": "2026-08-29T23:00:00Z",
+    "affectedUnit": "INDQ-1",
+    "assetId": "INDQ-1",
+    "fuelType": "Fossil Gas",
+    "normalCapacity": 140.0,
+    "availableCapacity": 131.0,
+    "unavailableCapacity": 9.0,
+    "unavailabilityType": "Unplanned",
+    "cause": "Plant Fault",
+    "eventStatus": "Active",
+    "participantId": "NGED",
+    "biddingZone": "GB",
+}
+
+
+def test_map_real_api_shape():
+    row = map_message(REAL_SHAPE)
+    assert row["message_id"] == "23X--140120-IQPW-NGET-RMT-00021096"
+    assert row["published_at"] == "2026-08-25T22:01:02Z"
+    assert row["event_start"] == "2026-08-26T05:00:00Z"
+    assert row["event_end"] == "2026-08-29T23:00:00Z"
+    assert row["asset_name"] == "INDQ-1"
+    assert row["affected_mw"] == 9.0
+    assert row["outage_type"] == "unplanned"
+    assert row["cause"] == "Plant Fault"

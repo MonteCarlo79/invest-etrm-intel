@@ -125,7 +125,7 @@ def map_message(item: dict) -> dict | None:
         return None
     fuel_raw = str(_first(item, "fuelType", "fuel", "technology", default="")).lower()
     fuel = _FUEL_MAP.get(fuel_raw, "Other" if not fuel_raw else fuel_raw.title())
-    outage_raw = str(_first(item, "outageType", "type", "eventType", default="")).lower()
+    outage_raw = str(_first(item, "unavailabilityType", "outageType", "type", "eventType", default="")).lower()
     if "unplanned" in outage_raw:
         outage_type = "unplanned"
     elif "planned" in outage_raw:
@@ -134,12 +134,12 @@ def map_message(item: dict) -> dict | None:
         outage_type = "unknown"
     return {
         "message_id":   str(mid),
-        "published_at": _first(item, "publishedDateTime", "published", "publishedDate", "publishTime"),
-        "event_start":  _first(item, "eventStart", "startTime", "startDate", "outageStart"),
-        "event_end":    _first(item, "eventEnd", "endTime", "endDate", "outageEnd"),
-        "asset_name":   _first(item, "assetName", "asset", "unitName", "station", "bmUnit", default=""),
+        "published_at": _first(item, "publishTime", "publishedDateTime", "published", "publishedDate"),
+        "event_start":  _first(item, "eventStartTime", "eventStart", "startTime", "startDate", "outageStart"),
+        "event_end":    _first(item, "eventEndTime", "eventEnd", "endTime", "endDate", "outageEnd"),
+        "asset_name":   _first(item, "affectedUnit", "assetId", "assetName", "asset", "unitName", "station", "bmUnit", default=""),
         "fuel_type":    fuel,
-        "affected_mw":  _first(item, "affectedCapacity", "unavailableCapacity", "mw", "affectedMW"),
+        "affected_mw":  _first(item, "unavailableCapacity", "affectedCapacity", "mw", "affectedMW"),
         "outage_type":  outage_type,
         "cause":        _first(item, "cause", "reason", "description", default=""),
         "raw":          item,
@@ -253,12 +253,29 @@ def write_digest(conn, today: date) -> bool:
 # ---------------------------------------------------------------------------
 
 def run(conn, days_back: int = 2) -> int:
-    """Fetch last `days_back` days of REMIT messages and upsert. Returns row count."""
+    """Fetch last `days_back` days of REMIT messages and upsert. Returns row count.
+
+    The API rejects publish windows > 1 day, so the window is chunked into
+    1-day slices (oldest first).
+    """
     ensure_table(conn)
     now = datetime.now(timezone.utc)
     session = requests.Session()
-    items = fetch_messages(session, now - timedelta(days=days_back), now)
+    items: list[dict] = []
+    for d in range(days_back, 0, -1):
+        win_from = now - timedelta(days=d)
+        win_to = now - timedelta(days=d - 1)
+        try:
+            items.extend(fetch_messages(session, win_from, win_to))
+        except requests.HTTPError as exc:
+            logger.warning("[remit] fetch %s..%s failed: %s — skipping window",
+                           win_from.date(), win_to.date(), exc)
     rows = [r for r in (map_message(i) for i in items) if r]
+    if rows:
+        s = rows[0]
+        logger.info("[remit] mapped sample: id=%s asset=%s start=%s end=%s type=%s mw=%s",
+                    s["message_id"], s["asset_name"], s["event_start"],
+                    s["event_end"], s["outage_type"], s["affected_mw"])
     n = upsert_messages(rows, conn)
     logger.info("[remit] %d messages fetched, %d upserted", len(items), n)
     try:
