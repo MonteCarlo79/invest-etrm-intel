@@ -77,15 +77,16 @@ def _api_get(session: requests.Session, url: str, params: dict | None = None):
 def fetch_messages(session: requests.Session, from_dt: datetime, to_dt: datetime) -> list[dict]:
     """Fetch REMIT messages published in [from_dt, to_dt] (UTC).
 
-    Uses the documented GET /remit/list/by-publish endpoint with the API's
-    publishDateTimeFrom/To convention (same as WINDFOR in elexon_ops.py).
+    Uses the documented GET /datasets/REMIT endpoint (verified against the
+    official swagger at data.elexon.co.uk/swagger/v1/swagger.json — params
+    publishDateTimeFrom/To are REQUIRED, same /datasets/ pattern as WINDFOR).
     """
     params = {
         "publishDateTimeFrom": from_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "publishDateTimeTo":   to_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "format": "json",
     }
-    data = _api_get(session, f"{_API_BASE}/remit/list/by-publish", params)
+    data = _api_get(session, f"{_API_BASE}/datasets/REMIT", params)
     if isinstance(data, list):
         items = data
     else:
