@@ -275,11 +275,24 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
             from services.settlement_ingest.parser_voucher import parse_generation_voucher
             items = parse_generation_voucher(tmp_path)
         elif kind == "discharge" or (kind == "unknown" and is_scanned):
-            # Discharge (上网) — vision parser handles scanned + text PDFs
-            if is_scanned:
-                st.info("Detected scanned PDF — using AI Vision to extract data...")
-            from services.settlement_ingest.parser_discharge import parse_discharge_settlement_pdf
-            items = parse_discharge_settlement_pdf(tmp_path)
+            items = None
+            if not is_scanned:
+                # Text-layer bill: deterministic Gansu regex beats vision for the
+                # 国网甘肃 类别 layout — vision expects the Mengxi 成分明细 table and
+                # fails or hallucinates on Gansu bills (observed 民勤 2026-01..06).
+                gansu_text = ""
+                with pdfplumber.open(tmp_path) as _pdf:
+                    for _pg in _pdf.pages:
+                        gansu_text += (_pg.extract_text() or "") + "\n"
+                from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
+                if is_gansu_bill(gansu_text):
+                    items = parse_gansu_discharge_text(gansu_text)
+                    st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
+            if items is None:
+                if is_scanned:
+                    st.info("Detected scanned PDF — using AI Vision to extract data...")
+                from services.settlement_ingest.parser_discharge import parse_discharge_settlement_pdf
+                items = parse_discharge_settlement_pdf(tmp_path)
         elif kind == "charge" or kind == "unknown":
             if is_scanned:
                 st.warning(
@@ -290,6 +303,11 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                 return
             from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
             items = parse_charging_cost_pdf(tmp_path)
+            if not items:
+                # Non-Mengxi charge layout (e.g. 甘肃) — generic vision fallback
+                st.info("Charge regex parser found nothing — trying AI Vision (generic provincial layout)...")
+                from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                items = parse_charge_bill_vision(tmp_path)
         else:
             items = []
     except Exception as e:

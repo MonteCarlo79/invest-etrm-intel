@@ -79,120 +79,20 @@ def _normalize_units(volume: float | None, volume_unit: str,
 
 
 def parse_discharge_settlement_pdf(file_path: str) -> list[dict[str, Any]]:
-    """Parse a discharge settlement PDF (scanned image) using Claude Vision.
+    """Parse a discharge settlement PDF (or image) using Claude Vision.
 
-    Also accepts image files directly (PNG/JPG/WEBP) — e.g. phone screenshots
-    of settlement bills (observed: 苏右 2025-04 上网 exists only as a PNG).
+    Delegates to the format-agnostic parser in parser_vision — works with any
+    provincial grid company layout (蒙西, 甘肃, etc.), not just the Mengxi table.
 
     Args:
-        file_path: Path to the scanned PDF or image file
+        file_path: Path to the PDF or image file
 
     Returns:
         List of settlement item dicts with: category, volume_mwh, price_cny_kwh, amount_cny, notes
     """
-    # Convert input to image bytes
-    ext = file_path.lower().rsplit(".", 1)[-1]
-    image_media_types = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
-    if ext in image_media_types:
-        with open(file_path, "rb") as f:
-            image_bytes = f.read()
-        media_type = image_media_types[ext]
-    else:
-        image_bytes = _pdf_page_to_image(file_path, page_num=0)
-        media_type = "image/png"
-    if not image_bytes:
-        return []
+    from services.settlement_ingest.parser_vision import parse_settlement_bill_vision
+    return parse_settlement_bill_vision(file_path, side="discharge")
 
-    # Use Claude Vision to extract table
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    client = _make_anthropic_client(api_key)
-
-    prompt = """Extract the settlement table from this image. The table has columns:
-成分明细 (category), 电量 (volume), 电价 (price), 电费 (amount in CNY), 电费年月 (month).
-
-IMPORTANT — report units exactly as printed on the invoice. Volume unit is usually
-千千瓦时 (thousand kWh = MWh), but some invoices print 千瓦时 (kWh). Price unit is
-usually 元/千千瓦时, but some print 元/千瓦时. Read the column headers / unit labels
-carefully; do not assume.
-
-Return ONLY a JSON array of objects with these exact keys:
-- "category_cn": the Chinese category name (现货, 非市场化, 调频, etc.)
-- "volume": number (电量, raw value as printed)
-- "volume_unit": string ("千千瓦时", "千瓦时", or "兆瓦时" as printed)
-- "price": number (电价, raw value as printed)
-- "price_unit": string ("元/千千瓦时" or "元/千瓦时" as printed)
-- "amount_cny": number (电费 in 元)
-- "month": string (电费年月, format YYYY-MM)
-
-Do NOT include the 机组合计 (total) row. Return raw JSON only, no markdown."""
-
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64.b64encode(image_bytes).decode("utf-8"),
-                    },
-                },
-                {"type": "text", "text": prompt},
-            ],
-        }],
-    )
-
-    # Parse response
-    text = response.content[0].text.strip()
-    # Remove markdown code fences if present
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1]
-        if text.endswith("```"):
-            text = text[:-3]
-
-    try:
-        rows = json.loads(text)
-    except json.JSONDecodeError:
-        return []
-
-    # Map to settlement items
-    items = []
-    for row in rows:
-        category_cn = row.get("category_cn", "")
-        category = _map_category(category_cn)
-
-        # Backward-compatible field handling: new prompt returns raw value+unit,
-        # older cached responses may return volume_mwh / price_cny_mwh directly
-        if "volume" in row or "volume_unit" in row:
-            vol_mwh, price_kwh, corrected = _normalize_units(
-                row.get("volume"), row.get("volume_unit", ""),
-                row.get("price"), row.get("price_unit", ""),
-                row.get("amount_cny"),
-            )
-        else:
-            vol_mwh, price_kwh, corrected = (
-                row.get("volume_mwh"),
-                (row.get("price_cny_mwh") or 0) / 1000.0 if row.get("price_cny_mwh") is not None else None,
-                False,
-            )
-
-        notes = f"放电结算: {category_cn}"
-        if corrected:
-            notes += " [units auto-corrected: kWh invoice]"
-
-        items.append({
-            "category": category,
-            "volume_mwh": vol_mwh,
-            "price_cny_kwh": price_kwh,
-            "amount_cny": row.get("amount_cny", 0),
-            "month": row.get("month"),  # 电费年月 per row — needed for multi-month bills
-            "notes": notes,
-        })
-
-    return items
 
 
 def _map_category(category_cn: str) -> str:
