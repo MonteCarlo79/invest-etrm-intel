@@ -121,6 +121,7 @@ def infer_report_month(filename: str) -> Optional[date]:
 
     Handles:
       - 2026年1月  / 2026年01月     → 2026-01-01
+      - 2026-01   / 2026.01         → 2026-01-01 (dash/dot separators)
       - 第1期 / 第01期              → 2026-01-01 (needs year context from filename)
       - 一季度 / 二季度 ...          → first month of the quarter
     """
@@ -130,6 +131,15 @@ def infer_report_month(filename: str) -> Optional[date]:
         try:
             return date(int(m.group(1)), int(m.group(2)), 1)
         except ValueError:
+            pass
+
+    # e.g. "天津2026-06-信息发布报告" or "2026.06"
+    m = re.search(r"(\d{4})[-.](\d{1,2})(?!\d)", filename)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), 1)
+        except ValueError:
+            pass
             pass
 
     # Quarterly: "2026年一季度"
