@@ -869,6 +869,30 @@ def create_app() -> FastAPI:
             },
         )
 
+        # Exchange monthly report watcher: 06:20 UTC (14:20 Beijing) — scan the
+        # OneDrive exchange-monthly-reports folder and ingest any new reports.
+        if agent.onedrive:
+            from shared.usage_meter import usage_tag as _usage_tag
+
+            def _exchange_watch_job() -> None:
+                with _usage_tag("exchange_watch"):
+                    from services.exchange_reports.watcher import scan_exchange_reports_onedrive
+                    summary = scan_exchange_reports_onedrive(
+                        onedrive=agent.onedrive,
+                        pg_url=_mengxi_pg_url,
+                        api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+                        feishu=feishu,
+                        owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+                    )
+                    logger.info("exchange watch: %s", {
+                        k: v for k, v in summary.items() if k != "results"
+                    })
+
+            scheduler.add_job(_exchange_watch_job, "cron", hour=6, minute=20)
+            logger.info("Exchange report watcher scheduled: 06:20 UTC daily")
+        else:
+            logger.warning("Exchange report watcher NOT scheduled: OneDrive not configured")
+
         # KB digest: 18:07 UTC (02:07 Beijing next day) — synthesize + digest all new docs
         # Runs after news screener (06:00 UTC) and well before morning briefing (00:03 UTC)
         scheduler.add_job(
