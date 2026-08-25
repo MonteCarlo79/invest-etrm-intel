@@ -676,17 +676,28 @@ def _detect_province_via_llm(
 
         from services.exchange_reports.metrics_extractor import _get_client
         client, model_id, provider = _get_client(api_key=api_key)
-        resp = client.messages.create(
-            model=model_id,
-            max_tokens=30,
-            system=(
-                "You are identifying which Chinese province a power exchange monthly report "
-                "belongs to. Reply with ONLY the Chinese province/region name (e.g. '河南', '四川', "
-                "'湖北', '云南', '新疆') and nothing else. If you cannot determine it, reply 'unknown'."
-            ),
-            messages=[{"role": "user", "content": f"文件名: {filename}\n\n{sample}"}],
+        system = (
+            "You are identifying which Chinese province a power exchange monthly report "
+            "belongs to. Reply with ONLY the Chinese province/region name (e.g. '河南', '四川', "
+            "'湖北', '云南', '新疆') and nothing else. If you cannot determine it, reply 'unknown'."
         )
-        detected = resp.content[0].text.strip()
+        user = f"文件名: {filename}\n\n{sample}"
+        if provider == "deepseek":
+            resp = client.chat.completions.create(
+                model=model_id,
+                max_tokens=30,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+            )
+            detected = (resp.choices[0].message.content or "").strip()
+        else:
+            resp = client.messages.create(
+                model=model_id,
+                max_tokens=30,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            detected = resp.content[0].text.strip()
         if detected and detected != "unknown" and len(detected) <= 10:
             logger.info("LLM detected province '%s' from %s", detected, filename)
             return detected
