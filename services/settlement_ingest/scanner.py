@@ -240,6 +240,10 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
         try:
             if pdf_type == "charge":
                 items = parse_charging_cost_pdf(str(pdf_path))
+                if not items:
+                    # Non-Mengxi charge layout — generic vision fallback
+                    from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                    items = parse_charge_bill_vision(str(pdf_path))
             elif pdf_type == "discharge":
                 items = parse_discharge_settlement_pdf(str(pdf_path))
             elif pdf_type == "voucher":
