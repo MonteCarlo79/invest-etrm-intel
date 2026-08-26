@@ -427,6 +427,46 @@ _TOOL_SCHEMA = {
 _TOOL_SCHEMA_OPENAI["function"]["parameters"] = _TOOL_SCHEMA["input_schema"]
 
 
+_CREDIT_ERROR_HINTS = ("insufficient", "balance", "quota", "credit", "payment", "401", "402", "429")
+
+
+def _is_credit_error(exc: Exception) -> bool:
+    """True for DeepSeek account-credit / auth failures (402 Insufficient Balance,
+    401, 429) — the only error class that should trigger the Bedrock fallback."""
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 402, 429):
+        return True
+    msg = str(exc).lower()
+    return any(h in msg for h in _CREDIT_ERROR_HINTS)
+
+
+def _bedrock_client():
+    """Force a Bedrock client regardless of provider selection — the credit-fallback target.
+    Returns (client, model_id) or (None, None) when BEDROCK_REGION is unset."""
+    import anthropic
+    region = os.environ.get("BEDROCK_REGION", "").strip()
+    if not region:
+        return None, None
+    model_id = os.environ.get("BEDROCK_MODEL_ID", _DEFAULT_BEDROCK_MODEL)
+    return anthropic.AnthropicBedrock(aws_region=region), model_id
+
+
+def _extract_via_anthropic(client, model_id: str, system_prompt: str, user_message: str) -> Optional[dict]:
+    """Anthropic-shaped tool-call extraction (direct API or Bedrock)."""
+    resp = client.messages.create(
+        model=model_id,
+        max_tokens=1024,
+        system=system_prompt,
+        tools=[_TOOL_SCHEMA],
+        tool_choice={"type": "tool", "name": "store_market_metrics"},
+        messages=[{"role": "user", "content": user_message}],
+    )
+    for block in resp.content:
+        if block.type == "tool_use" and block.name == "store_market_metrics":
+            return _sanity_check(block.input)
+    return None
+
+
 def extract_metrics(
     full_text: str,
     province: str,
@@ -508,46 +548,49 @@ def extract_metrics(
         client, model_id, provider = _get_client(api_key=api_key)
 
         if provider == "deepseek":
-            # OpenAI-compatible function calling. DeepSeek occasionally returns
-            # truncated/malformed tool-call JSON — retry once before giving up.
-            for attempt in (1, 2):
-                resp = client.chat.completions.create(
-                    model=model_id,
-                    max_tokens=4096,
-                    tools=[_TOOL_SCHEMA_OPENAI],
-                    tool_choice={"type": "function", "function": {"name": "store_market_metrics"}},
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user",   "content": user_message},
-                    ],
+            try:
+                # OpenAI-compatible function calling. DeepSeek occasionally returns
+                # truncated/malformed tool-call JSON — retry once before giving up.
+                for attempt in (1, 2):
+                    resp = client.chat.completions.create(
+                        model=model_id,
+                        max_tokens=4096,
+                        tools=[_TOOL_SCHEMA_OPENAI],
+                        tool_choice={"type": "function", "function": {"name": "store_market_metrics"}},
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user",   "content": user_message},
+                        ],
+                    )
+                    tool_calls = resp.choices[0].message.tool_calls
+                    if tool_calls:
+                        try:
+                            result = json.loads(tool_calls[0].function.arguments)
+                            return _sanity_check(result)
+                        except json.JSONDecodeError as exc:
+                            logger.warning(
+                                "DeepSeek invalid JSON (attempt %d/2) for %s %s "
+                                "(finish_reason=%s, args_len=%d): %s",
+                                attempt, province, report_month,
+                                resp.choices[0].finish_reason,
+                                len(tool_calls[0].function.arguments), exc,
+                            )
+            except Exception as exc:
+                # Credit/auth failure on DeepSeek → fall back to Bedrock Claude for this call.
+                if not _is_credit_error(exc):
+                    raise
+                logger.warning(
+                    "DeepSeek credit/auth failure (%s) — falling back to Bedrock for %s %s",
+                    exc, province, report_month,
                 )
-                tool_calls = resp.choices[0].message.tool_calls
-                if tool_calls:
-                    try:
-                        result = json.loads(tool_calls[0].function.arguments)
-                        return _sanity_check(result)
-                    except json.JSONDecodeError as exc:
-                        logger.warning(
-                            "DeepSeek invalid JSON (attempt %d/2) for %s %s "
-                            "(finish_reason=%s, args_len=%d): %s",
-                            attempt, province, report_month,
-                            resp.choices[0].finish_reason,
-                            len(tool_calls[0].function.arguments), exc,
-                        )
+                bc, bmodel = _bedrock_client()
+                if bc is None:
+                    raise RuntimeError("DeepSeek credit failure and BEDROCK_REGION unset — no fallback available") from exc
+                return _extract_via_anthropic(bc, bmodel, system_prompt, user_message)
 
         else:
             # Anthropic SDK (direct or Bedrock)
-            resp = client.messages.create(
-                model=model_id,
-                max_tokens=1024,
-                system=system_prompt,
-                tools=[_TOOL_SCHEMA],
-                tool_choice={"type": "tool", "name": "store_market_metrics"},
-                messages=[{"role": "user", "content": user_message}],
-            )
-            for block in resp.content:
-                if block.type == "tool_use" and block.name == "store_market_metrics":
-                    return _sanity_check(block.input)
+            return _extract_via_anthropic(client, model_id, system_prompt, user_message)
 
     except Exception as exc:
         logger.error("Metrics extraction failed for %s %s: %s", province, report_month, exc)

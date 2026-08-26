@@ -63,13 +63,34 @@ def _within_days(item: dict, days: Optional[int]) -> bool:
     return modified >= cutoff
 
 
+_NON_MONTHLY_PATTERNS = (
+    "年报", "年度", "半年报", "上半年", "前三季度", "通报", "预测", "供需", "中长期",
+)
+
+
+def _is_non_monthly(filename: str, exc: Exception) -> bool:
+    """True when a file doesn't belong in the monthly schema and should be
+    rerouted to the KB: annual/period/special reports by name, or anything the
+    monthly pipeline rejected for missing report_month / province."""
+    if any(p in filename for p in _NON_MONTHLY_PATTERNS):
+        return True
+    msg = str(exc)
+    return "Cannot infer report_month" in msg or "Cannot infer province" in msg
+
+
 def _existing_filenames(pg_url: str) -> set[str]:
+    """Filenames already handled anywhere — monthly reports table (ingested)
+    plus KB docs (including non-monthly files rerouted there), so rerouted
+    files are not re-downloaded every run."""
     import psycopg2
     conn = psycopg2.connect(pg_url, options="-c statement_timeout=15000")
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT file_name FROM staging.exchange_monthly_reports")
-            return {r[0] for r in cur.fetchall() if r[0]}
+            monthly = {r[0] for r in cur.fetchall() if r[0]}
+            cur.execute("SELECT file_name FROM staging.spot_knowledge_docs")
+            kb = {r[0] for r in cur.fetchall() if r[0]}
+            return monthly | kb
     finally:
         conn.close()
 
@@ -88,7 +109,7 @@ def scan_exchange_reports_onedrive(
     from services.exchange_reports.ingestor import ingest_report
 
     summary: dict = {"scanned": 0, "candidates": 0, "ingested": 0,
-                     "duplicate": 0, "failed": 0, "skipped": 0, "results": []}
+                     "duplicate": 0, "failed": 0, "skipped": 0, "kb_ingested": 0, "results": []}
 
     if onedrive is None:
         logger.warning("exchange watch: OneDrive not configured — skipping scan")
@@ -136,9 +157,30 @@ def scan_exchange_reports_onedrive(
             logger.info("exchange watch: %s → %s (%s %s)", name, status,
                         result.get("province"), result.get("report_month"))
         except Exception as exc:
-            summary["failed"] += 1
-            summary["results"].append({"file": name, "status": "failed", "error": str(exc)[:200]})
-            logger.error("exchange watch: ingest failed for %s: %s", name, exc, exc_info=True)
+            # Non-monthly reports (annual/period/special) don't fit the monthly
+            # schema — reroute to the KB instead of leaving them failed.
+            if _is_non_monthly(name, exc):
+                try:
+                    from services.knowledge_pool.knowledge_docs import register_and_ingest
+                    doc_id, is_new, cat = register_and_ingest(
+                        file_bytes=file_bytes, filename=name,
+                        category_override=None, app="strategist",
+                        api_key=api_key, synthesize=True,
+                    )
+                    summary["kb_ingested"] += 1
+                    summary["results"].append({
+                        "file": name, "status": "kb_ingested",
+                        "kb_doc_id": doc_id, "category": cat, "is_new": is_new,
+                    })
+                    logger.info("exchange watch: %s → KB (doc_id=%s, cat=%s)", name, doc_id, cat)
+                except Exception as kb_exc:
+                    summary["failed"] += 1
+                    summary["results"].append({"file": name, "status": "failed", "error": str(kb_exc)[:200]})
+                    logger.error("exchange watch: KB reroute failed for %s: %s", name, kb_exc, exc_info=True)
+            else:
+                summary["failed"] += 1
+                summary["results"].append({"file": name, "status": "failed", "error": str(exc)[:200]})
+                logger.error("exchange watch: ingest failed for %s: %s", name, exc, exc_info=True)
 
     # Notify only when something new actually landed
     if feishu and owner_open_id and summary["ingested"] > 0 and not dry_run:

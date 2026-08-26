@@ -683,13 +683,28 @@ def _detect_province_via_llm(
         )
         user = f"文件名: {filename}\n\n{sample}"
         if provider == "deepseek":
-            resp = client.chat.completions.create(
-                model=model_id,
-                max_tokens=30,
-                messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": user}],
-            )
-            detected = (resp.choices[0].message.content or "").strip()
+            try:
+                resp = client.chat.completions.create(
+                    model=model_id,
+                    max_tokens=30,
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                )
+                detected = (resp.choices[0].message.content or "").strip()
+            except Exception as exc:
+                # Credit/auth failure on DeepSeek → fall back to Bedrock Claude.
+                from services.exchange_reports.metrics_extractor import _bedrock_client, _is_credit_error
+                if not _is_credit_error(exc):
+                    raise
+                bc, bmodel = _bedrock_client()
+                if bc is None:
+                    raise
+                logger.warning("DeepSeek credit failure (%s) — province detection falling back to Bedrock", exc)
+                resp = bc.messages.create(
+                    model=bmodel, max_tokens=30, system=system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                detected = resp.content[0].text.strip()
         else:
             resp = client.messages.create(
                 model=model_id,

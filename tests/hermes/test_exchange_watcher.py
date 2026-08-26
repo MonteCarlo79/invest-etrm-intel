@@ -123,3 +123,40 @@ class TestScan:
             s = scan_exchange_reports_onedrive(od, "pg", "key", dry_run=True, root="root")
         od.read_file.assert_not_called()
         assert s["results"][0]["status"] == "dry_run"
+
+
+class TestNonMonthlyReroute:
+    def test_annual_report_rerouted_to_kb(self):
+        od = _fake_onedrive({"root": [_item("广东电力现货市场2025年年报.pdf", days_ago=1)]})
+        with patch(_PATCH_KNOWN, return_value=set()), \
+             patch(_PATCH_INGEST, side_effect=ValueError("Cannot infer report_month from filename: 'x'")), \
+             patch("services.knowledge_pool.knowledge_docs.register_and_ingest",
+                   return_value=(9001, True, "annual_report")) as kb:
+            s = scan_exchange_reports_onedrive(od, "pg", "key", root="root")
+        assert s["kb_ingested"] == 1 and s["failed"] == 0
+        assert s["results"][0]["kb_doc_id"] == 9001
+
+    def test_monthly_failure_without_month_also_rerouted(self):
+        od = _fake_onedrive({"root": [_item("2025年江苏电力市场运营情况通报.pdf", days_ago=1)]})
+        with patch(_PATCH_KNOWN, return_value=set()), \
+             patch(_PATCH_INGEST, side_effect=ValueError("Cannot infer report_month from filename: 'x'")), \
+             patch("services.knowledge_pool.knowledge_docs.register_and_ingest",
+                   return_value=(9002, True, "monthly_report")):
+            s = scan_exchange_reports_onedrive(od, "pg", "key", root="root")
+        assert s["kb_ingested"] == 1 and s["failed"] == 0
+
+    def test_unrelated_failure_stays_failed(self):
+        od = _fake_onedrive({"root": [_item("新疆2026年6月月报.pdf", days_ago=1)]})
+        with patch(_PATCH_KNOWN, return_value=set()), \
+             patch(_PATCH_INGEST, side_effect=RuntimeError("connection reset")):
+            s = scan_exchange_reports_onedrive(od, "pg", "key", root="root")
+        assert s["kb_ingested"] == 0 and s["failed"] == 1
+
+    def test_kb_reroute_failure_stays_failed(self):
+        od = _fake_onedrive({"root": [_item("2025年年报.pdf", days_ago=1)]})
+        with patch(_PATCH_KNOWN, return_value=set()), \
+             patch(_PATCH_INGEST, side_effect=ValueError("Cannot infer report_month from filename: 'x'")), \
+             patch("services.knowledge_pool.knowledge_docs.register_and_ingest",
+                   side_effect=RuntimeError("db down")):
+            s = scan_exchange_reports_onedrive(od, "pg", "key", root="root")
+        assert s["kb_ingested"] == 0 and s["failed"] == 1
