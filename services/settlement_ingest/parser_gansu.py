@@ -61,7 +61,7 @@ def _row_amount(text: str, label: str) -> float | None:
     whitespace, otherwise backtracking splits "338314.98" into "33831" + "4.98"
     (observed 2026-05).
     """
-    m = re.search(re.escape(label) + r"\s+(?:-\s+|\d[\d,]*\s+)?(-?[\d,]+\.\d{1,2})(?=\s|$)", text)
+    m = re.search(re.escape(label) + r"\s+(?:-\s+|/\s*|\d[\d,]*\s+)?(-?[\d,]+\.\d{1,2})(?=\s|$)", text)
     return _num(m.group(1)) if m else None
 
 
@@ -138,3 +138,93 @@ def parse_gansu_discharge_pdf(file_path: str) -> list[dict[str, Any]]:
             text += t + "\n"
     pdf.close()
     return parse_gansu_discharge_text(text)
+
+
+GANSU_CHARGE_SIGNATURE_MARKERS = ("市场化购电电费", "输配电量电费")
+
+# Gansu 下网 charge bill 费用组成 rows: (label, category)
+# Amounts are taken AS PRINTED, then NEGATED (charge-side P&L convention:
+# costs are negative; a 退补 refund bill prints negative amounts, which then
+# become positive P&L — observed 民勤 2026-04（退补）: -610,866.63 → +610,866.63).
+# Validation: sum of rows as printed == 合计 (the bill's own arithmetic check).
+_CHARGE_FEE_ROWS = [
+    ("市场化购电电费", "charge_energy"),
+    ("输配电量电费", "transmission"),
+    ("输配容（需）量电费", "basic_fee"),
+    ("上网环节线损费用", "system_operation"),
+    ("系统运行费", "system_operation"),
+    ("功率因数调整电费", "basic_fee"),
+    ("政府性基金及附加", "govt_surcharges"),
+    ("代理服务费", "other"),
+    ("非市场化电费", "other"),
+    ("自备电厂系统备用费", "other"),
+    ("市场运营费用及不平衡资金", "system_operation"),
+    ("退补电费", "charge_energy"),
+    ("分次结算清算费用", "other"),
+]
+
+
+def is_gansu_charge_bill(text: str) -> bool:
+    """True for the Gansu 下网 charge bill layout (费用组成 with ①市场化购电电费)."""
+    return all(m in text for m in GANSU_CHARGE_SIGNATURE_MARKERS)
+
+
+def parse_gansu_charge_text(text: str) -> list[dict[str, Any]]:
+    """Parse a Gansu 下网 charge bill's text into settlement items.
+
+    Layout (observed 民勤储能下网电费结算单 2026-01 + 04（退补）):
+      本期电量 1551995千瓦时 本期电费 179574.29元
+      费用组成 计收数量 电费
+      ①市场化购电电费 1551995 179574.29
+      ②输配电量电费 1551995 0.00
+      ...
+      合计 ¥179574.29
+    """
+    # Truncate at 备注 — the 用能分析 panel after it holds 峰平谷 volume tables
+    # whose numbers previously leaked into 系统运行费 (the -1,142,286 junk).
+    text = text.split("备注")[0]
+
+    # Volume (kWh) and total (元) from the header line
+    m_vol = re.search(r"本期电量\s*([\d,]+)\s*千瓦时", text)
+    m_total = re.search(r"本期电费\s*(-?[\d,]+\.\d{1,2})\s*元", text)
+    if not (m_vol and m_total):
+        return []
+    vol_mwh = _num(m_vol.group(1)) / 1000.0
+    total_cny = _num(m_total.group(1))
+
+    items: list[dict[str, Any]] = []
+    printed_sum = 0.0
+    for label, category in _CHARGE_FEE_ROWS:
+        # Row: ①市场化购电电费 1551995 179574.29  — volume may be "/" (none)
+        amt = _row_amount(text, label)
+        if amt is None or amt == 0:
+            continue
+        printed_sum += amt
+        items.append({
+            "category": category,
+            "volume_mwh": vol_mwh if category == "charge_energy" and vol_mwh > 0 else None,
+            "price_cny_kwh": None,
+            "amount_cny": -amt,  # negate: printed cost → negative P&L
+            "notes": f"甘肃下网结算单: {label}",
+        })
+
+    if not items:
+        return []
+
+    # Validation: rows as printed must sum to 合计/本期电费
+    if abs(printed_sum - total_cny) > 1.0:
+        return []
+
+    return items
+
+
+def parse_gansu_charge_pdf(file_path: str) -> list[dict[str, Any]]:
+    """File-level wrapper for the Gansu charge parser."""
+    pdf = pdfplumber.open(file_path)
+    text = ""
+    for page in pdf.pages:
+        t = page.extract_text()
+        if t:
+            text += t + "\n"
+    pdf.close()
+    return parse_gansu_charge_text(text)

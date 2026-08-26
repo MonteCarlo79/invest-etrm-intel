@@ -301,8 +301,25 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                     "Use the scanner path or obtain the text version."
                 )
                 return
-            from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
-            items = parse_charging_cost_pdf(tmp_path)
+            # Gansu 下网 layout first: the Mengxi regex doesn't fail on these —
+            # it produces junk (valley volumes as 系统运行费, observed 民勤 2026-01..06)
+            gansu_text = ""
+            with pdfplumber.open(tmp_path) as _pdf:
+                for _pg in _pdf.pages:
+                    gansu_text += (_pg.extract_text() or "") + "\n"
+            from services.settlement_ingest.parser_gansu import (
+                is_gansu_charge_bill, parse_gansu_charge_text,
+            )
+            if is_gansu_charge_bill(gansu_text):
+                items = parse_gansu_charge_text(gansu_text)
+                st.info("国网甘肃 charge bill detected — parsed deterministically (no vision).")
+            else:
+                from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
+                items = parse_charging_cost_pdf(tmp_path)
+                if not items:
+                    # Non-Mengxi charge layout — generic vision fallback
+                    from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                    items = parse_charge_bill_vision(tmp_path)
             if not items:
                 # Non-Mengxi charge layout (e.g. 甘肃) — generic vision fallback
                 st.info("Charge regex parser found nothing — trying AI Vision (generic provincial layout)...")

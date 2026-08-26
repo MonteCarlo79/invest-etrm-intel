@@ -239,11 +239,21 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
         # Ingest
         try:
             if pdf_type == "charge":
-                items = parse_charging_cost_pdf(str(pdf_path))
-                if not items:
-                    # Non-Mengxi charge layout — generic vision fallback
-                    from services.settlement_ingest.parser_vision import parse_charge_bill_vision
-                    items = parse_charge_bill_vision(str(pdf_path))
+                # Gansu 下网 layout first (Mengxi regex produces junk, not failure)
+                from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
+                import pdfplumber as _pp
+                _text = ""
+                with _pp.open(str(pdf_path)) as _pdf:
+                    for _pg in _pdf.pages:
+                        _text += (_pg.extract_text() or "") + "\n"
+                if is_gansu_charge_bill(_text):
+                    items = parse_gansu_charge_pdf(str(pdf_path))
+                else:
+                    items = parse_charging_cost_pdf(str(pdf_path))
+                    if not items:
+                        # Non-Mengxi charge layout — generic vision fallback
+                        from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                        items = parse_charge_bill_vision(str(pdf_path))
             elif pdf_type == "discharge":
                 items = parse_discharge_settlement_pdf(str(pdf_path))
             elif pdf_type == "voucher":
