@@ -824,7 +824,7 @@ def _score_article(title: str, body: str, api_key: str) -> dict:
     try:
         msg = client.messages.create(
             model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
-            max_tokens=256,
+            max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         text = msg.content[0].text.strip()
@@ -940,7 +940,7 @@ def _score_articles_batch(articles: list[dict], api_key: str) -> list[dict]:
             try:
                 msg = client.messages.create(
                     model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
-                    max_tokens=max(256, 300 * len(chunk)),
+                    max_tokens=max(512, 600 * len(chunk)),
                     messages=[{"role": "user", "content": prompt}],
                 )
                 text = msg.content[0].text.strip()
@@ -968,17 +968,49 @@ def _score_articles_batch(articles: list[dict], api_key: str) -> list[dict]:
                 break
 
         if parsed is None:
-            logger.warning(
-                "Batch of %d malformed after retry — falling back to per-article scoring",
-                len(chunk),
-            )
-            parsed = [
-                _score_article(a.get("title", ""), a.get("body") or "", api_key)
-                for a in chunk
-            ]
+            # Truncated/malformed array — salvage complete objects before falling back.
+            salvaged = _salvage_batch_objects(text, len(chunk))
+            if salvaged is not None:
+                logger.warning(
+                    "Batch of %d truncated — salvaged %d complete objects",
+                    len(chunk), len(salvaged),
+                )
+                parsed = salvaged + [_null() for _ in chunk[len(salvaged):]]
+            else:
+                logger.warning(
+                    "Batch of %d malformed after retry — falling back to per-article scoring",
+                    len(chunk),
+                )
+                parsed = [
+                    _score_article(a.get("title", ""), a.get("body") or "", api_key)
+                    for a in chunk
+                ]
         results.extend(parsed)
 
     return results
+
+
+def _salvage_batch_objects(text: str, expected: int) -> Optional[list]:
+    """Extract complete flat {...} objects from a truncated/malformed JSON array.
+
+    The batch scorer's JSON objects are flat (no nested braces), so a simple
+    pattern finds every complete object before the truncation point. Returns
+    the list of parsed objects (possibly shorter than `expected`), or None if
+    none parse — the caller then falls back to per-article scoring.
+    """
+    import json as _json
+
+    salvaged: list[dict] = []
+    for m in re.finditer(r"\{[^{}]*\}", text):
+        try:
+            obj = _json.loads(m.group(0))
+        except _json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "relevance" in obj:
+            salvaged.append(obj)
+    if salvaged and len(salvaged) < expected:
+        return salvaged
+    return None
 
 
 def _apply_ai_scoring(articles: list[dict], api_key: str) -> None:

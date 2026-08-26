@@ -152,3 +152,25 @@ def test_batch_size_chunks_by_10():
     ]
     assert sizes == [10, 10, 5]
     assert all(a["ai_result"]["relevance"] == 6 for a in arts)
+
+
+class TestSalvageBatchObjects:
+    def test_salvages_complete_objects_from_truncated_array(self):
+        from services.hermes.news_screener import _salvage_batch_objects
+        text = ('[{"relevance": 8, "region_bucket": "全国", "region_province": null, '
+                '"category": "industry_news", "summary": "a"}, '
+                '{"relevance": 7, "region_bucket": "全国", "region_province": null, '
+                '"category": "policy", "summary": "b"}, {"relevance": 9, "region_bu')
+        result = _salvage_batch_objects(text, expected=3)
+        assert result is not None and len(result) == 2
+        assert result[0]["relevance"] == 8 and result[1]["relevance"] == 7
+
+    def test_returns_none_when_nothing_complete(self):
+        from services.hermes.news_screener import _salvage_batch_objects
+        assert _salvage_batch_objects('[{"relevance": 8, "region_bu', expected=2) is None
+
+    def test_returns_none_when_all_complete(self):
+        # full-length array means it wasn't truncated — the main parser handles it
+        from services.hermes.news_screener import _salvage_batch_objects
+        text = '[{"relevance": 8}, {"relevance": 7}]'
+        assert _salvage_batch_objects(text, expected=2) is None
