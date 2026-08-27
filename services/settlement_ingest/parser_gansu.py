@@ -32,12 +32,16 @@ GANSU_BILL_SIGNATURE = "国网甘肃省电力公司"
 #   430,687.06 + 424,087.34 − 88,646.40 + 36,505.54 = 802,633.54 (2026-06) ✓
 _FEE_ROWS = [
     ("电能量电费", "discharge_energy", +1),
-    ("系统运行费用", "system_operation", +1),
+    # 系统运行费用 on the discharge bill is 辅助服务交易 / 省内调频服务 (frequency
+    # revenue) per the bill's own detail pages — NOT a system-operation fee
+    # (observed 民勤 2026-05 detail: 系统运行费用 → 辅助服务交易 → 省内调频服务).
+    ("系统运行费用", "frequency", +1),
     ("辅助服务交易", "frequency", +1),
+    # 两个细则费用 = ancillary-services assessment (as printed, may be negative)
+    ("两个细则费用", "frequency", +1),
     ("市场运营费用", "system_operation", +1),
     ("双轨制资金分摊", "system_operation", +1),
     ("偏差费用", "penalty", +1),
-    ("两个细则费用", "system_operation", +1),
     ("容量费用", "capacity_compensation", +1),
     ("清算", "other", +1),
 ]
@@ -152,7 +156,9 @@ _CHARGE_FEE_ROWS = [
     ("输配电量电费", "transmission"),
     ("输配容（需）量电费", "basic_fee"),
     ("上网环节线损费用", "system_operation"),
-    ("系统运行费", "system_operation"),
+    # Gansu charge-side 系统运行费 is the system-operation charge (Mengxi's
+    # 燃气容量电费 family) → 系统运行费 column, NOT 上网线损费.
+    ("系统运行费", "coal_capacity_charge"),
     ("功率因数调整电费", "basic_fee"),
     ("政府性基金及附加", "govt_surcharges"),
     ("代理服务费", "other"),

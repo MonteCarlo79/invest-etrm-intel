@@ -76,8 +76,9 @@ def test_may_detached_volume_label():
     assert len(items) == 2
     en = next(i for i in items if i["category"] == "discharge_energy")
     assert en["volume_mwh"] == pytest.approx(1369.728)
-    so = next(i for i in items if i["category"] == "system_operation")
-    assert so["amount_cny"] == pytest.approx(338314.98)
+    # 系统运行费用 on the discharge bill is 辅助服务交易/省内调频服务 → frequency
+    fr = next(i for i in items if i["category"] == "frequency")
+    assert fr["amount_cny"] == pytest.approx(338314.98)
 
 
 def test_jun_negative_and_clearing_rows():

@@ -60,7 +60,9 @@ _PROMPT_TEMPLATE = """This image is a monthly electricity settlement bill issued
 
 Layouts vary by province and issuer — do NOT assume any specific table structure. Read whatever is printed.
 
-Extract every fee/revenue line item. Return ONLY a JSON array of objects with these keys:
+IMPORTANT: many bills contain BOTH a summary table (本期电费明细 / 类别 / 费用组成) and detail breakdowns (e.g. 现货交易 sub-items 3.1/3.2/3.3, per-period rows). Extract ONLY from the summary table. Do NOT extract detail-section rows that decompose a summary row — they double-count (e.g. if 电能量电费 exists as a summary row, skip its 现货交易 breakdown).
+
+Extract every fee/revenue line item from the summary table. Return ONLY a JSON array of objects with these keys:
 - "item_cn": the line-item name exactly as printed (e.g. 上网电费, 现货电费, 电能电费, 容量补偿费用, 输配电费, 系统运行费, 政府性基金及附加, 偏差考核费用)
 - "volume": number, raw value as printed (null if the line has no volume)
 - "volume_unit": "千瓦时" / "千千瓦时" / "兆瓦时" exactly as printed (null if none)
