@@ -27,6 +27,31 @@ _CATEGORY_CN = {
 
 _REVENUE_CATS = ("discharge_energy", "generation_revenue")
 
+ASSET_CLASS_OPTIONS = ["wind", "solar", "bess", "thermal", "load",
+                       "wind+bess", "wind+bess+load", "solar+bess+load"]
+
+
+def book_matches_classes(asset_type: str | None, book_type: str | None, sel_classes: list[str]) -> bool:
+    """True if a book matches any of the selected asset classes.
+
+    Single classes match rm_assets.asset_type; 'load' matches rm_books.book_type;
+    composites are unions (e.g. 'wind+bess+load' = wind/bess assets or load books).
+    """
+    t = asset_type or ""
+    bt = book_type or ""
+    for c in sel_classes:
+        if c == t:
+            return True
+        if c == "load" and bt == "load":
+            return True
+        if c == "wind+bess" and t in ("wind", "bess"):
+            return True
+        if c == "wind+bess+load" and (t in ("wind", "bess") or bt == "load"):
+            return True
+        if c == "solar+bess+load" and (t in ("solar", "bess") or bt == "load"):
+            return True
+    return False
+
 
 def _portfolio_matrix(items_df: pd.DataFrame) -> pd.DataFrame:
     """Month × asset net-profit matrix with 组合合计 column and 资产合计 row."""
@@ -92,7 +117,7 @@ def render_pnl(engine):
 
     with engine.connect() as conn:
         books = pd.read_sql(text(
-            "SELECT b.id, b.name, a.asset_type FROM marketdata.rm_books b "
+            "SELECT b.id, b.name, b.book_type, a.asset_type, a.province FROM marketdata.rm_books b "
             "LEFT JOIN marketdata.rm_assets a ON a.id = b.asset_id ORDER BY b.name"
         ), conn)
 
@@ -100,16 +125,38 @@ def render_pnl(engine):
         st.warning("No books found.")
         return
 
-    # Multi-select: all books = portfolio; any subset = filtered portfolio;
-    # exactly one = single-book view (user request 2026-08-22)
+    # Province + asset class filters (user request 2026-08-27)
+    provinces = sorted(p for p in books["province"].dropna().unique().tolist())
+    fcol1, fcol2 = st.columns(2)
+    with fcol1:
+        sel_provinces = st.multiselect("Province", provinces, default=provinces, key="pnl_prov")
+    with fcol2:
+        sel_classes = st.multiselect("Asset class", ASSET_CLASS_OPTIONS,
+                                     default=ASSET_CLASS_OPTIONS, key="pnl_class")
+
+    all_prov_selected = len(sel_provinces) == len(provinces)
+    mask = books.apply(
+        lambda r: book_matches_classes(r["asset_type"], r["book_type"], sel_classes)
+        and (r["province"] in sel_provinces or (pd.isna(r["province"]) and all_prov_selected)),
+        axis=1,
+    )
+    filtered_books = books[mask]
+    if filtered_books.empty:
+        st.info("No books match the current filters.")
+        return
+
+    # Multi-select over the filtered set: one = single view, many = portfolio.
+    # Key encodes the filter state so changing a filter resets to the full filtered set.
+    filter_key = f"pnl_books_{len(sel_provinces)}p_{len(sel_classes)}c"
     selected_names = st.multiselect(
         "Book (select one for single view, multiple for portfolio)",
-        books["name"].tolist(), default=books["name"].tolist(), key="pnl_books",
+        filtered_books["name"].tolist(), default=filtered_books["name"].tolist(),
+        key=filter_key,
     )
     if not selected_names:
         st.info("Select one or more books to see P&L.")
         return
-    sel_ids = books[books["name"].isin(selected_names)]["id"].tolist()
+    sel_ids = filtered_books[filtered_books["name"].isin(selected_names)]["id"].tolist()
 
     if len(sel_ids) > 1:
         _render_portfolio(engine, sel_ids)
