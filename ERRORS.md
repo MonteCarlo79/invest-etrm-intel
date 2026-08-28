@@ -4,6 +4,47 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## OneDrive bulk hydration fails instantly with ETIMEDOUT: sync engine not running (Mac)
+
+**What didn't work:**
+1. Reading dataless files to trigger hydration — every `read()` failed in <1s with `Errno 60 Operation timed out`, even files that hydrated fine an hour earlier. Not a network timeout: an instant rejection.
+2. `fileproviderctl` — this macOS build has no `materialize` command; there is no CLI force-download.
+3. Hammering with `ditto`/parallel readers while the engine is down — 100% failure, and the File Provider wedges further (47-min hang `.diag` reports in `/Library/Logs/DiagnosticReports/`).
+
+**Root cause:** only the `OneDrive File Provider.appex` was running; the **main sync engine** (`/Applications/OneDrive.app/Contents/MacOS/OneDrive`) had quit. The appex cannot serve hydration without it. The engine also dies repeatedly under sustained bulk-download load (~1-2h, then every ~5 min when throttled).
+
+**What worked:**
+- Check first: `ps aux | grep "OneDrive.app/Contents/MacOS/OneDrive"` — if absent, `open -a OneDrive` and reads succeed within ~15s.
+- For 1000+ files: serial-ish hydration script (thread pool ≤3, plain `read()` → mirror to /tmp, skip already-staged by size, idempotent) run in **waves with 3-min pauses** + a **watchdog** that relaunches the engine when it dies:
+  ```bash
+  while true; do pgrep -f "OneDrive.app/Contents/MacOS/OneDrive" >/dev/null || { open -a OneDrive; sleep 45; }; sleep 30; done
+  ```
+- OneDrive throttles bulk hydration after ~350-400 rapid downloads; waves outlast the throttle. 1,126 files ≈ 4h wall-clock this way. Faster durable alternative: user pins the folder **"Always Keep on This Device"** in Finder (different, prioritized download path).
+- Detect dataless files without triggering hydration: `ls -lO` shows `dataless` flag. First observed 2026-08-28/29, nomination+dispatch ingestion (889 xlsx, 378MB).
+
+---
+
+## Row-by-row INSERT over WAN = hours; batch every bulk load
+
+**What didn't work:**
+- `cur.execute(INSERT ... ON CONFLICT)` per 5-min interval row from Mac → RDS Singapore: ~1.7M rows × 5-10ms RTT = 3-5h per ingest run, and looks exactly like a hang (no output for 50+ min).
+
+**What worked:**
+- `psycopg2.extras.execute_batch(cur, SQL, rows, page_size=2000)` — same station finished in ~1-2 min. Rule: any ingest >10k rows must batch; per-station `conn.commit()` stays (this network kills long transactions). Applied 2026-08-29 to `services/dispatch_ingest/`.
+
+---
+
+## Trader Excel date typos: verify parsed dates against sheet name / plausible window
+
+**What didn't work:**
+- Trusting in-sheet dates: 汇总 workbooks had `2006-01-26…2006-12-26` (trader typed `06-01-26` meaning 2026-06-01; Excel read YY-MM-DD, days advance the MONTH component). Another file had epoch-0 junk cells → 1969/1970 rows in the DB.
+
+**What worked:**
+- Repair rule verified against raw cells: year==2006 + sheet title `(\d{1,2})月` → rebuild as `2026-{sheet_month}-{parsed.month:02d}` (parsed.month is the intended day). Drop any other pre-2024 rows. Filter daily dispatch sheets (`M.DD` title) to rows matching the title date — template leftover rows from other months otherwise upsert over the authoritative month file. Implemented in `services/dispatch_ingest/` 2026-08-29.
+
+---
+
+
 ## docker build from OneDrive repo root: context stall + silently missing files (Mac)
 
 **What didn't work:**
