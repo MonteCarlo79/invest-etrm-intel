@@ -7,6 +7,11 @@ Layout survey (2026-08-28):
       日期 | 时刻 | 预策略D-2功率（MW） | 正式策略D-1功率（MW）
   07-巴盟:
       日期 | 时刻 | 预申报策略（MW） | 实际申报策略（MW）
+  Single-column variant (seen in 01-苏右 April files):
+      日期 | 时刻 | 申报功率（MW） | 爬坡校验 | ...
+  Multi-sheet workbooks may carry a real nomination sheet (策略申报) plus a
+  zeroed output template (输出模板) with the same header — parse_nomination_file
+  merges by interval, letting the sheet with more actual values win.
 
 Intervals are 5-min. Positive MW = discharge, negative = charge.
 Header-driven column detection — no per-station hardcoding.
@@ -17,6 +22,7 @@ import re
 from typing import Any
 
 import openpyxl
+import pandas as pd
 
 # 申报策略 station folder → rm_assets.name
 NOMINATION_FOLDER_TO_ASSET = {
@@ -31,11 +37,13 @@ NOMINATION_FOLDER_TO_ASSET = {
 
 # Header aliases → canonical field
 _PLANNED_ALIASES = ("预计划功率", "预策略d-2功率", "预申报策略")
-_NOMINATED_ALIASES = ("正式申报", "正式策略d-1功率", "实际申报策略")
+_NOMINATED_ALIASES = ("正式申报", "正式策略d-1功率", "实际申报策略", "实际申报功率", "申报功率", "功率")
+_TIME_ALIASES = ("时刻", "时间")
 
 
 def _norm(s: str) -> str:
-    return re.sub(r"[\s（(].*$", "", (s or "").strip().lower())
+    s = re.sub(r"[\s（(].*$", "", (s or "").strip().lower())
+    return re.sub(r"^\d+[.、]", "", s)  # "2.申报功率（MW）" → "申报功率"
 
 
 def _match_alias(cell: str, aliases: tuple[str, ...]) -> bool:
@@ -51,9 +59,9 @@ def _find_columns(header_row: list[Any]) -> dict[str, int] | None:
         if not text:
             continue
         n = _norm(text)
-        if n == "日期":
+        if n == "日期" and "date" not in cols:
             cols["date"] = i
-        elif n == "时刻":
+        elif n in _TIME_ALIASES and "time" not in cols:
             cols["time"] = i
         elif "planned" not in cols and _match_alias(text, _PLANNED_ALIASES):
             cols["planned"] = i
@@ -72,6 +80,30 @@ def _to_float(v: Any) -> float | None:
     except (TypeError, ValueError):
         m = re.search(r"-?\d[\d,]*\.?\d*", str(v))
         return float(m.group(0).replace(",", "")) if m else None
+
+
+_SHEET_MONTH_RE = re.compile(r"(\d{1,2})月")
+_MIN_PLAUSIBLE = pd.Timestamp("2024-01-01", tz="Asia/Shanghai")
+
+
+def _repair_date(ts: "pd.Timestamp", sheet_title: str) -> "pd.Timestamp | None":
+    """Repair known trader date typos; return None to drop the row.
+
+    汇总 sheets: trader typed "06-01-26" meaning 2026-06-01; Excel stored
+    YY-MM-DD → 2006-01-26, and following days advance the MONTH component
+    (2006-02-26 = Jun 2 …). Verified on 【汇总】6月杭锦旗 workbook 2026-08-29.
+    Other pre-2024 timestamps are junk tail cells (e.g. epoch-0) → drop.
+    """
+    if ts >= _MIN_PLAUSIBLE:
+        return ts
+    m = _SHEET_MONTH_RE.search(sheet_title or "")
+    if ts.year == 2006 and m:
+        month = int(m.group(1))
+        try:
+            return ts.replace(year=2026, month=month, day=ts.month)
+        except ValueError:
+            return None
+    return None
 
 
 def parse_nomination_sheet(ws) -> list[dict[str, Any]]:
@@ -94,8 +126,6 @@ def parse_nomination_sheet(ws) -> list[dict[str, Any]]:
     if cols is None:
         return []
 
-    import pandas as pd
-
     items = []
     for row in ws.iter_rows(min_row=header_row_idx + 1, values_only=True):
         date_v = row[cols["date"]] if cols["date"] < len(row) else None
@@ -106,6 +136,9 @@ def parse_nomination_sheet(ws) -> list[dict[str, Any]]:
             ts = pd.Timestamp(f"{pd.to_datetime(date_v).date()} {time_v}", tz="Asia/Shanghai")
         except Exception:
             continue
+        ts = _repair_date(ts, getattr(ws, "title", ""))
+        if ts is None:
+            continue
         items.append({
             "interval_start": ts,
             "planned_mw": _to_float(row[cols["planned"]]) if "planned" in cols else None,
@@ -115,13 +148,32 @@ def parse_nomination_sheet(ws) -> list[dict[str, Any]]:
 
 
 def parse_nomination_file(file_path: str) -> list[dict[str, Any]]:
-    """Parse every nomination-looking sheet in one workbook."""
+    """Parse nomination sheets in one workbook, merged by interval.
+
+    Some workbooks carry both the real nomination sheet (策略申报) and a zeroed
+    output template (输出模板) with an identical header. Sheets are applied in
+    ascending order of non-null nomination count, so the sheet with the most
+    actual data wins any overlapping interval.
+    """
     wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-    items: list[dict[str, Any]] = []
+    scored: list[tuple[tuple[int, int], list[dict[str, Any]]]] = []
     for ws in wb.worksheets:
-        items.extend(parse_nomination_sheet(ws))
+        items = parse_nomination_sheet(ws)
+        if items:
+            # Template sheets are filled with literal 0s, so rank by non-zero
+            # nominations; break ties toward the explicitly-named nomination sheet.
+            nonzero = sum(1 for it in items if it["nominated_mw"] not in (None, 0))
+            prefer = 1 if "策略申报" in ws.title else 0
+            scored.append(((nonzero, prefer), items))
     wb.close()
-    return items
+    merged: dict[Any, dict[str, Any]] = {}
+    for _, items in sorted(scored, key=lambda si: si[0]):
+        for it in items:
+            key = it["interval_start"]
+            if key in merged and it["planned_mw"] is None and it["nominated_mw"] is None:
+                continue
+            merged[key] = it
+    return list(merged.values())
 
 
 def ingest_nominations(root: str, batch_id: str) -> dict[str, Any]:
@@ -150,6 +202,7 @@ def ingest_nominations(root: str, batch_id: str) -> dict[str, Any]:
                     continue
 
                 rows_written = 0
+                pending: list[tuple] = []
                 for dirpath, _, files in os.walk(folder_path):
                     for fname in sorted(files):
                         if not fname.endswith(".xlsx") or fname.startswith("~$"):
@@ -163,21 +216,28 @@ def ingest_nominations(root: str, batch_id: str) -> dict[str, Any]:
                         if not items:
                             report["skipped"].append(f"{fname}: no nomination sheets")
                             continue
-                        for it in items:
-                            cur.execute("""
-                                INSERT INTO marketdata.rm_nominations
-                                    (asset_id, interval_start, planned_mw, nominated_mw,
-                                     source_file, upload_batch_id)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (asset_id, interval_start) DO UPDATE SET
-                                    planned_mw = EXCLUDED.planned_mw,
-                                    nominated_mw = EXCLUDED.nominated_mw,
-                                    source_file = EXCLUDED.source_file,
-                                    upload_batch_id = EXCLUDED.upload_batch_id
-                            """, (asset_id, it["interval_start"], it["planned_mw"],
-                                  it["nominated_mw"], os.path.join(dirpath.replace(root, "").lstrip("/"), fname),
-                                  batch_id))
-                            rows_written += 1
+                        rel = os.path.join(dirpath.replace(root, "").lstrip("/"), fname)
+                        pending.extend(
+                            (asset_id, it["interval_start"], it["planned_mw"],
+                             it["nominated_mw"], rel, batch_id)
+                            for it in items
+                        )
+                if pending:
+                    from psycopg2.extras import execute_batch
+                    # Batched upsert: row-by-row INSERTs over WAN cost hours at
+                    # 5-min granularity; execute_batch cuts round trips ~2000x.
+                    execute_batch(cur, """
+                        INSERT INTO marketdata.rm_nominations
+                            (asset_id, interval_start, planned_mw, nominated_mw,
+                             source_file, upload_batch_id)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (asset_id, interval_start) DO UPDATE SET
+                            planned_mw = EXCLUDED.planned_mw,
+                            nominated_mw = EXCLUDED.nominated_mw,
+                            source_file = EXCLUDED.source_file,
+                            upload_batch_id = EXCLUDED.upload_batch_id
+                    """, pending, page_size=2000)
+                    rows_written = len(pending)
                 report["assets"][asset_name] = rows_written
                 # Per-station commit: this network kills long transactions
                 # (ERRORS.md bulk-load rule — a dead connection costs one chunk)

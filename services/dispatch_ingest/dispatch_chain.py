@@ -35,7 +35,10 @@ def restriction_from_fill(fill) -> str | None:
     """Map a cell fill to a restriction value (see module docstring for semantics)."""
     if not fill or fill.fill_type != "solid" or not fill.start_color:
         return None
-    rgb = (fill.start_color.rgb or "").upper()
+    rgb = fill.start_color.rgb
+    if not isinstance(rgb, str):
+        return None  # theme colours return an RGB descriptor, not a hex string
+    rgb = rgb.upper()
     if rgb in _RED:
         return "discharge_only"
     if rgb in _ORANGE_LIKE:
@@ -93,6 +96,12 @@ def parse_dispatch_sheet(ws) -> list[dict[str, Any]]:
 
     import pandas as pd
 
+    # Daily sheets are named "M.DD"; rows whose in-sheet date doesn't match the
+    # sheet name are template junk (e.g. 巴盟 07.31 workbook's 07.15 sheet
+    # carries stray 2026-05-15 rows) and must not overwrite the real month file.
+    dm = _DAILY_SHEET_RE.match(ws.title.strip()) if hasattr(ws, "title") else None
+    sheet_md = (int(dm.group(1)), int(dm.group(2))) if dm else None
+
     items = []
     for row in ws.iter_rows(min_row=2, max_col=max(header.values()) + 1):
         time_v = row[header["time"]].value
@@ -103,6 +112,8 @@ def parse_dispatch_sheet(ws) -> list[dict[str, Any]]:
             if ts.tz is None:
                 ts = ts.tz_localize("Asia/Shanghai")
         except Exception:
+            continue
+        if sheet_md and (ts.month, ts.day) != sheet_md:
             continue
         items.append({
             "interval_start": ts,
@@ -116,14 +127,92 @@ def parse_dispatch_sheet(ws) -> list[dict[str, Any]]:
     return items
 
 
-def parse_dispatch_file(file_path: str) -> list[dict[str, Any]]:
-    """Parse every dispatch-looking sheet in one workbook."""
-    wb = openpyxl.load_workbook(file_path, data_only=True)
+_DAILY_SHEET_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
+
+_DISPATCH_FIELDS = ("soc_pct", "nominated_mw", "da_cleared_mw", "rt_cleared_mw", "actual_mw")
+
+
+def _restriction_from_rgb(rgb) -> str | None:
+    if not rgb:
+        return None
+    r, g, b = rgb
+    if r > 180 and g < 100 and b < 100:
+        return "discharge_only"
+    if r > 200 and 100 <= g <= 190 and b < 90:
+        return "charge_only"
+    return None
+
+
+def parse_dispatch_xls(file_path: str) -> list[dict[str, Any]]:
+    """Legacy .xls variant of the monthly dispatch workbook (xlrd, palette fills)."""
+    import xlrd
+
+    import pandas as pd
+
+    book = xlrd.open_workbook(file_path, formatting_info=True)
     items: list[dict[str, Any]] = []
-    for ws in wb.worksheets:
-        items.extend(parse_dispatch_sheet(ws))
-    wb.close()
+    for name in book.sheet_names():
+        sh = book.sheet_by_name(name)
+        header = None
+        for r in range(min(6, sh.nrows)):
+            cols = _find_columns([sh.cell_value(r, c) for c in range(sh.ncols)])
+            if cols:
+                header = (r, cols)
+                break
+        if not header:
+            continue
+        hr, cols = header
+        for r in range(hr + 1, sh.nrows):
+            tv = sh.cell_value(r, cols["time"])
+            if tv in ("", None):
+                continue
+            try:
+                if isinstance(tv, (int, float)):
+                    ts = pd.Timestamp(xlrd.xldate.xldate_as_datetime(tv, book.datemode), tz="Asia/Shanghai")
+                else:
+                    ts = pd.Timestamp(tv)
+                    ts = ts.tz_localize("Asia/Shanghai") if ts.tz is None else ts
+            except Exception:
+                continue
+            rgb = book.colour_map.get(
+                book.xf_list[sh.cell_xf_index(r, cols["time"])].background.pattern_colour_index
+            )
+            items.append({
+                "interval_start": ts,
+                "soc_pct": _to_float(sh.cell_value(r, cols["soc"])) if "soc" in cols else None,
+                "nominated_mw": _to_float(sh.cell_value(r, cols["nominated"])),
+                "da_cleared_mw": _to_float(sh.cell_value(r, cols["da_cleared"])),
+                "rt_cleared_mw": _to_float(sh.cell_value(r, cols["rt_cleared"])),
+                "actual_mw": _to_float(sh.cell_value(r, cols["actual"])),
+                "restriction": _restriction_from_rgb(rgb),
+            })
     return items
+
+
+def parse_dispatch_file(file_path: str) -> list[dict[str, Any]]:
+    """Parse dispatch sheets in one workbook, merged by interval.
+
+    Workbooks hold per-day sheets ("5.01".."5.31") and may also carry an
+    aggregate sheet (电力交易调度计划) covering the same intervals. The
+    aggregate is applied first, per-day sheets on top, so day-level data (and
+    its restriction colours) wins; all-empty rows never overwrite real data.
+    """
+    wb = openpyxl.load_workbook(file_path, data_only=True)
+    scored: list[tuple[int, list[dict[str, Any]]]] = []
+    for ws in wb.worksheets:
+        items = parse_dispatch_sheet(ws)
+        if items:
+            daily = 1 if _DAILY_SHEET_RE.match(ws.title.strip()) else 0
+            scored.append((daily, items))
+    wb.close()
+    merged: dict[Any, dict[str, Any]] = {}
+    for _, items in sorted(scored, key=lambda si: si[0]):
+        for it in items:
+            key = it["interval_start"]
+            if key in merged and all(it[f] is None for f in _DISPATCH_FIELDS):
+                continue
+            merged[key] = it
+    return list(merged.values())
 
 
 def ingest_dispatch_chain(root: str, batch_id: str) -> dict[str, Any]:
@@ -148,41 +237,50 @@ def ingest_dispatch_chain(root: str, batch_id: str) -> dict[str, Any]:
                     continue
 
                 rows_written = 0
+                pending: list[tuple] = []
                 for dirpath, _, files in os.walk(folder_path):
                     for fname in sorted(files):
-                        if not fname.endswith(".xlsx") or fname.startswith("~$"):
+                        if not fname.lower().endswith((".xlsx", ".xls")) or fname.startswith("~$"):
                             continue
                         fpath = os.path.join(dirpath, fname)
                         try:
-                            items = parse_dispatch_file(fpath)
+                            if fname.lower().endswith(".xls"):
+                                items = parse_dispatch_xls(fpath)
+                            else:
+                                items = parse_dispatch_file(fpath)
                         except Exception as e:
                             report["errors"].append(f"{fname}: {e}")
                             continue
                         if not items:
                             report["skipped"].append(f"{fname}: no dispatch sheets")
                             continue
-                        for it in items:
-                            cur.execute("""
-                                INSERT INTO marketdata.rm_dispatch_chain
-                                    (asset_id, interval_start, soc_pct, nominated_mw,
-                                     da_cleared_mw, rt_cleared_mw, actual_mw, restriction,
-                                     source_file, upload_batch_id)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (asset_id, interval_start) DO UPDATE SET
-                                    soc_pct = EXCLUDED.soc_pct,
-                                    nominated_mw = EXCLUDED.nominated_mw,
-                                    da_cleared_mw = EXCLUDED.da_cleared_mw,
-                                    rt_cleared_mw = EXCLUDED.rt_cleared_mw,
-                                    actual_mw = EXCLUDED.actual_mw,
-                                    restriction = EXCLUDED.restriction,
-                                    source_file = EXCLUDED.source_file,
-                                    upload_batch_id = EXCLUDED.upload_batch_id
-                            """, (asset_id, it["interval_start"], it["soc_pct"],
-                                  it["nominated_mw"], it["da_cleared_mw"], it["rt_cleared_mw"],
-                                  it["actual_mw"], it["restriction"],
-                                  os.path.join(dirpath.replace(root, "").lstrip("/"), fname),
-                                  batch_id))
-                            rows_written += 1
+                        rel = os.path.join(dirpath.replace(root, "").lstrip("/"), fname)
+                        pending.extend(
+                            (asset_id, it["interval_start"], it["soc_pct"],
+                             it["nominated_mw"], it["da_cleared_mw"], it["rt_cleared_mw"],
+                             it["actual_mw"], it["restriction"], rel, batch_id)
+                            for it in items
+                        )
+                if pending:
+                    from psycopg2.extras import execute_batch
+                    # Batched upsert — see nominations.py for why (WAN round trips).
+                    execute_batch(cur, """
+                        INSERT INTO marketdata.rm_dispatch_chain
+                            (asset_id, interval_start, soc_pct, nominated_mw,
+                             da_cleared_mw, rt_cleared_mw, actual_mw, restriction,
+                             source_file, upload_batch_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (asset_id, interval_start) DO UPDATE SET
+                            soc_pct = EXCLUDED.soc_pct,
+                            nominated_mw = EXCLUDED.nominated_mw,
+                            da_cleared_mw = EXCLUDED.da_cleared_mw,
+                            rt_cleared_mw = EXCLUDED.rt_cleared_mw,
+                            actual_mw = EXCLUDED.actual_mw,
+                            restriction = EXCLUDED.restriction,
+                            source_file = EXCLUDED.source_file,
+                            upload_batch_id = EXCLUDED.upload_batch_id
+                    """, pending, page_size=2000)
+                    rows_written = len(pending)
                 report["assets"][asset_name] = rows_written
                 # Per-station commit: this network kills long transactions
                 conn.commit()

@@ -56,6 +56,36 @@ def test_nom_columns_rejects_other():
     assert _nom_cols(["时间", "SOC（%）", "交易员申报计划 (MW)"]) is None
 
 
+def test_nom_columns_single_power_variant():
+    # April 苏右 layout: one 申报功率 column, no planned/nominated split
+    cols = _nom_cols(["日期", "时刻", "申报功率（MW）", "爬坡校验"])
+    assert cols == {"date": 0, "time": 1, "nominated": 2}
+
+
+def test_parse_nomination_file_template_sheet_loses(tmp_path):
+    """A zeroed 输出模板 sheet with the same header must not overwrite 策略申报."""
+    import openpyxl
+    from services.dispatch_ingest.nominations import parse_nomination_file
+
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "策略申报"
+    ws1.append(["日期", "时刻", "申报功率（MW）", "爬坡校验"])
+    ws1.append(["2026-04-22", "00:05:00", 16, 16])
+    ws1.append(["2026-04-22", "00:10:00", 32, 16])
+    ws2 = wb.create_sheet("输出模板")
+    ws2.append(["日期", "时刻", "申报功率（MW）", "D-H列输出时请删除"])
+    ws2.append(["2026-04-22", "00:05:00", 0, ""])
+    ws2.append(["2026-04-22", "00:10:00", 0, ""])
+    path = tmp_path / "nom.xlsx"
+    wb.save(path)
+
+    items = parse_nomination_file(str(path))
+    assert len(items) == 2
+    assert [it["nominated_mw"] for it in items] == [16.0, 32.0]
+
+
+
 def test_parse_nomination_sheet_suyou():
     ws = _FakeSheet(
         ["日期", "时刻", "预计划功率", "正式申报"],
