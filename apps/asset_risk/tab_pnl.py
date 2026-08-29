@@ -72,6 +72,30 @@ def _days_in_months(month_series) -> int:
     return sum(calendar.monthrange(p.year, p.month)[1] for p in months)
 
 
+def _load_settlement_items(engine, book_id: int, date_range=None) -> pd.DataFrame:
+    """Category totals for one book, optionally restricted to a settlement_month range.
+
+    date_range is the st.date_input return: empty tuple while unselected, or
+    (start, end) once both dates are picked. Only a complete pair filters
+    (reversed picks are normalized); anything else returns all months.
+    """
+    clause = ""
+    params = {"bid": book_id}
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        start, end = sorted(str(d) for d in date_range)
+        clause = " AND s.settlement_month >= :d_start AND s.settlement_month <= :d_end"
+        params["d_start"], params["d_end"] = start, end
+    with engine.connect() as conn:
+        return pd.read_sql(text(f"""
+            SELECT si.category, SUM(si.amount_cny) as total
+            FROM marketdata.rm_settlement_items si
+            JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
+            WHERE s.book_id = :bid{clause}
+            GROUP BY si.category
+            ORDER BY total DESC
+        """), conn, params=params)
+
+
 def _asset_summary(items_df: pd.DataFrame) -> pd.DataFrame:
     """Per-asset realised P&L summary.
 
@@ -167,15 +191,7 @@ def render_pnl(engine):
 
     date_range = st.date_input("Date Range", value=[], key="pnl_dates")
 
-    with engine.connect() as conn:
-        items_df = pd.read_sql(text("""
-            SELECT si.category, SUM(si.amount_cny) as total
-            FROM marketdata.rm_settlement_items si
-            JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
-            WHERE s.book_id = :bid
-            GROUP BY si.category
-            ORDER BY total DESC
-        """), conn, params={"bid": book_id})
+    items_df = _load_settlement_items(engine, book_id, date_range)
 
     if items_df.empty:
         st.info("No P&L data yet. Upload settlements in Tab 2.")
