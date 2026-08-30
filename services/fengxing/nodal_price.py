@@ -242,9 +242,16 @@ def upsert(rows: list[dict], engine) -> int:
     if not rows:
         return 0
     from sqlalchemy import text as _text
-    batch_size = 2000
+    batch_size = 20000  # 20k per statement: 10x fewer round-trips than 2k —
+    # matters on lossy WAN paths (mid-batch stalls observed on this network)
     total = 0
     with engine.begin() as conn:
+        # Bounded statement lifetime: a half-dead connection must not park an
+        # INSERT forever (observed 2026-08-30 — server stuck in ClientRead on a
+        # lost packet tail, backend orphaned for hours). SET LOCAL scopes the
+        # limits to this transaction so pooled connections stay clean.
+        conn.execute(_text("SET LOCAL statement_timeout = '600s'"))
+        conn.execute(_text("SET LOCAL idle_in_transaction_session_timeout = '300s'"))
         for i in range(0, len(rows), batch_size):
             batch = [_coerce_row(r) for r in rows[i : i + batch_size]]
             conn.execute(_text(_UPSERT_SQL), batch)
