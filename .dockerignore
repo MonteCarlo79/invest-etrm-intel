@@ -118,6 +118,8 @@ apps/bess-inner-mongolia/
 # lingfeng-ingest image exceptions
 !services/lingfeng/
 !services/hermes/
+# hermes image also needs this: nodal_scraper imports services.fengxing.nodal_price
+!services/fengxing/
 
 # deal-structurer image exceptions
 !libs/deal_models/
