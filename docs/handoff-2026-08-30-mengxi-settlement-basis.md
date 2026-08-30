@@ -65,8 +65,10 @@ Cross-asset clustering: three 杭锦旗-area assets' June invoice discharge pric
 ### 巴盟 = 景怡查干哈达 (invoice folder "B-9 内蒙巴盟")
 
 - Registry capacity: **1000 MW / 4 h = 4 GWh** — a genuinely giant station (10× the 杭锦旗 assets). Invoice volumes (~140–160 GWh/mo ≈ 1.3 cycles/day) are physically normal.
-- The gap is on our side: dispatch chain captures only **~45% of metered energy** (Apr–May: 42.8% / 44.7%), collapsing to **~9% / 1%** (Jun–Jul).
-- Hypothesis: multi-section plant, only the `220kV.1M` bus section/node ingested (only one node exists in `md_rt_nodal_price`). **Ingestion coverage problem, not a settlement-rule issue.**
+- **Root cause (confirmed 2026-08-30):** the monthly dispatch workbooks were **exported mid-month** — actuals exist only through each export date (Apr 19→, May →15th, Jun 18–30 only, Jul 3–4 only). Interval-level data is full-plant (max ±1,004 MW) and correct when present; the "multi-section plant" hypothesis was tested and rejected.
+- **Fix applied:** backfilled `rt_cleared_mw` only (10,648 intervals, Apr 1 → Aug 26) from `md_id_cleared_energy` — semantically exact (RT cleared = RT cleared). `actual_mw` deliberately **not** filled: metered execution ≠ cleared, and filling it would fabricate zero-deviation days (user correction). Provenance: `source_file='backfill:md_id_cleared_energy'`, `upload_batch_id='backfill-md_id-20260830'`; `ON CONFLICT DO NOTHING` — Excel rows untouched, later re-uploads upsert over backfill.
+- **Result:** complete monthly RT-cleared coverage; RT-vs-invoice volume gaps now read ±4–9% (Jun discharge +15.4%) = the plant's **true deviation**, visible for analysis.
+- **Still open (ops, not code):** trader must re-export the monthly workbooks *after* month-end so `actual_mw` can be ingested for the missing days; `md_id` itself misses ~2 days each in Jun/Jul.
 - 远景乌拉特 (B-7, also Bayannur geography) shows a different, smaller pattern — **opposite-sign residuals** (Jun: charge -7.5% / discharge +5.6%; May: -3.4% / +1.6%) vs all other assets' same-signed gaps. Likely station-use/netting structure vs settlement meter. Secondary; check its ops Excel metered-vs-dispatch columns.
 
 ---
@@ -77,7 +79,7 @@ Cross-asset clustering: three 杭锦旗-area assets' June invoice discharge pric
 |---|---|---|
 | 7 | ~~Ingest DA nodal prices~~ — **cancelled: DA not used in settlement (user 2026-08-29)** | deleted |
 | 8 | Fix 8h timestamp skew in `arb_match` (`AT TIME ZONE 'Asia/Shanghai'`), recompute `rm_arb_match_daily` full range, verify vs bills | in progress |
-| 9 | Fix 景怡查干哈达 dispatch-chain coverage (multi-section plant; Jun–Jul gap) | pending |
+| 9 | ~~Fix 景怡查干哈达 dispatch-chain coverage~~ — root cause = mid-month Excel exports; `rt_cleared_mw` backfilled from md_id (10,648 rows, Apr 1→Aug 26). Open: trader re-exports full-month files for `actual_mw` | done (data) / open (ops) |
 | 10 | 远景乌拉特 opposite-sign residual check (meter structure) | pending |
 
 ## Key file paths
