@@ -161,9 +161,12 @@ resource "aws_ecs_service" "hermes" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = var.private_subnet_ids
+    # Dedicated private subnets behind the NAT gateway (nat.tf) — stable
+    # egress IP for the Fengxing whitelist. Applied out-of-band via
+    # aws ecs update-service; never blanket-apply this drifted service.
+    subnets          = [for s in aws_subnet.hermes_private : s.id]
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.hermes.arn
