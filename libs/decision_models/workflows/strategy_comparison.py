@@ -307,6 +307,9 @@ def run_perfect_foresight_dispatch(
         caveats: List[str] = [
             "perfect_foresight: 15-min granularity — LP optimised and settled at actual 15-min prices; "
             "true upper bound on all 15-min settled strategies",
+            "perfect_foresight: grid operator ramp limit applied — 爬坡限速 3.3%/min of rated "
+            "(≤49.5% rated swing per 15-min interval, idle day start; Mengxi BESS ops rule, "
+            "per user 2026-08-30) — PF is the upper bound *achievable under the ramp limit*",
             f"perfect_foresight: window_days={window_days} — "
             + ("SOC resets to 0 each day" if window_days == 1
                else f"SOC carries over across {window_days}-day windows"),
@@ -350,6 +353,7 @@ def run_perfect_foresight_dispatch(
                 compensation_yuan_per_mwh=meta["compensation_yuan_per_mwh"],
                 max_cycles_per_day=max_cycles,
                 window_days=int(window_days),
+                ramp_rate_pct_per_min=3.3,  # 蒙西 operator ramp limit (Mengxi ops only)
             )
         except Exception as exc:
             return _empty_result(f"perfect_foresight: 15-min LP failed — {exc}", caveats)

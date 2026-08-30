@@ -48,6 +48,7 @@ def optimise_window(
     max_cycles_per_day: Optional[float] = None,
     compensation_yuan_per_mwh: float = 0.0,
     dt: float = 1.0,
+    ramp_rate_pct_per_min: Optional[float] = None,
 ) -> DispatchResult:
     """
     Solve the BESS arbitrage LP for an arbitrary number of intervals T.
@@ -79,6 +80,15 @@ def optimise_window(
         compensation_yuan_per_mwh: Discharge subsidy (CNY/MWh) added to LP objective.
         dt:                        Interval duration in hours (default 1.0 for hourly,
                                    use 0.25 for 15-min intervals).
+        ramp_rate_pct_per_min:     Optional ramp limit as % of rated power per minute
+                                   (e.g. 3.3 for the 蒙西 operator rule 爬坡限速).
+                                   When set, the grid-power swing between adjacent
+                                   intervals is capped at
+                                   power_mw × pct/100 × 60 × dt  (49.5% of rated per
+                                   15-min interval at 3.3%/min), symmetric for
+                                   charge/discharge, and the window starts from idle
+                                   (|P_grid[0]| ≤ one ramp step). Default None =
+                                   unconstrained (valuation-model behaviour).
 
     Returns:
         DispatchResult with charge_mw, discharge_mw, soc_mwh arrays (length T),
@@ -123,6 +133,17 @@ def optimise_window(
             pulp.lpSum(dis[t] * dt for t in range(T))
             <= float(max_cycles_per_day) * e_cap * n_days_window
         )
+
+    # Ramp-rate constraint (opt-in). Grid power P[t] = dis[t] - ch[t]; the swing
+    # between adjacent intervals is capped at pct/100 of rated per minute.
+    # Window starts from idle (P[-1] = 0), consistent with soc[0] == 0.
+    if ramp_rate_pct_per_min is not None:
+        ramp_max = float(power_mw) * float(ramp_rate_pct_per_min) / 100.0 * 60.0 * dt
+        prob += (dis[0] - ch[0]) <= ramp_max
+        prob += (dis[0] - ch[0]) >= -ramp_max
+        for t in range(1, T):
+            prob += (dis[t] - ch[t]) - (dis[t - 1] - ch[t - 1]) <= ramp_max
+            prob += (dis[t] - ch[t]) - (dis[t - 1] - ch[t - 1]) >= -ramp_max
 
     # Objective: maximise (discharge + subsidy - charge) revenue × interval duration
     prob += pulp.lpSum(
@@ -198,6 +219,7 @@ def compute_dispatch_from_hourly_prices(
     dt: float = 1.0,
     intervals_per_day: int = 24,
     freq: str = "h",
+    ramp_rate_pct_per_min: Optional[float] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over every complete day in ``hourly_prices``,
@@ -294,6 +316,7 @@ def compute_dispatch_from_hourly_prices(
             max_cycles_per_day=max_cycles_per_day,
             compensation_yuan_per_mwh=compensation_yuan_per_mwh,
             dt=dt,
+            ramp_rate_pct_per_min=ramp_rate_pct_per_min,
         )
 
         for i, d in enumerate(window_dates):
@@ -330,6 +353,7 @@ def compute_dispatch_from_15min_prices(
     max_cycles_per_day: Optional[float] = None,
     compensation_yuan_per_mwh: float = 0.0,
     window_days: int = 1,
+    ramp_rate_pct_per_min: Optional[float] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over 15-min price intervals (96 per day).
@@ -342,6 +366,9 @@ def compute_dispatch_from_15min_prices(
 
     Args:
         prices_15min: pd.Series with 15-min DatetimeIndex.
+        ramp_rate_pct_per_min: optional operator ramp limit (%/min of rated),
+                             e.g. 3.3 for the 蒙西 rule — at 15-min granularity
+                             this caps interval swing at 49.5% of rated.
         Other args:   same as compute_dispatch_from_hourly_prices.
 
     Returns:
@@ -360,4 +387,5 @@ def compute_dispatch_from_15min_prices(
         dt=0.25,
         intervals_per_day=96,
         freq="15min",
+        ramp_rate_pct_per_min=ramp_rate_pct_per_min,
     )

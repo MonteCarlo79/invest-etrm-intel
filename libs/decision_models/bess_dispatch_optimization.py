@@ -100,7 +100,9 @@ MODEL_ASSUMPTIONS = {
         "Hourly granularity only — does not support 15-min or sub-hourly dispatch",
         "Perfect foresight on prices — not a real-time or forecast-based model",
         "No degradation model beyond optional throughput/cycle caps",
-        "No ramp rate constraints",
+        "No ramp rate constraints by default (engine now supports opt-in "
+        "ramp_rate_pct_per_min — used by the Mengxi ops workflow at 15-min; "
+        "non-binding at this model's hourly granularity anyway)",
         "No minimum charge/discharge duration constraints",
         "Assumes lossless grid connection (no transmission charges modelled)",
     ],
