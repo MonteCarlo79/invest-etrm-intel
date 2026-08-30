@@ -51,7 +51,7 @@ def _parse_spot_query_params(question: str, api_key: str) -> dict:
                 f"Today is {today}. Extract chart params from this question.\n"
                 f"Question: {question}\n\n"
                 "Return ONLY a JSON object (no markdown) with:\n"
-                '{"province_cn": "省名 or null", '
+                '{"provinces_cn": ["省名", ...] (every province named in the question; null if none), '
                 f'"start_date": "YYYY-MM-DD (default {year}-01-01 for YTD)", '
                 f'"end_date": "YYYY-MM-DD (default {today})", '
                 '"metrics": ["rt_avg"] // subset of: da_avg,da_max,da_min,rt_avg,rt_max,rt_min}'
@@ -65,15 +65,42 @@ def _parse_spot_query_params(question: str, api_key: str) -> dict:
         params = json.loads(text)
     except Exception:
         # Fallback defaults
-        params = {"province_cn": None, "start_date": f"{date.today().year}-01-01",
+        params = {"provinces_cn": None, "start_date": f"{date.today().year}-01-01",
                   "end_date": today, "metrics": ["rt_avg"]}
     return params
+
+
+def _normalize_provinces(raw) -> "list[str] | None":
+    """Normalize extractor output to a province list (None = all provinces).
+
+    Handles every shape the LLM returns for a multi-province question:
+    a list, a comma/、-joined string, a single name, or null.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        parts = re.split(r"[,，、/]+", raw)
+    elif isinstance(raw, (list, tuple)):
+        parts = []
+        for item in raw:
+            parts.extend(re.split(r"[,，、/]+", str(item)))
+    else:
+        return None
+    provinces = []
+    for p in parts:
+        p = p.strip()
+        if not p or p.lower() in ("null", "none"):
+            continue
+        provinces.append(_PROVINCE_ALIASES.get(p, _PROVINCE_ALIASES.get(p.lower(), p)))
+    return provinces or None
 
 
 def fetch_spot_dataframe(question: str, api_key: str, pg_url: str):
     """Query spot_daily directly for chart data — bypasses LLM truncation.
 
-    Returns a pandas DataFrame with columns: report_date + requested metrics.
+    Returns a pandas DataFrame with columns: report_date + requested metrics
+    (plus province_cn when filtering to multiple provinces), and the
+    normalized province list (None = all provinces).
     """
     import psycopg2
     import pandas as pd
@@ -81,10 +108,9 @@ def fetch_spot_dataframe(question: str, api_key: str, pg_url: str):
 
     params = _parse_spot_query_params(question, api_key)
 
-    province_cn = params.get("province_cn")
-    # Normalize province alias
-    if province_cn:
-        province_cn = _PROVINCE_ALIASES.get(province_cn, province_cn)
+    provinces = _normalize_provinces(
+        params.get("provinces_cn", params.get("province_cn"))
+    )
 
     start_date = params.get("start_date", f"{date.today().year}-01-01")
     end_date = params.get("end_date", date.today().isoformat())
@@ -96,13 +122,21 @@ def fetch_spot_dataframe(question: str, api_key: str, pg_url: str):
 
     conn = psycopg2.connect(pg_url, options="-c statement_timeout=30000")
     try:
-        if province_cn:
+        if provinces and len(provinces) == 1:
             df = pd.read_sql_query(
                 f"SELECT report_date, {metric_sql} FROM public.spot_daily "
                 "WHERE report_date BETWEEN %s AND %s AND province_cn = %s "
                 "ORDER BY report_date",
                 conn,
-                params=(start_date, end_date, province_cn),
+                params=(start_date, end_date, provinces[0]),
+            )
+        elif provinces:
+            df = pd.read_sql_query(
+                f"SELECT report_date, province_cn, {metric_sql} FROM public.spot_daily "
+                "WHERE report_date BETWEEN %s AND %s AND province_cn = ANY(%s) "
+                "ORDER BY report_date",
+                conn,
+                params=(start_date, end_date, provinces),
             )
         else:
             df = pd.read_sql_query(
@@ -114,7 +148,7 @@ def fetch_spot_dataframe(question: str, api_key: str, pg_url: str):
     finally:
         conn.close()
 
-    return df, province_cn, start_date, end_date, metrics
+    return df, provinces, start_date, end_date, metrics
 
 
 def generate_spot_line_chart(
@@ -133,12 +167,13 @@ def generate_spot_line_chart(
 
     _setup_font()
 
-    df, province_cn, start_date, end_date, metrics = fetch_spot_dataframe(
+    df, provinces, start_date, end_date, metrics = fetch_spot_dataframe(
         question, api_key, pg_url
     )
 
     if df is None or df.empty:
-        raise ValueError(f"spot_daily 中 {province_cn} {start_date}~{end_date} 无数据")
+        label = ",".join(provinces) if provinces else "全国"
+        raise ValueError(f"spot_daily 中 {label} {start_date}~{end_date} 无数据")
 
     # Convert report_date to datetime
     df["report_date"] = pd.to_datetime(df["report_date"])
@@ -161,7 +196,7 @@ def generate_spot_line_chart(
     fig.patch.set_facecolor("#f5f7fa")
     ax.set_facecolor("#f5f7fa")
 
-    if province_cn and "province_cn" not in df.columns:
+    if provinces and "province_cn" not in df.columns:
         for i, m in enumerate(metrics):
             if m in df.columns:
                 ax.plot(df["report_date"], df[m],
@@ -185,11 +220,11 @@ def generate_spot_line_chart(
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
     plt.xticks(rotation=40, ha="right", fontsize=8)
 
-    chart_title = title or f"{province_cn or '全国'} {start_date[:4]}年 现货价格走势"
+    chart_title = title or f"{','.join(provinces) if provinces else '全国'} {start_date[:4]}年 现货价格走势"
     ax.set_title(chart_title, fontsize=13, pad=10, fontweight="bold")
     ax.set_ylabel(y_label, fontsize=9)
     ax.set_xlabel("日期", fontsize=9)
-    if len(metrics) > 1 or not province_cn:
+    if len(metrics) > 1 or not provinces or len(provinces) > 1:
         ax.legend(loc="best", fontsize=8, framealpha=0.7)
     ax.grid(True, alpha=0.25, color="white", linewidth=1)
     ax.spines["top"].set_visible(False)
