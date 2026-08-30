@@ -10,25 +10,41 @@
 
 ### Settlement price basis (confirmed)
 
-Source: `202412 内蒙古电力多边交易市场规则体系` (knowledge pool doc id 6704, ch.3 §14–15), corroborated by the bill structures in `rm_settlement_items`.
+Sources: `202412 内蒙古电力多边交易市场规则体系` (knowledge pool doc id 6704, ch.3 §14–15), bill structures in `rm_settlement_items`, **user confirmation 2026-08-29**, and end-to-end numerical verification (below).
 
 | Leg | Basis |
 |---|---|
-| **Discharge (发电侧)** | 现货全电量: Σt Q放电(t) × **所在节点电价** per 15-min interval. Plus separately-itemized 中长期差价合约电费 (合约价 − 用户侧区域结算参考点电价) × 合约电量 if contracts held. |
-| **Charge (用户侧)** | Storage is the **explicit exception** to the uniform-price rule: Σt Q充电(t) × **所在节点电价** per 15-min interval (ordinary market users pay 区域结算参考点电价). T&D, line-loss, system-operation, government surcharges are itemized as separate bill lines. |
+| **Discharge (发电侧)** | RT nodal, **15-min interval** price × interval discharge energy. |
+| **Charge (用户侧)** | RT nodal, **hourly average** of the 15-min prices × interval charge energy (basis: trading practice, per user — overrides the rules-doc per-interval reading). T&D, line-loss, system-operation, government surcharges are itemized as separate bill lines. |
+| **DA component** | **None.** DA nodal prices are not used for settlement (per user 2026-08-29). No 中长期差价合约 lines on any of the six assets' bills → pure spot. |
 
-蒙西 settlement is two-part: **DA-cleared × DA nodal + deviation × RT nodal**.
+**This is exactly the rule Stage-2 implements. The price mismatch was NOT a rule problem.**
 
-Bill evidence:
-- Discharge bill (上网电费结算单) prints **one monthly effective 现货 price** = amount/volume (e.g. 景蓝乌尔图 2026-06: 0.27467 ¥/kWh stated, matching ¥3,491,459.98 / 12,711.64 MWh exactly). Note "放电结算: 现货".
-- Charge bill (下网电费结算单): charge_energy = 电能电费(市场化购电) with no stated price; 输配电费 / 上网线损费 / 系统运行费 / 政府基金及附加 itemized separately.
-- No 中长期差价合约 lines on any of the six assets' bills → assets are **pure spot**.
+### Root cause of the price mismatch: 8-hour timezone skew
 
-### Why Stage-2 (`services/arb_match/compute.py`) prices miss
+`services/arb_match/compute.py::_load_dispatch` used `interval_start::timestamp`. Under the RDS session's UTC timezone this reads the UTC wall clock, but `md_rt_nodal_price` / `md_id_cleared_energy` are Beijing-wall naive timestamps — every interval was priced **8 hours late** (discharge at post-midnight prices instead of evening peak; charge at morning instead of valley).
 
-1. **Charge modeled at hourly-average nodal** — the rule prices charge per 15-min interval, same as discharge. (Caveat: the 2026-08-28 note in `compute.py` docstring states "charging settles at the HOURLY AVERAGE of 15-min nodal prices" — source of that claim unverified; rules doc says per-interval. **Open question for user.**)
-2. **Everything priced at RT** — settlement is DA-cleared × DA nodal + deviation × RT nodal. June magnitudes imply DA-at-discharge-windows ≈ 240–250 ¥/MWh vs RT-windowed ≈ 150 ¥/MWh — the dominant gap.
-3. **DA price data does not exist for these plants**: `marketdata.md_da_cleared_energy` has **zero rows for all six BESS stations** (the table covers wind/PV/thermal; the 52k "乌尔图" rows belong to 国电乌尔图光伏电站, a PV station — substring false positive). The two-settlement blend is uncomputable until DA nodal prices are ingested.
+**Verification** (alignment fixed to `interval_start AT TIME ZONE 'Asia/Shanghai'`, charge at hourly-avg, discharge at 15-min, vs invoice effective prices, 2026-06):
+
+| Asset | Discharge modeled vs bill | Charge modeled vs bill |
+|---|---|---|
+| 悦杭独贵 | 257.8 vs 246.5 (+4.6%) | 165.1 vs 167.3 (−1.3%) |
+| 裕昭沙子坝 | 258.5 vs 244.3 (+5.8%) | 159.1 vs 165.9 (−4.1%) |
+| 远景乌拉特 | 244.4 vs 246.5 (−0.9%) | 177.3 vs 180.0 (−1.5%) |
+| 四子王旗 | 266.0 vs 260.1 (+2.3%) | 230.6 vs 225.0 (+2.5%) |
+
+All within ±6% — same order as the volume residuals. Basis and rule both confirmed.
+
+Bill evidence (structure): discharge bill (上网电费结算单) prints one monthly effective 现货 price (e.g. 景蓝乌尔图 2026-06: 0.27467 ¥/kWh stated = ¥3,491,459.98 / 12,711.64 MWh); charge bill (下网电费结算单) shows 电能电费(市场化购电) with network/system charges itemized separately.
+
+### Falsified candidate explanations (evidence)
+
+| Candidate | Test | Result |
+|---|---|---|
+| Wrong rule (per-interval charge) | user confirmation | charge is hourly-avg per trading practice |
+| DA/RT two-part settlement | user confirmation | DA not used; DA data also absent for all 6 BESS plants in `md_da_cleared_energy` (the "乌尔图" rows are 国电乌尔图光伏电站, a PV station) |
+| Province-uniform RT as basis | window-weighted vs invoice | ~2× off on charge, ±15–40% on discharge with sign flips |
+| Price-series disagreement (enos nodal vs Fengxing cleared) | daily abs diff, 景蓝乌尔图 May | 0–3% — series agree |
 
 ### Falsified candidate bases (evidence)
 
@@ -57,12 +73,12 @@ Cross-asset clustering: three 杭锦旗-area assets' June invoice discharge pric
 
 ## Next moves (tracked as tasks)
 
-| # | Task | Blocked by |
+| # | Task | Status |
 |---|---|---|
-| 7 | Ingest DA nodal prices for the 6 BESS nodes (Fengxing DA nodal endpoint or alternative) | — |
-| 8 | Rewrite Stage-2: per-15-min both legs + DA/RT blend; re-verify the hourly-avg note | #7 |
-| 9 | Fix 景怡查干哈达 dispatch-chain coverage (multi-section plant; Jun–Jul gap) | — |
-| 10 | 远景乌拉特 opposite-sign residual check (meter structure) | — |
+| 7 | ~~Ingest DA nodal prices~~ — **cancelled: DA not used in settlement (user 2026-08-29)** | deleted |
+| 8 | Fix 8h timestamp skew in `arb_match` (`AT TIME ZONE 'Asia/Shanghai'`), recompute `rm_arb_match_daily` full range, verify vs bills | in progress |
+| 9 | Fix 景怡查干哈达 dispatch-chain coverage (multi-section plant; Jun–Jul gap) | pending |
+| 10 | 远景乌拉特 opposite-sign residual check (meter structure) | pending |
 
 ## Key file paths
 

@@ -1,10 +1,20 @@
 """Stage 2 arbitrage matching: price actual dispatch at RT nodal prices.
 
-Settlement pricing rule (per user, 2026-08-28):
+Settlement pricing rule (confirmed by user 2026-08-29):
+  - no DA component: DA nodal prices are NOT used for settlement
   - charging energy is settled at the HOURLY AVERAGE of the 15-min nodal prices
+    (basis: trading practice, not the rules-doc per-interval reading)
   - discharging energy is settled at the 15-MIN nodal price
+  Verified: with correct timezone alignment this reproduces invoice effective
+  prices within ±6% on all four well-covered assets (2026-06).
 Price rows are timestamped at period END; dispatch interval_start at period START,
 so interval t prices at t + 15min.
+
+TIMEZONE: rm_dispatch_chain.interval_start is timestamptz (UTC instants); the price
+series are Beijing-wall naive timestamps. `interval_start::timestamp` is session-TZ
+dependent — under a UTC session it reads the UTC wall clock and prices every
+interval 8 HOURS LATE (root cause of the 2026-08 price mismatch: charge ~+40%,
+discharge ~-35%). Always convert explicitly with AT TIME ZONE 'Asia/Shanghai'.
 
 Price sources per asset:
   'nodal'   — marketdata.md_rt_nodal_price.node_price (enos ingest, full 2026)
@@ -29,7 +39,7 @@ PRICE_SOURCES = {
 
 def _load_dispatch(cur, asset_id: int, start: str, end: str) -> pd.DataFrame:
     cur.execute("""
-        SELECT interval_start::timestamp AS ts, actual_mw
+        SELECT (interval_start AT TIME ZONE 'Asia/Shanghai') AS ts, actual_mw
         FROM marketdata.rm_dispatch_chain
         WHERE asset_id = %s AND actual_mw IS NOT NULL
           AND interval_start >= %s AND interval_start < %s
