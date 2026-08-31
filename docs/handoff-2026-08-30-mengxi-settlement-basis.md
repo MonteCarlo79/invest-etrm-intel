@@ -65,11 +65,11 @@ Cross-asset clustering: three 杭锦旗-area assets' June invoice discharge pric
 ### 巴盟 = 景怡查干哈达 (invoice folder "B-9 内蒙巴盟")
 
 - Registry capacity: **1000 MW / 4 h = 4 GWh** — a genuinely giant station (10× the 杭锦旗 assets). Invoice volumes (~140–160 GWh/mo ≈ 1.3 cycles/day) are physically normal.
-- **Root cause (confirmed 2026-08-30):** the monthly dispatch workbooks were **exported mid-month** — actuals exist only through each export date (Apr 19→, May →15th, Jun 18–30 only, Jul 3–4 only). Interval-level data is full-plant (max ±1,004 MW) and correct when present; the "multi-section plant" hypothesis was tested and rejected.
-- **Fix applied:** backfilled `rt_cleared_mw` only (10,648 intervals, Apr 1 → Aug 26) from `md_id_cleared_energy` — semantically exact (RT cleared = RT cleared). `actual_mw` deliberately **not** filled: metered execution ≠ cleared, and filling it would fabricate zero-deviation days (user correction). Provenance: `source_file='backfill:md_id_cleared_energy'`, `upload_batch_id='backfill-md_id-20260830'`; `ON CONFLICT DO NOTHING` — Excel rows untouched, later re-uploads upsert over backfill.
-- **Result:** complete monthly RT-cleared coverage; RT-vs-invoice volume gaps now read ±4–9% (Jun discharge +15.4%) = the plant's **true deviation**, visible for analysis.
-- **Still open (ops, not code):** trader must re-export the monthly workbooks *after* month-end so `actual_mw` can be ingested for the missing days; `md_id` itself misses ~2 days each in Jun/Jul.
-- 远景乌拉特 (B-7, also Bayannur geography) shows a different, smaller pattern — **opposite-sign residuals** (Jun: charge -7.5% / discharge +5.6%; May: -3.4% / +1.6%) vs all other assets' same-signed gaps. Likely station-use/netting structure vs settlement meter. Secondary; check its ops Excel metered-vs-dispatch columns.
+- **Root cause — FINAL (2026-08-31, supersedes both earlier versions):** the monthly workbooks' per-day sheets after mid-month carried a **frozen template date column** (trader fill-series error: every sheet's date cells read 2026-07-04 in the August files, similar in May–July files). The parser's junk-day filter (drop rows whose date ≠ sheet name) silently discarded all those sheets — the actuals were there all along. Mid-month exports were only the superficial symptom.
+- **Resolution:** (1) parser frozen-template recovery in `services/dispatch_ingest/dispatch_chain.py` — when ≥2 daily sheets share the same wrong modal date with non-identical data, substitute sheet-name date (time-of-day kept); single rogue sheets still dropped; (2) full re-ingest from the reorganised `data/raw/nomination/` tree (`ingest_dispatch_tree_reorg`, latest-mtime file per asset-month, archived/client-reports excluded, 魏桥 excluded by design).
+- **Validation (independent):** chain actual volumes vs invoice — May −1.6%/−1.0%, Jun −0.5%/−0.1%, Jul −1.2%/+0.5% (charge/discharge). Was −55%/−91%/−99% before.
+- The earlier md_id `rt_cleared_mw` backfill (10,648 rows) remains only where no Excel day exists (Apr 1–18); Excel rows upserted over it everywhere else.
+- 远景乌拉特 (B-7) shows a different, smaller pattern — **opposite-sign residuals** (Jun: charge -7.5% / discharge +5.6%; May: -3.4% / +1.6%) vs all other assets' same-signed gaps. Station-use/measurement-point hypothesis (BESS-only station per user; hybrid theory rejected). Task #10 open.
 
 ---
 

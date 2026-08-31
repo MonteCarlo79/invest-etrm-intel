@@ -81,8 +81,13 @@ def _to_float(v: Any) -> float | None:
         return float(m.group(0).replace(",", "")) if m else None
 
 
-def parse_dispatch_sheet(ws) -> list[dict[str, Any]]:
-    """Parse one per-day dispatch sheet into interval dicts (with restriction from time-cell fill)."""
+def parse_dispatch_sheet(ws, drop_mismatch: bool = True) -> list[dict[str, Any]]:
+    """Parse one per-day dispatch sheet into interval dicts (with restriction from time-cell fill).
+
+    drop_mismatch=True (default, legacy): rows whose in-sheet date doesn't match
+    the sheet name are dropped (template junk protection). False: keep all rows
+    and let the caller apply workbook-level date logic (frozen-template recovery).
+    """
     header = None
     for idx, row in enumerate(ws.iter_rows(values_only=True)):
         if idx > 5:
@@ -96,9 +101,6 @@ def parse_dispatch_sheet(ws) -> list[dict[str, Any]]:
 
     import pandas as pd
 
-    # Daily sheets are named "M.DD"; rows whose in-sheet date doesn't match the
-    # sheet name are template junk (e.g. 巴盟 07.31 workbook's 07.15 sheet
-    # carries stray 2026-05-15 rows) and must not overwrite the real month file.
     dm = _DAILY_SHEET_RE.match(ws.title.strip()) if hasattr(ws, "title") else None
     sheet_md = (int(dm.group(1)), int(dm.group(2))) if dm else None
 
@@ -113,7 +115,7 @@ def parse_dispatch_sheet(ws) -> list[dict[str, Any]]:
                 ts = ts.tz_localize("Asia/Shanghai")
         except Exception:
             continue
-        if sheet_md and (ts.month, ts.day) != sheet_md:
+        if drop_mismatch and sheet_md and (ts.month, ts.day) != sheet_md:
             continue
         items.append({
             "interval_start": ts,
@@ -196,15 +198,80 @@ def parse_dispatch_file(file_path: str) -> list[dict[str, Any]]:
     aggregate sheet (电力交易调度计划) covering the same intervals. The
     aggregate is applied first, per-day sheets on top, so day-level data (and
     its restriction colours) wins; all-empty rows never overwrite real data.
+
+    Frozen-template recovery (巴盟 2026-08 workbooks): the trader fill-series'd
+    one date (2026-07-04) into every daily sheet's time column, so no row's date
+    matches its sheet name. When ≥2 daily sheets share the SAME wrong modal date
+    (and their data is not byte-identical, i.e. not template copies), the date
+    column is treated as frozen and each row's date is substituted with the
+    sheet-name date (time-of-day preserved). A single rogue mismatched sheet is
+    still dropped (the 07.15 junk-sheet protection).
     """
+    from collections import Counter, defaultdict
+
     wb = openpyxl.load_workbook(file_path, data_only=True)
-    scored: list[tuple[int, list[dict[str, Any]]]] = []
+    daily: list[tuple[str, tuple[int, int], list[dict[str, Any]]]] = []
+    other: list[list[dict[str, Any]]] = []
     for ws in wb.worksheets:
-        items = parse_dispatch_sheet(ws)
-        if items:
-            daily = 1 if _DAILY_SHEET_RE.match(ws.title.strip()) else 0
-            scored.append((daily, items))
+        items = parse_dispatch_sheet(ws, drop_mismatch=False)
+        if not items:
+            continue
+        dm = _DAILY_SHEET_RE.match(ws.title.strip())
+        if dm:
+            daily.append((ws.title.strip(), (int(dm.group(1)), int(dm.group(2))), items))
+        else:
+            other.append(items)
     wb.close()
+
+    # Modal date per daily sheet
+    modal: dict[str, Any] = {}
+    for title, md, items in daily:
+        cnt = Counter(it["interval_start"].date() for it in items)
+        modal[title] = cnt.most_common(1)[0][0] if cnt else None
+
+    # Wrong-modal-date sheets grouped by their shared wrong date
+    by_wrong_date: dict[Any, list[str]] = defaultdict(list)
+    for title, md, items in daily:
+        m = modal.get(title)
+        if m and (m.month, m.day) != md:
+            by_wrong_date[m].append(title)
+
+    def _fingerprint(title: str) -> tuple:
+        items = next(it for t, _, it in daily if t == title)
+        return tuple((it["nominated_mw"], it["actual_mw"]) for it in items[:12])
+
+    frozen_dates = set()
+    for wrong_date, titles in by_wrong_date.items():
+        if len(titles) < 2:
+            continue
+        fps = {_fingerprint(t) for t in titles}
+        if len(fps) > 1:
+            # ≥2 sheets share the wrong date but carry different data →
+            # the date column is a frozen template, not copied junk sheets
+            frozen_dates.add(wrong_date)
+
+    scored: list[tuple[int, list[dict[str, Any]]]] = []
+    for title, md, items in daily:
+        m = modal.get(title)
+        if m is None:
+            continue
+        if (m.month, m.day) == md:
+            # Normal sheet: keep only rows whose in-sheet date matches the sheet
+            # name (drops template junk rows, e.g. stray 2026-05-15 in a 07.15 sheet)
+            scored.append((1, [
+                it for it in items
+                if (it["interval_start"].month, it["interval_start"].day) == md
+            ]))
+        elif m in frozen_dates:
+            # Frozen template column: substitute sheet-name date, keep time-of-day
+            scored.append((1, [
+                {**it, "interval_start": it["interval_start"].replace(month=md[0], day=md[1])}
+                for it in items
+            ]))
+        # else: single rogue mismatched sheet → dropped (junk protection)
+    for items in other:
+        scored.append((0, items))
+
     merged: dict[Any, dict[str, Any]] = {}
     for _, items in sorted(scored, key=lambda si: si[0]):
         for it in items:
@@ -285,4 +352,150 @@ def ingest_dispatch_chain(root: str, batch_id: str) -> dict[str, Any]:
                 # Per-station commit: this network kills long transactions
                 conn.commit()
                 print(f"[dispatch_chain] {asset_name}: {rows_written:,} rows committed", flush=True)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Reorganised tree ingest (data/raw/nomination/, 2026-08-31 layout)
+# ---------------------------------------------------------------------------
+
+# Reorganised per-asset folder → rm_assets.name
+REORG_FOLDER_TO_ASSET = {
+    "杭锦旗": "悦杭独贵",
+    "四子王旗": "四子王旗",
+    "乌拉特中旗": "远景乌拉特",
+    "巴盟": "景怡查干哈达",
+    "苏右": "景蓝乌尔图",
+    "谷山梁": "裕昭沙子坝",
+}
+
+_SKIP_SUBDIRS = {"archived", "client-reports"}
+
+
+def _month_token(fname: str) -> int | None:
+    """Month number from a workbook filename.
+
+    Handles '4月'/'5月'/【4月】 Chinese-month tokens and 巴盟 export-date style
+    '05.31'/'08.29' (mm.dd in the name — the month part).
+    """
+    m = re.search(r"(\d{1,2})月", fname)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(?<!\d)(\d{2})\.(\d{2})(?!\d)", fname)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def select_latest_file_per_month(folder_path: str) -> dict[int, str]:
+    """{month: path} of the latest-mtime workbook per month in one asset folder.
+
+    Each daily download is a full monthly workbook snapshot (later = more
+    day-tabs filled), so the latest-mtime file for a month is the fullest.
+    Top-level files only — archived/ and client-reports/ are excluded.
+    """
+    import os
+    out: dict[int, tuple[float, str]] = {}
+    if not os.path.isdir(folder_path):
+        return {}
+    for fname in os.listdir(folder_path):
+        fpath = os.path.join(folder_path, fname)
+        if not os.path.isfile(fpath) or fname.startswith("~$"):
+            continue
+        if not fname.lower().endswith((".xlsx", ".xls")):
+            continue
+        mo = _month_token(fname)
+        if mo is None or not (1 <= mo <= 12):
+            continue
+        mt = os.path.getmtime(fpath)
+        if mo not in out or mt > out[mo][0]:
+            out[mo] = (mt, fpath)
+    return {mo: path for mo, (mt, path) in sorted(out.items())}
+
+
+def ingest_dispatch_tree_reorg(root: str, batch_id: str, dry_run: bool = False,
+                               assets: list[str] | None = None) -> dict[str, Any]:
+    """Ingest the reorganised data/raw/nomination/ tree into rm_dispatch_chain.
+
+    Per asset folder, only the latest-mtime workbook per month is parsed
+    (per user rule 2026-08-31: most recent file per month; archived and
+    client-reports subfolders ignored; 魏桥 excluded from the asset map).
+    Upsert semantics per (asset_id, interval_start); per-station commit.
+
+    dry_run=True parses and reports intervals/days per asset-month, writes nothing.
+    """
+    import os
+    import pandas as pd
+    from psycopg2.extras import execute_batch
+    from shared.agents.db import get_conn
+
+    report: dict[str, Any] = {"assets": {}, "files": [], "skipped": [], "errors": []}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for folder, asset_name in REORG_FOLDER_TO_ASSET.items():
+                if assets and asset_name not in assets:
+                    continue
+                cur.execute("SELECT id FROM marketdata.rm_assets WHERE name = %s", (asset_name,))
+                row = cur.fetchone()
+                if not row:
+                    report["errors"].append(f"asset not found: {asset_name}")
+                    continue
+                asset_id = row[0]
+
+                folder_path = os.path.join(root, folder)
+                chosen = select_latest_file_per_month(folder_path)
+                if not chosen:
+                    report["skipped"].append(f"{folder}: no workbooks found")
+                    continue
+
+                pending: list[tuple] = []
+                for mo, fpath in chosen.items():
+                    fname = os.path.basename(fpath)
+                    try:
+                        if fname.lower().endswith(".xls"):
+                            items = parse_dispatch_xls(fpath)
+                        else:
+                            items = parse_dispatch_file(fpath)
+                    except Exception as e:
+                        report["errors"].append(f"{fname}: {type(e).__name__}: {e}")
+                        continue
+                    days = sorted({it["interval_start"].date().isoformat() for it in items})
+                    rel = os.path.join(folder, fname)
+                    report["files"].append({
+                        "asset": asset_name, "month": mo, "file": rel,
+                        "intervals": len(items), "days": len(days),
+                        "first": days[0] if days else None, "last": days[-1] if days else None,
+                    })
+                    if not items:
+                        continue
+                    pending.extend(
+                        (asset_id, it["interval_start"], it["soc_pct"],
+                         it["nominated_mw"], it["da_cleared_mw"], it["rt_cleared_mw"],
+                         it["actual_mw"], it["restriction"], rel, batch_id)
+                        for it in items
+                    )
+
+                if dry_run:
+                    report["assets"][asset_name] = f"dry-run: {len(pending):,} rows would upsert"
+                    continue
+                if pending:
+                    execute_batch(cur, """
+                        INSERT INTO marketdata.rm_dispatch_chain
+                            (asset_id, interval_start, soc_pct, nominated_mw,
+                             da_cleared_mw, rt_cleared_mw, actual_mw, restriction,
+                             source_file, upload_batch_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (asset_id, interval_start) DO UPDATE SET
+                            soc_pct = EXCLUDED.soc_pct,
+                            nominated_mw = EXCLUDED.nominated_mw,
+                            da_cleared_mw = EXCLUDED.da_cleared_mw,
+                            rt_cleared_mw = EXCLUDED.rt_cleared_mw,
+                            actual_mw = EXCLUDED.actual_mw,
+                            restriction = EXCLUDED.restriction,
+                            source_file = EXCLUDED.source_file,
+                            upload_batch_id = EXCLUDED.upload_batch_id
+                    """, pending, page_size=2000)
+                    conn.commit()
+                report["assets"][asset_name] = len(pending)
+                print(f"[reorg] {asset_name}: {len(pending):,} rows committed", flush=True)
     return report
