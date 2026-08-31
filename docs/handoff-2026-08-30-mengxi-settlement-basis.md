@@ -73,7 +73,16 @@ Cross-asset clustering: three 杭锦旗-area assets' June invoice discharge pric
 
 ---
 
-## Next moves (tracked as tasks)
+## Dispatch-chain data lineage (as of 2026-09-01)
+
+| Window | Source | Batch / provenance |
+|---|---|---|
+| Jan 18 – Apr 19 | `ops_bess_dispatch_15min` (ops_ingestion pipeline, 日报 + 运营统计 formats) → ETL into `rm_dispatch_chain` | `upload_batch_id='ops-etl-20260901'`, `source_file='etl:ops:<filename>'`. 34,464 inserted; 1,443 all-NULL rows (四子王旗 Jan, plant not yet trading) deleted after. 4 assets only （悦杭/四子王/景蓝/裕昭） — 远景乌拉特 & 景怡查干哈达 have no Jan–Mar source anywhere. |
+| Apr 20 – Aug 30 | Reorganised `data/raw/nomination/` tree (latest-mtime file per asset-month; frozen-template date recovery) | `upload_batch_id='reorg-20260831'` |
+| 景怡查干哈达 Apr 1–18 | `md_id_cleared_energy` rt_cleared backfill (semantics: RT cleared, NOT actual) | `source_file='backfill:md_id_cleared_energy'` |
+| Known gaps (source-absent) | All assets Apr 1–18/19; 景蓝乌尔图 June; 裕昭 pre-Mar-18; 远景乌拉特 & 查干哈达 Jan–Mar | — |
+
+**Next moves (tracked as tasks)**
 
 | # | Task | Status |
 |---|---|---|
