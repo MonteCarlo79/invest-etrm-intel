@@ -51,9 +51,9 @@ except Exception:
 
 st.title("Asset Risk Management")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Asset Config", "Settlement", "Realised P&L",
-    "Positions & MtM", "VaR & Greeks", "Agent"
+    "Positions & MtM", "VaR & Greeks", "Agent", "Dispatch Diagnostics"
 ])
 
 with tab1:
@@ -79,3 +79,7 @@ with tab5:
 with tab6:
     from apps.asset_risk.tab_agent import render_agent
     render_agent(engine)
+
+with tab7:
+    from apps.asset_risk.tab_diagnostics import render_diagnostics
+    render_diagnostics(engine)
