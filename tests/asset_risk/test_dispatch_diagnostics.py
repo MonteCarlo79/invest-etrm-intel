@@ -14,6 +14,7 @@ from apps.asset_risk.tab_diagnostics import (
     _load_prices,
     _month_asset_matrix,
     bid_fail_monthly,
+    capacity_loss_monthly,
     exec_gap_monthly,
     find_defect_events,
     restriction_monthly,
@@ -67,9 +68,9 @@ def sqlite_engine():
         # bid fail chg — 4 intervals nom=-10, da=-6 (-4 MWh, ¥-1200)
         for i in range(14, 18):
             chain(1, quarter(i), -10, -6, -6, -6)
-        # restrictions
-        chain(1, quarter(18), 0, 0, 0, 0, res="charge_only")
-        chain(1, quarter(19), 0, 0, 0, 0, res="charge_only")
+        # restrictions (rows 18-19 carry rt values to exercise in-window gap fields)
+        chain(1, quarter(18), 0, 0, 10, 7, res="charge_only")
+        chain(1, quarter(19), 0, 0, -10, -12, res="charge_only")
         chain(1, quarter(20), 0, 0, 0, 0, res="discharge_only")
         # defect run: 5 consecutive actual=0, rt=30 (>25% of 100MW) — 37.5 MWh, ¥11250
         for i in range(21, 26):
@@ -89,6 +90,10 @@ def sqlite_engine():
         chain(1, quarter(40), 30, 30, 30, 0)
         # Asset 2 July rows (month grouping in matrix)
         chain(2, "2026-07-01 00:00:00", 10, 10, 10, 5)
+        # Asset 3 锡西二 — capacity rate 280 (named-asset test)
+        conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
+                          "(3, '锡西二', 'bess', 'test', 100, 4.0)"))
+        chain(3, "2026-06-01 00:00:00", 10, 10, 10, 5)
 
         # Prices for P1: 300 at every ts+15min except interval 0's target (00:15),
         # so interval 0 stays unpriced (MWh counted, ¥ skipped)
@@ -149,19 +154,19 @@ def test_exec_gap_monthly_values(sqlite_engine):
     df["month"] = df["ts"].dt.strftime("%Y-%m")
     m = exec_gap_monthly(df)
     row = m[(m["asset"] == "A1") & (m["month"] == "2026-06")].iloc[0]
-    # dis mask catches: 4 gap rows (3 MWh) + bid rows (0) + all defect-family rows
-    # (rt>0.5, actual=0: 37.5+22.5+25+30 = 115 MWh) → total gap 118 MWh
-    assert row["dis_gap_mwh"] == pytest.approx(118.0)
-    # ¥ = 118 x 300 minus the unpriced first interval (0.75 MWh x 300 = 225)
-    assert row["dis_gap_cny"] == pytest.approx(35175.0)
-    # denominator: 139.5 MWh (10 + 7 + 37.5 + 7.5 + 22.5 + 25 + 30);
+    # dis mask catches: 4 gap rows (3) + bid rows (0) + restriction row 18 (0.75)
+    # + all defect-family rows (37.5+7.5sep0+22.5+25+30 = 122.5... see below) → gap 118.75
+    assert row["dis_gap_mwh"] == pytest.approx(118.75)
+    # ¥ = 118.75 x 300 minus the unpriced first interval (0.75 MWh x 300 = 225)
+    assert row["dis_gap_cny"] == pytest.approx(35400.0)
+    # denominator: 142 MWh (10 + 7 + 2.5 + 37.5 + 7.5 + 22.5 + 25 + 30);
     # backfill NULL-actual row (2.5) excluded from num AND denom
-    assert row["dis_cleared_mwh"] == pytest.approx(139.5)
-    assert row["dis_gap_pct"] == pytest.approx(118.0 / 139.5 * 100, abs=0.01)
-    assert row["chg_gap_mwh"] == pytest.approx(-2.0)     # 4 x (-12+10) x 0.25
-    assert row["chg_gap_cny"] == pytest.approx(-600.0)
-    assert row["chg_cleared_mwh"] == pytest.approx(16.0)  # 10 + 6
-    assert row["chg_gap_pct"] == pytest.approx(-12.5)
+    assert row["dis_cleared_mwh"] == pytest.approx(142.0)
+    assert row["dis_gap_pct"] == pytest.approx(118.75 / 142.0 * 100, abs=0.01)
+    assert row["chg_gap_mwh"] == pytest.approx(-2.5)     # 4x(-12+10)x0.25 + row19 (-0.5)
+    assert row["chg_gap_cny"] == pytest.approx(-750.0)
+    assert row["chg_cleared_mwh"] == pytest.approx(18.5)  # 10 + 6 + 2.5
+    assert row["chg_gap_pct"] == pytest.approx(-2.5 / 18.5 * 100, abs=0.01)
 
 
 def test_bid_fail_monthly_values(sqlite_engine):
@@ -188,6 +193,40 @@ def test_restriction_monthly(sqlite_engine):
     assert row["discharge_only_intervals"] == 1
     assert row["total_intervals"] == 39
     assert row["restricted_share"] == pytest.approx(3 / 39)
+    assert row["moved_mwh"] == pytest.approx(5.0)        # (10 + 10 + 0) x 0.25
+    # in-window exec gap: row18 (10-7)x0.25 = 0.75; row19 (-12+10)x0.25 = -0.5
+    assert row["gap_dis_mwh"] == pytest.approx(0.75)
+    assert row["gap_chg_mwh"] == pytest.approx(-0.5)
+    assert row["gap_cny"] == pytest.approx(75.0)         # 0.75x300 + (-0.5)x300
+
+
+def test_capacity_loss_exec_gap(sqlite_engine):
+    chain = _load_chain(sqlite_engine, [1, 3], None, None)
+    prices = _load_prices(sqlite_engine, ["P1"], None, "2026-06-02")
+    df = _attach_prices(chain, prices, {"A1": "P1"})
+    df["month"] = df["ts"].dt.strftime("%Y-%m")
+    m = capacity_loss_monthly(df, kind="exec_gap")
+    a1 = m[(m["asset"] == "A1") & (m["month"] == "2026-06")].iloc[0]
+    assert a1["dis_shortfall_mwh"] == pytest.approx(118.75)
+    assert a1["capcomp_rate"] == 350.0                    # default rate
+    assert a1["capacity_loss_cny"] == pytest.approx(118.75 * 350.0)
+    xxe = m[m["asset"] == "锡西二"].iloc[0]
+    assert xxe["capcomp_rate"] == 280.0                   # named-asset rate
+    assert xxe["capacity_loss_cny"] == pytest.approx(1.25 * 280.0)
+
+
+def test_capacity_loss_bid_fail_and_override(sqlite_engine):
+    chain = _load_chain(sqlite_engine, [1], None, None)
+    prices = _load_prices(sqlite_engine, ["P1"], None, "2026-06-02")
+    df = _attach_prices(chain, prices, {"A1": "P1"})
+    df["month"] = df["ts"].dt.strftime("%Y-%m")
+    m = capacity_loss_monthly(df, kind="bid_fail")
+    row = m[(m["asset"] == "A1") & (m["month"] == "2026-06")].iloc[0]
+    assert row["dis_shortfall_mwh"] == pytest.approx(3.0)
+    assert row["capacity_loss_cny"] == pytest.approx(3.0 * 350.0)
+    m2 = capacity_loss_monthly(df, kind="exec_gap", rate_map={"A1": 280.0})
+    row2 = m2[(m2["asset"] == "A1") & (m2["month"] == "2026-06")].iloc[0]
+    assert row2["capacity_loss_cny"] == pytest.approx(118.75 * 280.0)
 
 
 # --- defect events ---
@@ -217,7 +256,7 @@ def test_month_asset_matrix_totals(sqlite_engine):
     mat = _month_asset_matrix(m, "dis_gap_cny")
     assert "组合合计" in mat.columns
     assert "资产合计" in mat.index
-    assert mat.loc["2026-06", "A1"] == pytest.approx(35175.0)
+    assert mat.loc["2026-06", "A1"] == pytest.approx(35400.0)
     assert mat.loc["2026-07", "A2"] == pytest.approx(375.0)   # (10-5) x 0.25 x 300
     assert mat.loc["资产合计", "组合合计"] == pytest.approx(mat.drop(index="资产合计")["组合合计"].sum())
 

@@ -30,6 +30,10 @@ PLANT_MAP = {
 RESTRICTION_CN = {"charge_only": "仅可充电", "discharge_only": "仅可放电"}
 RESTRICTION_COLOR = {"charge_only": "#e67e22", "discharge_only": "#e74c3c"}  # Excel cell colours
 
+# 容量补偿标准 (¥/MWh, per user 2026-09-01): default 350; 锡西二/阿拉善/武川 280.
+CAPCOMP_RATE: dict[str, float] = {"锡西二": 280.0, "阿拉善": 280.0, "武川": 280.0}
+CAPCOMP_RATE_DEFAULT = 350.0
+
 
 # ---------------------------------------------------------------------------
 # SQL loaders (dialect-light: the only PG-specific fragment is the tz expr)
@@ -169,8 +173,44 @@ def bid_fail_monthly(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def capacity_loss_monthly(df: pd.DataFrame, kind: str = "exec_gap",
+                          rate_map: dict[str, float] | None = None,
+                          default_rate: float = CAPCOMP_RATE_DEFAULT) -> pd.DataFrame:
+    """Per (asset, month): capacity subsidy foregone on discharge volume shortfall.
+
+    kind="exec_gap":  vol = Σ(rt−actual)×0.25 where rt>0.5, actual notna (panel 1)
+    kind="bid_fail":  vol = Σ(nom−da)×0.25   where nom>0.5           (panel 2)
+    capacity_loss_cny = vol × rate (350 ¥/MWh default; 280 for 锡西二/阿拉善/武川,
+    per user 2026-09-01). Positive = subsidy foregone.
+    """
+    rates = dict(CAPCOMP_RATE if rate_map is None else rate_map)
+    rows = []
+    for (asset, month), g in df.groupby(["asset", "month"]):
+        if kind == "bid_fail":
+            m = g[g["nominated_mw"] > 0.5]
+            vol = float(((m["nominated_mw"] - m["da_cleared_mw"]) * 0.25).sum())
+        else:
+            m = g[(g["rt_cleared_mw"] > 0.5) & g["actual_mw"].notna()]
+            vol = float(((m["rt_cleared_mw"] - m["actual_mw"]) * 0.25).sum())
+        rate = rates.get(asset, default_rate)
+        rows.append({
+            "asset": asset, "month": month,
+            "dis_shortfall_mwh": vol,
+            "capcomp_rate": rate,
+            "capacity_loss_cny": vol * rate,
+        })
+    return pd.DataFrame(rows)
+
+
 def restriction_monthly(df: pd.DataFrame) -> pd.DataFrame:
-    """Per (asset, month): restriction counts, share, moved volume/¥, in-window exec gap ¥."""
+    """Per (asset, month): restriction counts, share, scheduled volume/¥ in windows,
+    and the exec-gap deviation (MWh + ¥) WITHIN flagged windows.
+
+    moved_mwh/cny = Σ|rt|×0.25 / Σ rt×0.25×price over flagged intervals — scheduled
+    energy in restricted windows (context size, NOT a deviation).
+    gap_mwh/gap_cny = exec-gap deviation inside flagged windows (same masks/formulas
+    as exec_gap_monthly) — the deviation quantity.
+    """
     rows = []
     for (asset, month), g in df.groupby(["asset", "month"]):
         out = {"asset": asset, "month": month}
@@ -183,8 +223,13 @@ def restriction_monthly(df: pd.DataFrame) -> pd.DataFrame:
         out["moved_cny"] = float((flagged["rt_cleared_mw"] * 0.25
                                   * flagged["price_cny_mwh"]).sum())
         dis = flagged[(flagged["rt_cleared_mw"] > 0.5) & flagged["actual_mw"].notna()]
+        chg = flagged[(flagged["rt_cleared_mw"] < -0.5) & flagged["actual_mw"].notna()]
+        out["gap_dis_mwh"] = float(((dis["rt_cleared_mw"] - dis["actual_mw"]) * 0.25).sum())
+        out["gap_chg_mwh"] = float(((chg["actual_mw"] - chg["rt_cleared_mw"]) * 0.25).sum())
         out["gap_cny"] = float(((dis["rt_cleared_mw"] - dis["actual_mw"]) * 0.25
-                                * dis["price_cny_mwh"]).sum())
+                                * dis["price_cny_mwh"]).sum()
+                               + ((chg["actual_mw"] - chg["rt_cleared_mw"]) * 0.25
+                                  * chg["price_cny_mwh"]).sum())
         rows.append(out)
     return pd.DataFrame(rows)
 
@@ -337,33 +382,49 @@ def render_diagnostics(engine):
     # ================= Panel 1: execution gap =================
     st.markdown("#### 1. 执行偏差：实时出清 vs 实际执行（网架拥堵）")
     gap = exec_gap_monthly(df)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("放电偏差电量", f"{gap['dis_gap_mwh'].sum():,.0f} MWh")
-    c2.metric("放电偏差金额", f"¥{gap['dis_gap_cny'].sum():,.0f}")
-    c3.metric("充电偏差电量", f"{gap['chg_gap_mwh'].sum():,.0f} MWh")
-    c4.metric("充电偏差金额", f"¥{gap['chg_gap_cny'].sum():,.0f}")
+    cap1 = capacity_loss_monthly(df, kind="exec_gap")
+    gap = gap.merge(cap1[["asset", "month", "capacity_loss_cny"]],
+                    on=["asset", "month"], how="left")
+    gap["cost_change_cny"] = -gap["chg_gap_cny"]              # 充电成本变化：+多付 / −少付
+    gap["arb_net_cny"] = gap["dis_gap_cny"] - gap["chg_gap_cny"]  # 套利净影响：+净损失
 
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("放电偏差电量", f"{gap['dis_gap_mwh'].sum():,.0f} MWh", help="正=少放（出清未执行），负=多放")
+    c2.metric("充电偏差电量", f"{gap['chg_gap_mwh'].sum():,.0f} MWh", help="正=少充，负=多充")
+    c3.metric("套利净影响", f"¥{gap['arb_net_cny'].sum():,.0f}",
+              help="放电收入损失 + 充电成本变化（正=净损失）")
+    c4.metric("容量补偿影响", f"¥{gap['capacity_loss_cny'].sum():,.0f}",
+              help="放电偏差电量 × 容量补偿标准（350元/MWh；锡西二/阿拉善/武川 280元/MWh）")
+
+    m_mwh = gap.groupby("month", as_index=False)[["dis_gap_mwh", "chg_gap_mwh"]].sum().sort_values("month")
+    m_cny = gap.groupby("month", as_index=False)[
+        ["dis_gap_cny", "cost_change_cny", "arb_net_cny"]].sum().sort_values("month")
     col_l, col_r = st.columns(2)
     with col_l:
         fig = go.Figure([
-            go.Bar(name="放电偏差", x=gap.groupby("month")["dis_gap_mwh"].sum().index,
-                   y=gap.groupby("month")["dis_gap_mwh"].sum().values, marker_color="#2ecc71"),
-            go.Bar(name="充电偏差", x=gap.groupby("month")["chg_gap_mwh"].sum().index,
-                   y=gap.groupby("month")["chg_gap_mwh"].sum().values, marker_color="#3498db"),
+            go.Bar(name="放电偏差", x=m_mwh["month"], y=m_mwh["dis_gap_mwh"], marker_color="#2ecc71"),
+            go.Bar(name="充电偏差", x=m_mwh["month"], y=m_mwh["chg_gap_mwh"], marker_color="#3498db"),
         ])
-        fig.update_layout(title="执行偏差电量 by 月", yaxis_title="MWh",
-                          barmode="group", height=330)
+        fig.update_layout(title="执行偏差电量 by 月（正=少放/少充，负=多放/多充）",
+                          yaxis_title="MWh", barmode="group", height=330)
         st.plotly_chart(fig, use_container_width=True)
     with col_r:
         fig = go.Figure([
-            go.Bar(name="放电偏差", x=gap.groupby("month")["dis_gap_cny"].sum().index,
-                   y=gap.groupby("month")["dis_gap_cny"].sum().values, marker_color="#2ecc71"),
-            go.Bar(name="充电偏差", x=gap.groupby("month")["chg_gap_cny"].sum().index,
-                   y=gap.groupby("month")["chg_gap_cny"].sum().values, marker_color="#3498db"),
+            go.Bar(name="放电收入损失", x=m_cny["month"], y=m_cny["dis_gap_cny"], marker_color="#e74c3c"),
+            go.Bar(name="充电成本变化", x=m_cny["month"], y=m_cny["cost_change_cny"], marker_color="#3498db"),
+            go.Bar(name="套利净影响", x=m_cny["month"], y=m_cny["arb_net_cny"], marker_color="#e67e22"),
         ])
-        fig.update_layout(title="执行偏差金额 by 月", yaxis_title="CNY",
-                          barmode="group", height=330)
+        fig.update_layout(title="套利影响 by 月（放电收入 − 充电成本；正=净损失）",
+                          yaxis_title="CNY", barmode="group", height=330)
         st.plotly_chart(fig, use_container_width=True)
+
+    m_cap = gap.groupby("month", as_index=False)["capacity_loss_cny"].sum().sort_values("month")
+    fig = go.Figure(go.Bar(x=m_cap["month"], y=m_cap["capacity_loss_cny"], marker_color="#9b59b6",
+                           text=[f"{v/1e6:,.2f}M" for v in m_cap["capacity_loss_cny"]],
+                           textposition="auto"))
+    fig.update_layout(title="容量补偿影响 by 月（放电偏差电量 × 350元/MWh；锡西二/阿拉善/武川 280元/MWh）",
+                      yaxis_title="CNY", showlegend=False, height=300)
+    st.plotly_chart(fig, use_container_width=True)
 
     prof = _hourly_exec_gap_profile(df)
     if prof is not None:
@@ -371,10 +432,14 @@ def render_diagnostics(engine):
     hm = _pct_heatmap(gap, "dis_gap_pct", "放电执行偏差率 % (资产 × 月)")
     if hm is not None:
         st.plotly_chart(hm, use_container_width=True)
-    st.dataframe(_month_asset_matrix(gap, "dis_gap_cny").style.format("¥{:,.0f}"),
-                 use_container_width=True)
-    with st.expander("充电偏差金额 matrix"):
-        st.dataframe(_month_asset_matrix(gap, "chg_gap_cny").style.format("¥{:,.0f}"),
+    col_l, col_r = st.columns(2)
+    with col_l:
+        st.markdown("**套利净影响 (¥)**")
+        st.dataframe(_month_asset_matrix(gap, "arb_net_cny").style.format("¥{:,.0f}"),
+                     use_container_width=True)
+    with col_r:
+        st.markdown("**容量补偿影响 (¥)**")
+        st.dataframe(_month_asset_matrix(gap, "capacity_loss_cny").style.format("¥{:,.0f}"),
                      use_container_width=True)
 
     st.divider()
@@ -382,33 +447,64 @@ def render_diagnostics(engine):
     # ================= Panel 2: bid failure =================
     st.markdown("#### 2. 申报失败：申报 vs 日前出清")
     fail = bid_fail_monthly(df)
+    cap2 = capacity_loss_monthly(df, kind="bid_fail")
+    fail = fail.merge(cap2[["asset", "month", "capacity_loss_cny"]],
+                      on=["asset", "month"], how="left")
+    fail["chg_shortfall_mwh"] = -fail["chg_fail_mwh"]      # 充电未中标电量：正=少中标，负=多中标
+    fail["arb_net_cny"] = fail["dis_fail_cny"] + fail["chg_fail_cny"]  # 套利净影响：+净损失
+    # fail["chg_fail_cny"]: negative = 少中标（少付成本/avoided），positive = 多中标（多付成本）
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("放电未中标电量", f"{fail['dis_fail_mwh'].sum():,.0f} MWh")
-    c2.metric("放电未中标金额", f"¥{fail['dis_fail_cny'].sum():,.0f}")
-    c3.metric("充电未中标电量", f"{fail['chg_fail_mwh'].sum():,.0f} MWh")
-    c4.metric("充电未中标金额", f"¥{fail['chg_fail_cny'].sum():,.0f}")
+    c2.metric("充电未中标电量", f"{fail['chg_shortfall_mwh'].sum():,.0f} MWh",
+              help="正=少中标，负=多中标")
+    c3.metric("套利净影响", f"¥{fail['arb_net_cny'].sum():,.0f}",
+              help="放电收入损失 + 充电成本变化（正=净损失）")
+    c4.metric("容量补偿影响", f"¥{fail['capacity_loss_cny'].sum():,.0f}",
+              help="放电未中标电量 × 容量补偿标准（350元/MWh；锡西二/阿拉善/武川 280元/MWh）")
 
+    f_mwh = fail.groupby("month", as_index=False)[["dis_fail_mwh", "chg_shortfall_mwh"]].sum().sort_values("month")
+    f_cny = fail.groupby("month", as_index=False)[
+        ["dis_fail_cny", "chg_fail_cny", "arb_net_cny"]].sum().sort_values("month")
     col_l, col_r = st.columns(2)
     with col_l:
-        fig = go.Figure(go.Bar(x=fail.groupby("month")["dis_fail_mwh"].sum().index,
-                               y=fail.groupby("month")["dis_fail_mwh"].sum().values,
-                               marker_color="#e74c3c"))
-        fig.update_layout(title="放电未中标电量 by 月", yaxis_title="MWh",
-                          showlegend=False, height=330)
+        fig = go.Figure([
+            go.Bar(name="放电未中标", x=f_mwh["month"], y=f_mwh["dis_fail_mwh"], marker_color="#e74c3c"),
+            go.Bar(name="充电未中标", x=f_mwh["month"], y=f_mwh["chg_shortfall_mwh"], marker_color="#3498db"),
+        ])
+        fig.update_layout(title="申报失败电量 by 月（正=少中标，负=多中标）",
+                          yaxis_title="MWh", barmode="group", height=330)
         st.plotly_chart(fig, use_container_width=True)
     with col_r:
-        fig = go.Figure(go.Bar(x=fail.groupby("month")["dis_fail_cny"].sum().index,
-                               y=fail.groupby("month")["dis_fail_cny"].sum().values,
-                               marker_color="#e67e22"))
-        fig.update_layout(title="放电未中标金额 by 月", yaxis_title="CNY",
-                          showlegend=False, height=330)
+        fig = go.Figure([
+            go.Bar(name="放电收入损失", x=f_cny["month"], y=f_cny["dis_fail_cny"], marker_color="#e74c3c"),
+            go.Bar(name="充电成本变化", x=f_cny["month"], y=f_cny["chg_fail_cny"], marker_color="#3498db"),
+            go.Bar(name="套利净影响", x=f_cny["month"], y=f_cny["arb_net_cny"], marker_color="#e67e22"),
+        ])
+        fig.update_layout(title="套利影响 by 月（放电收入 − 充电成本；正=净损失）",
+                          yaxis_title="CNY", barmode="group", height=330)
         st.plotly_chart(fig, use_container_width=True)
+
+    f_cap = fail.groupby("month", as_index=False)["capacity_loss_cny"].sum().sort_values("month")
+    fig = go.Figure(go.Bar(x=f_cap["month"], y=f_cap["capacity_loss_cny"], marker_color="#9b59b6",
+                           text=[f"{v/1e6:,.2f}M" for v in f_cap["capacity_loss_cny"]],
+                           textposition="auto"))
+    fig.update_layout(title="容量补偿影响 by 月（放电未中标电量 × 350元/MWh；锡西二/阿拉善/武川 280元/MWh）",
+                      yaxis_title="CNY", showlegend=False, height=300)
+    st.plotly_chart(fig, use_container_width=True)
 
     hm2 = _pct_heatmap(fail, "dis_fail_pct", "放电申报失败率 % (资产 × 月)")
     if hm2 is not None:
         st.plotly_chart(hm2, use_container_width=True)
-    st.dataframe(_month_asset_matrix(fail, "dis_fail_cny").style.format("¥{:,.0f}"),
-                 use_container_width=True)
+    col_l, col_r = st.columns(2)
+    with col_l:
+        st.markdown("**套利净影响 (¥)**")
+        st.dataframe(_month_asset_matrix(fail, "arb_net_cny").style.format("¥{:,.0f}"),
+                     use_container_width=True)
+    with col_r:
+        st.markdown("**容量补偿影响 (¥)**")
+        st.dataframe(_month_asset_matrix(fail, "capacity_loss_cny").style.format("¥{:,.0f}"),
+                     use_container_width=True)
 
     st.divider()
 
@@ -416,12 +512,16 @@ def render_diagnostics(engine):
     st.markdown("#### 3. 系统限制与设备缺陷")
     st.markdown("**3a 调度限制窗口（申报表时间格颜色）**")
     rest = restriction_monthly(df)
-    c1, c2, c3, c4 = st.columns(4)
     n_flag = rest["charge_only_intervals"].sum() + rest["discharge_only_intervals"].sum()
+    gap_vol = rest["gap_dis_mwh"].sum() + rest["gap_chg_mwh"].sum()
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("受限区间数", f"{n_flag:,}")
     c2.metric("受限占比", f"{n_flag / max(rest['total_intervals'].sum(), 1):.1%}")
-    c3.metric("受限窗口电量", f"{rest['moved_mwh'].sum():,.0f} MWh")
-    c4.metric("受限窗口执行偏差", f"¥{rest['gap_cny'].sum():,.0f}")
+    c3.metric("受限窗口计划电量", f"{rest['moved_mwh'].sum():,.0f} MWh",
+              help="受限窗口内的计划（出清）电量 Σ|rt|×0.25 — 非偏差，仅度量受限规模")
+    c4.metric("窗口内执行偏差电量", f"{gap_vol:,.0f} MWh",
+              help="受限窗口内 实时出清 vs 实际执行 的偏差（正=少放/少充，负=多放/多充）")
+    c5.metric("窗口内执行偏差金额", f"¥{rest['gap_cny'].sum():,.0f}")
 
     by_month_type = rest.groupby("month")[["charge_only_intervals",
                                            "discharge_only_intervals"]].sum()
