@@ -38,3 +38,19 @@ Asset → grid connection point → Fengxing price node. Sources: 系统接入�
 - **谷山梁 220kV bus zone**: hangjinqi + gushanliang (各自升压站计量, 相距数km-30km — 平日同价, 阻塞日可分叉, 2026-05-20 实证) + 库布其凝光400MW光储 / 库布其洁能800MW光储 / 库布其云恒800MW光储 / 明阳(亚什图,把栅).
 - **锡西二 220kV bus zone**: suyou + xixier (upcoming).
 - 节点表中变电站多表记 (.1M–.4M) 对应不同母线/线路计量点, 阻塞时同站不同表价可分叉.
+
+## Substation neighborhoods (from 内蒙古电网主系统图 2024-08-01, data/nodal/网架图/内蒙/)
+
+Positional text extraction (130pt radius) — proximity on the diagram ⇒ probable electrical adjacency, but individual connections not yet visually verified. Vintage 2024-08: 锡西二/阿拉腾敖包 not yet on the map (在建/规划); BESS assets themselves also absent (all energized later).
+
+| Substation | Neighboring plants/stations on map (curated) |
+|---|---|
+| 谷山梁变 | 库布其凝光/洁能/云恒(光储), 沙日召光伏, 亿利治沙, 朔方, 卓越, 度光, 河日恒, 沙拉告里, 门肯, 先导, 泰泽一站, 蒙泰韩家渠 |
+| 杜尔伯特变 | 港建乌兰花风电, 席边河风光, 杜尔伯特(中广核)风电, 夏日(三峡)风电, 四子王, 清泉, 锡拉木伦, 布力格, 中光, 明杰汗乌拉 |
+| 苏尼特变/锡西二 zone | 京东方楚鲁图, 乌日希勒, 深能那仁, 巴音塔拉, 伊林一场/二场, 二连协合, 环昕满都拉图, 二连恩和, 蒙科敖都, 天宏阳光, 乌日根, 中海油二连风电 |
+| 河套站 | 京能伊力更, 国华川井, 获各琦, 乌后旗开闭站, 曙光变, 杭后, 布拉格, 厂汉 |
+| 德岭山站 | 隆兴昌, 文更, 临河, 国合, 金风达茂, 兴顺西, 巴中, 新安, 金泉 |
+| 武川站 | 东山永光伏, 南卜子, 天能久远, 国龙白山风电, 东方新能源西南壕, 风盛北疆, 恒润, 呼市抽水蓄能(4×300), 三圣太 |
+| 可镇站 | 李汉梁风光, 红山, 黑沙兔, 三圣太, 义和美, 元山, 上秃亥, 北梁, 风后柜 |
+
+Cross-validation: 港建乌兰花/席边河/李汉梁/国龙白山/东山永 all appeared in 景通四益堂's price cluster; 中海油二连/苏尼特站/玉龙站/涌泉站 in 景蓝乌尔图's — map, price analysis, and interconnection reports triangulate consistently.
