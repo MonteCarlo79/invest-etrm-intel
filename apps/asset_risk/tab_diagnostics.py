@@ -230,6 +230,9 @@ def restriction_monthly(df: pd.DataFrame) -> pd.DataFrame:
                                 * dis["price_cny_mwh"]).sum()
                                + ((chg["actual_mw"] - chg["rt_cleared_mw"]) * 0.25
                                   * chg["price_cny_mwh"]).sum())
+        # In-window capacity subsidy foregone (subset of panel-1 容量补偿影响):
+        # discharge exec-gap volume in flagged windows × rate (350 default / 280 named)
+        out["capacity_loss_cny"] = out["gap_dis_mwh"] * CAPCOMP_RATE.get(asset, CAPCOMP_RATE_DEFAULT)
         rows.append(out)
     return pd.DataFrame(rows)
 
@@ -521,7 +524,12 @@ def render_diagnostics(engine):
               help="受限窗口内的计划（出清）电量 Σ|rt|×0.25 — 非偏差，仅度量受限规模")
     c4.metric("窗口内执行偏差电量", f"{gap_vol:,.0f} MWh",
               help="受限窗口内 实时出清 vs 实际执行 的偏差（正=少放/少充，负=多放/多充）")
-    c5.metric("窗口内执行偏差金额", f"¥{rest['gap_cny'].sum():,.0f}")
+    c5.metric("窗口内执行偏差金额", f"¥{rest['gap_cny'].sum():,.0f}",
+              help="仅套利影响（按实时价格加权）；容量补偿影响见下行")
+    c6, c7 = st.columns(2)
+    c6.metric("窗口内容量补偿影响", f"¥{rest['capacity_loss_cny'].sum():,.0f}",
+              help="窗口内放电偏差电量 × 容量补偿标准（350元/MWh；锡西二/阿拉善/武川 280元/MWh）"
+                   "— 为 Panel 1 容量补偿影响的受限窗口子集")
 
     by_month_type = rest.groupby("month")[["charge_only_intervals",
                                            "discharge_only_intervals"]].sum()

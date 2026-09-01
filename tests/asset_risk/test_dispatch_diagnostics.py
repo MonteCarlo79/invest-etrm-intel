@@ -198,6 +198,7 @@ def test_restriction_monthly(sqlite_engine):
     assert row["gap_dis_mwh"] == pytest.approx(0.75)
     assert row["gap_chg_mwh"] == pytest.approx(-0.5)
     assert row["gap_cny"] == pytest.approx(75.0)         # 0.75x300 + (-0.5)x300
+    assert row["capacity_loss_cny"] == pytest.approx(0.75 * 350.0)  # in-window dis gap x rate
 
 
 def test_capacity_loss_exec_gap(sqlite_engine):
