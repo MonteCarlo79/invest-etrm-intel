@@ -30,6 +30,15 @@ def test_age_years_mapping():
     assert age_years("2026-05-01", "2026-06-01") == 0
 
 
+def test_age_years_timestamp_inputs():
+    """pd.Timestamp inputs (from benchmark_leg's month_start) — prod bug 2026-09-02:
+    Timestamp − datetime.date TypeError."""
+    import pandas as pd
+    assert age_years("2024-01-15", pd.Timestamp("2026-06-01")) == 2
+    assert age_years(pd.Timestamp("2024-01-15"), "2026-06-01") == 2
+    assert age_years(pd.Timestamp("2024-01-15"), pd.Timestamp("2026-06-01")) == 2
+
+
 def test_params_for_asset():
     p0 = params_for_asset(100.0, 4.0, "2026-01-01", "2026-06-01")
     assert p0["age"] == 0

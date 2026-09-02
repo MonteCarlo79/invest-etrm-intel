@@ -18,7 +18,8 @@ STANDARD_RTE = [0.88, 0.88, 0.87, 0.87, 0.87, 0.87, 0.87, 0.87,
 def age_years(commission_date, as_of) -> int:
     """Whole years since commissioning at as_of, clamped to [0, 15].
 
-    commission_date: datetime.date/str/None. None or unparseable → 0 (newest params).
+    commission_date / as_of: datetime.date, str, or pandas Timestamp.
+    None or unparseable commission_date → 0 (newest params).
     """
     if commission_date is None or (isinstance(commission_date, float) and commission_date != commission_date):
         return 0
@@ -26,6 +27,11 @@ def age_years(commission_date, as_of) -> int:
         commission_date = dt.date.fromisoformat(commission_date[:10])
     if isinstance(as_of, str):
         as_of = dt.date.fromisoformat(as_of[:10])
+    # Normalize pandas Timestamps (and datetime.datetime) to plain dates
+    if hasattr(commission_date, "date") and callable(getattr(commission_date, "date")):
+        commission_date = commission_date.date()
+    if hasattr(as_of, "date") and callable(getattr(as_of, "date")):
+        as_of = as_of.date()
     years = (as_of - commission_date).days // 365
     return max(0, min(15, years))
 
