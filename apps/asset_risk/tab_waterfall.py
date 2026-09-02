@@ -237,8 +237,9 @@ def waterfall_figure(wf: pd.DataFrame) -> go.Figure:
             else:
                 traces[c]["base"].append(running + v if running else v)
                 traces[c]["y"].append(-v)
-            label = f"¥{v / 1e6:,.2f}M" if v else ""
-            traces[c]["text"].append(label)
+            # stage columns carry no per-segment text — a single TOTAL annotation
+            # is added per stage (component value labels read as a mismatch vs KPIs)
+            traces[c]["text"].append("")
 
     def delta_bar(stage, prev_stage):
         running = stage_total[prev_stage]
@@ -271,6 +272,13 @@ def waterfall_figure(wf: pd.DataFrame) -> go.Figure:
             text=traces[c]["text"], textposition="outside",
             opacity=0.95,
         ))
+    # Stage-total labels above each stage column (headline-consistent)
+    for stage in ("投资标准", "申报", "出清", "实际"):
+        total = stage_total[stage]
+        fig.add_annotation(
+            x=stage, y=total, text=f"<b>¥{total / 1e6:,.2f}M</b>",
+            showarrow=False, yanchor="bottom",
+        )
     fig.update_layout(
         title="收益瀑布：投资标准 → 申报 → 出清 → 实际（套利 + 容量补偿 stacked；费用仅在实际段）",
         yaxis_title="CNY", barmode="overlay", height=480,
