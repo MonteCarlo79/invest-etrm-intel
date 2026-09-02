@@ -55,12 +55,10 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
                              start: str | None, end: str | None) -> pd.DataFrame:
     """Per (asset, month) from settlement bills: arb/cap/fee/other (signed amounts).
 
-    start/end accept ISO dates or 'YYYY-MM' month tokens (start → first of month,
-    end → first of next month, exclusive)."""
-    if start and len(start) == 7:
-        start = start + "-01"
-    if end and len(end) == 7:
-        end = (pd.Timestamp(end + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
+    start/end accept ISO dates or 'YYYY-MM' month tokens (normalized via
+    _month_token_bounds from tab_diagnostics)."""
+    from apps.asset_risk.tab_diagnostics import _month_token_bounds
+    start, end = _month_token_bounds(start, end)
     sql = """
         SELECT a.id AS asset_id, a.name AS asset, s.settlement_month AS month,
                si.category, si.amount_cny

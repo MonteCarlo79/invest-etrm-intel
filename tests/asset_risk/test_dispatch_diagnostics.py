@@ -135,6 +135,20 @@ def test_load_prices(sqlite_engine):
     assert set(df["plant_name"]) == {"P1"}
 
 
+def test_load_prices_month_tokens(sqlite_engine):
+    """'YYYY-MM' tokens are normalized to valid bounds (prod bug class 2026-09-02:
+    '2026-06' crashed a PG timestamp comparison in _load_prices)."""
+    df = _load_prices(sqlite_engine, ["P1"], "2026-06", "2026-07")
+    assert len(df) == 95
+    df2 = _load_prices(sqlite_engine, ["P1"], "2026-07", None)
+    assert len(df2) == 0  # P1 prices are June-only in the fixture
+
+
+def test_load_chain_month_tokens(sqlite_engine):
+    df = _load_chain(sqlite_engine, [1, 2], "2026-07", None)
+    assert set(df["asset"]) == {"A2"}
+
+
 def test_attach_prices_period_end(sqlite_engine):
     chain = _load_chain(sqlite_engine, [1], None, None)
     prices = _load_prices(sqlite_engine, ["P1"], None, "2026-06-02")

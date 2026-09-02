@@ -54,8 +54,19 @@ def _load_assets(engine) -> pd.DataFrame:
         ), conn)
 
 
+def _month_token_bounds(start: str | None, end: str | None) -> tuple[str | None, str | None]:
+    """Normalize 'YYYY-MM' month tokens to valid date bounds (start → first of
+    month, end → first of next month, exclusive). Full ISO dates pass through."""
+    if start and len(start) == 7:
+        start = start + "-01"
+    if end and len(end) == 7:
+        end = (pd.Timestamp(end + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
+    return start, end
+
+
 def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None) -> pd.DataFrame:
     ts = _ts_expr(engine)
+    start, end = _month_token_bounds(start, end)
     sql = f"""
         SELECT dc.asset_id, a.name AS asset, a.capacity_mw, {ts} AS ts,
                dc.nominated_mw, dc.da_cleared_mw, dc.rt_cleared_mw, dc.actual_mw,
@@ -79,6 +90,7 @@ def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None
 
 
 def _load_prices(engine, plants: list[str], start: str | None, end: str | None) -> pd.DataFrame:
+    start, end = _month_token_bounds(start, end)
     sql = """
         SELECT plant_name, datetime, cleared_price
         FROM marketdata.md_id_cleared_energy
