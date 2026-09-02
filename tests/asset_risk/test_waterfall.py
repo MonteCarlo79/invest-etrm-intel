@@ -148,6 +148,15 @@ def test_load_settlement_actuals(sqlite_engine):
     assert july["arb_cny"] == pytest.approx(50000.0)
 
 
+def test_load_settlement_actuals_month_token(sqlite_engine):
+    """'YYYY-MM' start tokens are normalized to valid dates (prod bug 2026-09-02:
+    '2026-08' was passed straight into a PG date comparison and crashed)."""
+    df = _load_settlement_actuals(sqlite_engine, [1], "2026-07", None)
+    assert set(df["month"]) == {"2026-07"}
+    df2 = _load_settlement_actuals(sqlite_engine, [1], "2026-06", None)
+    assert set(df2["month"]) == {"2026-06", "2026-07"}
+
+
 def test_build_waterfall_bridge_identity(sqlite_engine):
     bench = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"],
                           "arb_cny": [1000.0], "dis_mwh": [10.0], "cap_cny": [3500.0]})

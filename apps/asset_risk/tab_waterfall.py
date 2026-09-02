@@ -53,7 +53,14 @@ def _load_assets(engine) -> pd.DataFrame:
 
 def _load_settlement_actuals(engine, asset_ids: list[int],
                              start: str | None, end: str | None) -> pd.DataFrame:
-    """Per (asset, month) from settlement bills: arb/cap/fee/other (signed amounts)."""
+    """Per (asset, month) from settlement bills: arb/cap/fee/other (signed amounts).
+
+    start/end accept ISO dates or 'YYYY-MM' month tokens (start → first of month,
+    end → first of next month, exclusive)."""
+    if start and len(start) == 7:
+        start = start + "-01"
+    if end and len(end) == 7:
+        end = (pd.Timestamp(end + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
     sql = """
         SELECT a.id AS asset_id, a.name AS asset, s.settlement_month AS month,
                si.category, si.amount_cny
@@ -329,7 +336,9 @@ def render_waterfall(engine):
         return
 
     df = chain[chain["month"].isin(sel_months)].copy()
-    prices = _load_prices(engine, [PLANT_MAP[a] for a in assets["name"]], None, None)
+    month_end = (pd.Timestamp(max(sel_months) + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
+    prices = _load_prices(engine, [PLANT_MAP[a] for a in assets["name"]],
+                          min(sel_months), month_end)
     df = _attach_prices(df, prices, PLANT_MAP)
 
     if sel_asset != "全部资产":
