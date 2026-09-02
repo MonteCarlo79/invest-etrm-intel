@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.pjh-etrm.ops-kb-ingest</string>
+    <!-- Runs an INSTALLED COPY on local disk: launchd-spawned processes get exit 126
+         (TCC) executing scripts inside ~/Library/CloudStorage. Repo copy is the source;
+         refresh via scripts/setup_ops_kb_launchd.sh after edits. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>cd "/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform" &amp;&amp; /Users/chenzhuqi/.venvs/bess-platform/bin/python -m services.knowledge_pool.ops_watcher</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/chenzhuqi</string>
+    <!-- Hourly scan of assets/operating/复盘/ for drop-in files. -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/chenzhuqi/Library/Logs/bess-ops-kb/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chenzhuqi/Library/Logs/bess-ops-kb/launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/chenzhuqi/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- launchd does not reliably export HOME; without it aws CLI and dotenv
+             config resolution can fail or hang -->
+        <key>HOME</key>
+        <string>/Users/chenzhuqi</string>
+    </dict>
+</dict>
+</plist>
