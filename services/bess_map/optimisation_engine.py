@@ -49,6 +49,7 @@ def optimise_window(
     compensation_yuan_per_mwh: float = 0.0,
     dt: float = 1.0,
     ramp_rate_pct_per_min: Optional[float] = None,
+    solver_time_limit_s: Optional[float] = None,
 ) -> DispatchResult:
     """
     Solve the BESS arbitrage LP for an arbitrary number of intervals T.
@@ -151,7 +152,7 @@ def optimise_window(
          - float(prices[t]) * ch[t]) * dt
         for t in range(T)
     )
-    prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=120))
+    prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=(solver_time_limit_s or 120)))
 
     status = pulp.LpStatus.get(prob.status, str(prob.status))
 
