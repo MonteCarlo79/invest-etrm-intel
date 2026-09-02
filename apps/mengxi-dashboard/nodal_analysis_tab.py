@@ -157,12 +157,16 @@ def render(get_engine) -> None:
                             _na_rows.append((_base + timedelta(minutes=15 * _i), "own meter node", _v[_i]))
 
             _na_fig = go.Figure()
-            _na_colors = {"asset cleared_price": "#d62728", "parent bus (mean)": "#1f77b4", "own meter node": "#2ca02c"}
+            _na_styles = {
+                "asset cleared_price": dict(color="#d62728", width=1.4),
+                "own meter node": dict(color="#2ca02c", width=2.6),
+                "parent bus (mean)": dict(color="#1f77b4", width=1.2, dash="dash"),
+            }
             _na_pdf = pd.DataFrame(_na_rows, columns=["ts", "series", "price"])
             for _s, _g in _na_pdf.groupby("series"):
                 _na_fig.add_trace(go.Scatter(
                     x=_g["ts"], y=_g["price"], name=_s, mode="lines",
-                    line=dict(color=_na_colors[_s], width=1.2),
+                    line=_na_styles[_s],
                 ))
             # Charge/discharge shading from cleared energy (sign per interval,
             # consecutive same-sign slots merged into blocks).
