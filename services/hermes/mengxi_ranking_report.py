@@ -250,10 +250,12 @@ def _compute_nodal_pf_ranks(
             _, profit_2h = compute_dispatch_from_15min_prices(
                 prices_s, power_mw=1.0, duration_h=2.0, roundtrip_eff=rte,
                 ramp_rate_pct_per_min=3.3,  # 蒙西 operator ramp limit (per user 2026-08-30)
+                max_cycles_per_day=1.5,  # 蒙西 operator cycle cap (per user 2026-09-02)
             )
             _, profit_4h = compute_dispatch_from_15min_prices(
                 prices_s, power_mw=1.0, duration_h=4.0, roundtrip_eff=rte,
                 ramp_rate_pct_per_min=3.3,  # 蒙西 operator ramp limit (per user 2026-08-30)
+                max_cycles_per_day=1.5,  # 蒙西 operator cycle cap (per user 2026-09-02)
             )
             score_2h = float(profit_2h.sum()) / (2.0 * max(n_days, 1))
             score_4h = float(profit_4h.sum()) / (4.0 * max(n_days, 1))
@@ -809,10 +811,12 @@ def compute_and_store_nodal_pf_daily(
             _, p2h = compute_dispatch_from_15min_prices(
                 prices_s, power_mw=1.0, duration_h=2.0, roundtrip_eff=rte,
                 ramp_rate_pct_per_min=3.3,  # 蒙西 operator ramp limit (per user 2026-08-30)
+                max_cycles_per_day=1.5,  # 蒙西 operator cycle cap (per user 2026-09-02)
             )
             _, p4h = compute_dispatch_from_15min_prices(
                 prices_s, power_mw=1.0, duration_h=4.0, roundtrip_eff=rte,
                 ramp_rate_pct_per_min=3.3,  # 蒙西 operator ramp limit (per user 2026-08-30)
+                max_cycles_per_day=1.5,  # 蒙西 operator cycle cap (per user 2026-09-02)
             )
             score_2h = float(p2h.sum()) / (2.0 * max(n_days, 1))
             score_4h = float(p4h.sum()) / (4.0 * max(n_days, 1))
@@ -1026,6 +1030,7 @@ def compute_and_store_nodal_pf_annual(
             _, profit = compute_dispatch_from_15min_prices(
                 prices_s, power_mw=1.0, duration_h=4.0, roundtrip_eff=0.85,
                 ramp_rate_pct_per_min=3.3,  # 蒙西 operator ramp limit (per user 2026-08-30)
+                max_cycles_per_day=1.5,  # 蒙西 operator cycle cap (per user 2026-09-02)
             )
             score = float(profit.sum()) / (4.0 * max(n_days, 1))
         except Exception as exc:

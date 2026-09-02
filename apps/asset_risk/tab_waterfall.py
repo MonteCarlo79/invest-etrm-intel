@@ -149,7 +149,8 @@ def benchmark_leg(_engine, asset_id: int, month: str, capacity_mw: float,
     dispatch_df, profit_s = compute_dispatch_from_15min_prices(
         s, power_mw=capacity_mw, duration_h=params["duration_h"] * params["dod"] * params["soh"],
         roundtrip_eff=params["roundtrip_eff"], window_days=1,
-        ramp_rate_pct_per_min=3.3,
+        ramp_rate_pct_per_min=3.3, max_cycles_per_day=1.5,
+        # 蒙西 operator rules: ramp 3.3%/min + max 1.5 cycles/day per asset (user 2026-09).
         # capacity subsidy NOT internalised in the objective: it makes the MILP
         # ~25-500x slower (every discharge marginally profitable explodes the binary
         # search) while changing discharge volume by only ~0.2% (measured 2026-06,
@@ -293,7 +294,7 @@ _DEFINITIONS_MD = """
 _CAVEATS_MD = """
 **口径与假设**
 
-- 投资标准：LP 完美预见调度（15 分钟 RT 节点电价，纯现货套利目标），参数取标准表（容量=资产配置容量，DOD 90%，SOH/RTE 按投运年限），爬坡 3.3%/min；容量补偿按放电量 × 标准单价另计。补贴不内化于 LP 目标函数的实测效果（2026-06 悦杭独贵）：放电 13.7 GWh/月 ≈ 1.5 次/日（与实际电站节奏一致；内化则为 21.5 GWh ≈ 2.4 次/日，超出实际运营水平），且求解快 60 倍。
+- 投资标准：LP 完美预见调度（15 分钟 RT 节点电价，纯现货套利目标），参数取标准表（容量=资产配置容量，DOD 90%，SOH/RTE 按投运年限），蒙西调度约束：爬坡 3.3%/min + 每日最多 1.5 次循环（2026-09 用户确认）；容量补偿按放电量 × 标准单价另计。补贴不内化于 LP 目标函数的实测效果（2026-06 悦杭独贵）：放电 13.7 GWh/月 ≈ 1.5 次/日（与实际电站节奏一致；内化则为 21.5 GWh ≈ 2.4 次/日，超出实际运营水平），且求解快 60 倍。
 - 申报/出清两腿按 15 分钟节点电价计价；账单充电按小时均价结算（已确认的结算规则），与 15 分钟口径存在 ±1–4% 基差，归入"出清→实际"偏差。
 - 费用项（系统运行费、线损、其他费用）仅存在于实际段（结算单），前两腿为零 — 这是 Δ执行与费用 的组成部分，不是错误。
 - commission_date 缺失的资产按 Year 0（最新参数）处理，并在下方列出警告。

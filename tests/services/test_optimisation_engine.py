@@ -63,6 +63,26 @@ def test_ramp_constraint_binds_on_spike_day():
     assert ramped.profit < unramped.profit
 
 
+def test_max_cycles_per_day_caps_discharge():
+    """1.5 cycles/day operator cap (蒙西, per user 2026-09-02): daily discharge
+    ≤ 1.5 × energy cap, and the cap binds when prices support more cycling."""
+    # Two 4-hour price spikes (05:00-09:00 + 18:00-22:00) with charge time before
+    # each — uncapped LP runs two full SOC-box cycles (~738 MWh), exceeding the cap
+    p = np.full(96, 30.0)
+    p[20:36] = 300.0
+    p[72:88] = 320.0
+    e_cap = POWER * DUR  # 400 MWh
+    uncapped = optimise_window(p, power_mw=POWER, duration_h=DUR, roundtrip_eff=RTE, dt=DT)
+    uncapped_mwh = float(uncapped.discharge_mw.sum() * DT)
+    assert uncapped_mwh > 1.5 * e_cap  # sanity: prices really support >1.5 cycles
+
+    capped = optimise_window(p, power_mw=POWER, duration_h=DUR, roundtrip_eff=RTE,
+                             dt=DT, max_cycles_per_day=1.5)
+    capped_mwh = float(capped.discharge_mw.sum() * DT)
+    assert capped_mwh <= 1.5 * e_cap + 1e-6
+    assert capped_mwh < uncapped_mwh
+
+
 def test_ramp_default_is_unconstrained():
     """ramp_rate_pct_per_min=None (default) reproduces the unconstrained solution
     (backward compatibility for valuation callers)."""
