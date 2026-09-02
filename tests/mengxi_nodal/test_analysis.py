@@ -1,5 +1,6 @@
 """Tests for services.mengxi_nodal.analysis — pure nodal-analysis functions."""
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,6 +12,18 @@ from services.mengxi_nodal.analysis import (
     price_match_fraction,
 )
 from services.mengxi_nodal.zones import CURRENT_ASSETS, ZONES
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+class TestRequirements:
+    def test_pulp_in_mengxi_dashboard_requirements(self):
+        """Regression guard: Nodal Maps tab imports pulp (services.bess_map.
+        optimisation_engine) — it must be in the image requirements."""
+        req = (REPO / "apps" / "mengxi-dashboard" / "requirements.txt").read_text()
+        assert any(l.strip().lower().startswith("pulp") for l in req.splitlines()), \
+            "pulp missing from apps/mengxi-dashboard/requirements.txt"
+
 
 
 class TestPriceMatchFraction:
@@ -108,3 +121,18 @@ class TestZonesConfig:
         for z in ZONES:
             for ref in z["our_assets"]:
                 assert ref in codes, (z, ref)
+
+    def test_zones_with_our_assets_have_n1_firm_capacity(self):
+        ours = {a["asset_code"] for a in CURRENT_ASSETS}
+        for z in ZONES:
+            if z["our_assets"] and set(z["our_assets"]) & ours:
+                assert z.get("transformers"), z["zone"]
+                assert z.get("firm_mva", 0) > 0, z["zone"]
+
+    def test_sibling_entries_carry_mw_when_known(self):
+        for z in ZONES:
+            for entry in z["sibling_bess"] + z["sibling_plants"]:
+                name, mw = entry
+                assert name, z["zone"]
+                if mw is not None:
+                    assert mw > 0, (z["zone"], entry)

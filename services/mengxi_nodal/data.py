@@ -42,6 +42,17 @@ def get_asset_price_vectors(engine, plant_name: str, start: date, end: date) -> 
     return out
 
 
+def get_asset_interval_series(engine, plant_name: str, start: date, end: date) -> pd.DataFrame:
+    """Per-interval cleared price + energy for charge/discharge shading."""
+    q = text(f"""
+        SELECT datetime, cleared_price, cleared_energy_mwh
+        FROM {_CLEARED}
+        WHERE plant_name = :p AND data_date BETWEEN :s AND :e
+        ORDER BY datetime
+    """)
+    return pd.read_sql(q, engine, params={"p": plant_name, "s": start, "e": end})
+
+
 def get_node_price_vectors(engine, node_names: list[str], start: date, end: date) -> dict[str, dict[date, np.ndarray]]:
     """Fengxing node prices as {node_name: {day: 96-slot vector}} for the given nodes."""
     if not node_names:

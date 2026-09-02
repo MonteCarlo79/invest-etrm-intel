@@ -19,6 +19,7 @@ from services.mengxi_nodal.analysis import (
     detect_split_days as _na_splits,
 )
 from services.mengxi_nodal.data import (
+    get_asset_interval_series as _na_intervals,
     get_asset_price_vectors as _na_asset_vecs,
     get_day_node_matrix as _na_day_matrix,
     get_node_price_vectors as _na_node_vecs,
@@ -40,9 +41,25 @@ def render(get_engine) -> None:
     # ── Section 1: Zone Roster ───────────────────────────────────────────────
     st.header("1 · Zone Roster")
     _na_by_code = {a["asset_code"]: a for a in _NA_ASSETS}
+
+    def _na_fmt_siblings(entries):
+        return " · ".join(f"{n}({mw:g}MW)" if mw is not None else n for n, mw in entries)
+
+    def _na_zone_totals(z):
+        bess_mw = sum(mw for _, mw in z["sibling_bess"] if mw) + sum(
+            _na_by_code[c]["capacity_mw"] or 0 for c in z["our_assets"])
+        plant_mw = sum(mw for _, mw in z["sibling_plants"] if mw)
+        return bess_mw, plant_mw
+
     for _z in _NA_ZONES:
         with st.container(border=True):
+            _bess_mw, _plant_mw = _na_zone_totals(_z)
             st.subheader(_z["zone"])
+            if _z.get("transformers"):
+                st.markdown(
+                    f"**{_z['transformers']}** → N-1 firm ≈ **{_z['firm_mva']:,} MVA**  |  "
+                    f"zone installed: BESS **{_bess_mw:,.0f} MW** · wind/solar/thermal **{_plant_mw:,.0f} MW**"
+                )
             _zc1, _zc2 = st.columns([1, 2])
             with _zc1:
                 st.markdown("**Our assets**")
@@ -58,10 +75,10 @@ def render(get_engine) -> None:
                     st.caption("—")
                 if _z["sibling_bess"]:
                     st.markdown("**Sibling BESS**")
-                    st.markdown(" · ".join(_z["sibling_bess"]))
+                    st.markdown(_na_fmt_siblings(_z["sibling_bess"]))
             with _zc2:
                 st.markdown("**Zone plants (wind/solar/thermal)**")
-                st.markdown(" · ".join(_z["sibling_plants"]) if _z["sibling_plants"] else "—")
+                st.markdown(_na_fmt_siblings(_z["sibling_plants"]) if _z["sibling_plants"] else "—")
     with st.expander("Upcoming assets (simulation study)", expanded=False):
         for _u in _NA_UPCOMING:
             st.markdown(f"- **{_u['asset_code']}** — {_u['capacity']}, {_u['substation']} ({_u['conn_kv']}kV)")
@@ -87,12 +104,13 @@ def render(get_engine) -> None:
         asset_vecs = _na_asset_vecs(eng, plant, start, end)
         nodes = list(parents) + ([own] if own else [])
         node_vecs = _na_node_vecs(eng, nodes, start, end)
-        return asset_vecs, node_vecs
+        intervals = _na_intervals(eng, plant, start, end)
+        return asset_vecs, node_vecs, intervals
 
     if _na_start > _na_end:
         st.warning("Start date must be ≤ end date.")
     else:
-        _na_av, _na_nv = _na_load_explorer(
+        _na_av, _na_nv, _na_iv = _na_load_explorer(
             _na_asset["plant_name"], tuple(_na_asset["parent_nodes"]), _na_asset["own_node"],
             _na_start, _na_end,
         )
@@ -146,11 +164,27 @@ def render(get_engine) -> None:
                     x=_g["ts"], y=_g["price"], name=_s, mode="lines",
                     line=dict(color=_na_colors[_s], width=1.2),
                 ))
-            for _sd in _na_split_days:
+            # Charge/discharge shading from cleared energy (sign per interval,
+            # consecutive same-sign slots merged into blocks).
+            # cleared_energy_mwh < 0 = charging (grid → battery), > 0 = discharging.
+            _na_blocks = []
+            if not _na_iv.empty:
+                _cur_s, _cur_start, _prev_ts = 0, None, None
+                for _row in _na_iv.itertuples():
+                    _e = _row.cleared_energy_mwh
+                    _s = -1 if (_e is not None and _e < 0) else (1 if (_e is not None and _e > 0) else 0)
+                    if _s != _cur_s:
+                        if _cur_s != 0:
+                            _na_blocks.append((_cur_start, _prev_ts + timedelta(minutes=15), _cur_s))
+                        _cur_s, _cur_start = _s, _row.datetime
+                    _prev_ts = _row.datetime
+                if _cur_s != 0:
+                    _na_blocks.append((_cur_start, _prev_ts + timedelta(minutes=15), _cur_s))
+            for _x0, _x1, _s in _na_blocks:
                 _na_fig.add_vrect(
-                    x0=datetime(_sd.year, _sd.month, _sd.day),
-                    x1=datetime(_sd.year, _sd.month, _sd.day) + timedelta(days=1),
-                    fillcolor="#d62728", opacity=0.12, line_width=0,
+                    x0=_x0, x1=_x1, line_width=0,
+                    fillcolor="#d62728" if _s < 0 else "#2ca02c",
+                    opacity=0.10,
                 )
             _na_fig.update_layout(
                 height=420, margin=dict(l=40, r=20, t=30, b=40),
@@ -161,13 +195,23 @@ def render(get_engine) -> None:
             _na_m1.metric("days with asset data", len(_na_av))
             _na_m2.metric(f"days cleared ≠ {_na_ref_name} (>1% slots)", len(_na_split_days))
             st.caption(
-                f"cleared_price = 日内出清价 (md_id_cleared_energy); node prices = 实时节点价 (Fengxing). "
-                f"Block-level divergence between them is a product/data characteristic question, not necessarily congestion. "
-                + ("Split days: " + ", ".join(str(d) for d in _na_split_days[:30]) if _na_split_days else "")
+                "Background: **red = charging** (cleared_energy < 0), **green = discharging** (> 0), unshaded = idle or missing intervals. "
+                "Lines: **asset cleared_price** = 日内出清价 (md_id_cleared_energy); **own meter node** / **parent bus** = 实时节点价 (Fengxing RT) "
+                "at the asset's meter node / its parent substation (mean of bus meters). "
+                "Gaps = intervals with no cleared record for the asset; Fengxing RT lines continue through them. "
+                + ("Days where cleared diverges from RT: " + ", ".join(str(d) for d in _na_split_days[:30]) if _na_split_days else "")
             )
 
     # ── Section 3: Congestion-Day Cluster View ───────────────────────────────
     st.header("3 · Congestion-Day Cluster View")
+    st.caption(
+        "How to read this: for the chosen day, every node's 96-interval RT price curve is compared; nodes with "
+        "(rounded) identical curves are grouped into a **cluster** = a set of nodes that experienced the same price that day. "
+        "**Many clusters** (e.g. 146) = the market was fragmented by congestion into many price zones; "
+        "**few clusters** = near-uniform pricing. Bars: the 10 largest clusters by node count. "
+        "Table: which cluster each of our assets sat in (anchored at its own meter node) and which other BESS shared it — "
+        "those are the assets that saw the same prices as ours that day."
+    )
     _na_day = st.date_input("Day", value=date(2026, 8, 25), key="na_day")
 
     @st.cache_data(ttl=600, show_spinner="Loading day matrix & clustering…")

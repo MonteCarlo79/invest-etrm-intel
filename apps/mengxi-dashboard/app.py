@@ -1174,7 +1174,8 @@ with tab_nodal_maps:
     _nm_c1, _nm_c2, _nm_c3 = st.columns(3)
     _nm_province = _nm_c1.selectbox(
         "Province",
-        ["山西", "广东", "广西", "海南", "甘肃", "贵州", "陕西", "湖南", "浙江", "云南"],
+        ["蒙西", "山西", "陕西", "湖南", "浙江", "云南", "贵州", "广东", "广西", "海南", "甘肃",
+         "山东", "河北南网", "黑龙江", "辽宁", "湖北", "安徽", "江西"],
         key="nm_province",
     )
     _nm_start = _nm_c2.date_input(

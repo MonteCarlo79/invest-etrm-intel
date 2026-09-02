@@ -12,3 +12,4 @@ streamlit-autorefresh>=1.0
 numpy>=1.26
 numpy-financial>=1.0
 pypsa>=0.28
+pulp>=2.7
