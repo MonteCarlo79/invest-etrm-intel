@@ -120,6 +120,8 @@ apps/bess-inner-mongolia/
 !services/hermes/
 # hermes image also needs this: nodal_scraper imports services.fengxing.nodal_price
 !services/fengxing/
+# inner_agent image (EnOS daily ingestion) is built from this dir (Dockerfile.agent)
+!services/bess-inner-mongolia/
 
 # deal-structurer image exceptions
 !libs/deal_models/
