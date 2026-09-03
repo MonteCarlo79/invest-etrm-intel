@@ -15,6 +15,7 @@ from apps.asset_risk.standard_params import (
 )
 from apps.asset_risk.tab_waterfall import (
     _load_settlement_actuals,
+    attribution_rows,
     build_waterfall,
     stage_arbitrage,
     stage_capacity,
@@ -166,7 +167,55 @@ def test_load_settlement_actuals_month_token(sqlite_engine):
     assert set(df2["month"]) == {"2026-06", "2026-07"}
 
 
-def test_build_waterfall_bridge_identity(sqlite_engine):
+def test_attribution_decomposition_identities():
+    """Each attribution block sums exactly to its waterfall deviation column."""
+    df = pd.DataFrame({
+        "asset": ["A1"] * 6,
+        "month": ["2026-06"] * 6,
+        "ts": pd.date_range("2026-06-01", periods=6, freq="15min"),
+        "nominated_mw": [10.0, 10.0, -10.0, -10.0, 10.0, 30.0],
+        "da_cleared_mw": [8.0, 8.0, -8.0, -8.0, 8.0, 30.0],
+        "rt_cleared_mw": [7.0, 7.0, -7.0, -7.0, 7.0, 30.0],
+        "actual_mw": [7.0, 5.0, -7.0, -7.0, 0.0, 0.0],
+        "restriction": [None, None, None, None, None, "charge_only"],
+        "soc_pct": [50.0, 50.0, 96.0, 50.0, 50.0, 50.0],
+        "capacity_mw": [100.0] * 6,
+        "price_cny_mwh": [300.0] * 6,
+    })
+    bench = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"], "arb_cny": [1000.0]})
+    fc_rows = [{"arb_cny": 800.0}]
+    attr = attribution_rows(df, bench, fc_rows)
+    by_cause = dict(zip(attr["成因"], attr["cny"]))
+
+    # key-shape regression: merged benchmark rows carry BOTH arb_cny (benchmark)
+    # and fc_arb_cny (forecast) — forecast must read fc_arb_cny, not arb_cny
+    merged = [{"arb_cny": 1000.0, "fc_arb_cny": 800.0}]
+    attr_m = attribution_rows(df, bench, merged)
+    assert dict(zip(attr_m["成因"], attr_m["cny"]))[
+        "预测误差（现货价格预测 vs 完美预见）"] == pytest.approx(200.0)
+
+    # Δ策略与预测: 预测误差 + 申报策略 = 标准 − 申报
+    nom_arb = stage_arbitrage(df, "nominated_mw")["arb_cny"].sum()  # 40 x 0.25 x 300 = 3000
+    assert by_cause["预测误差（现货价格预测 vs 完美预见）"] == pytest.approx(200.0)   # 1000-800
+    assert by_cause["申报策略选择（留电/SOC/保守度）"] == pytest.approx(-2200.0)     # 800-3000
+    assert (by_cause["预测误差（现货价格预测 vs 完美预见）"]
+            + by_cause["申报策略选择（留电/SOC/保守度）"]) == pytest.approx(1000.0 - nom_arb)
+
+    # Δ出清校核: 日前未中标 (150) + 实时校核 (75) = Σ(nom−rt)×0.25×300 = 225
+    assert by_cause["日前未中标（申报 vs 日前出清）"] == pytest.approx(150.0)
+    assert by_cause["实时校核（日前出清 vs 实时出清）"] == pytest.approx(75.0)
+    assert (by_cause["日前未中标（申报 vs 日前出清）"]
+            + by_cause["实时校核（日前出清 vs 实时出清）"]) == pytest.approx(225.0)
+    # SOC校核 informational: soc=96 charge interval → 7 x 0.25 x 300 = 525
+    assert by_cause["　其中：SOC校核（soc≥95% 仍出清充电）"] == pytest.approx(525.0)
+
+    # Δ执行偏差: 红绿灯 (2250) + 非响应 (0) + 残差 (675) = 2925
+    assert by_cause["红绿灯限制窗口（仅充电/仅放电时段）"] == pytest.approx(2250.0)
+    assert by_cause["设备非响应事件（出清≠0 实际≈0）"] == pytest.approx(0.0)
+    assert by_cause["阻塞/调度核减/涉网试验（残差）"] == pytest.approx(675.0)
+    assert (by_cause["红绿灯限制窗口（仅充电/仅放电时段）"]
+            + by_cause["设备非响应事件（出清≠0 实际≈0）"]
+            + by_cause["阻塞/调度核减/涉网试验（残差）"]) == pytest.approx(2925.0)
     bench = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"],
                           "arb_cny": [1000.0], "dis_mwh": [10.0], "cap_cny": [3500.0]})
     nominated = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"],

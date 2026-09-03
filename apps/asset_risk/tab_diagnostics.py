@@ -70,7 +70,7 @@ def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None
     sql = f"""
         SELECT dc.asset_id, a.name AS asset, a.capacity_mw, {ts} AS ts,
                dc.nominated_mw, dc.da_cleared_mw, dc.rt_cleared_mw, dc.actual_mw,
-               dc.restriction
+               dc.restriction, dc.soc_pct
         FROM marketdata.rm_dispatch_chain dc
         JOIN marketdata.rm_assets a ON a.id = dc.asset_id
         WHERE dc.asset_id IN :ids

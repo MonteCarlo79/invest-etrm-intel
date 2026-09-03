@@ -30,6 +30,7 @@ from apps.asset_risk.tab_diagnostics import (
     _load_chain,
     _load_prices,
     _month_asset_matrix,
+    exec_gap_monthly,
 )
 
 _COMPONENT_COLORS = {"arb_cny": "#3498db", "cap_cny": "#9b59b6",
@@ -280,8 +281,121 @@ def deviation_breakdown_figure(wf: pd.DataFrame) -> go.Figure:
 
 
 # ---------------------------------------------------------------------------
-# Render
+# Deviation attribution (偏差归因): pin each waterfall deviation to named
+# causes with MWh + ¥. Decompositions sum exactly to their waterfall column.
 # ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def forecast_optimal_leg(_engine, asset_id: int, month: str, capacity_mw: float,
+                         duration_h: float, commission_iso: str | None,
+                         plant: str) -> dict:
+    """Forecast-optimal dispatch for one asset-month: ols_rt_time_v1 forecast
+    (hourly, on the asset's plant RT series) → LP → settled at ACTUAL hourly
+    mean prices. Mirrors strategy_comparison Skill-3 convention (hourly
+    granularity, province-model caveat)."""
+    from services.bess_map.forecast_engine import build_forecast
+    from services.bess_map.optimisation_engine import compute_dispatch_from_hourly_prices
+
+    params = params_for_asset(capacity_mw, duration_h, commission_iso,
+                              pd.Timestamp(month + "-01"))
+    month_start = pd.Timestamp(month + "-01")
+    month_end = (month_start + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
+
+    prices = _load_prices(_engine, [plant], None, month_end)
+    if prices.empty:
+        return {"arb_cny": 0.0, "note": "no prices"}
+    s = pd.Series({pd.Timestamp(t): float(v) for t, v in zip(prices["datetime"], prices["cleared_price"])
+                   if pd.notna(v)}).sort_index()
+    hourly = s.resample("h").mean().dropna()
+    hourly_df = pd.DataFrame({"rt_price": hourly})
+
+    rt_pred = build_forecast(hourly_df, model="ols_rt_time_v1")
+    target = rt_pred[(rt_pred.index >= month_start) & (rt_pred.index < pd.Timestamp(month_end))].dropna()
+    if target.empty:
+        return {"arb_cny": 0.0, "note": "no forecast"}
+
+    dispatch_df, _ = compute_dispatch_from_hourly_prices(
+        target, power_mw=capacity_mw,
+        duration_h=params["duration_h"] * params["dod"] * params["soh"],
+        roundtrip_eff=params["roundtrip_eff"], window_days=1,
+        max_cycles_per_day=1.5,
+    )
+    if dispatch_df.empty:
+        return {"arb_cny": 0.0, "note": "lp empty"}
+    actual_hourly = hourly[target.index[0]:]
+    grid = dispatch_df["dispatch_grid_mw"].reindex(actual_hourly.index).fillna(0.0)
+    arb = float((grid * actual_hourly).sum())
+    return {"arb_cny": arb, "note": ""}
+
+
+def attribution_rows(df: pd.DataFrame, bench: pd.DataFrame,
+                     forecast_rows: list[dict]) -> pd.DataFrame:
+    """Per-cause attribution for the three waterfall deviations.
+
+    df: priced chain frame (asset/ts/month/mw cols/restriction/soc_pct/price_cny_mwh).
+    bench: benchmark leg frame (asset, month, arb_cny).
+    forecast_rows: forecast_optimal_leg results per (asset, month).
+    Returns DataFrame: 偏差区间 | 成因 | mwh | cny.
+    """
+    rows = []
+
+    def _diff_sum(col_a: str, col_b: str) -> tuple[float, float]:
+        """Σ(a − b) volumes (|.|×0.25) and ¥ (signed ×0.25×price) over all asset-months."""
+        total_mwh, total_cny = 0.0, 0.0
+        for (asset, month), g in df.groupby(["asset", "month"]):
+            v = g[col_a] - g[col_b]
+            total_mwh += float((v.abs() * 0.25).sum())
+            total_cny += float((v * 0.25 * g["price_cny_mwh"]).sum())
+        return total_mwh, total_cny
+
+    # --- Δ策略与预测: 预测误差 + 申报策略 ---
+    std_arb = float(bench["arb_cny"].sum()) if not bench.empty else 0.0
+    # forecast rows may be plain ({arb_cny}) or merged benchmark rows ({..., fc_arb_cny})
+    fc_arb = float(sum(r.get("fc_arb_cny", r.get("arb_cny", 0.0)) for r in forecast_rows))
+    nom_arb = float(stage_arbitrage(df, "nominated_mw")["arb_cny"].sum())
+    rows.append({"偏差区间": "Δ策略与预测", "成因": "预测误差（现货价格预测 vs 完美预见）",
+                 "mwh": None, "cny": std_arb - fc_arb})
+    rows.append({"偏差区间": "Δ策略与预测", "成因": "申报策略选择（留电/SOC/保守度）",
+                 "mwh": None, "cny": fc_arb - nom_arb})
+
+    # --- Δ出清校核: 日前未中标 + 实时校核 (+ SOC校核 informational) ---
+    mwh, cny = _diff_sum("nominated_mw", "da_cleared_mw")
+    rows.append({"偏差区间": "Δ出清校核", "成因": "日前未中标（申报 vs 日前出清）",
+                 "mwh": mwh, "cny": cny})
+    mwh2, cny2 = _diff_sum("da_cleared_mw", "rt_cleared_mw")
+    rows.append({"偏差区间": "Δ出清校核", "成因": "实时校核（日前出清 vs 实时出清）",
+                 "mwh": mwh2, "cny": cny2})
+    soc_mwh, soc_cny = 0.0, 0.0
+    for (asset, month), g in df.groupby(["asset", "month"]):
+        m = g[(g["soc_pct"] >= 95.0) & (g["rt_cleared_mw"] < -0.5)]
+        soc_mwh += float((-m["rt_cleared_mw"] * 0.25).sum())
+        soc_cny += float((-m["rt_cleared_mw"] * 0.25 * m["price_cny_mwh"]).sum())
+    rows.append({"偏差区间": "Δ出清校核", "成因": "　其中：SOC校核（soc≥95% 仍出清充电）",
+                 "mwh": soc_mwh, "cny": soc_cny})
+
+    # --- Δ执行偏差: 红绿灯 + 设备非响应 + residual ---
+    from apps.asset_risk.tab_diagnostics import restriction_monthly, find_defect_events
+    rest = restriction_monthly(df)
+    rw_cny = float(rest["gap_cny"].sum())
+    rw_mwh = float(rest["gap_dis_mwh"].sum() + abs(rest["gap_chg_mwh"].sum()))
+    events = find_defect_events(df)
+    def_cny = float(events["lost_cny"].sum()) if not events.empty else 0.0
+    def_mwh = float(events["lost_mwh"].abs().sum()) if not events.empty else 0.0
+    gap = exec_gap_monthly(df)
+    total_exec_cny = float((gap["dis_gap_cny"] + gap["chg_gap_cny"]).sum())
+    total_exec_mwh = float((gap["dis_gap_mwh"].abs() + gap["chg_gap_mwh"].abs()).sum())
+    rows.append({"偏差区间": "Δ执行偏差", "成因": "红绿灯限制窗口（仅充电/仅放电时段）",
+                 "mwh": rw_mwh, "cny": rw_cny})
+    rows.append({"偏差区间": "Δ执行偏差", "成因": "设备非响应事件（出清≠0 实际≈0）",
+                 "mwh": def_mwh, "cny": def_cny})
+    rows.append({"偏差区间": "Δ执行偏差", "成因": "阻塞/调度核减/涉网试验（残差）",
+                 "mwh": total_exec_mwh - rw_mwh - def_mwh,
+                 "cny": total_exec_cny - rw_cny - def_cny})
+
+    out = pd.DataFrame(rows)
+    out["金额_fmt"] = out["cny"].map(lambda v: f"¥{v:,.0f}")
+    out["电量_fmt"] = out["mwh"].map(lambda v: "—" if pd.isna(v) else f"{v:,.0f}")
+    return out[["偏差区间", "成因", "电量_fmt", "金额_fmt", "mwh", "cny"]]
 
 _DEFINITIONS_MD = """
 **偏差定义（来源：蒙西储能 2026 上半年复盘，slides 7–18）**
@@ -303,7 +417,8 @@ _CAVEATS_MD = """
 - 申报/出清两腿按 15 分钟节点电价计价；账单充电按小时均价结算（已确认的结算规则），与 15 分钟口径存在 ±1–4% 基差，归入"出清→实际"偏差。
 - 费用项（系统运行费、线损、其他费用）仅存在于实际段（结算单），前两腿为零 — 这是 Δ执行与费用 的组成部分，不是错误。
 - commission_date 缺失的资产按 Year 0（最新参数）处理，并在下方列出警告。
-- LP 窗口 7 天、SOC 窗口起点为 0；价格或调度链缺失的日期跳过（见数据覆盖）。
+- 偏差归因的预测最优采用 ols_rt_time_v1 小时级预测调度、按实际小时均价结算（沿用 strategy_comparison 口径；与 15 分钟口径存在基差）。
+- LP 窗口 1 天、SOC 窗口起点为 0；价格或调度链缺失的日期跳过（见数据覆盖）。
 """
 
 
@@ -371,7 +486,10 @@ def render_waterfall(engine):
         r = benchmark_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
                           float(a["bess_duration_h"]), commission_iso, rate,
                           PLANT_MAP[a["name"]])
-        return {"asset": a["name"], "month": month, **r}
+        fr = forecast_optimal_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
+                                  float(a["bess_duration_h"]), commission_iso,
+                                  PLANT_MAP[a["name"]])
+        return {"asset": a["name"], "month": month, **r, "fc_arb_cny": fr.get("arb_cny", 0.0)}
 
     if len(work) > 1:
         status = st.status(f"正在计算投资标准基准 (LP ×{len(work)})…", expanded=False)
@@ -414,6 +532,16 @@ def render_waterfall(engine):
 
     st.plotly_chart(stage_waterfall_figure(wf), use_container_width=True)
     st.plotly_chart(deviation_breakdown_figure(wf), use_container_width=True)
+
+    # --- 偏差归因 (loss breakdown by cause) ---
+    st.markdown("#### 偏差归因（按成因分解损失）")
+    attr = attribution_rows(df, bench, bench_rows)
+    st.dataframe(attr[["偏差区间", "成因", "电量_fmt", "金额_fmt"]]
+                 .rename(columns={"电量_fmt": "电量 (MWh)", "金额_fmt": "金额"}),
+                 use_container_width=True, hide_index=True)
+    st.caption("归因合计与瀑布各偏差段一致：预测误差+申报策略=Δ策略与预测；日前未中标+实时校核=Δ出清校核；"
+               "红绿灯限制+设备非响应+残差=Δ执行偏差。预测最优基于 ols_rt_time_v1（小时级，与实际价差结算；"
+               "详见口径与假设）。")
 
     with st.expander("偏差定义（复盘）"):
         st.markdown(_DEFINITIONS_MD)
