@@ -74,7 +74,11 @@ def _price_sql(province: str) -> text:
 
 
 def _fetch_prices(engine, province: str, day: date) -> pd.DataFrame:
-    params = {"s": day, "e": day + timedelta(days=1)}
+    # Explicit CST bounds: python dates would be coerced at midnight in the DB
+    # session TZ (UTC), shifting the window 8h and dropping slots 1-32.
+    s = f"{day} 00:00:00+08"
+    e = f"{day + timedelta(days=1)} 00:00:00+08"
+    params = {"s": s, "e": e}
     if province != "蒙西":
         params["prov"] = province
     return pd.read_sql(_price_sql(province), engine, params=params)

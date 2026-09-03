@@ -104,6 +104,22 @@ class TestAssignAssetClusters:
         assert result["bess_a"] == []
 
 
+class TestCstBounds:
+    def test_day_window_is_cst_not_utc(self):
+        """Python dates passed to timestamptz comparisons are coerced at midnight
+        in the DB session TZ (UTC) — shifting the CST day window by 8h and
+        dropping slots 1-32. Bounds must be explicit +08 strings."""
+        from services.mengxi_nodal.data import _cst_bounds
+        s, e = _cst_bounds(date(2026, 8, 28))
+        assert s == "2026-08-28 00:00:00+08"
+        assert e == "2026-08-29 00:00:00+08"
+
+    def test_month_rollover(self):
+        from services.mengxi_nodal.data import _cst_bounds
+        s, e = _cst_bounds(date(2026, 8, 31))
+        assert e == "2026-09-01 00:00:00+08"
+
+
 class TestZonesConfig:
     def test_all_six_current_assets_present_with_substation(self):
         assert len(CURRENT_ASSETS) == 6

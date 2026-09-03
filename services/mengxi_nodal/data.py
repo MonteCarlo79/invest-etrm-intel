@@ -16,6 +16,16 @@ _VIEW = "marketdata.md_mengxi_nodal_price_96"
 _CLEARED = "marketdata.md_id_cleared_energy"
 
 
+def _cst_bounds(day: date) -> tuple[str, str]:
+    """Explicit CST day-window bounds for timestamptz comparisons.
+
+    Passing a python date lets PG coerce it to midnight in the SESSION timezone
+    (UTC on this RDS) — shifting the CST window 8h and dropping slots 1-32.
+    Always pass these explicit +08 strings instead."""
+    from datetime import timedelta
+    return (f"{day} 00:00:00+08", f"{day + timedelta(days=1)} 00:00:00+08")
+
+
 def _to_vec(df: pd.DataFrame, slot_col: str, price_col: str) -> np.ndarray:
     v = np.full(97, np.nan)
     for slot, price in zip(df[slot_col], df[price_col]):
@@ -63,7 +73,8 @@ def get_node_price_vectors(engine, node_names: list[str], start: date, end: date
         WHERE node_name = ANY(:names)
           AND metric_time >= :s AND metric_time < :e2
     """)
-    df = pd.read_sql(q, engine, params={"names": node_names, "s": start, "e2": end + timedelta(days=1)})
+    s, e2 = _cst_bounds(start), _cst_bounds(end)[1]
+    df = pd.read_sql(q, engine, params={"names": node_names, "s": s, "e2": e2})
     out: dict[str, dict[date, np.ndarray]] = {}
     for (node, d), g in df.groupby(["node_name", "d"]):
         out.setdefault(node, {})[d] = _to_vec(g, "time_order_96", "avg_node_price")
@@ -77,6 +88,7 @@ def get_day_node_matrix(engine, day: date) -> dict[str, np.ndarray]:
         FROM {_VIEW}
         WHERE metric_time >= :s AND metric_time < :e2
     """)
-    df = pd.read_sql(q, engine, params={"s": day, "e2": day + timedelta(days=1)})
+    s, e2 = _cst_bounds(day)
+    df = pd.read_sql(q, engine, params={"s": s, "e2": e2})
     return {node: _to_vec(g, "time_order_96", "avg_node_price")
             for node, g in df.groupby("node_name")}
