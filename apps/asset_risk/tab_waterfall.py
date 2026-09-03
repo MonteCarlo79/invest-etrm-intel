@@ -214,74 +214,66 @@ def build_waterfall(bench: pd.DataFrame, nominated: pd.DataFrame,
     return out.sort_values(["stage_order", "component"]).reset_index(drop=True)
 
 
-def waterfall_figure(wf: pd.DataFrame) -> go.Figure:
-    """Stacked-bar waterfall: stage columns stacked from 0 (positive up, negative down),
-    deviation columns as floating bridges (base+value) landing on next stage total."""
+def stage_waterfall_figure(wf: pd.DataFrame) -> go.Figure:
+    """Classic waterfall on stage TOTALS (arb+cap+fees aggregated per stage).
+
+    plotly's go.Waterfall computes the bridge geometry itself — no manual base
+    math, no overlapping segments. Stage bars absolute, delta bars relative.
+    """
+    stage_totals = {}
+    for stage in ("投资标准", "申报", "出清", "实际"):
+        stage_totals[stage] = float(wf[wf["stage"] == stage]["cny"].sum())
+    d1 = stage_totals["申报"] - stage_totals["投资标准"]
+    d2 = stage_totals["出清"] - stage_totals["申报"]
+    d3 = stage_totals["实际"] - stage_totals["出清"]
+
+    x = ["投资标准", "Δ策略与预测", "申报", "Δ出清校核", "出清", "Δ执行与费用", "实际"]
+    measures = ["absolute", "relative", "absolute", "relative", "absolute", "relative", "absolute"]
+    y = [stage_totals["投资标准"], d1, stage_totals["申报"], d2,
+         stage_totals["出清"], d3, stage_totals["实际"]]
+    texts = [f"<b>¥{stage_totals['投资标准'] / 1e6:,.2f}M</b>",
+             f"{d1 / 1e6:+,.2f}M",
+             f"<b>¥{stage_totals['申报'] / 1e6:,.2f}M</b>",
+             f"{d2 / 1e6:+,.2f}M",
+             f"<b>¥{stage_totals['出清'] / 1e6:,.2f}M</b>",
+             f"{d3 / 1e6:+,.2f}M",
+             f"<b>¥{stage_totals['实际'] / 1e6:,.2f}M</b>"]
+
+    fig = go.Figure(go.Waterfall(
+        x=x, measure=measures, y=y, text=texts, textposition="outside",
+        connector={"line": {"color": "rgb(120, 120, 120)", "dash": "dot"}},
+        increasing={"marker": {"color": "#2ecc71"}},
+        decreasing={"marker": {"color": "#e74c3c"}},
+        totals={"marker": {"color": "#3498db"}},
+    ))
+    fig.update_layout(
+        title="收益瀑布（合计口径：套利 + 容量补偿 + 费用）",
+        yaxis_title="CNY", height=440, showlegend=False,
+    )
+    return fig
+
+
+def deviation_breakdown_figure(wf: pd.DataFrame) -> go.Figure:
+    """Deviation decomposition: per delta column, its components as ADJACENT
+    grouped bars (no overlap) — makes compensation structure explicit, e.g.
+    套利 −1.40M next to 容量补偿 +1.72M."""
+    delta_stages = ["Δ策略与预测", "Δ出清校核", "Δ执行与费用"]
     comps = ["arb_cny", "cap_cny", "fee_cny", "other_cny"]
-    totals = {s: {c: float(wf[(wf["stage"] == s) & (wf["component"] == c)]["cny"].sum())
-                  for c in comps} for s in ("投资标准", "申报", "出清", "实际")}
-    stage_total = {s: sum(totals[s].values()) for s in totals}
-
-    traces = {c: {"base": [], "y": [], "text": []} for c in comps}
-    x = list(_STAGES)
-
-    def stage_bar(stage):
-        running = 0.0
-        for c in comps:
-            v = totals[stage][c]
-            if v >= 0:
-                traces[c]["base"].append(0.0 if running == 0 else None)
-                traces[c]["base"][-1] = running if running else 0.0
-                traces[c]["y"].append(v)
-                running += v
-            else:
-                traces[c]["base"].append(running + v if running else v)
-                traces[c]["y"].append(-v)
-            # stage columns carry no per-segment text — a single TOTAL annotation
-            # is added per stage (component value labels read as a mismatch vs KPIs)
-            traces[c]["text"].append("")
-
-    def delta_bar(stage, prev_stage):
-        running = stage_total[prev_stage]
-        next_stage = {"Δ策略与预测": "申报", "Δ出清校核": "出清", "Δ执行与费用": "实际"}[stage]
-        for c in comps:
-            d = float(wf[(wf["stage"] == stage) & (wf["component"] == c)]["cny"].sum())
-            if d >= 0:
-                traces[c]["base"].append(running)
-                traces[c]["y"].append(d)
-            else:
-                traces[c]["base"].append(running + d)
-                traces[c]["y"].append(-d)
-            running += d
-            traces[c]["text"].append(f"{d / 1e6:+,.2f}M" if d else "")
-        assert abs(running - stage_total[next_stage]) < 1.0, (
-            f"bridge {stage}: lands {running:.0f} != {stage_total[next_stage]:.0f}")
-
-    for stage in x:
-        if stage in totals:
-            stage_bar(stage)
-        else:
-            prev = {"Δ策略与预测": "投资标准", "Δ出清校核": "申报", "Δ执行与费用": "出清"}[stage]
-            delta_bar(stage, prev)
-
     fig = go.Figure()
     for c in comps:
+        vals = []
+        texts = []
+        for s in delta_stages:
+            v = float(wf[(wf["stage"] == s) & (wf["component"] == c)]["cny"].sum())
+            vals.append(v)
+            texts.append(f"{v / 1e6:+,.2f}M" if abs(v) > 1e4 else "")
         fig.add_trace(go.Bar(
-            x=x, y=traces[c]["y"], base=traces[c]["base"],
-            name=_COMPONENT_CN[c], marker_color=_COMPONENT_COLORS[c],
-            text=traces[c]["text"], textposition="outside",
-            opacity=0.95,
+            name=_COMPONENT_CN[c], x=delta_stages, y=vals,
+            marker_color=_COMPONENT_COLORS[c], text=texts, textposition="outside",
         ))
-    # Stage-total labels above each stage column (headline-consistent)
-    for stage in ("投资标准", "申报", "出清", "实际"):
-        total = stage_total[stage]
-        fig.add_annotation(
-            x=stage, y=total, text=f"<b>¥{total / 1e6:,.2f}M</b>",
-            showarrow=False, yanchor="bottom",
-        )
     fig.update_layout(
-        title="收益瀑布：投资标准 → 申报 → 出清 → 实际（套利 + 容量补偿 stacked；费用仅在实际段）",
-        yaxis_title="CNY", barmode="overlay", height=480,
+        title="偏差分解（按成因并排展示，正=增益，负=损失）",
+        yaxis_title="CNY", barmode="group", height=340,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     return fig
@@ -363,6 +355,7 @@ def render_waterfall(engine):
 
     bench_rows = []
     missing_commission = []
+    work = []
     for _, a in assets.iterrows():
         commission_iso = None
         if pd.notna(a.get("commission_date")):
@@ -370,11 +363,29 @@ def render_waterfall(engine):
         else:
             missing_commission.append(a["name"])
         for month in sel_months:
-            rate = CAPCOMP_RATE.get(a["name"], CAPCOMP_RATE_DEFAULT)
-            r = benchmark_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
-                              float(a["bess_duration_h"]), commission_iso, rate,
-                              PLANT_MAP[a["name"]])
-            bench_rows.append({"asset": a["name"], "month": month, **r})
+            work.append((a, month, commission_iso))
+
+    def _solve(item):
+        a, month, commission_iso = item
+        rate = CAPCOMP_RATE.get(a["name"], CAPCOMP_RATE_DEFAULT)
+        r = benchmark_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
+                          float(a["bess_duration_h"]), commission_iso, rate,
+                          PLANT_MAP[a["name"]])
+        return {"asset": a["name"], "month": month, **r}
+
+    if len(work) > 1:
+        status = st.status(f"正在计算投资标准基准 (LP ×{len(work)})…", expanded=False)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_solve, item): item for item in work}
+        done = 0
+        for fut in as_completed(futures):
+            bench_rows.append(fut.result())
+            done += 1
+            if len(work) > 1:
+                status.update(label=f"正在计算投资标准基准 (LP {done}/{len(work)})…")
+    if len(work) > 1:
+        status.update(label="投资标准基准计算完成", state="complete", expanded=False)
     bench = pd.DataFrame(bench_rows) if bench_rows else pd.DataFrame(
         columns=["asset", "month", "arb_cny", "dis_mwh", "cap_cny"])
     if missing_commission:
@@ -401,7 +412,8 @@ def render_waterfall(engine):
     k3.metric("实际套利", f"¥{_tot('实际', 'arb_cny'):,.0f}")
     k4.metric("实际容量补偿", f"¥{_tot('实际', 'cap_cny'):,.0f}")
 
-    st.plotly_chart(waterfall_figure(wf), use_container_width=True)
+    st.plotly_chart(stage_waterfall_figure(wf), use_container_width=True)
+    st.plotly_chart(deviation_breakdown_figure(wf), use_container_width=True)
 
     with st.expander("偏差定义（复盘）"):
         st.markdown(_DEFINITIONS_MD)
