@@ -68,5 +68,7 @@ elif tab_choice == "4 · Monte Carlo":
     from apps.deal_structurer import mc_tab; mc_tab.render()
 elif tab_choice == "5 · Deal Pricing":
     from apps.deal_structurer import deal_tab; deal_tab.render()
+elif tab_choice == "6 · 投委会":
+    from apps.deal_structurer import committee_tab; committee_tab.render()
 else:
     from apps.deal_structurer import strategist; strategist.render()
