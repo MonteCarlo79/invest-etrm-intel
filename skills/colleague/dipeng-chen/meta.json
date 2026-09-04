@@ -1,0 +1,140 @@
+{
+  "name": "Dipeng Chen",
+  "display_name": "Dipeng Chen",
+  "character": "colleague",
+  "classification": {
+    "language": "en",
+    "domain": "China power markets, BESS/renewable investment economics, energy trading",
+    "gallery_category": "Colleague",
+    "tags": [
+      "power markets",
+      "BESS",
+      "investment economics",
+      "quant",
+      "China spot",
+      "asset management",
+      "trading"
+    ]
+  },
+  "profile": "Head of Power Markets + Head of Asset Management. Renewable/BESS investment economics, asset-backed trading (coal/renewable/BESS), O&M and value optimisation of in-house assets, full lifecycle (acquisition to exit). China primary; GB/AU/ERCOT secondary. Direct, quant-precise, no filler; evidence before assertions; cost-disciplined.",
+  "tags": [
+    "power markets",
+    "BESS",
+    "investment economics",
+    "quant",
+    "China spot",
+    "asset management",
+    "trading"
+  ],
+  "knowledge_sources": [
+    "CLAUDE.md (role, scope, working rules)",
+    "auto-memory feedback files (direct statements on market constraints, git discipline, refactoring preferences)",
+    "48 marketdata.agent_memory rows (own investment theses, market views, methodology, preferences, red flags)",
+    "observed working pattern across sessions (Aug 2026)"
+  ],
+  "research_profile": "standard",
+  "type": "colleague",
+  "lifecycle": {
+    "status": "active",
+    "created_at": "2026-08-24T15:41:22.227954+00:00",
+    "updated_at": "2026-08-24T15:41:22.227954+00:00",
+    "version": "v1"
+  },
+  "generation": {
+    "engine": "distilly",
+    "character": "colleague",
+    "research_profile": "standard",
+    "preset": "distilly.colleague.v1",
+    "prompt_bundle": {
+      "preset": "distilly.colleague.v1",
+      "intake": "prompts/intake.md",
+      "work_analyzer": "prompts/work_analyzer.md",
+      "persona_analyzer": "prompts/persona_analyzer.md",
+      "work_builder": "prompts/work_builder.md",
+      "persona_builder": "prompts/persona_builder.md",
+      "merger": "prompts/merger.md",
+      "correction_handler": "prompts/correction_handler.md"
+    },
+    "research_profile_bundle": {},
+    "research_profile_references": [],
+    "merge_strategy": "compact",
+    "quality_profile": "budget-friendly",
+    "knowledge_dirs": [
+      "docs",
+      "messages",
+      "emails"
+    ],
+    "storage_root": "skills/colleague",
+    "created_from": [
+      "CLAUDE.md (role, scope, working rules)",
+      "auto-memory feedback files (direct statements on market constraints, git discipline, refactoring preferences)",
+      "48 marketdata.agent_memory rows (own investment theses, market views, methodology, preferences, red flags)",
+      "observed working pattern across sessions (Aug 2026)"
+    ],
+    "corrections_count": 0
+  },
+  "source_context": {
+    "domain": "work",
+    "relationship_to_user": "coworker",
+    "is_real_person": true,
+    "is_public_figure": false,
+    "is_fictional": false
+  },
+  "engine": {
+    "name": "distilly",
+    "kind": "meta-skill",
+    "character": "colleague",
+    "research_profile": "standard",
+    "preset": "distilly.colleague.v1",
+    "prompt_bundle": {
+      "preset": "distilly.colleague.v1",
+      "intake": "prompts/intake.md",
+      "work_analyzer": "prompts/work_analyzer.md",
+      "persona_analyzer": "prompts/persona_analyzer.md",
+      "work_builder": "prompts/work_builder.md",
+      "persona_builder": "prompts/persona_builder.md",
+      "merger": "prompts/merger.md",
+      "correction_handler": "prompts/correction_handler.md"
+    },
+    "research_profile_bundle": {},
+    "research_profile_references": [],
+    "merge_strategy": "compact",
+    "quality_profile": "budget-friendly",
+    "knowledge_dirs": [
+      "docs",
+      "messages",
+      "emails"
+    ],
+    "storage_root": "skills/colleague"
+  },
+  "schema_version": "3",
+  "slug": "dipeng-chen",
+  "kind": "meta-skill",
+  "subtype": null,
+  "preset": "distilly.colleague.v1",
+  "id": "meta-skill.colleague.dipeng-chen",
+  "artifacts": {
+    "combined_skill": "SKILL.md",
+    "work_skill": "work_skill.md",
+    "persona_skill": "persona_skill.md",
+    "work_doc": "work.md",
+    "persona_doc": "persona.md",
+    "manifest": "manifest.json",
+    "combined_name": "colleague-dipeng-chen",
+    "work_name": "colleague-dipeng-chen-work",
+    "persona_name": "colleague-dipeng-chen-persona",
+    "combined_command": "colleague-dipeng-chen",
+    "work_command": "colleague-dipeng-chen-work",
+    "persona_command": "colleague-dipeng-chen-persona"
+  },
+  "compat": {
+    "legacy_command": "/create-colleague",
+    "legacy_storage_root": "colleagues",
+    "legacy_type": "colleague"
+  },
+  "summary": "Dipeng Chen, Head of Power Markets + Head of Asset Management. Renewable/BESS investment economics, asset-backed trading (coal/renewable/BESS), O&M and value optimisation of in-house assets, full lifecycle (acquisition to exit). China primary; GB/AU/ERCOT secondary. Direct, quant-precise, no filler; evidence before assertions; cost-disciplined.",
+  "created_at": "2026-08-24T15:41:22.227954+00:00",
+  "updated_at": "2026-08-24T15:41:22.227954+00:00",
+  "version": "v1",
+  "corrections_count": 0
+}

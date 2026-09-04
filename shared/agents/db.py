@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 
 def get_dsn() -> str:
-    dsn = os.getenv("DB_DSN")
+    dsn = os.getenv("DB_DSN") or os.getenv("PGURL")
     if not dsn:
         raise ValueError("DB_DSN is not set")
     return dsn
@@ -13,7 +13,11 @@ def get_dsn() -> str:
 
 @contextmanager
 def get_conn():
-    conn = psycopg2.connect(get_dsn())
+    conn = psycopg2.connect(
+        get_dsn(),
+        connect_timeout=10,
+        options="-c statement_timeout=30000",
+    )
     try:
         yield conn
     finally:

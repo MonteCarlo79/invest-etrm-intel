@@ -1,15 +1,146 @@
 .git
 .gitignore
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
 .env
 .venv
-node_modules
-*.xlsx
-*.csv
-*.parquet
-*.log
-.dump
-*.dump
+venv/
+**/node_modules/
+**/*.log
+**/*.dump
+**/.pytest_cache/
+
+# Large data / output directories — not needed in any container
+data/
+!data/market-fundamentals/
+debug/
+logs/
+knowledge/
+docs/
+memo/
+reports/
+outputs/
+samples/
+extract/
+archived/
+archived md/
+backup/
+ar/
+tmp/
+bess-marketdata-ingestion/
+claw-code-main/
+claw-code-main.zip
+
+# Infrastructure and scripts
+infra/
+scripts/
+config/
+auth/
+db/
+shared/
+agents/
+
+# Large files that sneak in (recursive)
+**/*.xlsx
+**/*.csv
+**/*.parquet
+**/*.zip
+**/*.tar
+**/*.tar.gz
+
+# Apps / services not used by gb-market image
+# (gb-market only COPYs: apps/gb-market/, services/modo_energy/,
+#  services/common/, services/gb_knowledge/)
+apps/portal/
+apps/inner-mongolia/
+apps/spot-watcher/
+apps/uploader/
+apps/hermes-wechaty/
+apps/mengxi-dashboard/
+apps/model-catalogue/
+apps/options-cockpit/
+apps/strategy-agent/
+apps/portfolio-agent/
+apps/portfolio-risk-agent/
+apps/execution-agent/
+apps/trading-performance-agent/
+apps/it-dev-agent/
+apps/dev-agent/
+apps/mengxi-trading-ops/
+apps/pnl-attribution/
+apps/spot-agent/
+apps/spot-market/
+apps/trading/
+apps/dashboard/
+
+services/bess_inner_mongolia/
+services/bess-inner-mongolia/
+services/bess_map/
+services/bess_mcp/
+services/data_ingestion/
+services/decision_models/
+services/document_intake/
+services/fengxing/
+services/knowledge_pool/
+services/lingfeng/
+services/loader/
+services/market_fundamentals/
+services/mengxi_ingestion/
+services/monitoring/
+services/ops/
+services/ops_ingestion/
+services/portal/
+services/spot_ingest/
+services/spot_mcp/
+services/trading/
+
+# libs not used by gb-market image
+libs/
+
+# bess-inner-mongolia app
+apps/bess-inner-mongolia/
+
+# Spot-market image exceptions (re-include what the gb-market exclusions above removed)
+!apps/spot-market/
+!apps/spot-watcher/
+!services/spot_ingest/
+!services/spot_mcp/
+!services/knowledge_pool/
+!services/market_fundamentals/
+
+# bess-map image exceptions
+!auth/
+!shared/
+!services/bess_map/
+
+# lingfeng-ingest image exceptions
+!services/lingfeng/
+!services/hermes/
+# hermes image also needs this: nodal_scraper imports services.fengxing.nodal_price
+!services/fengxing/
+# inner_agent image (EnOS daily ingestion) is built from this dir (Dockerfile.agent)
+!services/bess-inner-mongolia/
+
+# deal-structurer image exceptions
+!libs/deal_models/
+!services/deal_engine/
+!db/ddl/marketdata/deal_committee.sql
+
+# asset-risk image exceptions
+!libs/risk/
+!libs/settlement/
+!libs/options/
+!services/forward_curve/
+!services/operating_assets/
+!apps/asset_risk/
+
+# retail-risk image exceptions
+!apps/retail_risk/
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db

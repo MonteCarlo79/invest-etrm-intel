@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.pjh-etrm.lingfeng-daily</string>
+    <!-- /bin/bash invocation: immune to OneDrive permission quirks (no +x needed) -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/services/lingfeng/run_daily.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform</string>
+    <!-- Daily 04:00. If asleep, launchd runs the job at next wake (StartWhenAvailable equivalent). -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>4</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/logs/lingfeng_launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/logs/lingfeng_launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/chenzhuqi/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

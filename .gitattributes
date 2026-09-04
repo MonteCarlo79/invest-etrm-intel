@@ -1,0 +1,4 @@
+# Ensure shell scripts always have LF line endings in the working tree,
+# even on Windows (where core.autocrlf=true would otherwise convert to CRLF).
+# CRLF in .sh files breaks bash inside Docker/Linux containers.
+*.sh    text eol=lf

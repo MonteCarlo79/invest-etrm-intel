@@ -176,13 +176,13 @@ def generate_daily_report_note(
     province_links = sorted(set(p for p, _, _, _, _ in price_rows if p))
     prov_link_lines = [f"- [[{p}]]" for p in province_links]
 
-    # Concept links: scan driver text for known concept keywords
-    CONCEPT_KEYS = list(CONCEPT_PATTERNS.keys())
-    concept_hits: list[str] = []
+    # Concept links: scan driver text for known concept keywords (with occurrence counts)
     all_driver_text = " ".join(ft for _, ft, _ in driver_rows)
-    for ck in CONCEPT_KEYS:
-        if ck in all_driver_text:
-            concept_hits.append(f"- [[{ck}]]")
+    concept_hits: list[str] = []
+    for ck in CONCEPT_PATTERNS:
+        count = all_driver_text.count(ck)
+        if count > 0:
+            concept_hits.append(f"- [[{ck}]] ({count}×)")
 
     # Provenance: pages → date
     prov_lines = []
@@ -389,12 +389,32 @@ def generate_province_note(province_cn: str, province_en: str) -> Path:
         for fn, did, dmin, dmax in source_docs
     ]
 
-    # Concept links: scan driver text for known concept keywords
-    all_driver_text = " ".join(ft for _, ft, _, _ in drivers)
+    # Concept cross-links: query ALL driver facts for this province across all documents
+    # (not just the last 20 fetched above) so the concept section is comprehensive.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT fact_text
+                FROM staging.spot_report_facts
+                WHERE province_cn = %s AND fact_type = 'driver'
+                """,
+                (province_cn,),
+            )
+            all_fact_texts = [r[0] or "" for r in cur.fetchall()]
+
+    all_facts_combined = " ".join(all_fact_texts)
+    # Build concept hits with occurrence counts
+    concept_hits_with_count: list[tuple[str, int]] = []
+    for ck in CONCEPT_PATTERNS:
+        count = all_facts_combined.count(ck)
+        if count > 0:
+            concept_hits_with_count.append((ck, count))
+    concept_hits_with_count.sort(key=lambda x: -x[1])
+
     concept_hits = [
-        f"- [[{ck}]]"
-        for ck in CONCEPT_PATTERNS
-        if ck in all_driver_text
+        f"- [[{ck}]] ({cnt} occurrences)"
+        for ck, cnt in concept_hits_with_count
     ]
 
     fm = _frontmatter(
@@ -446,10 +466,12 @@ def generate_province_note(province_cn: str, province_en: str) -> Path:
 
     sections += [
         "",
-        "## Related Concepts",
+        "## Related Concepts  _(cross-links to concept notes)_",
+        "",
+        "_Concepts found in all driver sentences for this province, sorted by frequency._",
         "",
     ]
-    sections += concept_hits if concept_hits else ["_No concept keywords detected in recent drivers._"]
+    sections += concept_hits if concept_hits else ["_No concept keywords detected in driver sentences._"]
 
     sections += [
         "",
@@ -484,13 +506,27 @@ def generate_province_note(province_cn: str, province_en: str) -> Path:
 
 # Concept keywords and their display names
 CONCEPT_PATTERNS = {
+    # ── Supply-side ────────────────────────────────────────────────────────
     "新能源出力下降": "新能源出力下降 (New Energy Output Decline)",
-    "负荷增加": "负荷增加 (Load Increase)",
-    "省间现货交易": "省间现货交易 (Interprovincial Spot Trading)",
-    "实时价格波动": "实时价格波动 (Real-time Price Volatility)",
-    "检修": "机组检修 (Unit Maintenance)",
-    "水电": "水电出力 (Hydro Output)",
     "新能源消纳": "新能源消纳 (New Energy Absorption)",
+    "水电": "水电出力 (Hydro Output)",
+    "火电出力": "火电出力变化 (Thermal Power Output)",
+    "风电": "风电出力 (Wind Power Output)",
+    "光伏": "光伏出力 (Solar PV Output)",
+    "检修": "机组检修 (Unit Maintenance)",
+    # ── Demand-side ────────────────────────────────────────────────────────
+    "负荷增加": "负荷增加 (Load Increase)",
+    "负荷下降": "负荷下降 (Load Decrease)",
+    "高温": "高温用电 (High Temperature Demand)",
+    "供大于求": "供大于求 (Oversupply)",
+    # ── Market structure ───────────────────────────────────────────────────
+    "省间现货交易": "省间现货交易 (Interprovincial Spot Trading)",
+    "省间外送": "省间外送电 (Interprovincial Power Export)",
+    "实时价格波动": "实时价格波动 (Real-time Price Volatility)",
+    "调峰": "调峰辅助服务 (Peak Shaving Services)",
+    "电价上限": "电价上限 (Price Cap)",
+    "现货出清": "现货出清价格 (Spot Clearing Price)",
+    "市场化交易": "市场化交易 (Market-Based Trading)",
 }
 
 

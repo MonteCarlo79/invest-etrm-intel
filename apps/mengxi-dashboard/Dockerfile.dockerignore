@@ -1,0 +1,77 @@
+# Build context ignore rules for the mengxi-dashboard image.
+# This file is used instead of the root .dockerignore when building with
+#   docker build --file apps/mengxi-dashboard/Dockerfile .
+
+.git
+.gitignore
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+node_modules
+*.log
+*.dump
+.pytest_cache/
+**/.pytest_cache/
+
+# Large data / output dirs
+data/
+debug/
+logs/
+knowledge/
+docs/
+memo/
+reports/
+outputs/
+samples/
+extract/
+archived/
+backup/
+tests/
+
+# Other apps (not needed in this image)
+apps/portal/
+apps/inner-mongolia/
+apps/spot-watcher/
+apps/uploader/
+apps/model-catalogue/
+apps/options-cockpit/
+apps/strategy-agent/
+apps/portfolio-agent/
+apps/portfolio-risk-agent/
+apps/execution-agent/
+apps/trading-performance-agent/
+apps/it-dev-agent/
+apps/dev-agent/
+apps/mengxi-trading-ops/
+apps/pnl-attribution/
+apps/spot-agent/
+apps/spot-market/
+apps/trading/
+apps/dashboard/
+apps/gb-market/
+apps/au-market/
+apps/bess-inner-mongolia/
+apps/caiso-market/
+apps/ercot-market/
+apps/pjm-market/
+
+# Services not used by mengxi-dashboard
+services/bess_inner_mongolia/
+services/bess-inner-mongolia/
+services/bess_mcp/
+services/data_ingestion/
+services/decision_models/
+services/document_intake/
+services/lingfeng/
+services/loader/
+services/market_fundamentals/
+services/monitoring/
+services/portal/
+services/spot_ingest/
+services/spot_mcp/
+services/trading/

@@ -1,0 +1,152 @@
+# Run any market app Streamlit UI locally using the latest ECR image.
+# No rebuild needed — pulls the same image running on AWS.
+#
+# Prerequisites:
+#   aws ecr get-login-password --region ap-southeast-1 | \
+#     docker login --username AWS --password-stdin \
+#     319383842493.dkr.ecr.ap-southeast-1.amazonaws.com
+#
+# Usage:
+#   docker-compose -f docker-compose.local.yml up gb-market
+#   docker-compose -f docker-compose.local.yml up bess-map inner-mongolia
+#   docker-compose -f docker-compose.local.yml up portal   # hub at http://localhost:8500
+#
+# Port map:
+#   portal:           http://localhost:8500
+#   bess-map:         http://localhost:8503/bess-map/
+#   inner-mongolia:   http://localhost:8504/inner-mongolia/
+#   mengxi-dashboard: http://localhost:8505/mengxi-dashboard/
+#   options-cockpit:  http://localhost:8507/options-cockpit/
+#   gb-market:        http://localhost:8508/gb-market/
+#   au-market:        http://localhost:8509/au-market/
+#   ercot-market:     http://localhost:8510/ercot-market/
+#   pjm-market:       http://localhost:8511/pjm-market/
+#   caiso-market:     http://localhost:8512/caiso-market/
+#   ph-market:        http://localhost:8513
+#   po-market:        http://localhost:8514
+#   spot-markets:     http://localhost:8515
+#   deal-structurer:  http://localhost:8522/deal-structurer/
+#
+# To link Portal "Open App →" buttons to local instances, set in config/.env:
+#   APP_URL_MAP=gb-market=http://localhost:8508/gb-market,au-market=http://localhost:8509/au-market,...
+
+version: "3.8"
+
+x-common: &common
+  env_file: config/.env
+  restart: "no"
+
+services:
+
+  gb-market:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-gb-market:v73
+    command: ["/bin/bash", "apps/gb-market/run.sh"]
+    ports: ["8508:8508"]
+
+  au-market:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-au-market:v7
+    command: ["/bin/bash", "apps/au-market/run.sh"]
+    ports: ["8509:8509"]
+
+  ercot-market:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-ercot-market:v4
+    command: ["/bin/bash", "apps/ercot-market/run.sh"]
+    ports: ["8510:8510"]
+
+  caiso-market:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-caiso-market:v4
+    command: ["/bin/bash", "apps/caiso-market/run.sh"]
+    ports: ["8512:8512"]
+
+  pjm-market:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-pjm-market:v4
+    command: ["/bin/bash", "apps/pjm-market/run.sh"]
+    ports: ["8511:8511"]
+
+  ph-market:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-ph-market:v15
+    # Uses default image CMD (run.sh baked in)
+    ports: ["8513:8510"]
+
+  po-market:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-po-market:v15
+    # Uses default image CMD (run.sh baked in)
+    ports: ["8514:8511"]
+
+  bess-map:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-map:v60
+    # Uses default image CMD (run.sh baked in)
+    ports: ["8503:8503"]
+    volumes:
+      - ./apps/bess-map/app.py:/app/apps/bess-map/app.py:ro
+
+  inner-mongolia:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-inner-mongolia:v52
+    # Uses default image CMD (run.sh baked in)
+    ports: ["8504:8504"]
+
+  mengxi-dashboard:
+    <<: *common
+    image: mengxi-dashboard-local:latest
+    # Uses default image CMD (run.sh baked in)
+    ports: ["8505:8505"]
+    volumes:
+      - ./data:/app/data  # live-mount local data/ so CSV/Excel files are visible without rebuild
+
+  options-cockpit:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-options-cockpit:v5-debug
+    # Uses default image CMD (run.sh baked in)
+    ports: ["8507:8507"]
+
+  deal-structurer:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-deal-structurer:v5
+    command: ["streamlit", "run", "apps/deal_structurer/app.py",
+              "--server.port=8522", "--server.address=0.0.0.0",
+              "--server.baseUrlPath=deal-structurer",
+              "--server.enableCORS=false", "--server.enableXsrfProtection=false",
+              "--server.headless=true", "--server.fileWatcherType=none"]
+    ports: ["8522:8522"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./apps/deal_structurer:/app/apps/deal_structurer:ro
+      - ./services/deal_engine:/app/services/deal_engine:ro
+      - ./services/common:/app/services/common:ro
+      - ./libs/deal_models:/app/libs/deal_models:ro
+
+  spot-markets:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-spot-markets:v32
+    command: ["streamlit", "run", "apps/spot-market/app.py",
+              "--server.port=8505", "--server.address=0.0.0.0",
+              "--server.enableCORS=false", "--server.enableXsrfProtection=false",
+              "--server.headless=true", "--server.fileWatcherType=none"]
+    ports: ["8515:8505"]
+
+  # ── Portal (local dev) ────────────────────────────────────────────────────
+  # AUTH_MODE=dev bypasses Cognito OIDC — no ALB required.
+  # Service Control panel will show errors for ECS calls (expected locally).
+  # To make "Open App →" links point to local instances, add to config/.env:
+  #   APP_URL_MAP=gb-market=http://localhost:8508/gb-market,...
+  portal:
+    <<: *common
+    image: 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-portal:v10
+    command: ["streamlit", "run", "apps/portal/app.py",
+              "--server.port=8500", "--server.address=0.0.0.0",
+              "--server.enableCORS=false", "--server.enableXsrfProtection=false",
+              "--server.headless=true"]
+    ports: ["8500:8500"]
+    environment:
+      AUTH_MODE: dev
+      DEV_USER_EMAIL: dev@local
+      DEV_USER_ROLE: Admin

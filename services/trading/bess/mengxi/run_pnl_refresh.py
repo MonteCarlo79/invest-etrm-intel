@@ -9,6 +9,20 @@ Created on Tue Mar 24 12:47:32 2026
 from __future__ import annotations
 
 import os
+import sys
+
+# Ensure repo root is on sys.path when run as a script
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+# Set DB_DSN from PGURL if only the latter is provided
+_url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
+if _url:
+    os.environ.setdefault("DB_DSN", _url)
+    os.environ.setdefault("PGURL", _url)
+
 import logging
 from datetime import date, datetime, timedelta
 from typing import Dict
@@ -32,7 +46,17 @@ DB_URL = os.getenv("DB_DSN") or os.getenv("PGURL")
 if not DB_URL:
     raise ValueError("Missing DB_DSN / PGURL")
 
-ENGINE = create_engine(DB_URL)
+ENGINE = create_engine(
+    DB_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={
+        "keepalives": 1,
+        "keepalives_idle": 30,       # send first keepalive after 30s idle
+        "keepalives_interval": 10,   # retry every 10s
+        "keepalives_count": 5,       # fail after 5 missed probes
+    },
+)
 DEFAULT_COMPENSATION_YUAN_PER_MWH = float(
     os.getenv("DEFAULT_COMPENSATION_YUAN_PER_MWH", "350"))
 REFRESH_LOOKBACK_DAYS = int(os.getenv("PNL_REFRESH_LOOKBACK_DAYS", "7"))
@@ -196,7 +220,7 @@ def upsert_df(engine: Engine, table_name: str, df: pd.DataFrame, pk_cols: list[s
     if df.empty:
         return
 
-    stage_name = f"_tmp_{table_name.replace('.', '_')}_{int(pd.Timestamp.utcnow().timestamp())}"
+    stage_name = f"_tmp_{table_name.replace('.', '_')}_{int(pd.Timestamp.now('UTC').timestamp())}"
     schema_name, bare_name = table_name.split(".", 1)
 
     with engine.begin() as con:
@@ -222,11 +246,27 @@ def upsert_df(engine: Engine, table_name: str, df: pd.DataFrame, pk_cols: list[s
 
 
 def main() -> None:
+    import argparse
+    from datetime import date as _date
+
+    p = argparse.ArgumentParser(description="Mengxi BESS P&L refresh")
+    p.add_argument("--start-date", default=None, help="ISO date (default: today - LOOKBACK_DAYS)")
+    p.add_argument("--end-date",   default=None, help="ISO date (default: today)")
+    args = p.parse_args()
+
+    if args.start_date or args.end_date:
+        today = _date.today()
+        start = _date.fromisoformat(args.start_date) if args.start_date else today - timedelta(days=REFRESH_LOOKBACK_DAYS)
+        end   = _date.fromisoformat(args.end_date)   if args.end_date   else today
+        dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+        logger.info("Date range from args: %s → %s (%d days)", start, end, len(dates))
+    else:
+        dates = fetch_trade_dates(ENGINE, REFRESH_LOOKBACK_DAYS)
+
     logger.info("Starting Mengxi P&L refresh")
     ensure_report_tables(ENGINE)
 
     availability_df = fetch_scenario_availability(ENGINE)
-    dates = fetch_trade_dates(ENGINE, REFRESH_LOOKBACK_DAYS)
     compensation_df = fetch_asset_monthly_compensation(ENGINE)
     scenario_rows_all = []
     attribution_rows_all = []

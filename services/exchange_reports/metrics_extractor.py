@@ -1,0 +1,854 @@
+"""
+services/exchange_reports/metrics_extractor.py
+
+AI-powered structured data extraction from provincial exchange monthly reports.
+
+Uses Claude to extract key market metrics from full report text, then upserts
+to staging.exchange_monthly_metrics for cross-province comparison.
+
+Common fields across all 9 provinces (where available):
+  - Total traded volume (GWh)
+  - Year-on-year change (%)
+  - Average settlement/transaction price (yuan/MWh)
+  - Peak / valley prices
+  - Spot vs medium-long-term volume split
+  - Renewable energy share (%)
+  - Installed capacity (GW)
+  - Max load (GW)
+  - Market participant counts
+  - Key highlights (free text, 2-3 sentences)
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import date
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# ── LLM provider config ───────────────────────────────────────────────────────
+#
+# Provider selection (first match wins):
+#   1. DEEPSEEK_API_KEY set           → DeepSeek  (OpenAI-compatible, China-accessible)
+#   2. BEDROCK_REGION set             → AWS Bedrock Claude
+#   3. ANTHROPIC_API_KEY set          → Direct Anthropic API
+#
+# Optional overrides:
+#   DEEPSEEK_MODEL   (default: deepseek-chat)
+#   BEDROCK_MODEL_ID (default: global.anthropic.claude-sonnet-4-6)
+
+_DEFAULT_DIRECT_MODEL   = "claude-sonnet-4-6"
+_DEFAULT_BEDROCK_MODEL  = "global.anthropic.claude-sonnet-4-6"
+_DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+_DEEPSEEK_BASE_URL      = "https://api.deepseek.com"
+
+# OpenAI-format tool schema for DeepSeek (same fields, different wrapper)
+_TOOL_SCHEMA_OPENAI = {
+    "type": "function",
+    "function": {
+        "name": "store_market_metrics",
+        "description": (
+            "Store structured metrics extracted from a Chinese provincial power exchange "
+            "monthly report. Use null for any field not found in the report text."
+        ),
+        "parameters": None,  # filled in after _TOOL_SCHEMA is defined
+    },
+}
+
+
+def _get_provider() -> str:
+    """Return 'deepseek', 'bedrock', or 'anthropic'."""
+    if os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        return "deepseek"
+    if os.environ.get("BEDROCK_REGION", "").strip():
+        return "bedrock"
+    return "anthropic"
+
+
+def _get_client(api_key: Optional[str] = None):
+    """
+    Return (client, model_id, provider) for LLM calls.
+    provider is 'deepseek', 'bedrock', or 'anthropic'.
+    """
+    provider = _get_provider()
+
+    if provider == "deepseek":
+        from openai import OpenAI
+        key = os.environ.get("DEEPSEEK_API_KEY", "")
+        model_id = os.environ.get("DEEPSEEK_MODEL", _DEFAULT_DEEPSEEK_MODEL)
+        client = OpenAI(api_key=key, base_url=_DEEPSEEK_BASE_URL)
+        logger.debug("Using DeepSeek client, model=%s", model_id)
+        return client, model_id, "deepseek"
+
+    import anthropic
+    if provider == "bedrock":
+        region = os.environ.get("BEDROCK_REGION")
+        model_id = os.environ.get("BEDROCK_MODEL_ID", _DEFAULT_BEDROCK_MODEL)
+        client = anthropic.AnthropicBedrock(aws_region=region)
+        logger.debug("Using Bedrock client in %s, model=%s", region, model_id)
+        return client, model_id, "bedrock"
+
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    client = anthropic.Anthropic(api_key=key)
+    return client, _DEFAULT_DIRECT_MODEL, "anthropic"
+
+
+# ── DB DDL ────────────────────────────────────────────────────────────────────
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS staging.exchange_monthly_metrics (
+    id                          SERIAL PRIMARY KEY,
+    province                    TEXT NOT NULL,
+    report_month                DATE NOT NULL,
+    report_type                 TEXT NOT NULL DEFAULT 'monthly',
+
+    -- Volume
+    total_volume_gwh            NUMERIC(12,2),   -- 总成交/用电量 (GWh; 1 亿千瓦时 = 100 GWh)
+    volume_yoy_pct              NUMERIC(6,2),    -- 同比变化 (%)
+    spot_volume_gwh             NUMERIC(12,2),   -- 现货成交量
+    medium_longterm_volume_gwh  NUMERIC(12,2),   -- 中长期成交量
+
+    -- Prices (yuan/MWh — 元/兆瓦时 = 元/千千瓦时 × 1000 if input in fen)
+    avg_price_yuan_mwh          NUMERIC(8,2),    -- 加权平均价格
+    peak_price_yuan_mwh         NUMERIC(8,2),    -- 峰段价格
+    valley_price_yuan_mwh       NUMERIC(8,2),    -- 谷段价格
+    spot_avg_price_yuan_mwh     NUMERIC(8,2),    -- 现货均价
+
+    -- Generation mix
+    renewable_pct               NUMERIC(6,2),    -- 新能源/可再生能源占比 (%)
+    wind_pct                    NUMERIC(6,2),    -- 风电占比
+    solar_pct                   NUMERIC(6,2),    -- 光伏/太阳能占比
+    thermal_pct                 NUMERIC(6,2),    -- 火电占比
+    hydro_pct                   NUMERIC(6,2),    -- 水电占比
+
+    -- Capacity & load
+    installed_capacity_gw       NUMERIC(10,2),   -- 装机容量 (万千瓦 → GW)
+    max_load_gw                 NUMERIC(8,2),    -- 最大用电负荷
+    avg_load_gw                 NUMERIC(8,2),    -- 平均负荷
+
+    -- Market participants
+    market_participants_total   INT,             -- 注册市场主体总数
+    generators_count            INT,             -- 发电企业
+    retailers_count             INT,             -- 售电公司
+    consumers_count             INT,             -- 电力用户
+
+    -- Settlement prices by generation type (yuan/MWh)
+    contract_avg_price_yuan_mwh          NUMERIC(8,2),   -- 合约均价
+    thermal_settlement_price_yuan_mwh    NUMERIC(8,2),   -- 火电结算均价
+    wind_settlement_price_yuan_mwh       NUMERIC(8,2),   -- 风电结算均价
+    solar_settlement_price_yuan_mwh      NUMERIC(8,2),   -- 光伏结算均价
+    nuclear_settlement_price_yuan_mwh    NUMERIC(8,2),   -- 核电结算均价
+    bess_settlement_price_yuan_mwh       NUMERIC(8,2),   -- 储能结算均价
+
+    -- Generation volumes by fuel type (GWh)
+    thermal_volume_gwh          NUMERIC(12,2),   -- 火电上网/结算电量
+    wind_volume_gwh             NUMERIC(12,2),   -- 风电上网/结算电量
+    solar_volume_gwh            NUMERIC(12,2),   -- 光伏上网/结算电量
+    hydro_volume_gwh            NUMERIC(12,2),   -- 水电上网电量
+    nuclear_volume_gwh          NUMERIC(12,2),   -- 核电上网电量
+    bess_traded_volume_gwh      NUMERIC(12,2),   -- 储能成交/上网电量
+
+    -- Interprovincial flows (GWh)
+    incoming_volume_gwh         NUMERIC(12,2),   -- 外来电/省间受入
+    outgoing_volume_gwh         NUMERIC(12,2),   -- 外送电量
+
+    -- Capacity breakdown (GW)
+    wind_capacity_gw            NUMERIC(10,2),   -- 风电装机
+    solar_capacity_gw           NUMERIC(10,2),   -- 光伏装机
+    thermal_capacity_gw         NUMERIC(10,2),   -- 火电装机
+    bess_capacity_gw            NUMERIC(10,2),   -- 储能装机
+    nuclear_capacity_gw         NUMERIC(10,2),   -- 核电装机
+
+    -- Retailer trading
+    retailer_volume_gwh                    NUMERIC(12,2), -- 售电公司代理电量
+    retailer_settlement_price_yuan_mwh     NUMERIC(8,2),  -- 售电侧结算均价
+    retailer_service_fee_million_yuan      NUMERIC(10,2), -- 代理服务费 (万元)
+
+    -- Text summary
+    key_highlights              TEXT,            -- AI-generated 2-3 sentence summary
+
+    -- Metadata
+    exchange_report_id          INT REFERENCES staging.exchange_monthly_reports(id),
+    extracted_at                TIMESTAMPTZ DEFAULT NOW(),
+    extraction_model            TEXT DEFAULT 'claude-sonnet-4-6',
+
+    UNIQUE(province, report_month, report_type)
+);
+"""
+
+_TABLES_INITIALIZED = False
+
+
+def init_metrics_table(pg_url: Optional[str] = None) -> None:
+    """Create metrics table if not exists."""
+    global _TABLES_INITIALIZED
+    if _TABLES_INITIALIZED:
+        return
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    if not url:
+        raise RuntimeError("pg_url required")
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+    _TABLES_INITIALIZED = True
+
+
+# ── Claude extraction ─────────────────────────────────────────────────────────
+
+_TOOL_SCHEMA = {
+    "name": "store_market_metrics",
+    "description": (
+        "Store structured metrics extracted from a Chinese provincial power exchange "
+        "monthly report. Use null for any field not found in the report text."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "total_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Total electricity traded/consumed this month in GWh "
+                               "(multiply 亿千瓦时 figures by 100). "
+                               "Look for 总成交量, 总用电量, 全社会用电量.",
+            },
+            "volume_yoy_pct": {
+                "type": ["number", "null"],
+                "description": "Year-on-year change percentage. Look for 同比增长/下降 X%.",
+            },
+            "spot_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Spot market traded volume in GWh (multiply 亿千瓦时 figures by 100). Look for 现货成交量, 日前+实时成交.",
+            },
+            "medium_longterm_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Medium-long term contract volume in GWh (multiply 亿千瓦时 figures by 100). Look for 中长期成交量.",
+            },
+            "avg_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Weighted average settlement price in yuan/MWh (元/兆瓦时). "
+                               "If report shows 元/千瓦时, multiply by 1000. "
+                               "If 分/千瓦时, divide by 10. Look for 加权平均价, 结算均价, 成交均价.",
+            },
+            "peak_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Peak period price yuan/MWh. Look for 峰段价格, 高峰, 峰时.",
+            },
+            "valley_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Valley period price yuan/MWh. Look for 谷段价格, 低谷, 谷时.",
+            },
+            "spot_avg_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Spot market average price yuan/MWh. Look for 现货均价, 日前均价.",
+            },
+            "renewable_pct": {
+                "type": ["number", "null"],
+                "description": "Renewable energy share as percentage of total generation. "
+                               "Look for 新能源占比, 可再生能源占比.",
+            },
+            "wind_pct": {
+                "type": ["number", "null"],
+                "description": "Wind power percentage. Look for 风电占比.",
+            },
+            "solar_pct": {
+                "type": ["number", "null"],
+                "description": "Solar/PV percentage. Look for 光伏占比, 太阳能占比.",
+            },
+            "thermal_pct": {
+                "type": ["number", "null"],
+                "description": "Thermal power percentage. Look for 火电占比.",
+            },
+            "hydro_pct": {
+                "type": ["number", "null"],
+                "description": "Hydro power percentage. Look for 水电占比.",
+            },
+            "installed_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Total installed generation capacity in GW. "
+                               "If report shows 万千瓦, divide by 100. Look for 装机容量, 装机规模.",
+            },
+            "max_load_gw": {
+                "type": ["number", "null"],
+                "description": "Maximum load in GW. Look for 最大负荷, 最高负荷. "
+                               "If in 万千瓦, divide by 100.",
+            },
+            "avg_load_gw": {
+                "type": ["number", "null"],
+                "description": "Average load in GW. Look for 平均负荷.",
+            },
+            "market_participants_total": {
+                "type": ["integer", "null"],
+                "description": "Total registered market participants. Look for 注册市场主体, 市场主体数量.",
+            },
+            "generators_count": {
+                "type": ["integer", "null"],
+                "description": "Number of registered generators/power plants. Look for 发电企业, 发电厂.",
+            },
+            "retailers_count": {
+                "type": ["integer", "null"],
+                "description": "Number of electricity retailers. Look for 售电公司.",
+            },
+            "consumers_count": {
+                "type": ["integer", "null"],
+                "description": "Number of electricity consumers. Look for 电力用户, 购电用户.",
+            },
+            # ── Settlement prices by generation type ────────────────────
+            "contract_avg_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Average contract (中长期) price yuan/MWh. Look for 合约均价. "
+                               "Distinct from spot or settlement average.",
+            },
+            "thermal_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Thermal power settlement average price yuan/MWh. "
+                               "Look for 火电结算均价, 煤电结算均价.",
+            },
+            "wind_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Wind power settlement average price yuan/MWh. Look for 风电结算均价.",
+            },
+            "solar_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Solar/PV settlement average price yuan/MWh. Look for 光伏结算均价, 太阳能结算均价.",
+            },
+            "nuclear_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Nuclear power settlement average price yuan/MWh. Look for 核电结算均价.",
+            },
+            "bess_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Battery energy storage settlement average price yuan/MWh. "
+                               "Look for 储能结算均价, 独立新型储能结算均价.",
+            },
+            # ── Generation volumes by fuel type ─────────────────────────
+            "thermal_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Thermal power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 火电上网电量, 火电结算电量, 煤电发电量.",
+            },
+            "wind_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Wind power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 风电上网电量, 风电结算电量.",
+            },
+            "solar_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Solar/PV generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 光伏上网电量, 光伏结算电量, 太阳能发电量.",
+            },
+            "hydro_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Hydro power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 水电上网电量, 水电发电量.",
+            },
+            "nuclear_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Nuclear power generation/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 核电上网电量, 核电发电量.",
+            },
+            "bess_traded_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Battery storage traded/settlement volume in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 储能成交电量, 独立新型储能上网电量, 储能放电量.",
+            },
+            # ── Interprovincial flows ────────────────────────────────────
+            "incoming_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Incoming electricity from other provinces (外来电/省间受入) in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 省间受入, 外来电量, 受西电/云电/北电, 外购电.",
+            },
+            "outgoing_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Outgoing electricity to other provinces in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 外送电量, 省间送出, 送广东/海南/华东.",
+            },
+            # ── Capacity breakdown ───────────────────────────────────────
+            "wind_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Wind power installed capacity in GW. "
+                               "Look for 风电装机容量. If in 万千瓦, divide by 100.",
+            },
+            "solar_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Solar/PV installed capacity in GW (include both centralised and distributed). "
+                               "Look for 光伏装机容量, 太阳能发电装机. If in 万千瓦, divide by 100.",
+            },
+            "thermal_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Thermal power installed capacity in GW. "
+                               "Look for 火电装机容量, 煤电装机. If in 万千瓦, divide by 100.",
+            },
+            "bess_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Battery energy storage installed capacity in GW. "
+                               "Look for 储能装机容量, 新型储能装机. If in 万千瓦, divide by 100.",
+            },
+            "nuclear_capacity_gw": {
+                "type": ["number", "null"],
+                "description": "Nuclear power installed capacity in GW. "
+                               "Look for 核电装机容量. If in 万千瓦, divide by 100.",
+            },
+            # ── Retailer trading ────────────────────────────────────────
+            "retailer_volume_gwh": {
+                "type": ["number", "null"],
+                "description": "Volume traded by electricity retailers in GWh (multiply 亿千瓦时 figures by 100). "
+                               "Look for 售电公司成交/结算电量, 售电公司代理电量.",
+            },
+            "retailer_settlement_price_yuan_mwh": {
+                "type": ["number", "null"],
+                "description": "Retailer-side settlement average price yuan/MWh. "
+                               "Look for 售电侧结算均价, 售电公司结算均价.",
+            },
+            "retailer_service_fee_million_yuan": {
+                "type": ["number", "null"],
+                "description": "Retailer service fee total in million yuan (万元). "
+                               "Look for 代理服务费, 售电服务费. If in 万元, use directly.",
+            },
+            "key_highlights": {
+                "type": "string",
+                "description": (
+                    "2-3 concise sentences in Chinese summarising the most notable market "
+                    "developments this month: price trends, volume changes, renewable growth, "
+                    "or any unusual market events."
+                ),
+            },
+        },
+        "required": ["key_highlights"],
+    },
+}
+
+# Patch the OpenAI schema now that _TOOL_SCHEMA is defined
+_TOOL_SCHEMA_OPENAI["function"]["parameters"] = _TOOL_SCHEMA["input_schema"]
+
+
+_CREDIT_ERROR_HINTS = ("insufficient", "balance", "quota", "credit", "payment", "401", "402", "429")
+
+
+def _is_credit_error(exc: Exception) -> bool:
+    """True for DeepSeek account-credit / auth failures (402 Insufficient Balance,
+    401, 429) — the only error class that should trigger the Bedrock fallback."""
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 402, 429):
+        return True
+    msg = str(exc).lower()
+    return any(h in msg for h in _CREDIT_ERROR_HINTS)
+
+
+def _bedrock_client():
+    """Force a Bedrock client regardless of provider selection — the credit-fallback target.
+    Returns (client, model_id) or (None, None) when BEDROCK_REGION is unset."""
+    import anthropic
+    region = os.environ.get("BEDROCK_REGION", "").strip()
+    if not region:
+        return None, None
+    model_id = os.environ.get("BEDROCK_MODEL_ID", _DEFAULT_BEDROCK_MODEL)
+    return anthropic.AnthropicBedrock(aws_region=region), model_id
+
+
+def _extract_via_anthropic(client, model_id: str, system_prompt: str, user_message: str) -> Optional[dict]:
+    """Anthropic-shaped tool-call extraction (direct API or Bedrock)."""
+    resp = client.messages.create(
+        model=model_id,
+        max_tokens=1024,
+        system=system_prompt,
+        tools=[_TOOL_SCHEMA],
+        tool_choice={"type": "tool", "name": "store_market_metrics"},
+        messages=[{"role": "user", "content": user_message}],
+    )
+    for block in resp.content:
+        if block.type == "tool_use" and block.name == "store_market_metrics":
+            return _sanity_check(block.input)
+    return None
+
+
+def extract_metrics(
+    full_text: str,
+    province: str,
+    report_month: date,
+    api_key: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Extract structured metrics from report full text via LLM (DeepSeek / Bedrock / Anthropic).
+
+    Returns dict of metric fields (matching DB columns), or None on failure.
+    """
+    provider = _get_provider()
+    if provider == "anthropic":
+        api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            logger.warning("No LLM provider configured (set DEEPSEEK_API_KEY, BEDROCK_REGION, or ANTHROPIC_API_KEY)")
+            return None
+
+    # Truncate to ~20k chars to cover more pages
+    text_sample = full_text[:20000]
+
+    system_prompt = (
+        "You are extracting structured data from a Chinese provincial power exchange "
+        f"monthly market report. Province: {province}, Month: {report_month.strftime('%Y年%m月')}. "
+        "Extract numerical values precisely as reported. "
+        "\n\nVOLUME UNIT CONVERSIONS (always output in GWh):\n"
+        "- 亿千瓦时 / 亿kWh → multiply by 100 (e.g. 389.6亿千瓦时 = 38960 GWh)\n"
+        "- 万千瓦时 → divide by 100 (e.g. 62.84万千瓦时 = 0.6284 GWh)\n"
+        "- GWh → use directly\n"
+        "\nIMPORTANT: extract SINGLE-MONTH values only. If a metric is only published "
+        "as a year-to-date cumulative figure (累计, 截至X月底, 1-N月合计), use null — "
+        "never store a cumulative value as the monthly figure.\n"
+        "\n\nPRICE UNIT CONVERSIONS (always output in 元/兆瓦时 yuan/MWh):\n"
+        "- 元/千瓦时 → multiply by 1000 (e.g. 0.3743 元/千瓦时 = 374.3 元/兆瓦时)\n"
+        "- 分/千瓦时 → multiply by 10 (e.g. 35.4 分/千瓦时 = 354 元/兆瓦时)\n"
+        "- 元/兆瓦时 → use directly\n"
+        "\n\nCAPACITY/LOAD UNIT CONVERSIONS (always output in GW):\n"
+        "- 万千瓦 → divide by 100 (e.g. 16500万千瓦 = 165 GW)\n"
+        "- 亿瓦 → divide by 10 (e.g. 1650亿瓦 = 165 GW)\n"
+        "- GW → use directly\n"
+        "\n\nFor avg_price look for: 结算均价, 成交均价, 加权平均价, 市场均价, 平均电价. "
+        "For spot_volume look for: 现货成交量, 日前+实时成交量之和, 现货市场成交. "
+        "For spot_avg_price look for: 现货均价, 日前均价, 现货结算均价. "
+        "\n\nFor settlement prices by type: "
+        "contract_avg_price → 合约均价; "
+        "thermal_settlement_price → 火电/煤电结算均价; "
+        "wind_settlement_price → 风电结算均价; "
+        "solar_settlement_price → 光伏结算均价; "
+        "nuclear_settlement_price → 核电结算均价; "
+        "bess_settlement_price → 储能结算均价/独立新型储能结算均价. "
+        "\n\nFor generation volumes by type (in GWh, 亿千瓦时 ×100): "
+        "thermal_volume → 火电上网/发电/结算电量; "
+        "wind_volume → 风电上网/发电/结算电量; "
+        "solar_volume → 光伏上网/发电/结算电量; "
+        "hydro_volume → 水电上网/发电量; "
+        "nuclear_volume → 核电上网/发电量; "
+        "bess_traded_volume → 储能成交/结算/上网电量. "
+        "\n\nFor interprovincial flows: "
+        "incoming_volume → 省间受入/外来电量/受西电/受云电; "
+        "outgoing_volume → 外送电量/送广东/省间送出. "
+        "\n\nFor capacity breakdown (in GW, divide 万千瓦 by 100): "
+        "wind_capacity_gw → 风电装机; "
+        "solar_capacity_gw → 光伏装机 (include all types if stated separately); "
+        "thermal_capacity_gw → 火电/煤电装机; "
+        "bess_capacity_gw → 储能/新型储能装机; "
+        "nuclear_capacity_gw → 核电装机. "
+        "\n\nFor retailer trading: "
+        "retailer_volume → 售电公司代理/结算电量; "
+        "retailer_settlement_price → 售电侧/售电公司结算均价; "
+        "retailer_service_fee_million_yuan → 代理服务费 (in 万元). "
+        "\nUse null for any field not present in the text."
+    )
+    user_message = (
+        f"Extract market metrics from this {province} power exchange report "
+        f"for {report_month.strftime('%Y年%m月')}:\n\n{text_sample}"
+    )
+
+    try:
+        client, model_id, provider = _get_client(api_key=api_key)
+
+        if provider == "deepseek":
+            try:
+                # OpenAI-compatible function calling. DeepSeek occasionally returns
+                # truncated/malformed tool-call JSON — retry once before giving up.
+                for attempt in (1, 2):
+                    resp = client.chat.completions.create(
+                        model=model_id,
+                        max_tokens=4096,
+                        tools=[_TOOL_SCHEMA_OPENAI],
+                        tool_choice={"type": "function", "function": {"name": "store_market_metrics"}},
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user",   "content": user_message},
+                        ],
+                    )
+                    tool_calls = resp.choices[0].message.tool_calls
+                    if tool_calls:
+                        try:
+                            result = json.loads(tool_calls[0].function.arguments)
+                            return _sanity_check(result)
+                        except json.JSONDecodeError as exc:
+                            logger.warning(
+                                "DeepSeek invalid JSON (attempt %d/2) for %s %s "
+                                "(finish_reason=%s, args_len=%d): %s",
+                                attempt, province, report_month,
+                                resp.choices[0].finish_reason,
+                                len(tool_calls[0].function.arguments), exc,
+                            )
+            except Exception as exc:
+                # Credit/auth failure on DeepSeek → fall back to Bedrock Claude for this call.
+                if not _is_credit_error(exc):
+                    raise
+                logger.warning(
+                    "DeepSeek credit/auth failure (%s) — falling back to Bedrock for %s %s",
+                    exc, province, report_month,
+                )
+                bc, bmodel = _bedrock_client()
+                if bc is None:
+                    raise RuntimeError("DeepSeek credit failure and BEDROCK_REGION unset — no fallback available") from exc
+                return _extract_via_anthropic(bc, bmodel, system_prompt, user_message)
+
+        else:
+            # Anthropic SDK (direct or Bedrock)
+            return _extract_via_anthropic(client, model_id, system_prompt, user_message)
+
+    except Exception as exc:
+        logger.error("Metrics extraction failed for %s %s: %s", province, report_month, exc)
+
+    return None
+
+
+def _sanity_check(metrics: dict) -> dict:
+    """
+    Post-process LLM output to fix common unit conversion failures.
+    Modifies in-place and returns the dict.
+    """
+    # installed_capacity_gw: any single Chinese province is 25–500 GW.
+    # If LLM returned raw 万千瓦 without dividing by 100, correct it.
+    # If result is still implausibly low after correction, null it out.
+    cap = metrics.get("installed_capacity_gw")
+    if cap is not None and cap > 500:
+        cap = round(cap / 100, 2)
+        logger.info("sanity_check: corrected installed_capacity_gw → %.2f GW (÷100)", cap)
+    if cap is not None and cap < 25:
+        logger.info("sanity_check: nulled installed_capacity_gw %.2f GW (implausibly low)", cap)
+        cap = None
+    metrics["installed_capacity_gw"] = cap
+
+    # max_load_gw / avg_load_gw: < 500 GW and > 5 GW for any province
+    for field in ("max_load_gw", "avg_load_gw"):
+        val = metrics.get(field)
+        if val is not None and val > 500:
+            val = round(val / 100, 2)
+            logger.info("sanity_check: corrected %s → %.2f GW (÷100)", field, val)
+        if val is not None and val < 5:
+            logger.info("sanity_check: nulled %s %.2f GW (implausibly low)", field, val)
+            val = None
+        metrics[field] = val
+
+    # Capacity breakdown sanity: each should be 0–300 GW per province
+    for field in ("wind_capacity_gw", "solar_capacity_gw", "thermal_capacity_gw",
+                  "nuclear_capacity_gw", "bess_capacity_gw"):
+        val = metrics.get(field)
+        if val is not None and val > 300:
+            val = round(val / 100, 2)
+            logger.info("sanity_check: corrected %s → %.2f GW (÷100)", field, val)
+        if val is not None and val <= 0:
+            val = None
+        metrics[field] = val
+
+    # Settlement prices: should be 0–5000 yuan/MWh; null if implausible
+    for field in ("contract_avg_price_yuan_mwh",
+                  "thermal_settlement_price_yuan_mwh", "wind_settlement_price_yuan_mwh",
+                  "solar_settlement_price_yuan_mwh", "nuclear_settlement_price_yuan_mwh",
+                  "bess_settlement_price_yuan_mwh", "retailer_settlement_price_yuan_mwh"):
+        val = metrics.get(field)
+        if val is not None and (val < 0 or val > 5000):
+            logger.info("sanity_check: nulled %s %.2f (out of range)", field, val)
+            val = None
+        metrics[field] = val
+
+    return metrics
+
+
+# ── DB upsert ─────────────────────────────────────────────────────────────────
+
+_METRIC_COLS = [
+    "total_volume_gwh", "volume_yoy_pct",
+    "spot_volume_gwh", "medium_longterm_volume_gwh",
+    "avg_price_yuan_mwh", "peak_price_yuan_mwh", "valley_price_yuan_mwh", "spot_avg_price_yuan_mwh",
+    "renewable_pct", "wind_pct", "solar_pct", "thermal_pct", "hydro_pct",
+    "installed_capacity_gw", "max_load_gw", "avg_load_gw",
+    "market_participants_total", "generators_count", "retailers_count", "consumers_count",
+    # Settlement prices by generation type
+    "contract_avg_price_yuan_mwh",
+    "thermal_settlement_price_yuan_mwh", "wind_settlement_price_yuan_mwh",
+    "solar_settlement_price_yuan_mwh", "nuclear_settlement_price_yuan_mwh",
+    "bess_settlement_price_yuan_mwh",
+    # Generation volumes by fuel type
+    "thermal_volume_gwh", "wind_volume_gwh", "solar_volume_gwh",
+    "hydro_volume_gwh", "nuclear_volume_gwh", "bess_traded_volume_gwh",
+    # Interprovincial flows
+    "incoming_volume_gwh", "outgoing_volume_gwh",
+    # Capacity breakdown
+    "wind_capacity_gw", "solar_capacity_gw", "thermal_capacity_gw",
+    "bess_capacity_gw", "nuclear_capacity_gw",
+    # Retailer trading
+    "retailer_volume_gwh", "retailer_settlement_price_yuan_mwh",
+    "retailer_service_fee_million_yuan",
+    "key_highlights",
+]
+
+
+def upsert_metrics(
+    metrics: dict,
+    province: str,
+    report_month: date,
+    report_type: str = "monthly",
+    exchange_report_id: Optional[int] = None,
+    model: str = "claude-sonnet-4-6",
+    pg_url: Optional[str] = None,
+) -> int:
+    """
+    Upsert extracted metrics into staging.exchange_monthly_metrics.
+    Returns the row id.
+    """
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    conn = psycopg2.connect(url)
+    try:
+        init_metrics_table(pg_url)
+        cols = ["province", "report_month", "report_type", "exchange_report_id", "extraction_model"]
+        vals = [province, report_month, report_type, exchange_report_id, model]
+        for col in _METRIC_COLS:
+            cols.append(col)
+            vals.append(metrics.get(col))
+
+        set_clause = ", ".join(
+            f"{c} = EXCLUDED.{c}"
+            for c in cols
+            if c not in ("province", "report_month", "report_type")
+        )
+
+        sql = f"""
+            INSERT INTO staging.exchange_monthly_metrics ({", ".join(cols)})
+            VALUES ({", ".join(["%s"] * len(cols))})
+            ON CONFLICT (province, report_month, report_type)
+            DO UPDATE SET {set_clause}, extracted_at = NOW()
+            RETURNING id
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql, vals)
+            row_id = cur.fetchone()[0]
+        conn.commit()
+        return row_id
+    finally:
+        conn.close()
+
+
+# ── Combined extract + upsert ─────────────────────────────────────────────────
+
+def extract_and_store(
+    full_text: str,
+    province: str,
+    report_month: date,
+    report_type: str = "monthly",
+    exchange_report_id: Optional[int] = None,
+    api_key: Optional[str] = None,
+    pg_url: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Extract metrics via Claude and store to DB.
+    Returns metrics row id, or None if extraction failed.
+    """
+    metrics = extract_metrics(full_text, province, report_month, api_key=api_key)
+    if metrics is None:
+        return None
+    return upsert_metrics(
+        metrics=metrics,
+        province=province,
+        report_month=report_month,
+        report_type=report_type,
+        exchange_report_id=exchange_report_id,
+        pg_url=pg_url,
+    )
+
+
+# ── Query helpers ─────────────────────────────────────────────────────────────
+
+def get_metrics_table(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    pg_url: Optional[str] = None,
+) -> list[dict]:
+    """
+    Return all metrics rows for a given year/month, ordered by province.
+    If month is None, returns the latest month available per province.
+    """
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            if month:
+                cur.execute(
+                    """
+                    SELECT * FROM staging.exchange_monthly_metrics
+                    WHERE EXTRACT(YEAR FROM report_month) = %s
+                      AND EXTRACT(MONTH FROM report_month) = %s
+                    ORDER BY province
+                    """,
+                    (year or date.today().year, month),
+                )
+            else:
+                # Latest month per province
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (province) *
+                    FROM staging.exchange_monthly_metrics
+                    WHERE (%s IS NULL OR EXTRACT(YEAR FROM report_month) = %s)
+                    ORDER BY province, report_month DESC
+                    """,
+                    (year, year),
+                )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_available_months(pg_url: Optional[str] = None) -> list[str]:
+    """Return distinct report_months as YYYY-MM strings, most recent first."""
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT TO_CHAR(report_month, 'YYYY-MM') "
+                "FROM staging.exchange_monthly_metrics "
+                "ORDER BY 1 DESC"
+            )
+            return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_metrics_timeseries(
+    province: str,
+    report_type: str = "monthly",
+    pg_url: Optional[str] = None,
+) -> list[dict]:
+    """Return all metrics rows for a province ordered by report_month."""
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM staging.exchange_monthly_metrics
+                WHERE province = %s AND report_type = %s
+                ORDER BY report_month
+                """,
+                (province, report_type),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_available_provinces(pg_url: Optional[str] = None) -> list[str]:
+    """Return distinct provinces that have metrics rows, sorted."""
+    import psycopg2
+    url = pg_url or os.environ.get("PGURL") or os.environ.get("DB_DSN")
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT province FROM staging.exchange_monthly_metrics ORDER BY province"
+            )
+            return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.pjh-etrm.s3-backup</string>
+    <!-- Runs an INSTALLED COPY on local disk: launchd-spawned processes get exit 126
+         (TCC) reading ~/Library/CloudStorage. Repo copy is the source; refresh via
+         scripts/setup_backup_launchd.sh after editing. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/chenzhuqi/.local/bin/bess-backup-criticals.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/chenzhuqi</string>
+    <!-- Daily 03:45, staggered ahead of LingFeng 04:00. If asleep, runs at next wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>3</integer>
+        <key>Minute</key><integer>45</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/chenzhuqi/Library/Logs/bess-backup/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chenzhuqi/Library/Logs/bess-backup/launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/chenzhuqi/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- launchd does not reliably export HOME; without it aws CLI cannot find
+             ~/.aws credentials and hangs probing the EC2 metadata endpoint -->
+        <key>HOME</key>
+        <string>/Users/chenzhuqi</string>
+    </dict>
+</dict>
+</plist>

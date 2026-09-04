@@ -28,7 +28,7 @@ locals {
 # -------------------------
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = local.log_group
-  retention_in_days = 14
+  retention_in_days = 7
   tags              = local.tags
 }
 
@@ -55,6 +55,15 @@ resource "aws_s3_bucket_versioning" "uploads" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  rule {
+    id     = "expire-alb-logs"
+    status = "Enabled"
+    filter { prefix = "alb/" }
+    expiration { days = 7 }
+  }
+}
 
 # -------------------------
 # Networking: Security Groups
@@ -100,9 +109,17 @@ resource "aws_security_group" "ecs_tasks" {
   tags        = local.tags
 
   ingress {
+    description     = "Hermes FastAPI from ALB"
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  ingress {
     description     = "Streamlit services from ALB"
     from_port       = 8500
-    to_port         = 8506
+    to_port         = 8530
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -158,7 +175,7 @@ resource "aws_db_subnet_group" "pg" {
 resource "aws_db_instance" "pg" {
   identifier                   = "${var.name}-pg"
   engine                       = "postgres"
-  engine_version               = "18.2"
+  engine_version               = "18.3"
   instance_class               = var.db_instance_class
   allocated_storage            = 100
   storage_type                 = "gp3"   # was gp2; gp3 saves ~$1.90/month, same 3000 IOPS, in-place change
@@ -177,6 +194,7 @@ resource "aws_db_instance" "pg" {
   backup_retention_period      = 7
   performance_insights_enabled = true
   max_allocated_storage        = 1000   # storage auto-scaling cap; set in AWS, reconciled here
+  apply_immediately            = true   # 2026-08-07: instance changes apply now, not at the weekly window
 }
 
 # -------------------------
@@ -249,6 +267,7 @@ resource "aws_lb_target_group" "bess_map" {
 }
 
 resource "aws_lb_target_group" "uploader" {
+  count       = var.enable_uploader_service ? 1 : 0
   name_prefix = "tgupl-"
   port        = 8501
   protocol    = "HTTP"
@@ -396,6 +415,7 @@ resource "aws_lb_listener_rule" "portal_path" {
 }
 
 resource "aws_lb_listener_rule" "uploader_path" {
+  count        = var.enable_uploader_service ? 1 : 0
   listener_arn = aws_lb_listener.https.arn
   priority     = 10
 
@@ -413,7 +433,7 @@ resource "aws_lb_listener_rule" "uploader_path" {
   action {
     type             = "forward"
     order            = 2
-    target_group_arn = aws_lb_target_group.uploader.arn
+    target_group_arn = aws_lb_target_group.uploader[0].arn
   }
 
   condition {
@@ -508,7 +528,7 @@ resource "aws_ecs_cluster" "this" {
   name = "${var.name}-cluster"
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = "disabled"
   }
 
   tags = local.tags
@@ -613,7 +633,8 @@ resource "aws_iam_policy" "ecs_run_task_policy" {
         Action = ["iam:PassRole"]
         Resource = [
           aws_iam_role.task_execution.arn,
-          aws_iam_role.task_role.arn
+          aws_iam_role.task_role.arn,
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ecsTaskExecutionRole"
         ]
       }
 
@@ -624,6 +645,22 @@ resource "aws_iam_policy" "ecs_run_task_policy" {
 resource "aws_iam_role_policy_attachment" "attach_run_task" {
   role       = aws_iam_role.task_role.name
   policy_arn = aws_iam_policy.ecs_run_task_policy.arn
+}
+
+resource "aws_iam_role_policy" "task_bedrock" {
+  name = "${var.name}-task-bedrock"
+  role = aws_iam_role.task_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ]
+      Resource = "*"
+    }]
+  })
 }
 
 
@@ -642,7 +679,7 @@ resource "aws_ecs_task_definition" "bess_map" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = "256"
-  memory                   = "512"
+  memory                   = "1024"
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -661,20 +698,17 @@ resource "aws_ecs_task_definition" "bess_map" {
     ]
 
     command = [
-  	"streamlit",
-  	"run",
-  	"streamlit_bess_profit_dashboard_v14.1_consistent_full2.py",
-  	"--server.port=8503",
-  	"--server.address=0.0.0.0",
-  	"--server.baseUrlPath=bess-map",
-  	"--server.enableCORS=false",
-  	"--server.enableXsrfProtection=false",
-  	"--",
-  	"--env",
-  	"/apps/.env",
-  	"--schema",
-  	"marketdata"
-     ]
+      "streamlit",
+      "run",
+      "apps/bess-map/app.py",
+      "--server.port=8503",
+      "--server.address=0.0.0.0",
+      "--server.baseUrlPath=bess-map",
+      "--server.enableCORS=false",
+      "--server.enableXsrfProtection=false",
+      "--server.fileWatcherType=none",
+      "--server.headless=true"
+    ]
 
     environment = [
       {
@@ -697,17 +731,49 @@ resource "aws_ecs_task_definition" "bess_map" {
         name  = "PGUSER"
         value = var.db_username
       },
-       {
-         name  = "AWS_REGION"
-         value = var.region
-       },
-       {
-         name  = "COGNITO_USER_POOL_ID"
-         value = aws_cognito_user_pool.bess_users.id
-       },
+      {
+        name  = "AWS_REGION"
+        value = var.region
+      },
+      {
+        name  = "COGNITO_USER_POOL_ID"
+        value = aws_cognito_user_pool.bess_users.id
+      },
       {
         name  = "PGPASSWORD"
         value = var.db_password
+      },
+      {
+        name  = "ANTHROPIC_API_KEY"
+        value = var.anthropic_api_key
+      },
+      {
+        name  = "BEDROCK_REGION"
+        value = "ap-southeast-1"
+      },
+      {
+        name  = "S3_BUCKET"
+        value = var.uploads_bucket_name
+      },
+      {
+        name  = "HERMES_URL"
+        value = "https://www.pjh-etrm.ai"
+      },
+      {
+        name  = "DEEPSEEK_API_KEY"
+        value = var.deepseek_api_key
+      },
+      {
+        name  = "OPENAI_API_KEY"
+        value = var.openai_api_key
+      },
+      {
+        name  = "LINGFENG_USERNAME"
+        value = var.lingfeng_username
+      },
+      {
+        name  = "LINGFENG_PASSWORD"
+        value = var.lingfeng_password
       }
     ]
 
@@ -731,6 +797,7 @@ resource "aws_ecs_task_definition" "bess_map" {
 # memory spike during large Excel uploads. Rolling deployment; roll back by reverting + apply.
 ############################################
 resource "aws_ecs_task_definition" "uploader" {
+  count                    = var.enable_uploader_service ? 1 : 0
   family                   = "${var.name}-uploader"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -913,6 +980,14 @@ resource "aws_ecs_task_definition" "portal" {
         {
           name  = "LOGOUT_REDIRECT_URI"
           value = var.logout_redirect_uri
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+        {
+          name  = "BEDROCK_REGION"
+          value = "us-east-1"
         }
 
       ]
@@ -939,8 +1014,8 @@ resource "aws_ecs_task_definition" "inner_mongolia" {
   family                   = "${var.name}-inner-mongolia"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = 512
+  memory                   = 1024  # right-sized from 1024/2048 — 14d mem p100 2.1% (2026-08 audit)
 
   execution_role_arn = aws_iam_role.task_execution.arn
   task_role_arn      = aws_iam_role.task_role.arn
@@ -1433,15 +1508,20 @@ resource "aws_ecs_task_definition" "spot_markets" {
       command = [
         "streamlit",
         "run",
-        "apps/spot-agent/ui/spot_dashboard.py",
+        "apps/spot-market/app.py",
         "--server.port=8505",
         "--server.address=0.0.0.0",
         "--server.baseUrlPath=spot-markets",
         "--server.enableCORS=false",
-        "--server.enableXsrfProtection=false"
+        "--server.enableXsrfProtection=false",
+        "--server.headless=true"
       ]
 
       environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
         {
           name  = "DB_URL"
           value = var.db_dsn
@@ -1449,6 +1529,46 @@ resource "aws_ecs_task_definition" "spot_markets" {
         {
           name  = "AWS_REGION"
           value = var.region
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
+        {
+          name  = "UPLOADS_BUCKET"
+          value = var.uploads_bucket_name
+        },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "REPORT_FROM_EMAIL"
+          value = var.smtp_user
+        },
+        {
+          name  = "REPORT_TO_EMAIL"
+          value = var.report_email_to
+        },
+        {
+          name  = "WECOM_WEBHOOK_URL"
+          value = var.spot_market_wecom_webhook_url
         }
       ]
 
@@ -1485,6 +1605,557 @@ resource "aws_ecs_service" "spot_markets" {
     container_port   = 8505
   }
 
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# GB Market Intelligence Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_ecr_repository" "gb_market" {
+  name                 = "bess-gb-market"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+}
+
+resource "aws_lb_target_group" "gb_market" {
+  name_prefix = "tggb-"
+  port        = 8508
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path                = "/gb-market/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "gb_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 45
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.gb_market.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/gb-market", "/gb-market/", "/gb-market/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "gb_market" {
+  family                   = "${var.name}-gb-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 1024
+  memory                   = 2048  # right-sized from live 2048/8192 — 14d mem p100 16.8% (2026-08 audit)
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "gb-market"
+      image     = var.image_gb_market
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8508
+          protocol      = "tcp"
+        }
+      ]
+
+      # run.sh starts scheduler_service.py in the background then Streamlit in the foreground.
+      # This ensures scheduled jobs run even if no user ever visits the page.
+      command = ["/bin/bash", "apps/gb-market/run.sh"]
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
+        {
+          name  = "MODO_API_KEY"
+          value = var.modo_api_key
+        },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "REPORT_FROM_EMAIL"
+          value = var.smtp_user
+        },
+        {
+          name  = "REPORT_TO_EMAIL"
+          value = var.report_email_to
+        },
+        {
+          name  = "MODO_EMAIL"
+          value = var.modo_email
+        },
+        {
+          name  = "MODO_PASSWORD"
+          value = var.modo_password
+        },
+        {
+          name  = "WECOM_WEBHOOK_URL"
+          value = var.wecom_webhook_url
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "gb-market"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "gb_market" {
+  name            = "${var.name}-gb-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.gb_market.arn
+  desired_count   = var.desired_count_gb_market
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.gb_market.arn
+    container_name   = "gb-market"
+    container_port   = 8508
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# AU Market (port 8509)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "au_market" {
+  name                 = "bess-au-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "au_market" {
+  name        = "${var.name}-au-market"
+  port        = 8509
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/au-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "au_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 46
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.au_market.arn
+  }
+  condition {
+    path_pattern { values = ["/au-market", "/au-market/", "/au-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "au_market" {
+  family                   = "${var.name}-au-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "au-market"
+    image     = var.image_au_market
+    essential = true
+    portMappings = [{ containerPort = 8509, protocol = "tcp" }]
+    command = ["/bin/bash", "apps/au-market/run.sh"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "au-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "au_market" {
+  name            = "${var.name}-au-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.au_market.arn
+  desired_count   = var.desired_count_au_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.au_market.arn
+    container_name   = "au-market"
+    container_port   = 8509
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# ERCOT Market (port 8510)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "ercot_market" {
+  name                 = "bess-ercot-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "ercot_market" {
+  name        = "${var.name}-ercot-market"
+  port        = 8510
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/ercot-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "ercot_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 47
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.ercot_market.arn
+  }
+  condition {
+    path_pattern { values = ["/ercot-market", "/ercot-market/", "/ercot-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "ercot_market" {
+  family                   = "${var.name}-ercot-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "ercot-market"
+    image     = var.image_ercot_market
+    essential = true
+    portMappings = [{ containerPort = 8510, protocol = "tcp" }]
+    command = ["/bin/bash", "apps/ercot-market/run.sh"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "ercot-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "ercot_market" {
+  name            = "${var.name}-ercot-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.ercot_market.arn
+  desired_count   = var.desired_count_ercot_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.ercot_market.arn
+    container_name   = "ercot-market"
+    container_port   = 8510
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# PJM Market (port 8511)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "pjm_market" {
+  name                 = "bess-pjm-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "pjm_market" {
+  name        = "${var.name}-pjm-market"
+  port        = 8511
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/pjm-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "pjm_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 48
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.pjm_market.arn
+  }
+  condition {
+    path_pattern { values = ["/pjm-market", "/pjm-market/", "/pjm-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "pjm_market" {
+  family                   = "${var.name}-pjm-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "pjm-market"
+    image     = var.image_pjm_market
+    essential = true
+    portMappings = [{ containerPort = 8511, protocol = "tcp" }]
+    command = ["/bin/bash", "apps/pjm-market/run.sh"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "pjm-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "pjm_market" {
+  name            = "${var.name}-pjm-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.pjm_market.arn
+  desired_count   = var.desired_count_pjm_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.pjm_market.arn
+    container_name   = "pjm-market"
+    container_port   = 8511
+  }
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# CAISO Market (port 8512)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "caiso_market" {
+  name                 = "bess-caiso-market"
+  image_tag_mutability = "MUTABLE"
+  tags                 = local.tags
+}
+
+resource "aws_lb_target_group" "caiso_market" {
+  name        = "${var.name}-caiso-market"
+  port        = 8512
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+  health_check {
+    path                = "/caiso-market/_stcore/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "caiso_market_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 49
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.caiso_market.arn
+  }
+  condition {
+    path_pattern { values = ["/caiso-market", "/caiso-market/", "/caiso-market/*"] }
+  }
+}
+
+resource "aws_ecs_task_definition" "caiso_market" {
+  family                   = "${var.name}-caiso-market"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+  container_definitions = jsonencode([{
+    name      = "caiso-market"
+    image     = var.image_caiso_market
+    essential = true
+    portMappings = [{ containerPort = 8512, protocol = "tcp" }]
+    command = ["/bin/bash", "apps/caiso-market/run.sh"]
+    environment = [
+      { name = "PGURL",             value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require" },
+      { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+      { name = "BEDROCK_REGION",     value = "us-east-1" },
+      { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
+      { name = "SMTP_HOST",         value = var.smtp_host },
+      { name = "SMTP_PORT",         value = var.smtp_port },
+      { name = "SMTP_USER",         value = var.smtp_user },
+      { name = "SMTP_PASSWORD",     value = var.smtp_password },
+      { name = "REPORT_TO_EMAIL",   value = var.report_email_to },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = { awslogs-group = local.log_group, awslogs-region = var.region, awslogs-stream-prefix = "caiso-market" }
+    }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "caiso_market" {
+  name            = "${var.name}-caiso-market-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.caiso_market.arn
+  desired_count   = var.desired_count_caiso_market
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.caiso_market.arn
+    container_name   = "caiso-market"
+    container_port   = 8512
+  }
   depends_on = [aws_lb_listener.https]
   tags       = local.tags
 }
@@ -1647,9 +2318,10 @@ resource "aws_ecs_service" "bess_map" {
 }
 
 resource "aws_ecs_service" "uploader" {
+  count           = var.enable_uploader_service ? 1 : 0
   name            = "${var.name}-uploader-svc"
   cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.uploader.arn
+  task_definition = aws_ecs_task_definition.uploader[0].arn
   desired_count   = var.desired_count_uploader
   launch_type     = "FARGATE"
 
@@ -1660,7 +2332,7 @@ resource "aws_ecs_service" "uploader" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.uploader.arn
+    target_group_arn = aws_lb_target_group.uploader[0].arn
     container_name   = "bess-uploader"
     container_port   = 8501
   }
@@ -1803,8 +2475,8 @@ resource "aws_ecs_task_definition" "mengxi_dashboard" {
   family                   = "${var.name}-mengxi-dashboard"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = "512"
+  memory                   = "2048"
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task_role.arn
 
@@ -1829,6 +2501,34 @@ resource "aws_ecs_task_definition" "mengxi_dashboard" {
         {
           name  = "AWS_REGION"
           value = var.region
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
+        {
+          name  = "FENGXING_API_KEY"
+          value = var.fengxing_api_key
+        },
+        {
+          name  = "ECS_CLUSTER"
+          value = aws_ecs_cluster.this.name
+        },
+        {
+          name  = "PIPELINE_TASK_DEF"
+          value = aws_ecs_task_definition.inner_pipeline.arn
+        },
+        {
+          name  = "PRIVATE_SUBNETS"
+          value = join(",", var.private_subnet_ids)
+        },
+        {
+          name  = "TASK_SECURITY_GROUPS"
+          value = aws_security_group.ecs_tasks.id
         }
       ]
 
@@ -2012,6 +2712,165 @@ resource "aws_ecs_service" "model_catalogue" {
     target_group_arn = aws_lb_target_group.model_catalogue.arn
     container_name   = "model-catalogue"
     container_port   = 8506
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# Options Cockpit — Streamlit app (port 8507)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "options_cockpit" {
+  name                 = "bess-options-cockpit"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_ecr_lifecycle_policy" "options_cockpit" {
+  repository = aws_ecr_repository.options_cockpit.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_lb_target_group" "options_cockpit" {
+  name_prefix = "tgopc-"
+  port        = 8507
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  health_check {
+    path                = "/options-cockpit/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "options_cockpit_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 29
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.options_cockpit.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/options-cockpit", "/options-cockpit/", "/options-cockpit/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "options_cockpit" {
+  family                   = "${var.name}-options-cockpit"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "options-cockpit"
+      image     = var.image_options_cockpit
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8507
+          protocol      = "tcp"
+        }
+      ]
+
+      command = [
+        "streamlit",
+        "run",
+        "apps/options-cockpit/app.py",
+        "--server.port=8507",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=options-cockpit",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
+        "--server.headless=true"
+      ]
+
+      environment = [
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "options-cockpit"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "options_cockpit" {
+  name            = "${var.name}-options-cockpit-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.options_cockpit.arn
+  desired_count   = var.desired_count_options_cockpit
+  launch_type     = "FARGATE"
+
+  health_check_grace_period_seconds = 60
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.options_cockpit.arn
+    container_name   = "options-cockpit"
+    container_port   = 8507
   }
 
   depends_on = [aws_lb_listener.https]
@@ -2424,6 +3283,320 @@ resource "aws_cloudwatch_event_target" "dev_agent_target" {
   ecs_target {
     launch_type         = "FARGATE"
     task_definition_arn = aws_ecs_task_definition.dev_agent.arn
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_tasks.id]
+      assign_public_ip = false
+    }
+  }
+}
+
+
+# ---------------------------------------------------------------------------
+# Trading Performance Agent
+# Runs daily after Inner Mongolia ops ingestion (23:00 UTC = 07:00 CST).
+# Calls run_trading_agent.py --send-email via the container CMD.
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "trading_performance_agent" {
+  name = "bess-trading-performance-agent"
+}
+
+resource "aws_ecr_lifecycle_policy" "trading_performance_agent" {
+  repository = aws_ecr_repository.trading_performance_agent.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "keep last 5 images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 5 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_ecs_task_definition" "trading_performance_agent" {
+  family                   = "${var.name}-trading-performance-agent"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "trading-performance-agent"
+      image     = var.image_trading_performance_agent
+      essential = true
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "DB_DSN"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "SMTP_FROM"
+          value = var.smtp_from
+        },
+        {
+          name  = "REPORT_EMAIL_TO"
+          value = var.report_email_to
+        },
+        {
+          name  = "UPLOADS_BUCKET_NAME"
+          value = aws_s3_bucket.uploads.bucket
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "trading-performance-agent"
+        }
+      }
+    }
+  ])
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Crystal-Ball Fortune Teller
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_ecr_repository" "crystal_ball" {
+  name                 = "crystal-ball-fortune"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+}
+
+resource "aws_lb_target_group" "crystal_ball" {
+  name_prefix = "tgcb-"
+  port        = 8520
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path                = "/crystal-ball/_stcore/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.tags
+}
+
+resource "aws_lb_listener_rule" "crystal_ball_path" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 50
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.bess_users.arn
+      user_pool_client_id = aws_cognito_user_pool_client.bess_client.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.crystal_ball.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/crystal-ball", "/crystal-ball/", "/crystal-ball/*"]
+    }
+  }
+}
+
+resource "aws_ecs_task_definition" "crystal_ball" {
+  family                   = "${var.name}-crystal-ball"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+
+  execution_role_arn = aws_iam_role.task_execution.arn
+  task_role_arn      = aws_iam_role.task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "crystal-ball"
+      image     = var.image_crystal_ball
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8520
+          protocol      = "tcp"
+        }
+      ]
+
+      command = [
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.port=8520",
+        "--server.address=0.0.0.0",
+        "--server.baseUrlPath=crystal-ball",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
+        "--server.headless=true"
+      ]
+
+      environment = [
+        {
+          name  = "PGURL"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.pg.address}:5432/${var.db_name}?sslmode=require"
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "ANTHROPIC_API_KEY"
+          value = var.anthropic_api_key
+        },
+      {
+        name  = "BEDROCK_REGION"
+        value = "us-east-1"
+      },
+        {
+          name  = "SMTP_HOST"
+          value = var.smtp_host
+        },
+        {
+          name  = "SMTP_PORT"
+          value = var.smtp_port
+        },
+        {
+          name  = "SMTP_USER"
+          value = var.smtp_user
+        },
+        {
+          name  = "SMTP_PASSWORD"
+          value = var.smtp_password
+        },
+        {
+          name  = "REPORT_FROM_EMAIL"
+          value = var.smtp_user
+        },
+        {
+          name  = "REPORT_TO_EMAIL"
+          value = var.report_email_to
+        },
+        {
+          name  = "WECOM_WEBHOOK_URL"
+          value = var.crystal_ball_wecom_webhook_url
+        },
+        {
+          name  = "TIMEZONE"
+          value = "Asia/Shanghai"
+        },
+        {
+          name  = "REPORT_HOUR"
+          value = "7"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = local.log_group
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "crystal-ball"
+        }
+      }
+    }
+  ])
+
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "crystal_ball" {
+  name            = "${var.name}-crystal-ball-svc"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.crystal_ball.arn
+  desired_count   = var.desired_count_crystal_ball
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.crystal_ball.arn
+    container_name   = "crystal-ball"
+    container_port   = 8520
+  }
+
+  depends_on = [aws_lb_listener.https]
+  tags       = local.tags
+}
+
+resource "aws_cloudwatch_event_rule" "trading_performance_agent_daily" {
+  name                = "${var.name}-trading-performance-agent-daily"
+  description         = "Daily BESS trading performance review — runs after IM ops ingestion"
+  schedule_expression = "cron(0 23 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "trading_performance_agent_target" {
+  rule     = aws_cloudwatch_event_rule.trading_performance_agent_daily.name
+  arn      = aws_ecs_cluster.this.arn
+  role_arn = aws_iam_role.eventbridge_ecs.arn
+
+  ecs_target {
+    launch_type         = "FARGATE"
+    task_definition_arn = aws_ecs_task_definition.trading_performance_agent.arn
+    task_count          = 1
 
     network_configuration {
       subnets          = var.private_subnet_ids

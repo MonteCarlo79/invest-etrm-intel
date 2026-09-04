@@ -55,8 +55,18 @@ class MultiDayDispatchInput:
         power_mw:             Inverter / power rating (MW). Same as single-day model.
         duration_h:           Battery duration (hours). Same as single-day model.
         roundtrip_eff:        Round-trip efficiency in (0, 1]. Same as single-day model.
-        max_throughput_mwh:   Optional daily discharge cap (applied independently per day).
-        max_cycles_per_day:   Optional daily cycle cap (applied independently per day).
+        max_throughput_mwh:        Optional daily discharge cap (applied independently per day).
+        max_cycles_per_day:        Optional daily cycle cap (applied independently per day).
+        compensation_yuan_per_mwh: Discharge subsidy (CNY/MWh). Added to the LP objective
+                                   so dispatch is optimal when (market_price + compensation) > 0.
+                                   Defaults to 0.0 (price-only optimisation).
+
+        window_days:
+            Number of consecutive calendar days to optimise in a single LP solve.
+            Default 1 (original per-day behaviour; SOC resets to 0 each day).
+            When > 1, consecutive days are grouped into windows and solved jointly
+            so SOC carries over naturally across day boundaries within each window.
+            Non-consecutive days (price gaps) always start a new window.
     """
     hourly_prices: List[dict]   # [{"datetime": str, "price": float}, ...]
     power_mw: float
@@ -64,6 +74,8 @@ class MultiDayDispatchInput:
     roundtrip_eff: float = 0.85
     max_throughput_mwh: Optional[float] = None
     max_cycles_per_day: Optional[float] = None
+    compensation_yuan_per_mwh: float = 0.0
+    window_days: int = 1
 
 
 @dataclass

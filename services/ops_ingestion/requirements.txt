@@ -1,0 +1,5 @@
+# services/ops_ingestion/requirements.txt
+# Runtime dependencies for Inner Mongolia BESS operations Excel ingestion service.
+# These are in addition to the platform-wide requirements (sqlalchemy, psycopg2-binary, etc.)
+
+openpyxl>=3.1.0

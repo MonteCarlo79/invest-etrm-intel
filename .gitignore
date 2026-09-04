@@ -65,3 +65,37 @@ tfplan_*
 
 # Local runtime copies (uploader Dockerfile mounts services/bess_map here)
 apps/uploader/models/
+# Generated reports and debug artifacts
+reports/
+check_canon.py
+check_output.txt
+overrides.json
+
+# Third-party cloned repos (do not commit)
+hermes-agent-main/
+awesome-hermes-agent-main/
+apps/hermes-service/
+
+# Debug artifacts
+debug/
+
+# Runtime / local-only files
+hermes_logs.txt
+planka_td.json
+local_launcher.py
+.superpowers/
+
+# Claude Code temp edit files
+*.tmp.*
+
+# Sensitive tokens
+scripts/onedrive_refresh_token.txt
+hermes_td_deploy.json
+hermes_td_src.json
+bm_td_deploy.json
+bm_td_src.json
+infra/terraform/terraform.tfvars
+container-def.json
+
+# Transferred Claude Code session transcripts + memory backup (local only)
+memo/

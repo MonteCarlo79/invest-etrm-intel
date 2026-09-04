@@ -100,7 +100,9 @@ MODEL_ASSUMPTIONS = {
         "Hourly granularity only — does not support 15-min or sub-hourly dispatch",
         "Perfect foresight on prices — not a real-time or forecast-based model",
         "No degradation model beyond optional throughput/cycle caps",
-        "No ramp rate constraints",
+        "No ramp rate constraints by default (engine now supports opt-in "
+        "ramp_rate_pct_per_min — used by the Mengxi ops workflow at 15-min; "
+        "non-binding at this model's hourly granularity anyway)",
         "No minimum charge/discharge duration constraints",
         "Assumes lossless grid connection (no transmission charges modelled)",
     ],
@@ -118,6 +120,7 @@ def _run(
     roundtrip_eff: float = 0.85,
     max_throughput_mwh: float = None,
     max_cycles_per_day: float = None,
+    compensation_yuan_per_mwh: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Validate inputs then delegate to the production LP engine.
@@ -156,6 +159,7 @@ def _run(
         roundtrip_eff=float(roundtrip_eff),
         max_throughput_mwh=float(max_throughput_mwh) if max_throughput_mwh is not None else None,
         max_cycles_per_day=float(max_cycles_per_day) if max_cycles_per_day is not None else None,
+        compensation_yuan_per_mwh=float(compensation_yuan_per_mwh),
     )
 
     output = DispatchOptOutput(

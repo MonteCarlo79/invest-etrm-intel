@@ -54,6 +54,11 @@ class DispatchOptInput:
             Optional. Cap on equivalent full cycles per day.
             Implemented as: total_discharge_mwh ≤ cycles × energy_capacity_mwh.
             No cap applied if None.
+
+        compensation_yuan_per_mwh:
+            Discharge subsidy (CNY/MWh). Added to the LP objective so dispatch
+            is optimal when (market_price + compensation) > 0.
+            Defaults to 0.0 (price-only optimisation).
     """
     prices_24: List[float]
     power_mw: float
@@ -61,6 +66,7 @@ class DispatchOptInput:
     roundtrip_eff: float = 0.85
     max_throughput_mwh: Optional[float] = None
     max_cycles_per_day: Optional[float] = None
+    compensation_yuan_per_mwh: float = 0.0
 
 
 @dataclass

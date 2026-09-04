@@ -275,7 +275,7 @@ resource "aws_ecs_task_definition" "mengxi_excel_ingest" {
 resource "aws_cloudwatch_event_rule" "mengxi_excel_ingest_daily" {
   name                = "${var.name}-mengxi-excel-ingest-daily"
   description         = "Daily Mengxi Excel ingest (md_id_cleared_energy + md_rt_nodal_price)"
-  schedule_expression = "cron(30 0 * * ? *)" # 08:30 China time — before province loader at 09:10
+  schedule_expression = "cron(0 12 * * ? *)" # 20:00 China time — data reliably available by evening
 }
 
 resource "aws_cloudwatch_event_target" "mengxi_excel_ingest_daily" {

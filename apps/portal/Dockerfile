@@ -5,13 +5,10 @@ WORKDIR /app
 COPY apps/portal /app/apps/portal
 COPY shared /app/shared
 COPY auth /app/auth
+COPY skills/colleague /app/skills/colleague
 
-RUN pip install --no-cache-dir \
-    streamlit \
-    pandas \
-    sqlalchemy \
-    psycopg2-binary \
-    boto3
+RUN pip install --no-cache-dir -r apps/portal/requirements.txt \
+    && pip install --no-cache-dir sqlalchemy psycopg2-binary boto3 "anthropic[bedrock]>=0.40"
 
 ENV PYTHONPATH=/app
 

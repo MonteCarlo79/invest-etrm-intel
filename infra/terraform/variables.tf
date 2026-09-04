@@ -105,6 +105,12 @@ variable "desired_count_uploader" {
   default = 1
 }
 
+variable "enable_uploader_service" {
+  description = "Set to false to retire the bess-uploader service and remove its ALB route."
+  type        = bool
+  default     = false
+}
+
 
 variable "investor_password" {
   description = "Password for investor login"
@@ -320,6 +326,21 @@ variable "image_model_catalogue" {
 }
 
 #################################################
+# Options Cockpit Image
+#################################################
+variable "image_options_cockpit" {
+  description = "Docker image for Options Cockpit Streamlit app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_options_cockpit" {
+  description = "Desired task count for the options-cockpit ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
 # Mengxi Dashboard Image
 #################################################
 variable "image_mengxi_dashboard" {
@@ -396,6 +417,26 @@ variable "openai_api_key" {
   default   = ""
 }
 
+variable "deepseek_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "lingfeng_username" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Lingfeng portal username (bess-map in-app backfill)"
+}
+
+variable "lingfeng_password" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Lingfeng portal password (bess-map in-app backfill)"
+}
+
 variable "slack_webhook_url" {
   type      = string
   sensitive = true
@@ -434,6 +475,19 @@ variable "smtp_from" {
   default = ""
 }
 
+variable "wecom_webhook_url" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "spot_market_wecom_webhook_url" {
+  description = "WeCom bot webhook URL for the spot market daily report (separate from GB market)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "image_strategy_agent" {
   description = "Docker image for strategy agent"
   type        = string
@@ -452,6 +506,18 @@ variable "image_execution_agent" {
 variable "image_dev_agent" {
   description = "Docker image for IT dev agent"
   type        = string
+}
+
+variable "image_trading_performance_agent" {
+  description = "Docker image for BESS trading performance agent"
+  type        = string
+}
+
+variable "anthropic_api_key" {
+  description = "Anthropic Claude API key for the trading performance agent"
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "scheduler_role_arn" {
@@ -480,4 +546,313 @@ variable "cognito_callback_urls" {
 
 variable "cognito_default_redirect_uri" {
   type = string
+}
+#################################################
+# GB Market Intelligence Dashboard
+#################################################
+variable "image_gb_market" {
+  description = "Docker image for GB Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_gb_market" {
+  description = "Desired task count for the gb-market ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# AU Market Intelligence Dashboard
+#################################################
+variable "image_au_market" {
+  description = "Docker image for AU Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_au_market" {
+  description = "Desired task count for the au-market ECS service."
+  type        = number
+  default     = 0
+}
+
+#################################################
+# ERCOT Market Intelligence Dashboard
+#################################################
+variable "image_ercot_market" {
+  description = "Docker image for ERCOT Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_ercot_market" {
+  description = "Desired task count for the ercot-market ECS service."
+  type        = number
+  default     = 0
+}
+
+#################################################
+# PJM Market Intelligence Dashboard
+#################################################
+variable "image_pjm_market" {
+  description = "Docker image for PJM Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_pjm_market" {
+  description = "Desired task count for the pjm-market ECS service."
+  type        = number
+  default     = 0
+}
+
+#################################################
+# CAISO Market Intelligence Dashboard
+#################################################
+variable "image_caiso_market" {
+  description = "Docker image for CAISO Market Intelligence dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_caiso_market" {
+  description = "Desired task count for the caiso-market ECS service."
+  type        = number
+  default     = 0
+}
+
+variable "modo_api_key" {
+  description = "Modo Energy public API token"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "modo_email" {
+  description = "Modo Energy web app login email (for AI agent distillation)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "modo_password" {
+  description = "Modo Energy web app login password (for AI agent distillation)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "fengxing_api_key" {
+  description = "Fengxing SaaS API key for Shanxi nodal price data"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+#################################################
+# Crystal-Ball Fortune Teller
+#################################################
+variable "image_crystal_ball" {
+  description = "Docker image for Crystal-Ball fortune teller app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_crystal_ball" {
+  description = "Desired task count for the crystal-ball ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "crystal_ball_wecom_webhook_url" {
+  description = "WeCom bot webhook URL for Crystal-Ball daily fortune report"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+#################################################
+# Crystal-Ball Client Terminal
+#################################################
+variable "image_crystal_ball_client" {
+  description = "Docker image for Crystal-Ball client terminal app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_crystal_ball_client" {
+  description = "Desired task count for the crystal-ball-client ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# PH Market
+#################################################
+variable "image_ph_market" {
+  description = "Docker image for PH Market dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_ph_market" {
+  description = "Desired task count for the ph-market ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# PO Market
+#################################################
+variable "image_po_market" {
+  description = "Docker image for PO Market dashboard"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_po_market" {
+  description = "Desired task count for the po-market ECS service."
+  type        = number
+  default     = 1
+}
+
+#################################################
+# Hermes — messaging hub
+#################################################
+variable "hermes_image_tag" {
+  description = "Image tag for bess-platform-hermes ECR image"
+  type        = string
+  default     = "latest"
+}
+
+variable "desired_count_hermes" {
+  description = "Desired task count for the hermes ECS service."
+  type        = number
+  default     = 1
+}
+
+variable "hermes_anthropic_api_key" {
+  description = "Anthropic API key for Hermes"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "hermes_wecom_corp_id" {
+  description = "WeCom corp ID for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_wecom_agent_id" {
+  description = "WeCom agent ID for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_wecom_secret" {
+  description = "WeCom secret for Hermes"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "hermes_wecom_user_id" {
+  description = "WeCom user ID for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_planka_email" {
+  description = "Planka admin email for Hermes"
+  type        = string
+  default     = ""
+}
+
+variable "hermes_planka_password" {
+  description = "Planka admin password for Hermes"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "planka_base_url" {
+  description = "Planka base URL (e.g. https://todo.pjh-etrm.ai)"
+  type        = string
+  default     = ""
+}
+
+#################################################
+# Deal Structurer
+#################################################
+variable "image_deal_structurer" {
+  description = "Docker image for Deal Structurer Streamlit app"
+  type        = string
+  default     = ""
+}
+
+variable "desired_count_deal_structurer" {
+  description = "Desired task count for the deal-structurer ECS service."
+  type        = number
+  default     = 1
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DeepTutor
+# ─────────────────────────────────────────────────────────────────────────────
+variable "image_deeptutor_nginx" {
+  description = "Docker image for DeepTutor nginx proxy (ECR)"
+  type        = string
+  default     = ""
+}
+
+variable "image_deeptutor" {
+  description = "Docker image for DeepTutor main app"
+  type        = string
+  default     = "ghcr.io/hkuds/deeptutor:latest"
+}
+
+variable "desired_count_deeptutor" {
+  description = "Desired task count for the DeepTutor ECS service"
+  type        = number
+  default     = 1
+}
+
+variable "deeptutor_pb_admin_email" {
+  description = "PocketBase superadmin email for DeepTutor multi-user mode"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "deeptutor_pb_admin_password" {
+  description = "PocketBase superadmin password for DeepTutor multi-user mode"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# ─── Asset Risk ──────────────────────────────────────────────────────────────
+variable "image_asset_risk" {
+  description = "Docker image for Asset Risk Management Streamlit app"
+  type        = string
+}
+
+variable "desired_count_asset_risk" {
+  description = "Desired task count for the asset-risk ECS service."
+  type        = number
+  default     = 1
+}
+
+# ─── Retail Risk ─────────────────────────────────────────────────────────────
+variable "image_retail_risk" {
+  description = "Docker image for Retail Risk Management Streamlit app"
+  type        = string
+}
+
+variable "desired_count_retail_risk" {
+  description = "Desired task count for the retail-risk ECS service."
+  type        = number
+  default     = 1
 }

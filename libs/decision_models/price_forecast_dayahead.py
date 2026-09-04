@@ -95,25 +95,31 @@ MODEL_ASSUMPTIONS = {
 def _run(
     hourly_prices: List[dict],
     target_date: str,
-    model: str = "ols_da_time_v1",
+    model: str = "ols_rt_time_v1",
     min_train_days: int = 7,
     lookback_days: int = 60,
 ) -> Dict[str, Any]:
     """
     Forecast hourly RT prices for target_date using the selected model.
 
+    RT-only models (naive_rt_lag1, naive_rt_lag7, ols_rt_time_v1) require only
+    rt_price in hourly_prices — da_price is ignored.  DA-based models
+    (naive_da, ols_da_time_v1) require da_price and are provided for
+    markets that publish a day-ahead price (not Inner Mongolia Mengxi).
+
     Wraps services/bess_map/forecast_engine.build_forecast().
     """
-    from services.bess_map.forecast_engine import build_forecast
+    from services.bess_map.forecast_engine import RT_ONLY_MODELS, build_forecast
 
     # --- Input validation ---
     if not hourly_prices:
         raise ValueError("hourly_prices must not be empty")
 
+    from services.bess_map.forecast_engine import SUPPORTED_MODELS
     model_key = model.lower().strip()
-    if model_key not in ("naive_da", "ols_da_time_v1"):
+    if model_key not in SUPPORTED_MODELS:
         raise ValueError(
-            f"model must be 'naive_da' or 'ols_da_time_v1', got {model!r}"
+            f"model must be one of {SUPPORTED_MODELS}, got {model!r}"
         )
 
     try:
@@ -129,16 +135,23 @@ def _run(
         raise ValueError(f"lookback_days must be >= 1, got {lookback_days}")
 
     # --- Build pd.DataFrame from JSON list ---
+    # da_price is optional for RT-only models
+    is_rt_only = model_key in RT_ONLY_MODELS
     try:
         rows = []
         for rec in hourly_prices:
             ts = pd.Timestamp(rec["datetime"])
             rt = rec.get("rt_price")
-            da = float(rec["da_price"])
-            rows.append({"datetime": ts, "rt_price": float(rt) if rt is not None else float("nan"), "da_price": da})
+            da_raw = rec.get("da_price")
+            da = float(da_raw) if da_raw is not None else float("nan")
+            rows.append({
+                "datetime": ts,
+                "rt_price": float(rt) if rt is not None else float("nan"),
+                "da_price": da,
+            })
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(
-            "hourly_prices must be a list of {datetime, da_price[, rt_price]} dicts. "
+            "hourly_prices must be a list of {datetime[, rt_price][, da_price]} dicts. "
             f"Parse error: {exc}"
         ) from exc
 
@@ -149,17 +162,19 @@ def _run(
     )
     df.index = pd.DatetimeIndex(df.index)
 
-    # --- Verify target_date has 24 hours with valid DA prices ---
+    # --- Verify target_date rows exist ---
     target_mask = df.index.date == target_day
     target_df = df[target_mask]
     if target_df.empty:
         raise ValueError(
             f"target_date {target_date!r} has no rows in hourly_prices"
         )
-    if target_df["da_price"].isna().any():
+
+    # DA-based models additionally require valid da_price on the target date
+    if not is_rt_only and target_df["da_price"].isna().any():
         raise ValueError(
             f"target_date {target_date!r} has NaN da_price values — "
-            "all 24 target hours must have valid da_price"
+            f"model {model_key!r} requires valid da_price for all target hours"
         )
 
     # --- Run forecast ---
@@ -179,16 +194,23 @@ def _run(
             "Check that target_date rows are present in hourly_prices."
         )
 
-    # Infer which model was actually used: OLS requires training data
+    # Infer which model was actually used
     train_before_target = df.loc[df.index < pd.Timestamp(target_day)]
-    train_days_available = train_before_target.dropna(
-        subset=["rt_price", "da_price"]
-    ).index.normalize().nunique()
-    actual_model_used = (
-        "ols"
-        if model_key == "ols_da_time_v1" and train_days_available >= min_train_days
-        else "naive_da"
-    )
+    if is_rt_only:
+        train_days_available = (
+            train_before_target.dropna(subset=["rt_price"]).index.normalize().nunique()
+        )
+        actual_model_used = (
+            model_key if train_days_available >= min_train_days else "naive_rt_lag1"
+        )
+    else:
+        train_days_available = (
+            train_before_target.dropna(subset=["rt_price", "da_price"]).index.normalize().nunique()
+        )
+        actual_model_used = (
+            "ols" if model_key == "ols_da_time_v1" and train_days_available >= min_train_days
+            else "naive_da"
+        )
 
     output = PriceForecastOutput(
         target_date=target_date,
