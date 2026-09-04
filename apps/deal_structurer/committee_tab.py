@@ -25,6 +25,7 @@ def _rerun_section(key: str) -> None:
         result.economics = econ
     result.synthesis = ""
     result.recommendation = ""
+    st.session_state.pop("_daf_pdf", None)
 
 
 def render() -> None:
@@ -37,8 +38,12 @@ def render() -> None:
     st.caption(f"项目:**{brief.deal_name or '(未命名)'}** · {brief.province} · "
                f"{brief.asset_type} · {brief.capacity_mw:g}MW/{brief.capacity_mwh:g}MWh")
 
+    stale = st.session_state.get("committee_result")
+    if stale is not None and stale.brief != brief:
+        del st.session_state["committee_result"]
+        st.session_state.pop("_daf_pdf", None)
+
     if st.button("▶ 运行投委会分析", type="primary"):
-        result = CommitteeResult(brief=brief, sections=[])
         with st.status("投委会分析运行中…", expanded=True) as status:
             def _done(sec):
                 icon = "✅" if sec.status == "ok" else "❌"
@@ -105,7 +110,7 @@ def render() -> None:
     pdf = st.session_state.get("_daf_pdf")
     if pdf:
         st.download_button("⬇ 下载 DAF PDF", pdf,
-                           file_name=f"DAF_{result.brief.deal_name or 'deal'}.pdf",
+                           file_name=f"DAF_{result.brief.deal_name or 'deal'}_{result.brief.province}.pdf",
                            mime="application/pdf", use_container_width=True)
 
     st.divider()
