@@ -4,8 +4,18 @@ pandas
 numpy
 scipy
 psycopg2-binary==2.9.10
+sqlalchemy>=2.0
 python-dotenv==1.0.1
 anthropic[bedrock]>=0.40
 boto3
 pydantic
 statsmodels>=0.14
+# deal committee: DAF PDF + charts
+reportlab
+matplotlib
+# deal committee intake: document parsers (services/knowledge_pool/knowledge_docs.py)
+python-docx
+python-pptx
+openpyxl
+xlrd
+pdfplumber

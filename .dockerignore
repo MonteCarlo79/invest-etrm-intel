@@ -126,6 +126,7 @@ apps/bess-inner-mongolia/
 # deal-structurer image exceptions
 !libs/deal_models/
 !services/deal_engine/
+!db/ddl/marketdata/deal_committee.sql
 
 # asset-risk image exceptions
 !libs/risk/
