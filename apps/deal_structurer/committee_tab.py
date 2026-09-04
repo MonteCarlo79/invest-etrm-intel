@@ -35,6 +35,11 @@ def render() -> None:
         st.warning("请先在 **0 · Deal Intake** 确认交易要素。")
         return
 
+    from shared.anthropic_client import is_llm_available
+    if not is_llm_available(_api_key()):
+        st.warning("未检测到 LLM 配置(ANTHROPIC_API_KEY 或 BEDROCK_REGION)——无法运行投委会分析。")
+        return
+
     st.caption(f"项目:**{brief.deal_name or '(未命名)'}** · {brief.province} · "
                f"{brief.asset_type} · {brief.capacity_mw:g}MW/{brief.capacity_mwh:g}MWh")
 
@@ -44,6 +49,7 @@ def render() -> None:
         st.session_state.pop("_daf_pdf", None)
 
     if st.button("▶ 运行投委会分析", type="primary"):
+        st.session_state.pop("_daf_pdf", None)
         with st.status("投委会分析运行中…", expanded=True) as status:
             def _done(sec):
                 icon = "✅" if sec.status == "ok" else "❌"

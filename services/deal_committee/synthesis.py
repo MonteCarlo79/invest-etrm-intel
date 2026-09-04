@@ -64,7 +64,7 @@ def run_synthesis(brief: DealBrief, sections: list[SectionResult],
         from shared.anthropic_client import make_client
         client = make_client(api_key)
     resp = client.messages.create(
-        model=SYNTHESIS_MODEL, max_tokens=4000,
+        model=SYNTHESIS_MODEL, max_tokens=6000,
         messages=[{"role": "user", "content": build_synthesis_prompt(brief, sections, economics)}],
     )
     text = resp.content[0].text.strip()

@@ -44,7 +44,8 @@ class DealBrief(BaseModel):
 
 def parse_brief_json(payload: dict, source_files: list[str] | None = None) -> DealBrief:
     """Tolerant parser for LLM extraction output: unknown keys dropped, missing → defaults."""
-    known = {k: v for k, v in (payload or {}).items() if k in DealBrief.model_fields}
+    known = {k: v for k, v in (payload or {}).items()
+             if k in DealBrief.model_fields and v is not None}
     conf = known.pop("field_confidence", {}) or {}
     brief = DealBrief(**known)
     brief.field_confidence = {str(k): float(v) for k, v in conf.items()

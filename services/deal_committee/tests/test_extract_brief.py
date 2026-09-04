@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.deal_committee.brief import build_extraction_prompt, extract_brief
+from services.deal_committee.brief import build_extraction_prompt, extract_brief, parse_brief_json
 
 
 class _FakeClient:
@@ -42,3 +42,26 @@ def test_extract_brief_invalid_json_raises():
     client = _FakeClient("这不是 JSON")
     with pytest.raises(ValueError, match="JSON"):
         extract_brief("文本", [], api_key="", client=client)
+
+
+def test_extract_brief_null_heavy_payload_falls_back_to_defaults():
+    payload = {"deal_name": None, "province": None, "capacity_mw": None,
+               "capacity_mwh": None, "capex_total_yuan": None,
+               "counterparty": None, "debt_ratio": None, "asset_type": "bess",
+               "field_confidence": None}
+    client = _FakeClient(json.dumps(payload))
+    brief = extract_brief("材料几乎无信息", ["vague.pdf"], api_key="", client=client)
+    assert brief.deal_name == ""
+    assert brief.province == ""
+    assert brief.capacity_mw == 0.0
+    assert brief.capex_total_yuan is None
+    assert brief.counterparty == ""
+    assert brief.debt_ratio == 0.70
+    assert brief.asset_type == "bess"
+    assert brief.source_files == ["vague.pdf"]
+
+
+def test_parse_brief_json_drops_none_values():
+    brief = parse_brief_json({"province": None, "capacity_mw": None})
+    assert brief.province == ""
+    assert brief.capacity_mw == 0.0

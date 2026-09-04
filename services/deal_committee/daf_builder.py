@@ -29,7 +29,8 @@ def split_synthesis(synthesis_md: str) -> dict[str, str]:
     parts = {"交易摘要": "", "风险分析": "", "投资建议": ""}
     current = None
     for line in (synthesis_md or "").splitlines():
-        m = re.match(r"^##\s*(交易摘要|风险分析|投资建议)\s*$", line.strip())
+        m = re.match(r"^##\s*(?:[一二三四五六七八九十0-9]+[、.．])?\s*"
+                     r"(交易摘要|风险分析|投资建议)\s*$", line.strip())
         if m:
             current = m.group(1)
             continue
@@ -184,6 +185,8 @@ def build_daf(result: CommitteeResult) -> bytes:
         sec = sections.get(key)
         if sec is None:
             continue
+        if key in ("ops_asset_risk", "ops_retail_risk"):
+            flow.append(Paragraph(f"<b>{_esc(sec.title)}</b>", styles["body"]))
         if sec.status != "ok":
             flow.append(Paragraph(f"〔本节数据缺失:{_esc(sec.error)}〕", styles["body"]))
             continue
