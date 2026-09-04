@@ -70,12 +70,18 @@ _48H_AGO = lambda: datetime.now(timezone.utc) - timedelta(hours=72)  # 72h windo
 
 # Keyword pre-filter: an article whose title contains NONE of these is scored 0
 # without an LLM call. Matching is generous — title only, case-insensitive.
+# Must cover macro energy vocabulary (光伏/煤电/电网…), not just market jargon —
+# national-policy headlines like "光伏成为第一大电源" were silently zeroed when
+# the list only carried trading terms.
 _RELEVANCE_KEYWORDS = (
     "储能", "电力市场", "现货", "新能源", "调频", "峰谷", "电价", "交易",
     "消纳", "容量", "辅助服务", "energy storage", "power market", "battery",
+    "光伏", "风电", "煤电", "火电", "水电", "核电", "电网", "电力",
+    "能源局", "发改委", "绿电", "绿证", "装机", "发电量", "碳",
+    "虚拟电厂", "特高压",
 )
 
-_SCORE_CAP = 40         # max articles scored by Claude per run (after pre-filter)
+_SCORE_CAP = 120        # max articles scored by Claude per run (after pre-filter + dedup)
 _SCORE_BATCH_SIZE = 10  # articles per Claude call in batch scoring
 
 _AI_PROMPT = """\
@@ -492,9 +498,9 @@ def backfill_source(
             logger.warning("Backfill error for %s: %s", url[:80], exc)
             errors += 1
 
-    # Score (keyword pre-filter + cap + batched Claude calls), then ingest
+    # Score (pre-scoring dedup + keyword pre-filter + cap + batched Claude calls), then ingest
     if api_key:
-        _apply_ai_scoring(pending, api_key)
+        _apply_ai_scoring(pending, api_key, pg_url=pg_url)
     else:
         for art in pending:
             art["ai_result"] = {
@@ -1013,17 +1019,81 @@ def _salvage_batch_objects(text: str, expected: int) -> Optional[list]:
     return None
 
 
-def _apply_ai_scoring(articles: list[dict], api_key: str) -> None:
+def _reuse_stored_scores(articles: list[dict], pg_url: str) -> None:
+    """Pre-scoring dedup: for articles with a non-empty body whose content hash
+    already exists in the KB, attach the stored AI metadata as ai_result instead
+    of re-scoring with Claude. The 72h discovery window re-fetches the same
+    articles every run — without this they consume most of the scoring cap.
+
+    Empty-body articles (Sogou CAPTCHA days) are never deduped: their body
+    hashes all collide, so hash matching would reuse the WRONG article's score.
+    DB failure → score everything (safe fallback).
+    """
+    by_hash: dict[str, list[dict]] = {}
+    for art in articles:
+        body = (art.get("body") or "").strip()
+        if body:
+            by_hash.setdefault(
+                hashlib.sha256(body.encode("utf-8")).hexdigest(), []
+            ).append(art)
+    if not by_hash:
+        return
+    try:
+        conn = psycopg2.connect(pg_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT file_hash, relevance_score, ai_summary, category,
+                           region_bucket, region_province
+                    FROM staging.spot_knowledge_docs
+                    WHERE file_hash = ANY(%s)
+                    """,
+                    (list(by_hash),),
+                )
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("Pre-scoring dedup lookup failed — scoring everything: %s", exc)
+        return
+
+    reused = 0
+    for file_hash, relevance, summary, category, bucket, province in rows:
+        for art in by_hash.get(file_hash, []):
+            art["ai_result"] = {
+                "relevance": relevance,
+                "region_bucket": bucket,
+                "region_province": province,
+                "category": category,
+                "summary": summary,
+            }
+            reused += 1
+    if reused:
+        logger.info(
+            "News screener: %d/%d articles already in KB — reusing stored scores",
+            reused, len(articles),
+        )
+
+
+def _apply_ai_scoring(articles: list[dict], api_key: str, pg_url: str | None = None) -> None:
     """
     Attach an ai_result dict to every article, in place:
+      0. Dedup (when pg_url given): articles already in the KB reuse their stored
+         score — no LLM call.
       1. Pre-filter: a title containing no relevance keyword is scored 0 with no LLM call.
       2. Cap: at most _SCORE_CAP candidates per run, chosen by keyword-hit count
          descending (stable sort — ties keep discovery/source order). Articles
          beyond the cap get the null ai_result (not scored).
       3. Survivors are scored via _score_articles_batch.
     """
+    if pg_url:
+        _reuse_stored_scores(articles, pg_url)
+
     candidates: list[dict] = []
     for art in articles:
+        if "ai_result" in art:
+            continue  # deduped — stored metadata reused
         if _keyword_hits(art.get("title", "")) == 0:
             art["ai_result"] = _prefilter_null_result()
         else:
@@ -1343,9 +1413,9 @@ def screen_news_sources(
                         except Exception:
                             pass
 
-        # 4. AI scoring — keyword pre-filter, 40-article cap, batched Claude calls
+        # 4. AI scoring — pre-scoring dedup, keyword pre-filter, cap, batched Claude calls
         if api_key:
-            _apply_ai_scoring([art for _, art in pending], api_key)
+            _apply_ai_scoring([art for _, art in pending], api_key, pg_url=pg_url)
         else:
             for source, art in pending:
                 art["ai_result"] = {

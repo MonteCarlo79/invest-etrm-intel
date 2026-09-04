@@ -659,6 +659,31 @@ def _embed_chunks_for_doc(doc_id: int) -> None:
         logger.error("Chunk embedding failed for doc_id=%d: %s", doc_id, exc)
 
 
+# Browser-like headers for mp.weixin.qq.com — the bare bot UA gets served an
+# anti-bot challenge page instead of the article (seen since the 2026-08-30
+# NAT-EIP cutover). Mirrors services/hermes/news_screener._WECHAT_HEADERS.
+_WECHAT_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+        "Version/17.0 Mobile/15E148 Safari/604.1"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://mp.weixin.qq.com/",
+}
+
+_BOT_CHALLENGE_MARKERS = (
+    "环境异常", "完成验证后即可继续访问", "请输入验证码", "操作频繁", "访问过于频繁",
+)
+
+
+def _is_challenge_page(html: str) -> bool:
+    """True if the HTML is an anti-bot verification page, not real content."""
+    head = html[:3000]
+    return any(m in head for m in _BOT_CHALLENGE_MARKERS)
+
+
 def register_url(
     url: str,
     api_key: Optional[str] = None,
@@ -668,23 +693,50 @@ def register_url(
 
     Returns (doc_id, is_new, category).  is_new=False if the URL was already ingested.
     Raises on network / parse errors so the caller can show a user-facing message.
+    Raises ValueError when the page is an anti-bot challenge (e.g. WeChat 环境异常)
+    so junk verification text is never ingested as document content.
     """
     import requests
     from bs4 import BeautifulSoup
 
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; SpotMarketBot/1.0)"}
+    is_wechat = "mp.weixin.qq.com" in url
+    headers = dict(_WECHAT_FETCH_HEADERS) if is_wechat else {
+        "User-Agent": "Mozilla/5.0 (compatible; SpotMarketBot/1.0)"
+    }
     resp = requests.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
+
+    if _is_challenge_page(resp.text):
+        raise ValueError(
+            "页面被反爬拦截（显示环境异常/需要验证），未获取到文章正文。"
+            "请在微信中打开文章，复制正文后直接粘贴给我。"
+        )
 
     soup = BeautifulSoup(resp.text, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
         tag.decompose()
 
-    title_el = soup.find("h1") or soup.find("title")
+    if is_wechat:
+        title_el = (
+            soup.find("h1", id="activity-name")
+            or soup.find("h2", class_="rich_media_title")
+            or soup.find("title")
+        )
+        content_div = (
+            soup.find("div", id="js_content")
+            or soup.find("div", class_="rich_media_content")
+        )
+        text = content_div.get_text(separator="\n", strip=True) if content_div else ""
+    else:
+        title_el = soup.find("h1") or soup.find("title")
+        text = soup.get_text(separator="\n", strip=True)
+
     title = title_el.get_text(strip=True)[:200] if title_el else url.split("/")[-1][:100]
-    text = soup.get_text(separator="\n", strip=True)
     if not text.strip():
-        raise ValueError("No readable text found at that URL.")
+        raise ValueError(
+            "未能从该页面提取到文章正文（可能遭遇反爬验证）。"
+            "请复制文章正文后直接粘贴给我。"
+        )
 
     # Use SHA-256 of the URL as the dedup key (allows re-fetch to update)
     url_hash = sha256_bytes(url.encode())

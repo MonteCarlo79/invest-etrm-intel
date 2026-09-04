@@ -1,4 +1,5 @@
 """Tests for news_screener batch scoring, keyword pre-filter, and scoring cap."""
+import hashlib
 import json
 import re
 from unittest.mock import MagicMock, patch
@@ -108,22 +109,22 @@ def test_batch_claude_exception_returns_null_results():
         }
 
 
-def test_cap_scores_only_40_articles():
-    """45 keyword-matched articles → only 40 sent to Claude; the rest get null results."""
-    arts = [_article(f"储能市场新闻 第{i}期") for i in range(45)]
+def test_cap_scores_only_120_articles():
+    """125 keyword-matched articles → only 120 sent to Claude; the rest get null results."""
+    arts = [_article(f"储能市场新闻 第{i}期") for i in range(125)]
     payload = json.dumps([_result(6)] * 10)
-    client = _fake_client([payload] * 4)
+    client = _fake_client([payload] * 12)
     with patch("shared.anthropic_client.make_client", return_value=client):
         ns._apply_ai_scoring(arts, "test-key")
-    assert client.messages.create.call_count == 4  # 40 articles / 10 per call
+    assert client.messages.create.call_count == 12  # 120 articles / 10 per call
     for c in client.messages.create.call_args_list:
         assert len(re.findall(r"Article \d+\nTitle:", _prompt_of(c))) == 10
     scored = [a for a in arts if a["ai_result"]["relevance"] == 6]
     nulled = [a for a in arts if a["ai_result"]["relevance"] == 0]
-    assert len(scored) == 40
+    assert len(scored) == 120
     assert len(nulled) == 5
     # equal keyword hits → stable order → the tail of the list is dropped
-    assert nulled == arts[40:]
+    assert nulled == arts[120:]
     for a in nulled:
         assert a["ai_result"] == {
             "relevance": 0,
@@ -174,3 +175,78 @@ class TestSalvageBatchObjects:
         from services.hermes.news_screener import _salvage_batch_objects
         text = '[{"relevance": 8}, {"relevance": 7}]'
         assert _salvage_batch_objects(text, expected=2) is None
+
+
+# ── Macro-energy keyword coverage ─────────────────────────────────────────────
+# Real titles from the 2026-09-04 digest that were all prefiltered to ★0 — the
+# keyword list must cover macro energy vocabulary, not just market jargon.
+
+_MACRO_ENERGY_TITLES = [
+    "APEC中国年能源合作纵深观察:从新型电力系统建设看亚太能源合作新命题",
+    "国家能源局:截至今年7月底,全国光伏发电装机达到12.86亿千瓦,首次超越煤电,光伏正式成为我国第一大电源",
+    "国家能源局公开征求意见",
+    "国家能源局关于印发《能源领域节能降碳行动计划(2026—2028年)》的通知",
+    "供电企业信息公开迎重大修订!国家能源局新规明确配电网可开放容量按季度更新,分布式光伏用户迎来重大利好",
+    "国家能源局就《供电企业信息公开实施办法》修订稿征求意见,要求按季度更新可开放容量",
+    "刚刚,国家能源局宣布:“光伏”正式成为我国第一大电源",
+    "国家能源局:明年全国风电光伏新增装机2亿千瓦左右",
+]
+
+
+def test_macro_energy_titles_pass_prefilter():
+    """Each macro-energy title must hit ≥1 keyword (no silent ★0 without LLM call)."""
+    for title in _MACRO_ENERGY_TITLES:
+        assert ns._keyword_hits(title) >= 1, f"prefiltered to ★0: {title[:40]}"
+
+
+# ── Pre-scoring dedup ─────────────────────────────────────────────────────────
+
+def test_dedup_reuses_stored_metadata_no_llm():
+    """Article whose body hash is already in the KB reuses stored AI metadata —
+    no Claude call, stored relevance preserved for the digest card."""
+    body = "国家能源局发布节能降碳行动计划全文，涉及煤电装机控制和新能源消纳。"
+    arts = [_article("国家能源局关于印发《能源领域节能降碳行动计划》的通知", body)]
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    stored_row = (digest, 7, "已存摘要", "policy", "全国", None)
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [stored_row]
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+
+    with patch.object(ns.psycopg2, "connect", return_value=conn) as conn_mock, \
+         patch("shared.anthropic_client.make_client") as mc:
+        ns._apply_ai_scoring(arts, "test-key", pg_url="postgres://x")
+
+    conn_mock.assert_called_once_with("postgres://x")
+    mc.assert_not_called()  # no LLM call for an already-ingested article
+    assert arts[0]["ai_result"]["relevance"] == 7
+    assert arts[0]["ai_result"]["summary"] == "已存摘要"
+    assert arts[0]["ai_result"]["category"] == "policy"
+
+
+def test_dedup_never_applies_to_empty_body():
+    """Empty-body articles (Sogou CAPTCHA days) all share one hash — they must
+    never be deduped, and no DB lookup should even happen for them."""
+    arts = [_article("储能行业新闻", "")]
+    client = _fake_client([json.dumps([_result(6)])])
+
+    with patch.object(ns.psycopg2, "connect") as conn_mock, \
+         patch("shared.anthropic_client.make_client", return_value=client):
+        ns._apply_ai_scoring(arts, "test-key", pg_url="postgres://x")
+
+    conn_mock.assert_not_called()
+    assert arts[0]["ai_result"]["relevance"] == 6  # scored by LLM as usual
+
+
+def test_dedup_db_failure_falls_back_to_scoring():
+    """If the dedup lookup fails, scoring proceeds normally (no crash)."""
+    body = "储能市场分析正文。"
+    arts = [_article("储能行业新闻", body)]
+    client = _fake_client([json.dumps([_result(6)])])
+
+    with patch.object(ns.psycopg2, "connect", side_effect=Exception("db down")), \
+         patch("shared.anthropic_client.make_client", return_value=client):
+        ns._apply_ai_scoring(arts, "test-key", pg_url="postgres://x")
+
+    assert arts[0]["ai_result"]["relevance"] == 6
