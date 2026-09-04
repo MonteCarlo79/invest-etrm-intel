@@ -41,8 +41,9 @@ with st.sidebar:
     st.divider()
     tab_choice = st.radio(
         "Navigate",
-        ["1 · Price Simulation", "2 · Dispatch Revenue", "3 · Project Cash Flow",
-         "4 · Monte Carlo", "5 · Deal Pricing", "💬 Strategist"],
+        ["0 · Deal Intake", "1 · Price Simulation", "2 · Dispatch Revenue",
+         "3 · Project Cash Flow", "4 · Monte Carlo", "5 · Deal Pricing",
+         "6 · 投委会", "💬 Strategist"],
         label_visibility="collapsed",
     )
     st.divider()
@@ -55,7 +56,9 @@ with st.sidebar:
         st.rerun()
 
 # ── Route to tabs ─────────────────────────────────────────────────────────────
-if tab_choice == "1 · Price Simulation":
+if tab_choice == "0 · Deal Intake":
+    from apps.deal_structurer import intake_tab; intake_tab.render()
+elif tab_choice == "1 · Price Simulation":
     from apps.deal_structurer import price_tab; price_tab.render()
 elif tab_choice == "2 · Dispatch Revenue":
     from apps.deal_structurer import dispatch_tab; dispatch_tab.render()
