@@ -89,6 +89,16 @@ def render() -> None:
             try:
                 result.synthesis, result.recommendation = run_synthesis(
                     result.brief, result.sections, result.economics, _api_key())
+                # Auto-save the full analysis to history the moment it is complete
+                try:
+                    from services.common.db_utils import get_engine
+                    from services.deal_committee.library import save_result
+                    st.session_state["_result_id"] = save_result(
+                        get_engine(), st.session_state.get("deal_brief_id"), result)
+                    st.toast("结果已保存到历史 DAF")
+                except Exception as e:
+                    st.session_state["_result_id"] = None
+                    st.warning(f"结果已生成,但保存到历史失败:{e}")
             except Exception as e:
                 st.error(f"综合意见生成失败:{e}")
     if result.synthesis:
@@ -105,8 +115,11 @@ def render() -> None:
             fname = f"DAF_{result.brief.deal_name or 'deal'}_{result.brief.province}.pdf"
             try:
                 from services.common.db_utils import get_engine
-                save_daf(get_engine(), st.session_state.get("deal_brief_id"),
-                         result.brief, pdf, fname, result.recommendation)
+                daf_id = save_daf(get_engine(), st.session_state.get("deal_brief_id"),
+                                  result.brief, pdf, fname, result.recommendation)
+                if st.session_state.get("_result_id"):
+                    from services.deal_committee.library import link_result_pdf
+                    link_result_pdf(get_engine(), st.session_state["_result_id"], daf_id)
                 st.success("DAF 已保存到报告库")
             except Exception as e:
                 st.warning(f"PDF 已生成,但保存到数据库失败:{e}")
@@ -120,20 +133,69 @@ def render() -> None:
                            mime="application/pdf", use_container_width=True)
 
     st.divider()
-    with st.expander("📚 历史 DAF"):
+    st.subheader("📚 历史 DAF")
+    try:
+        from services.common.db_utils import get_engine
+        from services.deal_committee.library import list_results, load_daf, load_result
+        rows = list_results(get_engine())
+    except Exception as e:
+        st.caption(f"历史库不可用:{e}")
+        return
+    if not rows:
+        st.caption("暂无历史 DAF——生成综合意见后,完整分析结果会自动保存到这里。")
+        return
+
+    for r in rows:
+        c1, c2, c3 = st.columns([5, 1, 1])
+        c1.write(f"**{r['deal_name']}** · {r['created_at'][:16].replace('T', ' ')} · "
+                 f"{r['province'] or '—'} · {r['asset_type']} · {r['recommendation'] or '—'}")
+        if c2.button("查看", key=f"view_{r['id']}", use_container_width=True):
+            st.session_state["_history_view"] = r["id"]
+        if r["daf_id"]:
+            data, fname = load_daf(get_engine(), r["daf_id"])
+            c3.download_button("⬇ PDF", data, file_name=fname, mime="application/pdf",
+                               key=f"dl_{r['id']}", use_container_width=True)
+        else:
+            c3.caption("无 PDF")
+
+    view_id = st.session_state.get("_history_view")
+    if view_id is not None:
+        st.divider()
         try:
-            from services.common.db_utils import get_engine
-            from services.deal_committee.library import list_dafs, load_daf
-            rows = list_dafs(get_engine())
-            if not rows:
-                st.caption("暂无历史 DAF。")
-            for r in rows:
-                c1, c2 = st.columns([4, 1])
-                c1.write(f"**{r['deal_name']}** · {r['created_at'][:10]} · "
-                         f"{r['recommendation'] or '—'} · {r['file_size_kb']} KB")
-                if c2.button("下载", key=f"daf_{r['id']}"):
-                    data, fname = load_daf(get_engine(), r["id"])
-                    st.download_button("⬇", data, file_name=fname,
-                                       mime="application/pdf", key=f"dl_{r['id']}")
+            rec = load_result(get_engine(), view_id)
+            _render_history_view(rec)
         except Exception as e:
-            st.caption(f"报告库不可用:{e}")
+            st.error(f"历史结果加载失败:{e}")
+            st.session_state.pop("_history_view", None)
+
+
+def _render_history_view(rec: dict) -> None:
+    """Read-only rendering of a loaded historical analysis."""
+    from services.deal_committee.brief import DealBrief
+    from services.deal_committee.result_store import dict_to_economics, sections_from_dicts
+
+    brief = DealBrief(**(rec["brief"] or {}))
+    c1, c2 = st.columns([6, 1])
+    c1.markdown(f"### 📄 {rec['deal_name']}"
+                + (f" — 结论:**{rec['recommendation']}**" if rec["recommendation"] else ""))
+    if c2.button("✕ 关闭", key="close_history"):
+        st.session_state.pop("_history_view", None)
+        st.rerun()
+
+    econ = dict_to_economics(rec["economics"])
+    if econ is not None:
+        from services.deal_committee.economics import economics_section_markdown
+        with st.expander("经济性测算", expanded=True):
+            st.markdown(economics_section_markdown(econ, brief))
+
+    for sec in sections_from_dicts(rec["sections"]):
+        icon = "✅" if sec.status == "ok" else "❌"
+        with st.expander(f"{icon} {sec.title}", expanded=False):
+            if sec.status == "ok":
+                st.markdown(sec.markdown)
+            else:
+                st.error(sec.error or "本节生成失败")
+
+    if rec["synthesis"]:
+        st.markdown("---")
+        st.markdown(rec["synthesis"])

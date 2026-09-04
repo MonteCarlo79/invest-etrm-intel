@@ -74,3 +74,73 @@ def load_daf(engine, daf_id: int) -> tuple[bytes, str]:
     if row is None:
         raise KeyError(f"DAF id={daf_id} 不存在")
     return bytes(row[0]), row[1]
+
+
+# ── Full analysis results (history view in Tab 6) ─────────────────────────────
+
+def save_result(engine, brief_id: int | None, result) -> int:
+    """Persist a complete CommitteeResult (sections + KPIs + synthesis). Returns result id."""
+    import json as _json
+
+    from services.deal_committee.result_store import result_to_record
+    ensure_tables(engine)
+    rec = result_to_record(result)
+    sql = text("""
+        INSERT INTO marketdata.deal_daf_results
+            (brief_id, deal_name, province, asset_type,
+             brief, sections, economics, synthesis, recommendation)
+        VALUES (:bid, :name, :province, :asset_type,
+                CAST(:brief AS jsonb), CAST(:sections AS jsonb), CAST(:economics AS jsonb),
+                :synthesis, :recommendation)
+        RETURNING id
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(sql, {
+            "bid": brief_id,
+            "name": result.brief.deal_name or "(未命名)",
+            "province": result.brief.province or None,
+            "asset_type": result.brief.asset_type,
+            "brief": _json.dumps(rec["brief"]),
+            "sections": _json.dumps(rec["sections"]),
+            "economics": _json.dumps(rec["economics"]) if rec["economics"] else None,
+            "synthesis": result.synthesis or None,
+            "recommendation": result.recommendation or None,
+        }).fetchone()
+    return int(row[0])
+
+
+def link_result_pdf(engine, result_id: int, daf_id: int) -> None:
+    """Back-fill daf_id on a saved result once its PDF lands in deal_daf_library."""
+    sql = text("UPDATE marketdata.deal_daf_results SET daf_id = :d WHERE id = :i")
+    with engine.begin() as conn:
+        conn.execute(sql, {"d": daf_id, "i": result_id})
+
+
+def list_results(engine, limit: int = 20) -> list[dict]:
+    ensure_tables(engine)
+    sql = text("""
+        SELECT r.id, r.deal_name, r.province, r.asset_type, r.recommendation,
+               r.created_at, r.daf_id, l.filename
+        FROM marketdata.deal_daf_results r
+        LEFT JOIN marketdata.deal_daf_library l ON l.id = r.daf_id
+        ORDER BY r.id DESC LIMIT :n
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(sql, {"n": limit}).fetchall()
+    return [{"id": r[0], "deal_name": r[1], "province": r[2], "asset_type": r[3],
+             "recommendation": r[4], "created_at": str(r[5]),
+             "daf_id": r[6], "filename": r[7]} for r in rows]
+
+
+def load_result(engine, result_id: int) -> dict:
+    sql = text("""
+        SELECT brief, sections, economics, synthesis, recommendation, deal_name, daf_id
+        FROM marketdata.deal_daf_results WHERE id = :i
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(sql, {"i": result_id}).fetchone()
+    if row is None:
+        raise KeyError(f"结果 id={result_id} 不存在")
+    return {"brief": row[0], "sections": row[1], "economics": row[2],
+            "synthesis": row[3] or "", "recommendation": row[4] or "",
+            "deal_name": row[5], "daf_id": row[6]}
