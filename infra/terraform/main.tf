@@ -2291,6 +2291,37 @@ resource "aws_cloudwatch_event_target" "inner_agent_target" {
   }
 }
 
+# Daily nodal PF batch: compute 100MW/2h/85% PF revenue for all 蒙西 nodes
+# into reports.nodal_pf_node_daily (the Nodal Maps tab reads precomputed results).
+resource "aws_cloudwatch_event_rule" "nodal_pf_daily" {
+  name                = "${var.name}-nodal-pf-daily"
+  schedule_expression = "cron(45 23 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "nodal_pf_daily_target" {
+  rule     = aws_cloudwatch_event_rule.nodal_pf_daily.name
+  arn      = aws_ecs_cluster.this.arn
+  role_arn = aws_iam_role.eventbridge_ecs.arn
+
+  ecs_target {
+    launch_type         = "FARGATE"
+    task_definition_arn = aws_ecs_task_definition.mengxi_dashboard.arn
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_tasks.id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [{
+      name    = "mengxi-dashboard"
+      command = ["/bin/sh", "-c", "python -m services.bess_map.nodal_pf_daily --start $(date -d '5 days ago' +%F) --end $(date -d 'yesterday' +%F) --province 蒙西"]
+    }]
+  })
+}
+
 # -------------------------
 # ECS Services (attach to ALB target groups)
 # -------------------------
