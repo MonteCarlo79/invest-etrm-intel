@@ -76,14 +76,14 @@ resource "aws_ecs_task_definition" "ph_market" {
   task_role_arn            = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([{
-    name      = "ph-market"
-    image     = var.image_ph_market
-    essential = true
+    name         = "ph-market"
+    image        = var.image_ph_market
+    essential    = true
     portMappings = [{ containerPort = 8510, protocol = "tcp" }]
     environment = [
-      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "PGURL", value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-      { name = "BEDROCK_REGION",     value = "us-east-1" },
+      { name = "BEDROCK_REGION", value = "us-east-1" },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -199,14 +199,14 @@ resource "aws_ecs_task_definition" "po_market" {
   task_role_arn            = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([{
-    name      = "po-market"
-    image     = var.image_po_market
-    essential = true
+    name         = "po-market"
+    image        = var.image_po_market
+    essential    = true
     portMappings = [{ containerPort = 8511, protocol = "tcp" }]
     environment = [
-      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "PGURL", value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-      { name = "BEDROCK_REGION",     value = "us-east-1" },
+      { name = "BEDROCK_REGION", value = "us-east-1" },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -319,14 +319,20 @@ resource "aws_ecs_task_definition" "deal_structurer" {
   task_role_arn            = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([{
-    name      = "deal-structurer"
-    image     = var.image_deal_structurer
-    essential = true
+    name         = "deal-structurer"
+    image        = var.image_deal_structurer
+    essential    = true
     portMappings = [{ containerPort = 8522, protocol = "tcp" }]
     environment = [
-      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "PGURL", value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-      { name = "BEDROCK_REGION",     value = "us-east-1" },
+      { name = "BEDROCK_REGION", value = "us-east-1" },
+      # thread caps (match live td rev 18; prevent numpy/scipy CPU oversubscription on Fargate)
+      { name = "OPENBLAS_NUM_THREADS", value = "1" },
+      { name = "OMP_NUM_THREADS", value = "1" },
+      { name = "MKL_NUM_THREADS", value = "1" },
+      { name = "VECLIB_MAXIMUM_THREADS", value = "1" },
+      { name = "NUMEXPR_NUM_THREADS", value = "1" },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -340,6 +346,11 @@ resource "aws_ecs_task_definition" "deal_structurer" {
 
   lifecycle { ignore_changes = [container_definitions] }
   tags = local.tags
+}
+
+import {
+  to = aws_ecs_task_definition.deal_structurer
+  id = "arn:aws:ecs:ap-southeast-1:319383842493:task-definition/bess-platform-deal-structurer:18"
 }
 
 resource "aws_ecs_service" "deal_structurer" {
@@ -432,16 +443,16 @@ resource "aws_ecs_task_definition" "crystal_ball_client" {
   task_role_arn            = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([{
-    name      = "crystal-ball-client"
-    image     = var.image_crystal_ball_client
-    essential = true
+    name         = "crystal-ball-client"
+    image        = var.image_crystal_ball_client
+    essential    = true
     portMappings = [{ containerPort = 8521, protocol = "tcp" }]
     environment = [
-      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "PGURL", value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-      { name = "BEDROCK_REGION",     value = "us-east-1" },
-      { name = "AWS_REGION",        value = var.region },
-      { name = "TIMEZONE",          value = "Asia/Shanghai" },
+      { name = "BEDROCK_REGION", value = "us-east-1" },
+      { name = "AWS_REGION", value = var.region },
+      { name = "TIMEZONE", value = "Asia/Shanghai" },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -535,15 +546,15 @@ resource "aws_ecs_task_definition" "asset_risk" {
   task_role_arn            = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([{
-    name      = "asset-risk"
-    image     = var.image_asset_risk
-    essential = true
+    name         = "asset-risk"
+    image        = var.image_asset_risk
+    essential    = true
     portMappings = [{ containerPort = 8512, protocol = "tcp" }]
     environment = [
-      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "PGURL", value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-      { name = "BEDROCK_REGION",    value = "us-east-1" },
-      { name = "AWS_REGION",        value = var.region },
+      { name = "BEDROCK_REGION", value = "us-east-1" },
+      { name = "AWS_REGION", value = var.region },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -635,15 +646,15 @@ resource "aws_ecs_task_definition" "retail_risk" {
   task_role_arn            = aws_iam_role.task_role.arn
 
   container_definitions = jsonencode([{
-    name      = "retail-risk"
-    image     = var.image_retail_risk
-    essential = true
+    name         = "retail-risk"
+    image        = var.image_retail_risk
+    essential    = true
     portMappings = [{ containerPort = 8513, protocol = "tcp" }]
     environment = [
-      { name = "PGURL",             value = local.db_pgurl_direct },
+      { name = "PGURL", value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-      { name = "BEDROCK_REGION",    value = "ap-southeast-1" },
-      { name = "AWS_REGION",        value = var.region },
+      { name = "BEDROCK_REGION", value = "ap-southeast-1" },
+      { name = "AWS_REGION", value = var.region },
     ]
     logConfiguration = {
       logDriver = "awslogs"
