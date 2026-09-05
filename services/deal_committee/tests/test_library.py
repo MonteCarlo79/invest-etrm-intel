@@ -52,7 +52,7 @@ def test_load_daf_returns_bytes_and_filename():
 # ── Full analysis results (deal_daf_results) ──────────────────────────────────
 
 from services.deal_committee.library import (
-    link_result_pdf, list_results, load_result, save_result,
+    link_result_pdf, list_briefs, list_results, load_result, save_result,
 )
 from services.deal_committee.orchestrator import CommitteeResult
 from services.deal_committee.sections import SectionResult
@@ -125,3 +125,30 @@ def test_load_result_missing_raises():
     import pytest
     with pytest.raises(KeyError):
         load_result(engine, 999)
+
+
+def test_list_briefs_returns_briefs_with_latest_result():
+    engine, conn = _engine_with(fetch_all=[
+        (3, "谷山梁二期", True, "2026-09-05", {"province": "蒙西", "capacity_mw": 500},
+         11, "有条件 GO", 7)])
+    rows = list_briefs(engine)
+    assert rows[0]["deal_name"] == "谷山梁二期"
+    assert rows[0]["brief"]["province"] == "蒙西"
+    assert rows[0]["result_id"] == 11
+    assert rows[0]["daf_id"] == 7
+    sql = str(conn.execute.call_args[0][0])
+    assert "deal_briefs" in sql and "LATERAL" in sql.upper()
+
+
+def test_ensure_tables_never_executes_comment_only_chunks():
+    """Regression: the DDL file contains comments with ';' — a comments-only chunk
+    made psycopg2 raise 'can't execute an empty query', breaking ALL saves on v14."""
+    from services.deal_committee.library import ensure_tables
+    engine, conn = _engine_with()
+    ensure_tables(engine)
+    executed = [str(c[0][0]) for c in conn.execute.call_args_list]
+    assert executed, "ensure_tables executed nothing"
+    for sql in executed:
+        assert sql.strip().upper().startswith(("CREATE", "ALTER")), \
+            f"non-SQL chunk executed: {sql[:80]!r}"
+    assert any("deal_daf_results" in s for s in executed)

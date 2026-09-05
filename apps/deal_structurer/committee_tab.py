@@ -133,6 +133,41 @@ def render() -> None:
                            mime="application/pdf", use_container_width=True)
 
     st.divider()
+    st.subheader("🗂 历史交易要素")
+    try:
+        from services.common.db_utils import get_engine
+        from services.deal_committee.library import list_briefs, load_daf
+        past_briefs = list_briefs(get_engine())
+    except Exception as e:
+        st.caption(f"历史要素库不可用:{e}")
+        past_briefs = []
+    if not past_briefs:
+        st.caption("暂无历史交易要素——在 0 · Deal Intake 确认要素后自动保存。")
+    for b in past_briefs:
+        bd = b["brief"] or {}
+        capex = bd.get("capex_total_yuan")
+        summary = (f"**{b['deal_name']}** · {b['created_at'][:16].replace('T', ' ')} · "
+                   f"{bd.get('province') or '—'} · {bd.get('asset_type') or '—'} · "
+                   f"{bd.get('capacity_mw', 0):g}MW/{bd.get('capacity_mwh', 0):g}MWh · "
+                   + (f"¥{capex/1e8:.1f}亿" if capex else "—")
+                   + (f" · {b['recommendation']}" if b["recommendation"] else ""))
+        c1, c2, c3, c4 = st.columns([6, 1.2, 1.2, 1.2])
+        c1.write(summary)
+        if c2.button("载入要素", key=f"loadbrief_{b['id']}", use_container_width=True):
+            from services.deal_committee.brief import DealBrief
+            st.session_state["deal_brief"] = DealBrief(**bd)
+            st.session_state["deal_brief_id"] = b["id"]
+            st.session_state.pop("_history_view", None)
+            st.rerun()
+        if b["result_id"] and c3.button("查看结果", key=f"viewres_{b['id']}",
+                                        use_container_width=True):
+            st.session_state["_history_view"] = b["result_id"]
+            st.rerun()
+        if b["daf_id"]:
+            data, fname = load_daf(get_engine(), b["daf_id"])
+            c4.download_button("⬇ PDF", data, file_name=fname, mime="application/pdf",
+                               key=f"dlpdf_{b['id']}", use_container_width=True)
+
     st.subheader("📚 历史 DAF")
     try:
         from services.common.db_utils import get_engine

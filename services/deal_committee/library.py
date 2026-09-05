@@ -12,8 +12,14 @@ _DDL_PATH = Path(__file__).resolve().parents[2] / "db" / "ddl" / "marketdata" / 
 
 
 def ensure_tables(engine) -> None:
+    # Strip `--` comments BEFORE splitting on ";": a semicolon inside a comment
+    # would otherwise split mid-comment and leave a chunk starting with comment
+    # text (psycopg2 "can't execute an empty query" — broke all saves on v14).
+    # Safe here: the DDL has no string literals containing "--".
+    raw = _DDL_PATH.read_text(encoding="utf-8")
+    bare = "\n".join(l.split("--", 1)[0] for l in raw.splitlines())
     with engine.begin() as conn:
-        for stmt in _DDL_PATH.read_text(encoding="utf-8").split(";"):
+        for stmt in bare.split(";"):
             if stmt.strip():
                 conn.execute(text(stmt))
 
@@ -144,3 +150,26 @@ def load_result(engine, result_id: int) -> dict:
     return {"brief": row[0], "sections": row[1], "economics": row[2],
             "synthesis": row[3] or "", "recommendation": row[4] or "",
             "deal_name": row[5], "daf_id": row[6]}
+
+
+def list_briefs(engine, limit: int = 20) -> list[dict]:
+    """Past deal briefs, each with its latest analysis result id + PDF link (if any)."""
+    ensure_tables(engine)
+    sql = text("""
+        SELECT b.id, b.deal_name, b.confirmed, b.created_at, b.brief,
+               r.id AS result_id, r.recommendation, r.daf_id
+        FROM marketdata.deal_briefs b
+        LEFT JOIN LATERAL (
+            SELECT id, recommendation, daf_id
+            FROM marketdata.deal_daf_results r
+            WHERE r.brief_id = b.id
+            ORDER BY r.id DESC LIMIT 1
+        ) r ON true
+        ORDER BY b.id DESC LIMIT :n
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(sql, {"n": limit}).fetchall()
+    return [{"id": r[0], "deal_name": r[1], "confirmed": r[2],
+             "created_at": str(r[3]), "brief": r[4],
+             "result_id": r[5], "recommendation": r[6], "daf_id": r[7]}
+            for r in rows]
