@@ -7,7 +7,7 @@ import streamlit as st
 from libs.deal_models.contracts import OUParams, PriceSimRequest
 from libs.deal_models.price_simulator import simulate_prices
 from services.deal_engine.price_data import fetch_price_history
-from apps.deal_structurer import session_cache
+from apps.deal_structurer import geo, session_cache
 
 
 def render() -> None:
@@ -16,7 +16,7 @@ def render() -> None:
 
     col1, col2 = st.columns([1, 2])
     with col1:
-        province = st.selectbox("Province", ["蒙西", "蒙东", "山西", "河北南网", "山东", "陕西", "甘肃", "新疆"], key="ps_province")
+        province = st.selectbox("Province", geo.FALLBACK_PROVINCES, key="ps_province")
         model = st.radio("Price Model", ["OU (Ornstein-Uhlenbeck)", "PCA (Distribution Sliders)"], key="ps_model")
         n_sim = st.slider("Simulations", 100, 2000, 500, 100, key="ps_nsim")
         n_years = st.slider("Horizon (years)", 1, 10, 1, key="ps_nyears")

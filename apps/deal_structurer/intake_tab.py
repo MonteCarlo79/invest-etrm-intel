@@ -5,8 +5,23 @@ import os
 
 import streamlit as st
 
+from apps.deal_structurer import geo
 from services.deal_committee.brief import DealBrief, extract_brief, low_confidence_fields
 from services.deal_committee.intake_parser import SUPPORTED_EXTS, extract_text
+
+
+def _node_widget(nodes: list[str], draft_node: str | None, province: str) -> str | None:
+    """Province-dependent node picker; keyed by province so a province switch
+    never leaves a stale value from the previous province's node list."""
+    if not nodes:
+        raw = st.text_input("节点(可选)", draft_node or "", key=f"intake_node_text_{province}")
+        return raw.strip() or None
+    options, idx, prefill = geo.node_select_state(nodes, draft_node)
+    sel = st.selectbox("节点(可选)", options, index=idx, key=f"intake_node_sel_{province}")
+    if sel == geo.NODE_MANUAL:
+        raw = st.text_input("节点(手工输入)", prefill, key=f"intake_node_manual_{province}")
+        return raw.strip() or None
+    return None if sel == geo.NODE_NONE else sel
 
 
 def _brief_form(draft: DealBrief) -> DealBrief | None:
@@ -16,6 +31,16 @@ def _brief_form(draft: DealBrief) -> DealBrief | None:
         if field in low:
             st.caption(f"⚠️ 提取置信度较低,请核对 {field}")
 
+    # 省份/节点 sit outside the form: the node list depends on the selected
+    # province, and form widgets only rerun on submit.
+    loc1, loc2 = st.columns(2)
+    with loc1:
+        prov_opts, prov_idx = geo.province_options(geo.load_provinces(), draft.province)
+        province = st.selectbox("省份", prov_opts, index=prov_idx, key="intake_province")
+        _warn("province")
+    with loc2:
+        node = _node_widget(geo.load_nodes(province), draft.node, province)
+
     with st.form("deal_brief_form"):
         c1, c2 = st.columns(2)
         with c1:
@@ -24,8 +49,6 @@ def _brief_form(draft: DealBrief) -> DealBrief | None:
                                       ["bess", "wind", "solar", "wind_bess", "solar_bess"],
                                       index=["bess", "wind", "solar", "wind_bess",
                                              "solar_bess"].index(draft.asset_type))
-            province = st.text_input("省份", draft.province); _warn("province")
-            node = st.text_input("节点(可选)", draft.node or "")
             capacity_mw = st.number_input("储能功率 (MW)", 0.0, 2000.0,
                                           float(draft.capacity_mw)); _warn("capacity_mw")
             capacity_mwh = st.number_input("储能容量 (MWh)", 0.0, 8000.0,
@@ -53,7 +76,7 @@ def _brief_form(draft: DealBrief) -> DealBrief | None:
         return None
     return DealBrief(
         deal_name=deal_name, asset_type=asset_type, province=province,
-        node=node or None, capacity_mw=capacity_mw, capacity_mwh=capacity_mwh,
+        node=node, capacity_mw=capacity_mw, capacity_mwh=capacity_mwh,
         efficiency=efficiency, cycles_per_day=cycles, installed_mw=installed_mw,
         capex_total_yuan=capex_yi * 1e8 or None, commissioning_year=int(commissioning),
         tenor_years=int(tenor), counterparty=counterparty, structure_notes=notes,
