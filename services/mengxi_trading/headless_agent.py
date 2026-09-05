@@ -202,10 +202,10 @@ def _dispatch(name: str, inputs: dict, engine) -> str:
         if name == "get_rt_prices":
             df = pd.read_sql(
                 sql_text(
-                    "SELECT date_trunc('hour', price_time) AS hour, "
-                    "AVG(price_value) AS avg_rt_price_cny_mwh "
-                    "FROM marketdata.hist_mengxi_provincerealtimeclearprice_15min "
-                    "WHERE price_time::date BETWEEN :start AND :end "
+                    "SELECT date_trunc('hour', time) AS hour, "
+                    "AVG(price) AS avg_rt_price_cny_mwh "
+                    "FROM public.hist_mengxi_provincerealtimeclearprice_15min "
+                    "WHERE time::date BETWEEN :start AND :end "
                     "GROUP BY 1 ORDER BY 1 LIMIT 500"
                 ),
                 engine,
@@ -223,10 +223,10 @@ def _dispatch(name: str, inputs: dict, engine) -> str:
                     params[f"a{i}"] = code
             df = pd.read_sql(
                 sql_text(
-                    f"SELECT trade_date, asset_code, strategy, total_pnl "
-                    f"FROM reports.bess_strategy_daily_pnl "
+                    f"SELECT trade_date, asset_code, scenario_name AS strategy, total_pnl "
+                    f"FROM reports.bess_asset_daily_scenario_pnl "
                     f"WHERE {' AND '.join(where)} "
-                    f"ORDER BY trade_date, asset_code, strategy LIMIT 500"
+                    f"ORDER BY trade_date, asset_code, scenario_name LIMIT 500"
                 ),
                 engine, params=params,
             )
