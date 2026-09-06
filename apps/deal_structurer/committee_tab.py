@@ -33,9 +33,17 @@ def render() -> None:
     st.header("6 · 投委会 — 投资决策建议书 (DAF)")
     brief = st.session_state.get("deal_brief")
     if brief is None or not brief.confirmed:
-        st.warning("请先在 **0 · Deal Intake** 确认交易要素。")
-        return
+        # No brief in this session (e.g. after a hard refresh) — history below
+        # must stay reachable: it is the only way to reload a saved deal.
+        st.info("当前会话没有已确认的交易要素——从下方 **🗂 历史交易要素** 载入,"
+                "或先在 **0 · Deal Intake** 确认新要素。")
+    else:
+        _analysis_flow(brief)
+    st.divider()
+    _history_sections()
 
+
+def _analysis_flow(brief) -> None:
     from shared.anthropic_client import is_llm_available
     if not is_llm_available(_api_key()):
         st.warning("未检测到 LLM 配置(ANTHROPIC_API_KEY 或 BEDROCK_REGION)——无法运行投委会分析。")
@@ -61,7 +69,7 @@ def render() -> None:
 
     result: CommitteeResult | None = st.session_state.get("committee_result")
     if result is None:
-        st.info("点击 **▶ 运行投委会分析** 开始。各章节将依次调用市场/量化/运营代理。")
+        st.info("点击 **▶ 运行投委会分析** 开始。各章节将并行调用市场/量化/运营代理。")
         return
 
     for sec in result.sections:
@@ -133,7 +141,8 @@ def render() -> None:
                            file_name=f"DAF_{result.brief.deal_name or 'deal'}_{result.brief.province}.pdf",
                            mime="application/pdf", use_container_width=True)
 
-    st.divider()
+
+def _history_sections() -> None:
     st.subheader("🗂 历史交易要素")
     try:
         from services.common.db_utils import get_engine
