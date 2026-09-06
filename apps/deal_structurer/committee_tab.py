@@ -146,13 +146,46 @@ def _history_sections() -> None:
     st.subheader("🗂 历史交易要素")
     try:
         from services.common.db_utils import get_engine
-        from services.deal_committee.library import list_briefs, load_daf
+        from services.deal_committee.library import (
+            brief_linked_counts, delete_brief, list_briefs, load_daf,
+        )
         past_briefs = list_briefs(get_engine())
     except Exception as e:
         st.caption(f"历史要素库不可用:{e}")
         past_briefs = []
     if not past_briefs:
         st.caption("暂无历史交易要素——在 0 · Deal Intake 确认要素后自动保存。")
+
+    # Two-step delete confirm banner
+    del_id = st.session_state.get("_confirm_delete_id")
+    if del_id is not None:
+        target = next((b for b in past_briefs if b["id"] == del_id), None)
+        if target is None:
+            st.session_state.pop("_confirm_delete_id", None)
+        else:
+            try:
+                n_res, n_daf = brief_linked_counts(get_engine(), del_id)
+            except Exception:
+                n_res, n_daf = 0, 0
+            st.warning(f"确认删除 **{target['deal_name']}**?将同时删除 "
+                       f"{n_res} 条分析结果、{n_daf} 份 DAF PDF——不可撤销。")
+            c_yes, c_no, _ = st.columns([1.2, 1.2, 8])
+            if c_yes.button("🗑 确认删除", key="del_yes", type="primary"):
+                try:
+                    delete_brief(get_engine(), del_id)
+                    st.session_state.pop("_confirm_delete_id", None)
+                    # Deleting the brief that feeds the current session invalidates it
+                    if st.session_state.get("deal_brief_id") == del_id:
+                        for k in ("deal_brief", "deal_brief_id", "committee_result"):
+                            st.session_state.pop(k, None)
+                    st.toast("已删除")
+                except Exception as e:
+                    st.error(f"删除失败:{e}")
+                st.rerun()
+            if c_no.button("取消", key="del_no"):
+                st.session_state.pop("_confirm_delete_id", None)
+                st.rerun()
+
     for b in past_briefs:
         bd = b["brief"] or {}
         capex = bd.get("capex_total_yuan")
@@ -161,7 +194,7 @@ def _history_sections() -> None:
                    f"{bd.get('capacity_mw', 0):g}MW/{bd.get('capacity_mwh', 0):g}MWh · "
                    + (f"¥{capex/1e8:.1f}亿" if capex else "—")
                    + (f" · {b['recommendation']}" if b["recommendation"] else ""))
-        c1, c2, c3, c4 = st.columns([6, 1.2, 1.2, 1.2])
+        c1, c2, c3, c4, c5, c6 = st.columns([5, 1, 1, 1.1, 1, 1])
         c1.write(summary)
         if c2.button("载入要素", key=f"loadbrief_{b['id']}", use_container_width=True):
             from services.deal_committee.brief import DealBrief
@@ -169,14 +202,23 @@ def _history_sections() -> None:
             st.session_state["deal_brief_id"] = b["id"]
             st.session_state.pop("_history_view", None)
             st.rerun()
-        if b["result_id"] and c3.button("查看结果", key=f"viewres_{b['id']}",
+        if c3.button("✏️ 编辑", key=f"editbrief_{b['id']}", use_container_width=True):
+            from services.deal_committee.brief import DealBrief
+            st.session_state["_draft_brief"] = DealBrief(**bd)
+            st.session_state["_edit_brief_id"] = b["id"]
+            st.session_state["nav"] = "0 · Deal Intake"
+            st.rerun()
+        if b["result_id"] and c4.button("查看结果", key=f"viewres_{b['id']}",
                                         use_container_width=True):
             st.session_state["_history_view"] = b["result_id"]
             st.rerun()
         if b["daf_id"]:
             data, fname = load_daf(get_engine(), b["daf_id"])
-            c4.download_button("⬇ PDF", data, file_name=fname, mime="application/pdf",
+            c5.download_button("⬇ PDF", data, file_name=fname, mime="application/pdf",
                                key=f"dlpdf_{b['id']}", use_container_width=True)
+        if c6.button("🗑 删除", key=f"delbrief_{b['id']}", use_container_width=True):
+            st.session_state["_confirm_delete_id"] = b["id"]
+            st.rerun()
 
     st.subheader("📚 历史 DAF")
     try:

@@ -45,6 +45,7 @@ with st.sidebar:
          "3 · Project Cash Flow", "4 · Monte Carlo", "5 · Deal Pricing",
          "6 · 投委会", "💬 Strategist"],
         label_visibility="collapsed",
+        key="nav",
     )
     st.divider()
     st.caption("Province → Price Paths → Dispatch → Cashflow → MC → Deal Pricing")

@@ -152,6 +152,49 @@ def load_result(engine, result_id: int) -> dict:
             "deal_name": row[5], "daf_id": row[6]}
 
 
+def update_brief(engine, brief_id: int, brief: DealBrief) -> None:
+    """Update an existing brief in place (edit flow — keeps the same id so
+    saved results/DAFs stay linked; they hold their own snapshots)."""
+    sql = text("""
+        UPDATE marketdata.deal_briefs
+        SET deal_name = :name, brief = CAST(:brief AS jsonb), confirmed = :confirmed
+        WHERE id = :i
+    """)
+    with engine.begin() as conn:
+        conn.execute(sql, {
+            "name": brief.deal_name or "(未命名)",
+            "brief": brief.model_dump_json(),
+            "confirmed": brief.confirmed,
+            "i": brief_id,
+        })
+
+
+def brief_linked_counts(engine, brief_id: int) -> tuple[int, int]:
+    """(n_results, n_daf_pdfs) linked to a brief — shown in the delete confirm."""
+    sql = text("""
+        SELECT
+            (SELECT count(*) FROM marketdata.deal_daf_results WHERE brief_id = :i),
+            (SELECT count(*) FROM marketdata.deal_daf_library WHERE brief_id = :i)
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(sql, {"i": brief_id}).fetchone()
+    return int(row[0]), int(row[1])
+
+
+def delete_brief(engine, brief_id: int) -> tuple[int, int]:
+    """Cascade-delete a brief plus its analysis results and DAF PDFs.
+    Returns (n_results, n_dafs) deleted."""
+    n_results, n_dafs = brief_linked_counts(engine, brief_id)
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM marketdata.deal_daf_results WHERE brief_id = :i"),
+                     {"i": brief_id})
+        conn.execute(text("DELETE FROM marketdata.deal_daf_library WHERE brief_id = :i"),
+                     {"i": brief_id})
+        conn.execute(text("DELETE FROM marketdata.deal_briefs WHERE id = :i"),
+                     {"i": brief_id})
+    return n_results, n_dafs
+
+
 def list_briefs(engine, limit: int = 20) -> list[dict]:
     """Past deal briefs, each with its latest analysis result id + PDF link (if any)."""
     ensure_tables(engine)

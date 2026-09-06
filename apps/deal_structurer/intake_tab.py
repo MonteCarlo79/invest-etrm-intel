@@ -89,8 +89,13 @@ def _brief_form(draft: DealBrief) -> DealBrief | None:
 def _persist(brief: DealBrief) -> None:
     try:
         from services.common.db_utils import get_engine
-        from services.deal_committee.library import save_brief
-        st.session_state["deal_brief_id"] = save_brief(get_engine(), brief)
+        from services.deal_committee.library import save_brief, update_brief
+        edit_id = st.session_state.pop("_edit_brief_id", None)
+        if edit_id is not None:
+            update_brief(get_engine(), edit_id, brief)
+            st.session_state["deal_brief_id"] = edit_id
+        else:
+            st.session_state["deal_brief_id"] = save_brief(get_engine(), brief)
     except Exception as e:
         st.session_state["deal_brief_id"] = None
         st.warning(f"要素已保存在会话中,但写入数据库失败:{e}")
@@ -117,6 +122,7 @@ def render() -> None:
         st.warning("未检测到 LLM 配置(ANTHROPIC_API_KEY 或 BEDROCK_REGION)——文档提取不可用,可手工录入。")
 
     if extract_btn:
+        st.session_state.pop("_edit_brief_id", None)  # new draft cancels any edit-in-place
         texts, names = [], []
         for f in uploaded:
             try:
@@ -132,6 +138,7 @@ def render() -> None:
                 except Exception as e:
                     st.error(f"要素提取失败:{e}")
     if manual_btn:
+        st.session_state.pop("_edit_brief_id", None)  # manual entry cancels edit-in-place
         st.session_state["_draft_brief"] = DealBrief()
 
     draft = st.session_state.get("_draft_brief")
