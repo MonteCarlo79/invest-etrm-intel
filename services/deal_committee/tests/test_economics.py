@@ -56,3 +56,47 @@ def test_solar_maps_to_wind_dispatch():
                                      "capacity_mw": 0.0, "capacity_mwh": 0.0})
     res = run_economics(solar, n_simulations=50, fetch_fn=_fake_prices, monthly_fn=_fake_monthly)
     assert math.isfinite(res.mc.revenue_p50)
+
+
+def test_default_fetch_uses_rt_primary(monkeypatch):
+    """Economics fetches RT prices first (user direction 2026-09-06)."""
+    captured = {}
+
+    def fake_fetch(province, start, end, price_col="da_price"):
+        captured["price_col"] = price_col
+        return [300.0] * 200
+
+    monkeypatch.setattr("services.deal_engine.price_data.fetch_price_history", fake_fetch)
+    from services.deal_committee import economics
+    economics._default_fetch("蒙西", "2025-09-01", "2026-09-01")
+    assert captured["price_col"] == "rt_price"
+
+
+def test_default_monthly_prefers_rt(monkeypatch):
+    """Monthly avg table prefers rt_price, falling back to da_price per row."""
+    seen = {}
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params):
+            seen["sql"] = str(sql)
+
+            class _Rs:
+                def fetchall(self):
+                    return []
+
+            return _Rs()
+
+    class _Engine:
+        def connect(self):
+            return _Conn()
+
+    from services.deal_committee import economics
+    economics._default_monthly(_Engine(), "蒙西")
+    assert "WHEN rt_price IS NOT NULL AND rt_price != 0" in seen["sql"]
+    assert "THEN rt_price ELSE da_price END" in seen["sql"]

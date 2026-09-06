@@ -30,7 +30,9 @@ class EconomicsResult:
 
 def _default_fetch(province: str, start: str, end: str) -> list[float]:
     from services.deal_engine.price_data import fetch_price_history
-    return fetch_price_history(province, start, end)
+    # RT primary: BESS revenue settles against real-time prices; several
+    # provinces （蒙西/蒙东） have no usable DA series in the DB at all.
+    return fetch_price_history(province, start, end, price_col="rt_price")
 
 
 def _default_monthly(engine, province: str) -> list[tuple[str, float]]:
@@ -39,8 +41,8 @@ def _default_monthly(engine, province: str) -> list[tuple[str, float]]:
     engine = engine or get_engine()
     sql = text("""
         SELECT TO_CHAR(DATE_TRUNC('month', datetime), 'YYYY-MM') AS month,
-               AVG(CASE WHEN da_price IS NOT NULL AND da_price != 0
-                        THEN da_price ELSE rt_price END) AS avg_price
+               AVG(CASE WHEN rt_price IS NOT NULL AND rt_price != 0
+                        THEN rt_price ELSE da_price END) AS avg_price
         FROM marketdata.spot_prices_hourly
         WHERE province = :p
           AND datetime >= DATE_TRUNC('month', NOW()) - INTERVAL '12 months'
@@ -102,7 +104,7 @@ def run_economics(brief: DealBrief, n_simulations: int = 1000,
 
 def economics_section_markdown(res: EconomicsResult, brief: DealBrief) -> str:
     mc = res.mc
-    return f"""**测算口径**：{brief.province} · {res.model.upper()} 模型 · {res.n_simulations} 条路径 · 历史价格 {res.n_price_hours} 小时 · 固定运维 ¥{_FIXED_OM_YUAN/1e6:.1f}M/年
+    return f"""**测算口径**：{brief.province} · 实时(RT)价格 · {res.model.upper()} 模型 · {res.n_simulations} 条路径 · 历史价格 {res.n_price_hours} 小时 · 固定运维 ¥{_FIXED_OM_YUAN/1e6:.1f}M/年
 
 | 指标 | P10 | P50 | P90 |
 |---|---|---|---|

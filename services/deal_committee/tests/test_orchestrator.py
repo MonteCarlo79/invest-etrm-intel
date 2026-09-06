@@ -77,12 +77,38 @@ def test_failing_economics_keeps_economics_none():
     assert res.economics is None
 
 
-def test_on_section_done_callback_fires_in_order():
+def test_on_section_done_callback_fires_for_every_section():
+    # Parallel execution: callbacks fire in completion order (nondeterministic);
+    # result.sections keeps SECTION_DEFS order (asserted in assembles test).
     seen = []
     run_committee(BRIEF, query_fn=_fake_query, econ_fn=_fake_econ,
                   risk_fn=_fake_risk, on_section_done=lambda s: seen.append(s.key))
-    assert seen == ["market_background", "policy", "economics",
-                    "ops_mengxi", "ops_asset_risk", "ops_retail_risk", "risk"]
+    assert sorted(seen) == sorted(
+        ["market_background", "policy", "economics",
+         "ops_mengxi", "ops_asset_risk", "ops_retail_risk", "risk"])
+
+
+def test_run_committee_runs_sections_in_parallel():
+    def slow_query(market, question, api_key):
+        time.sleep(0.4)
+        return "ok"
+
+    def slow_econ(brief, **kw):
+        time.sleep(0.4)
+        return _fake_econ(brief)
+
+    def slow_risk(brief, engine=None):
+        time.sleep(0.4)
+        return _fake_risk(brief)
+
+    t0 = time.time()
+    res = run_committee(BRIEF, query_fn=slow_query, econ_fn=slow_econ, risk_fn=slow_risk)
+    wall = time.time() - t0
+    # 7 x 0.4s sequential = 2.8s; parallel should finish well under 2s
+    assert wall < 2.0, f"sections appear sequential ({wall:.1f}s)"
+    assert [s.key for s in res.sections] == [
+        "market_background", "policy", "economics",
+        "ops_mengxi", "ops_asset_risk", "ops_retail_risk", "risk"]
 
 
 def test_run_single_section_agent():

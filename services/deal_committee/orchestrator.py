@@ -98,14 +98,24 @@ def run_single_section(key: str, brief: DealBrief, query_fn: QueryFn, api_key: s
 def run_committee(brief: DealBrief, query_fn: QueryFn = default_query_fn, api_key: str = "",
                   econ_fn=None, risk_fn=None,
                   on_section_done: Optional[Callable[[SectionResult], None]] = None,
-                  timeout_s: int = 180) -> CommitteeResult:
+                  timeout_s: int = 420) -> CommitteeResult:
+    """Run all sections in parallel — wall time is the slowest section, not the
+    sum. result.sections keeps SECTION_DEFS order; on_section_done fires in
+    completion order (from the caller's thread, so Streamlit callbacks are safe)."""
     result = CommitteeResult(brief=brief, sections=[])
-    for sdef in SECTION_DEFS:
-        sec, econ = run_single_section(sdef.key, brief, query_fn, api_key,
-                                       econ_fn=econ_fn, risk_fn=risk_fn, timeout_s=timeout_s)
-        if econ is not None:
-            result.economics = econ
-        result.sections.append(sec)
-        if on_section_done:
-            on_section_done(sec)
+    by_key: dict[str, tuple[SectionResult, Optional[EconomicsResult]]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(SECTION_DEFS)) as ex:
+        futures = {
+            ex.submit(run_single_section, sdef.key, brief, query_fn, api_key,
+                      econ_fn=econ_fn, risk_fn=risk_fn, timeout_s=timeout_s): sdef.key
+            for sdef in SECTION_DEFS
+        }
+        for fut in concurrent.futures.as_completed(futures):
+            sec, econ = fut.result()
+            by_key[sec.key] = (sec, econ)
+            if econ is not None:
+                result.economics = econ
+            if on_section_done:
+                on_section_done(sec)
+    result.sections = [by_key[s.key][0] for s in SECTION_DEFS]
     return result

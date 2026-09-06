@@ -8,6 +8,20 @@ from services.common.db_utils import get_engine
 import calendar
 
 
+def _read_prices(engine, province: str, start_date: str, end_date: str,
+                 price_col: str) -> pd.DataFrame:
+    sql = text(f"""
+        SELECT datetime, {price_col} AS price
+        FROM marketdata.spot_prices_hourly
+        WHERE province = :province
+          AND datetime >= :start_date
+          AND datetime <  :end_date
+        ORDER BY datetime
+    """)
+    with engine.connect() as conn:
+        return pd.read_sql(sql, conn, params={"province": province, "start_date": start_date, "end_date": end_date})
+
+
 def fetch_price_history(
     province: str,
     start_date: str,
@@ -22,20 +36,24 @@ def fetch_price_history(
 
     price_col: "da_price" uses day-ahead clearing price (default).
                "rt_price" uses real-time clearing price.
+
+    Some LingFeng provinces zero-fill a market leg that has no published data
+    (e.g. 蒙西/蒙东 da_price is all zeros). If the requested column is entirely
+    zeros, the other column is used instead; if both are degenerate, a clear
+    ValueError is raised (a constant series breaks the OU fit downstream).
     """
     engine = get_engine()
-    sql = text(f"""
-        SELECT datetime, {price_col} AS price
-        FROM marketdata.spot_prices_hourly
-        WHERE province = :province
-          AND datetime >= :start_date
-          AND datetime <  :end_date
-        ORDER BY datetime
-    """)
-    with engine.connect() as conn:
-        df = pd.read_sql(sql, conn, params={"province": province, "start_date": start_date, "end_date": end_date})
+    df = _read_prices(engine, province, start_date, end_date, price_col)
     if df.empty:
         raise ValueError(f"No price data for province={province!r} between {start_date} and {end_date}")
+    if (df["price"] == 0).all():
+        other = "rt_price" if price_col == "da_price" else "da_price"
+        alt = _read_prices(engine, province, start_date, end_date, other)
+        if alt.empty or (alt["price"] == 0).all():
+            raise ValueError(
+                f"No usable price data for province={province!r} between {start_date} "
+                f"and {end_date}: {price_col} and {other} are both all-zero or empty")
+        df = alt
     if len(df) < 168:
         raise ValueError(f"Insufficient data: only {len(df)} hours returned (need >= 168)")
 
