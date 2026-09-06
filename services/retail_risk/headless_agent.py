@@ -16,6 +16,10 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Tool-round budget: past this, the next API call is made without tools so the
+# model must answer with what it has (prevents unbounded tool loops).
+_MAX_TOOL_ROUNDS = 12
+
 _SYSTEM = """\
 You are a retail electricity risk management analyst for a Chinese energy trading company. \
 You monitor customer margins, procurement coverage, P&L rankings, and contract expiry pipelines.
@@ -64,12 +68,13 @@ def run_retail_risk_query(question: str, api_key: str, pg_url: str = "") -> str:
         pass
 
     messages = [{"role": "user", "content": question}]
+    rounds = 0
     while True:
         resp = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system,
-            tools=_tools,
+            tools=_tools if rounds < _MAX_TOOL_ROUNDS else [],
             messages=messages,
         )
         messages = messages + [{"role": "assistant", "content": resp.content}]
@@ -92,4 +97,5 @@ def run_retail_risk_query(question: str, api_key: str, pg_url: str = "") -> str:
                 })
         if not tool_results:
             return next((b.text for b in resp.content if hasattr(b, "text")), "")
+        rounds += 1
         messages = messages + [{"role": "user", "content": tool_results}]

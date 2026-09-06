@@ -98,7 +98,7 @@ def run_single_section(key: str, brief: DealBrief, query_fn: QueryFn, api_key: s
 def run_committee(brief: DealBrief, query_fn: QueryFn = default_query_fn, api_key: str = "",
                   econ_fn=None, risk_fn=None,
                   on_section_done: Optional[Callable[[SectionResult], None]] = None,
-                  timeout_s: int = 420) -> CommitteeResult:
+                  timeout_s: int = 600) -> CommitteeResult:
     """Run all sections in parallel — wall time is the slowest section, not the
     sum. result.sections keeps SECTION_DEFS order; on_section_done fires in
     completion order (from the caller's thread, so Streamlit callbacks are safe)."""

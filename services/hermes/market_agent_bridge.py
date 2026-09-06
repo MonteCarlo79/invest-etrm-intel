@@ -10,6 +10,10 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Tool-round budget: past this, the next API call is made without tools so the
+# model must answer with what it has (prevents unbounded tool loops).
+_MAX_TOOL_ROUNDS = 12
+
 # Mapping from market key → module + function to lazy-import
 _INTL_MARKETS = {"au", "ercot", "caiso", "pjm", "ph", "po"}
 
@@ -280,10 +284,11 @@ Hebei-South, Qinghai, Jiangxi, Hainan, Chongqing, Shanghai, Beijing, Tianjin.
         pass
 
     messages = [{"role": "user", "content": question}]
+    rounds = 0
     while True:
         resp = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=2048,  # tool-use; global.anthropic.claude-sonnet-4-6 is the only confirmed-working model
-            system=system, tools=tools, messages=messages,
+            model="claude-sonnet-4-6", max_tokens=4096,  # tool-use; global.anthropic.claude-sonnet-4-6 is the only confirmed-working model
+            system=system, tools=tools if rounds < _MAX_TOOL_ROUNDS else [], messages=messages,
         )
         messages = messages + [{"role": "assistant", "content": resp.content}]
         if resp.stop_reason == "end_turn":
@@ -302,4 +307,5 @@ Hebei-South, Qinghai, Jiangxi, Hainan, Chongqing, Shanghai, Beijing, Tianjin.
                 tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result_str})
         if not tool_results:
             return next((b.text for b in resp.content if hasattr(b, "text")), "")
+        rounds += 1
         messages = messages + [{"role": "user", "content": tool_results}]

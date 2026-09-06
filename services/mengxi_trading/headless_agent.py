@@ -25,6 +25,10 @@ from sqlalchemy import create_engine, text as sql_text
 
 logger = logging.getLogger(__name__)
 
+# Tool-round budget: past this, the next API call is made without tools so the
+# model must answer with what it has (prevents unbounded tool loops).
+_MAX_TOOL_ROUNDS = 12
+
 
 def _make_engine(pg_url: str):
     url = pg_url or os.environ.get("PGURL") or os.environ.get("DATABASE_URL", "")
@@ -278,12 +282,13 @@ def run_mengxi_query(question: str, api_key: str, pg_url: str = "") -> str:
         pass
 
     messages = [{"role": "user", "content": question}]
+    rounds = 0
     while True:
         resp = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system,
-            tools=_TOOLS,
+            tools=_TOOLS if rounds < _MAX_TOOL_ROUNDS else [],
             messages=messages,
         )
         messages = messages + [{"role": "assistant", "content": resp.content}]
@@ -307,4 +312,5 @@ def run_mengxi_query(question: str, api_key: str, pg_url: str = "") -> str:
                 })
         if not tool_results:
             return next((b.text for b in resp.content if hasattr(b, "text")), "")
+        rounds += 1
         messages = messages + [{"role": "user", "content": tool_results}]

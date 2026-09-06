@@ -18,7 +18,7 @@ def _rerun_section(key: str) -> None:
     result: CommitteeResult = st.session_state["committee_result"]
     with st.spinner("重新生成中…"):
         sec, econ = run_single_section(key, result.brief, default_query_fn, _api_key(),
-                                       timeout_s=420)
+                                       timeout_s=600)
     for i, s in enumerate(result.sections):
         if s.key == key:
             result.sections[i] = sec
