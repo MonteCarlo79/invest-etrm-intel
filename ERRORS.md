@@ -218,3 +218,24 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 - Copy the per-app ignore file to match the temp name: `cp apps/portal/Dockerfile.dockerignore Dockerfile.mirror.dockerignore`, then build with `-f Dockerfile.mirror`. Build succeeded.
 - Rule: in this repo, **a Dockerfile and its `<name>.dockerignore` are a pair** — always check/copy both when building with a modified or relocated Dockerfile.
 - Separate issue in the same build: **pypi.org times out from this network** (docker.io works). Fix: `-i https://pypi.tuna.tsinghua.edu.cn/simple` in the pip commands (temp Dockerfile only, not committed).
+
+---
+
+## CREATE INDEX CONCURRENTLY parks for hours: leaked idle-in-transaction sessions block snapshot validation (2026-09-06)
+
+**What didn't work:**
+1. Assuming a 17 GB trigram GIN build is "just slow" — 3.4 h wall with zero progress. `pg_stat_progress_create_index` showed phase `waiting for old snapshots`, `lockers_done 0/4` the whole time.
+2. Waiting for the blockers to clear on their own — pooled app connections hold `idle in transaction` state indefinitely (10 h+ observed).
+
+**Root cause:** two leaked sessions held pre-build snapshots: (a) a Spot Market task's `SELECT ... FROM marketdata.agent_memory` (memory-injection read that never committed — SQLAlchemy autobegin + unclosed `engine.connect()`), (b) a nodal-coverage `COUNT(DISTINCT ...)` from the same task that runs startup ensure-DDL. CONCURRENTLY waits for ALL older snapshots regardless of table. The leak on `agent_memory` also cascade-blocked four queued idempotent DDL ops (`ALTER agent_memory`, `CREATE INDEX ix_agent_memory_app`, `DROP INDEX settlement_ref...`, a `SELECT MAX`).
+
+**What worked:**
+- Diagnose before assuming slow: `SELECT phase, lockers_done, lockers_total FROM pg_stat_progress_create_index` + `pg_stat_activity` filtered on `xact_start` older than minutes / `wait_event_type='Lock'`. Identify leaked `idle in transaction` sessions by query text + `client_addr`.
+- `SELECT pg_terminate_backend(<pid>)` on the leaked sessions — build finalized in seconds (it was 246698/246699 blocks done, only validation was missing); the queued DDL committed immediately after.
+- Prevention (TODO): the `agent_memory` read path in the dashboard agents must use `engine.connect()` as a context manager (or `autocommit`/engine-level `execution_options(isolation_level="AUTOCOMMIT")`) so reads never leave an open transaction in the pool.
+
+## Anthropic API from this Mac: 400 "unsupported countries, regions, or territories"
+
+**What didn't work:** reproducing prod agent behavior locally (deal committee sections) — every direct `api.anthropic.com` call from this network returns 400 region-blocked, even with the real key.
+
+**What worked:** run the probe/migration **inside the prod environment** instead: `aws ecs run-task` with the app's own task definition (inherits PGURL/ANTHROPIC_API_KEY/BEDROCK_REGION) + `containerOverrides` `python -c <script>`, read output from CloudWatch. Pattern also dodges local-PyPI flakiness for DB work: no local psql needed (image has psycopg2). Note `load_dotenv()` does NOT override existing shell env — local `ANTHROPIC_*` (Kimi backend) must be popped first when testing SDK paths.
