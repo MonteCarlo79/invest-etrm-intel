@@ -142,6 +142,15 @@ def _analysis_flow(brief) -> None:
                            mime="application/pdf", use_container_width=True)
 
 
+def _start_edit(brief_dict: dict, brief_id: int) -> None:
+    """on_click callback: runs before the next script run, so mutating the
+    'nav' widget key here is legal (forbidden inside the script body)."""
+    from services.deal_committee.brief import DealBrief
+    st.session_state["_draft_brief"] = DealBrief(**brief_dict)
+    st.session_state["_edit_brief_id"] = brief_id
+    st.session_state["nav"] = "0 · Deal Intake"
+
+
 def _history_sections() -> None:
     st.subheader("🗂 历史交易要素")
     try:
@@ -202,12 +211,8 @@ def _history_sections() -> None:
             st.session_state["deal_brief_id"] = b["id"]
             st.session_state.pop("_history_view", None)
             st.rerun()
-        if c3.button("✏️ 编辑", key=f"editbrief_{b['id']}", use_container_width=True):
-            from services.deal_committee.brief import DealBrief
-            st.session_state["_draft_brief"] = DealBrief(**bd)
-            st.session_state["_edit_brief_id"] = b["id"]
-            st.session_state["nav"] = "0 · Deal Intake"
-            st.rerun()
+        c3.button("✏️ 编辑", key=f"editbrief_{b['id']}", use_container_width=True,
+                  on_click=_start_edit, args=(bd, b["id"]))
         if b["result_id"] and c4.button("查看结果", key=f"viewres_{b['id']}",
                                         use_container_width=True):
             st.session_state["_history_view"] = b["result_id"]
