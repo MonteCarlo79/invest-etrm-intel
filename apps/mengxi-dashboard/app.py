@@ -63,13 +63,18 @@ def _get_pg_conn():
     if not url:
         st.error("PGURL environment variable is not set.")
         st.stop()
-    return psycopg2.connect(
+    conn = psycopg2.connect(
         url,
         keepalives=1,
         keepalives_idle=60,
         keepalives_interval=10,
         keepalives_count=5,
     )
+    # Reads on this process-cached connection must not hold an open transaction:
+    # an uncommitted SELECT (e.g. _fx_coverage) leaks "idle in transaction"
+    # snapshots that block DDL (blocked a CREATE INDEX CONCURRENTLY on 2026-09-06).
+    conn.autocommit = True
+    return conn
 
 
 @st.cache_resource

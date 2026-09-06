@@ -719,8 +719,14 @@ def __conn():
         or os.environ.get("DB_URL")
         or "postgresql://postgres:root@127.0.0.1:5433/marketdata"
     )
-    return psycopg2.connect(url, keepalives=1, keepalives_idle=60,
+    conn = psycopg2.connect(url, keepalives=1, keepalives_idle=60,
                             keepalives_interval=10, keepalives_count=5)
+    # Reads on this process-cached connection must not hold an open transaction:
+    # an uncommitted SELECT leaks "idle in transaction" snapshots that block DDL
+    # (blocked a CREATE INDEX CONCURRENTLY for 3.4h on 2026-09-06). All writes
+    # here are single-statement + commit() (a no-op under autocommit).
+    conn.autocommit = True
+    return conn
 
 def _conn():
     conn = __conn()
