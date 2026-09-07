@@ -90,7 +90,14 @@ def run_asset_risk_query(question: str, api_key: str, pg_url: str = "") -> str:
         tool_results = []
         for block in resp.content:
             if block.type == "tool_use":
-                result = _execute_tool(block.name, block.input, engine)
+                try:
+                    result = _execute_tool(block.name, block.input, engine)
+                except Exception as exc:
+                    # Return the error as data so the agent can self-correct
+                    # (e.g. retry with the required dates) instead of killing
+                    # the whole committee section — same pattern as mengxi/spot.
+                    logger.error("asset-risk tool %s error: %s", block.name, exc)
+                    result = {"error": str(exc)}
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
