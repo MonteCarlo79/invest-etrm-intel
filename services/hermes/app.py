@@ -668,7 +668,7 @@ _MENU_TEXT_PLAIN = """\
 
 
 def _make_clients():
-    tasks = TasksClient(db_url=os.environ["HERMES_DB_URL"])
+    tasks = TasksClient(db_url=os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", ""))
 
     wecom: Optional[WeComClient] = None
     _corp_id = os.environ.get("WECOM_CORP_ID", "")
