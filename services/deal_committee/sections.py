@@ -27,7 +27,9 @@ SECTION_DEFS: tuple[SectionDef, ...] = (
     SectionDef("market_background", "市场背景", "spot"),
     SectionDef("policy", "政策与规则环境", "spot"),
     SectionDef("economics", "经济性测算", ""),
-    SectionDef("ops_mengxi", "运营实证 · 蒙西储能", "mengxi"),
+    # 蒙西储能实证数据源 = 资产风险台账(rm_*): mengxi 自有表对该口径无数据,
+    # agent 会空转(spin on empty get_dispatch_data)直至超时 — 2026-09-07 改指 asset-risk。
+    SectionDef("ops_mengxi", "运营实证 · 蒙西储能", "asset-risk"),
     SectionDef("ops_asset_risk", "运营实证 · 资产风险台账", "asset-risk"),
     SectionDef("ops_retail_risk", "运营实证 · 零售风险台账", "retail-risk"),
     SectionDef("risk", "风险数据", ""),
@@ -63,9 +65,14 @@ def build_question(key: str, brief: DealBrief) -> str:
             "请检索知识库文档并注明出处,中文回答。"
         ),
         "ops_mengxi": (
-            "总结蒙西在运储能电站的实际运营表现:现货捕获率、日均循环次数、等效利用小时、"
-            "结算均价水平、主要运营问题;并说明这些实证数据对评估新建"
-            f"{asset}项目({brief.province})的参考意义。中文回答。"
+            "基于资产风险台账中蒙西在运储能资产的真实数据,总结其运营表现:"
+            "1) 先用 get_asset_list 列出台账中的蒙西储能资产;"
+            "2) 对主要资产用 get_settlement_summary 取近 3 个月结算汇总"
+            "(放电/充电量、套利收入、套利价差 ¥/MWh——即结算均价水平);"
+            "3) 用 get_deviation_analysis 说明申报与实发偏差、受限时段情况;"
+            "4) 由放电/充电量估算日均循环次数与等效利用小时。"
+            f"最后说明这些实证数据对评估新建{asset}项目({brief.province})的参考意义。"
+            "如某资产无数据请明确说明,不要推测。中文回答。"
         ),
         "ops_asset_risk": (
             f"汇总资产风险台账中与{brief.province}及同类({asset})资产相关的在运项目"
