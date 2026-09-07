@@ -4533,5 +4533,5 @@ Daily — Province BESS ranking report"""
         return False
 
 
-if os.environ.get("HERMES_DB_URL"):
+if os.environ.get("HERMES_DB_URL") or os.environ.get("PGURL"):
     app = create_app()
