@@ -303,7 +303,7 @@ _MENU_BUTTONS = [
     ],
     [
         {"text": "🔢 Quant Models",       "callback_data": "cat:quant"},
-        {"text": "🏗 Structuring",        "callback_data": "cat:struct"},
+        {"text": "🏗 Deal & DAF",        "callback_data": "cat:struct"},
     ],
     [
         {"text": "📋 Meeting Prep",       "callback_data": "cat:meeting"},
@@ -320,7 +320,7 @@ _CALLBACK_MAP: dict[str, str] = {
     "cat:intl":     "你能分析哪些国际电力市场？分别能提供哪些数据？",
     "cat:trading":  "你在BESS交易运营和内蒙古资产管理方面能做什么？",
     "cat:quant":    "你能做哪些量化分析？IRR计算、NPV和调度策略对比怎么用？",
-    "cat:struct":   "在项目结构化、尽调分析和条款解读方面你能帮什么忙？",
+    "cat:struct":   "你在项目投资结构化(DAF投委会分析:市场背景/政策规则/运营实证/经济性测算/风险多角色评估)、交易定价、IRR/NPV/DSCR测算和条款解读方面能做什么?",
     "cat:meeting":  "帮我准备一个会议简报，你需要我提供哪些信息？",
     "cat:kb":       "怎么上传报告到知识库？支持哪些文件格式和分类？",
     "cat:status":   "app status",
@@ -353,7 +353,7 @@ _FEISHU_MENU_CARD: dict = {
             "tag": "action",
             "actions": [
                 {"tag": "button", "text": {"tag": "plain_text", "content": "🔢 量化模型"},   "type": "default", "value": {"cat": "quant"}},
-                {"tag": "button", "text": {"tag": "plain_text", "content": "🏗 结构化分析"}, "type": "default", "value": {"cat": "struct"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "🏗 Deal & DAF"}, "type": "default", "value": {"cat": "struct"}},
             ],
         },
         {
@@ -652,8 +652,9 @@ _MENU_TEXT_PLAIN = """\
 🔢 Quant Models / 量化模型
   BESS IRR/NPV计算 · 调度策略对比
 
-🏗 Structuring / 结构化分析
-  项目经济测算 · 条款解读 · 市场准入分析
+🏗 Deal & DAF / 项目投资结构化
+  DAF投委会分析(市场/政策/运营实证/经济性/风险多角色评估)
+  交易定价 · IRR/NPV/DSCR测算 · 条款解读
 
 📋 Meeting Prep / 会议准备
   示例: "帮我准备一个关于[主题]的会议简报"
