@@ -696,17 +696,14 @@ def register_url(
     Raises ValueError when the page is an anti-bot challenge (e.g. WeChat 环境异常)
     so junk verification text is never ingested as document content.
     """
+    import requests
     from bs4 import BeautifulSoup
-
-    from services.common.proxy_fetch import fetch as proxy_fetch
 
     is_wechat = "mp.weixin.qq.com" in url
     headers = dict(_WECHAT_FETCH_HEADERS) if is_wechat else {
         "User-Agent": "Mozilla/5.0 (compatible; SpotMarketBot/1.0)"
     }
-    # Routed through WECHAT_PROXY_URL when configured (WeChat anti-bot blocks
-    # the NAT datacenter IP); direct fetch otherwise.
-    resp = proxy_fetch(url, headers=headers, timeout=30)
+    resp = requests.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
 
     if _is_challenge_page(resp.text):

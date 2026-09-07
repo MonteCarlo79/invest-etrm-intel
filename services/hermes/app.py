@@ -2890,6 +2890,15 @@ def _handle_message(
     import re as _re
     chat_id = msg.sender_id or ""
 
+    # ── /daf committee command (owner-only; before any agent routing) ─────────
+    try:
+        from services.hermes.daf_command import try_handle as _daf_try_handle
+        if _daf_try_handle(msg, feishu, telegram,
+                           os.environ.get("ANTHROPIC_API_KEY", "")):
+            return True
+    except Exception as _daf_e:
+        logger.error("daf command error: %s", _daf_e)
+
     # ── Clear unlimited pending folder on any text message ───────────────────
     # (unlimited batches set via /save card use count=-1; a new text message ends the batch)
     _fe = _pending_folders.get(chat_id)

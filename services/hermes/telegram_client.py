@@ -49,6 +49,24 @@ class TelegramClient:
         except Exception:
             pass
 
+    def send_document(self, chat_id: int | str, data: bytes, filename: str,
+                      caption: str = "") -> bool:
+        """Send a file (e.g. DAF PDF) via sendDocument (multipart)."""
+        try:
+            resp = requests.post(
+                f"{self._base}/sendDocument",
+                data={"chat_id": chat_id, "caption": caption[:1000]},
+                files={"document": (filename, data, "application/pdf")},
+                timeout=60,
+            )
+            if not resp.ok or not resp.json().get("ok"):
+                logger.error("Telegram sendDocument failed: %s", resp.text[:200])
+                return False
+            return True
+        except Exception as exc:
+            logger.error("Telegram sendDocument error: %s", exc)
+            return False
+
     def send_menu(
         self,
         chat_id: int | str,

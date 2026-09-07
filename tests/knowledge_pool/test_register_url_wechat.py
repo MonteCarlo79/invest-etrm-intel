@@ -133,27 +133,3 @@ def test_non_wechat_challenge_page_also_detected():
          patch.object(kd, "get_conn"):
         with pytest.raises(ValueError, match="验证|拦截|正文"):
             kd.register_url(url, api_key="k")
-
-
-def test_wechat_fetch_routed_via_proxy_when_env_set(monkeypatch):
-    """WECHAT_PROXY_URL set → register_url fetches WeChat URLs through the proxy."""
-    proxy = "http://user:pass@cn-proxy.example:8080"
-    monkeypatch.setenv("WECHAT_PROXY_URL", proxy)
-    cm, _cur = _patch_db([None, (44,)])
-    with patch("requests.get", return_value=_resp(_ARTICLE_HTML)) as get_mock, \
-         patch.object(kd, "init_knowledge_tables"), \
-         patch.object(kd, "get_conn", return_value=cm), \
-         patch.object(kd, "auto_categorize", return_value="market_analytics"):
-        kd.register_url(_WECHAT_URL, api_key="k")
-    assert get_mock.call_args.kwargs["proxies"] == {"http": proxy, "https": proxy}
-
-
-def test_wechat_fetch_direct_when_env_unset(monkeypatch):
-    monkeypatch.delenv("WECHAT_PROXY_URL", raising=False)
-    cm, _cur = _patch_db([None, (45,)])
-    with patch("requests.get", return_value=_resp(_ARTICLE_HTML)) as get_mock, \
-         patch.object(kd, "init_knowledge_tables"), \
-         patch.object(kd, "get_conn", return_value=cm), \
-         patch.object(kd, "auto_categorize", return_value="market_analytics"):
-        kd.register_url(_WECHAT_URL, api_key="k")
-    assert "proxies" not in get_mock.call_args.kwargs
