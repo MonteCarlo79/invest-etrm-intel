@@ -19,7 +19,9 @@ def test_agent_keys_match_bridge():
     agents = {s.key: s.agent for s in SECTION_DEFS}
     assert agents["market_background"] == "spot"
     assert agents["policy"] == "spot"
-    assert agents["ops_mengxi"] == "mengxi"
+    # ops_mengxi 数据源是资产风险台账(rm_*)——mengxi 自有表对该口径无数据,
+    # agent 空转超时(2026-09-07 改指 asset-risk)。
+    assert agents["ops_mengxi"] == "asset-risk"
     assert agents["ops_asset_risk"] == "asset-risk"
     assert agents["ops_retail_risk"] == "retail-risk"
     assert agents["economics"] == "" and agents["risk"] == ""
