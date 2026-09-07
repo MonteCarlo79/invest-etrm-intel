@@ -46,14 +46,16 @@ def test_run_committee_assembles_all_sections():
 
 
 def test_failing_agent_marks_section_failed_and_continues():
+    # retail-risk is the only agent key used by exactly one section (ops_mengxi
+    # and ops_asset_risk share asset-risk since 2026-09-07).
     def boom(market, question, api_key):
-        if market == "mengxi":
+        if market == "retail-risk":
             raise RuntimeError("agent exploded")
         return "ok"
     res = run_committee(BRIEF, query_fn=boom, econ_fn=_fake_econ, risk_fn=_fake_risk)
-    mengxi = next(s for s in res.sections if s.key == "ops_mengxi")
-    assert mengxi.status == "failed" and "agent exploded" in mengxi.error
-    others = [s for s in res.sections if s.key != "ops_mengxi"]
+    failing = next(s for s in res.sections if s.key == "ops_retail_risk")
+    assert failing.status == "failed" and "agent exploded" in failing.error
+    others = [s for s in res.sections if s.key != "ops_retail_risk"]
     assert all(s.status == "ok" for s in others)
 
 
