@@ -819,6 +819,138 @@ def _cjk_bigrams(text: str, max_terms: int = 12) -> list[str]:
     return bigrams[:max_terms]
 
 
+# ── Two-phase CJK search (2026-09-07) ─────────────────────────────────────────
+# OR-ing all bigrams forces a seq scan of 2.8M chunks (~130-530s — committee
+# sections timed out). Instead: fetch candidates via the query's RARE bigrams
+# (GIN idx_skc_trgm), then re-rank only candidates by the full bigram count.
+# Chunks matching only common bigrams were never top-N anyway.
+# Rarity = exact per-bigram count(*) (planner EXPLAIN estimates are useless for
+# CJK ILIKE — every bigram estimated ~246 rows regardless of reality).
+
+_COMMON_CAP = 20_000         # bigrams matching ≥ this many chunks are "common"
+_CANDIDATE_EST_CAP = 50_000  # est. union rows above this → legacy full scan
+_MIN_GOOD_ROWS = 3           # fewer hits than this → legacy full scan (recall)
+_COUNT_CACHE_TTL_S = 3600    # in-process rarity cache (corpus shifts slowly)
+
+_count_cache: dict[str, tuple[int, float]] = {}
+
+
+def _bigram_count(cur, bigram: str) -> int:
+    """Exact chunk count for one bigram, cached in-process (1h TTL)."""
+    import time as _time
+    hit = _count_cache.get(bigram)
+    if hit and _time.monotonic() - hit[1] < _COUNT_CACHE_TTL_S:
+        return hit[0]
+    cur.execute(
+        "SELECT count(*) FROM staging.spot_knowledge_chunks"
+        " WHERE chunk_text ILIKE %s", (f"%{bigram}%",))
+    n = int(cur.fetchone()[0])
+    _count_cache[bigram] = (n, _time.monotonic())
+    return n
+
+
+def _cjk_anchor_bigrams(query: str, n: int = 4) -> list[str]:
+    """First n bigrams of the longest CJK run in the query — the phrase anchor.
+
+    AND-ing the first two anchor bigrams ≈ matching the anchor's first 4 chars
+    (e.g. 蒙西 ∩ 西电 ≈ "蒙西电") — a GIN-intersect of a few hundred rows, vs
+    tens of thousands for single common bigrams.  Run-aware because agents'
+    queries mix CJK phrases with Latin tokens ("蒙西 BESS 容量电价").
+    """
+    runs = [r for r in re.findall(r'[一-鿿㐀-䶿]+', query) if len(r) >= 2]
+    if not runs:
+        return []
+    longest = max(runs, key=len)
+    return [longest[i:i + 2] for i in range(min(len(longest) - 1, n))]
+
+
+def _pick_rare_bigrams(bigrams: list[str], counts: list[int]) -> tuple[list[str], int]:
+    """(rare_bigrams, est_union_rows): bigrams with 0 < count < _COMMON_CAP,
+    rarest-first, up to 2; when all are common, the 2 smallest."""
+    selective = sorted((c, b) for b, c in zip(bigrams, counts) if 0 < c < _COMMON_CAP)
+    if selective:
+        chosen = selective[:2]
+    else:
+        chosen = sorted((c, b) for b, c in zip(bigrams, counts) if c > 0)[:2]
+    return [b for _, b in chosen], sum(c for c, _ in chosen)
+
+
+def _cjk_candidate_query(bigrams: list[str], candidate_cond: str,
+                         candidate_params: list, *, category, app,
+                         filename_contains, limit, cur) -> list[dict]:
+    """Run the candidate search: full bigram-count rank over rows matching
+    candidate_cond (an AND/OR of ILIKEs, pre-filtered by the GIN index)."""
+    case_parts = " + ".join(
+        "(CASE WHEN c.chunk_text ILIKE %s THEN 1 ELSE 0 END)" for _ in bigrams)
+    conditions = ["d.active = TRUE", f"({candidate_cond})"]
+    # Placeholder order must match SQL text order: SELECT CASEs over all
+    # bigrams, WHERE candidate cond, doc filters, then LIMIT.
+    params: list = [f"%{bg}%" for bg in bigrams]
+    params += candidate_params
+    if category:
+        conditions.append("d.category = %s")
+        params.append(category)
+    if app:
+        conditions.append("(d.app = %s OR d.app = 'shared')")
+        params.append(app)
+    if filename_contains:
+        conditions.append("(" + " OR ".join(
+            "d.file_name ILIKE %s" for _ in filename_contains) + ")")
+        params += [f"%{t}%" for t in filename_contains]
+
+    sql = f"""
+        SELECT d.id AS doc_id, d.file_name, d.category, d.app,
+               c.page_no, c.chunk_text, ({case_parts})::float AS rank
+        FROM staging.spot_knowledge_chunks c
+        JOIN staging.spot_knowledge_docs d ON d.id = c.doc_id
+        WHERE {' AND '.join(conditions)}
+        ORDER BY rank DESC, d.id, c.chunk_index
+        LIMIT %s
+    """
+    params.append(limit)
+    cur.execute(sql, params)
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _cjk_two_phase_search(query: str, bigrams: list[str], *, category, app,
+                          filename_contains, limit) -> Optional[list[dict]]:
+    """Anchor-AND candidates → rare-union candidates → None (legacy scan).
+
+    Step 1: AND the first 2 anchor bigrams (GIN intersect, ~hundreds of rows).
+    Step 2: union of the 2 rarest anchor bigrams under _COMMON_CAP (exact
+    counts, cached).  Either returns None when results are too thin so the
+    caller falls back to the legacy full scan."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            anchor = _cjk_anchor_bigrams(query, 4)
+
+            # Step 1 — phrase anchor AND (no count queries needed)
+            if len(anchor) >= 2:
+                rows = _cjk_candidate_query(
+                    bigrams,
+                    "c.chunk_text ILIKE %s AND c.chunk_text ILIKE %s",
+                    [f"%{anchor[0]}%", f"%{anchor[1]}%"],
+                    category=category, app=app,
+                    filename_contains=filename_contains, limit=limit, cur=cur)
+                if len(rows) >= _MIN_GOOD_ROWS:
+                    return rows
+
+            # Step 2 — rare-bigram union (exact counts on the anchor only)
+            if anchor:
+                counts = [_bigram_count(cur, bg) for bg in anchor]
+                rare, est_union = _pick_rare_bigrams(anchor, counts)
+                if rare and est_union <= _CANDIDATE_EST_CAP:
+                    union_conds = " OR ".join("c.chunk_text ILIKE %s" for _ in rare)
+                    rows = _cjk_candidate_query(
+                        bigrams, union_conds, [f"%{bg}%" for bg in rare],
+                        category=category, app=app,
+                        filename_contains=filename_contains, limit=limit, cur=cur)
+                    if len(rows) >= _MIN_GOOD_ROWS:
+                        return rows
+            return None
+
+
 def search_reference_docs(
     query: str,
     category: Optional[str] = None,
@@ -856,6 +988,12 @@ def search_reference_docs(
         # Rank = sum of matched bigrams (higher = more relevant).
         bigrams = _cjk_bigrams(query)
         if bigrams:
+            # Fast path: rare-bigram GIN candidates + re-rank (None → legacy scan)
+            rows = _cjk_two_phase_search(
+                query, bigrams, category=category, app=app,
+                filename_contains=filename_contains, limit=limit)
+            if rows is not None:
+                return rows
             ilike_conds = " OR ".join("c.chunk_text ILIKE %s" for _ in bigrams)
             conditions.append(f"({ilike_conds})")
             params.extend(f"%{bg}%" for bg in bigrams)
