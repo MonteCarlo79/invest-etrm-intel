@@ -24,7 +24,9 @@ class TestDispatchComp:
         paths = rng.uniform(200, 500, size=(16, 8760))  # 16 sims × 1y hourly
         base = dispatch_annual(paths, _req(0.0))
         with_comp = dispatch_annual(paths, _req(365.0))
-        expected = 365.0 * 500.0 * 0.85 * 1 * 365  # rate × energy_mwh × eff × cycles × days
+        # rate × capacity_mwh × eff × cycles × days (full-cycle user convention,
+        # matches register empiricals — NOT the model's 1h-slot volume)
+        expected = 365.0 * 2000.0 * 0.85 * 1 * 365
         assert with_comp.comp_annual_yuan == expected
         np.testing.assert_allclose(
             with_comp.revenue_paths - base.revenue_paths, expected, rtol=1e-9)

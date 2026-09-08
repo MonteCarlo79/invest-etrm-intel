@@ -37,10 +37,14 @@ def _dispatch_bess(price_paths: np.ndarray, req: DispatchRequest) -> np.ndarray:
 
     daily_rev = np.maximum(discharge_rev - charge_cost - om, 0.0)
 
-    # Capacity compensation: ¥/MWh × annual discharged volume (constant per request)
+    # Capacity compensation: ¥/MWh × annual discharged volume. Volume uses the
+    # user-facing convention — capacity_mwh × full cycles/day × eff (≈1,887 MWh/day
+    # for a 500MW/2000MWh asset, matching the register's 裕昭 empiricals) — NOT the
+    # dispatch model's 1-hour-slot volume (500 MWh/day), which would understate
+    # the stream ~4×. Deterministic per request → constant shift of all percentiles.
     comp_annual = 0.0
     if req.comp_rate_yuan_mwh > 0.0:
-        comp_annual = (req.comp_rate_yuan_mwh * energy_mwh
+        comp_annual = (req.comp_rate_yuan_mwh * req.capacity_mwh
                        * req.roundtrip_eff * n_cycles * n_days)
 
     return daily_rev.sum(axis=1) + comp_annual
@@ -105,9 +109,8 @@ def dispatch_annual(price_paths: np.ndarray, req: DispatchRequest) -> DispatchRe
     comp_annual = 0.0
     if "bess" in req.asset_type and req.comp_rate_yuan_mwh > 0.0:
         n_cycles = max(1, int(req.cycles_per_day))
-        energy_mwh = min(req.power_mw * 1.0, req.capacity_mwh / n_cycles)
-        comp_annual = (req.comp_rate_yuan_mwh * energy_mwh * req.roundtrip_eff
-                       * n_cycles * (price_paths.shape[1] // 24))
+        comp_annual = (req.comp_rate_yuan_mwh * req.capacity_mwh
+                       * req.roundtrip_eff * n_cycles * (price_paths.shape[1] // 24))
     return DispatchResult(
         revenue_paths=rev,
         p10=p10, p50=p50, p90=p90,
