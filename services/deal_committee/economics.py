@@ -26,6 +26,8 @@ class EconomicsResult:
     n_price_hours: int
     n_simulations: int
     model: str
+    price_start: str = ""   # ISO date — actual history window used (printed in 测算口径)
+    price_end: str = ""
 
 
 def _default_fetch(province: str, start: str, end: str) -> list[float]:
@@ -99,12 +101,14 @@ def run_economics(brief: DealBrief, n_simulations: int = 1000,
     return EconomicsResult(
         mc=mc, monthly_price=monthly_fn(None, brief.province),
         n_price_hours=len(prices), n_simulations=n_simulations, model="ou",
+        price_start=start.isoformat(), price_end=end.isoformat(),
     )
 
 
 def economics_section_markdown(res: EconomicsResult, brief: DealBrief) -> str:
     mc = res.mc
-    return f"""**测算口径**：{brief.province} · 实时(RT)价格 · {res.model.upper()} 模型 · {res.n_simulations} 条路径 · 历史价格 {res.n_price_hours} 小时 · 固定运维 ¥{_FIXED_OM_YUAN/1e6:.1f}M/年
+    window = f" · 历史价格窗口 {res.price_start}→{res.price_end}" if res.price_start else ""
+    return f"""**测算口径**：{brief.province} · 实时(RT)价格 · {res.model.upper()} 模型 · {res.n_simulations} 条路径 · 历史价格 {res.n_price_hours} 小时{window} · 固定运维 ¥{_FIXED_OM_YUAN/1e6:.1f}M/年
 
 | 指标 | P10 | P50 | P90 |
 |---|---|---|---|

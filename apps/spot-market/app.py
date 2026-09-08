@@ -3067,7 +3067,10 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
 """
 
     def _build_spot_system(query: str = "") -> str:
-        base = _SPOT_AGENT_BASE_SYSTEM
+        from datetime import date as _date_cls
+        base = (f"今天是 {_date_cls.today().isoformat()}。涉及日期/时期的问题一律以该日期为基准,"
+                "使用最新可得数据——模型的内部日期感可能滞后于真实当前日期。\n\n"
+                + _SPOT_AGENT_BASE_SYSTEM)
         _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
 
         if query:

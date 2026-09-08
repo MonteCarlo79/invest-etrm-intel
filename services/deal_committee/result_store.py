@@ -26,6 +26,8 @@ def economics_to_dict(econ: EconomicsResult | None) -> dict | None:
         "n_price_hours": econ.n_price_hours,
         "n_simulations": econ.n_simulations,
         "model": econ.model,
+        "price_start": econ.price_start,
+        "price_end": econ.price_end,
     }
 
 
@@ -48,6 +50,8 @@ def dict_to_economics(d: dict | None) -> EconomicsResult | None:
         n_price_hours=d.get("n_price_hours", 0),
         n_simulations=d.get("n_simulations", 0),
         model=d.get("model", "ou"),
+        price_start=d.get("price_start", ""),
+        price_end=d.get("price_end", ""),
     )
 
 

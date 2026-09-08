@@ -1499,6 +1499,7 @@ with tab_trader:
     )
 
     def _build_trader_system() -> str:
+        from datetime import date as _date_cls
         mem_df = _load_trader_memories()
         if mem_df.empty:
             mem_block = ""
@@ -1506,7 +1507,9 @@ with tab_trader:
             lines = [f"[{r.category}] {r.subject}: {r.content}"
                      for r in mem_df.itertuples()]
             mem_block = "\n\n## Memory from prior sessions:\n" + "\n".join(lines)
-        return _TRADER_BASE_SYSTEM + mem_block
+        return (f"今天是 {_date_cls.today().isoformat()}。涉及日期/时期的问题一律以该日期为基准,"
+                "使用最新可得数据——模型的内部日期感可能滞后于真实当前日期。\n\n"
+                + _TRADER_BASE_SYSTEM + mem_block)
 
     # ── tools ─────────────────────────────────────────────────────────────────
     _TRADER_TOOLS = [
