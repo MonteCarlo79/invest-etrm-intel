@@ -1,9 +1,9 @@
 """Unit tests for the single-term-GIN CJK anchor search (no DB needed).
 
-2026-09-08 iteration 4: 2-term ANDs and count(*)-guided unions plan unreliably
-(planner ILIKE estimates are useless — 24-191s in prod). New shape: one ILIKE
-on the anchor's lead bigram (always GIN), re-check the rest on those rows.
-Ladder: lead AND second → lead AND any-of-rest → legacy scan. No count queries.
+2026-09-08 iteration 5: 2-char bigram patterns don't use the GIN (planner
+seq-scans, 15-38s); 4-char anchor-run patterns do (1-3s). Ladder: pattern CTE
++ AND second → + OR rest (return when any row) → legacy (60s timeout, zero
+anchor candidates only). No count queries.
 """
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +22,20 @@ class TestAnchorBigrams:
 
     def test_skips_single_char_runs(self):
         assert kd._cjk_anchor_bigrams("电 BESS") == []
+
+
+class TestAnchorPattern:
+    def test_first_four_chars(self):
+        assert kd._cjk_anchor_pattern("蒙西电力现货市场规则") == "蒙西电力"
+
+    def test_short_run_used_whole(self):
+        assert kd._cjk_anchor_pattern("蒙西 BESS") == "蒙西"
+
+    def test_latin_mix_picks_longest_run(self):
+        assert kd._cjk_anchor_pattern("蒙西 BESS 容量电价") == "容量电价"
+
+    def test_empty_when_no_cjk(self):
+        assert kd._cjk_anchor_pattern("BESS 2026") == ""
 
 
 class _FakeCursor:
@@ -86,7 +100,7 @@ class TestTwoPhaseSearch:
         assert sql.count("%s") == len(params)
         n_bg = len(_BIGRAMS)
         # param order: lead anchor, CASE bigrams, AND-rest, app, limit
-        assert params[0] == "%蒙西%"
+        assert params[0] == "%蒙西电力%"
         assert params[1:1 + n_bg] == [f"%{b}%" for b in _BIGRAMS]
         assert params[1 + n_bg] == "%西电%"
         assert params[-2] == "strategist"
@@ -95,8 +109,18 @@ class TestTwoPhaseSearch:
         assert "c.chunk_text ILIKE %s\n" not in sql  # only one rest cond
         assert sql.count("c.chunk_text ILIKE %s") == n_bg + 1  # CASE + rest (CTE is unaliased)
 
-    def test_step2_or_when_step1_thin(self):
-        cur = _FakeCursor([[(1, "f.pdf", "c", "shared", 1, "t", 5.0)], _ROWS3])
+    def test_step1_single_row_returns(self):
+        # >=1 anchored row short-circuits (province-anchored beats generic)
+        cur = _FakeCursor([[(1, "f.pdf", "c", "shared", 1, "t", 5.0)]])
+        with patch.object(kd, "get_conn", return_value=_fake_conn(cur)):
+            rows = kd._cjk_two_phase_search(
+                _QUERY, _BIGRAMS, category=None, app=None,
+                filename_contains=None, limit=5)
+        assert rows is not None and len(rows) == 1
+        assert len(cur.calls) == 1
+
+    def test_step2_or_when_step1_empty(self):
+        cur = _FakeCursor([[], _ROWS3])
         with patch.object(kd, "get_conn", return_value=_fake_conn(cur)):
             rows = kd._cjk_two_phase_search(
                 _QUERY, _BIGRAMS, category=None, app=None,
@@ -107,12 +131,11 @@ class TestTwoPhaseSearch:
         # step 2: OR across anchor[1:4]
         assert " OR ".join([]) == "" and " OR " in sql2
         n_bg = len(_BIGRAMS)
-        assert params2[0] == "%蒙西%"
+        assert params2[0] == "%蒙西电力%"
         assert params2[1 + n_bg: 1 + n_bg + 3] == ["%西电%", "%电力%", "%力现%"]
 
-    def test_returns_none_when_all_thin(self):
-        cur = _FakeCursor([[(1, "f.pdf", "c", "shared", 1, "t", 5.0)],
-                           [(1, "f.pdf", "c", "shared", 1, "t", 5.0)]])
+    def test_returns_none_when_all_empty(self):
+        cur = _FakeCursor([[], []])
         with patch.object(kd, "get_conn", return_value=_fake_conn(cur)):
             rows = kd._cjk_two_phase_search(
                 _QUERY, _BIGRAMS, category=None, app=None,

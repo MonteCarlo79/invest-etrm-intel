@@ -849,6 +849,20 @@ def _cjk_anchor_bigrams(query: str, n: int = 4) -> list[str]:
     return [longest[i:i + 2] for i in range(min(len(longest) - 1, n))]
 
 
+def _cjk_anchor_pattern(query: str, n: int = 4) -> str:
+    """First n CHARS of the longest CJK run as a single ILIKE pattern.
+
+    2-char bigram patterns (蒙西) don't use the GIN well — the planner seq-
+    scans (measured 15-38s in prod). 4 chars carry enough trigrams for the
+    index (蒙西储能 → ~1-3s), and the phrase lead is the most selective part
+    of an agent query (province/topic names).
+    """
+    runs = [r for r in re.findall(r'[一-鿿㐀-䶿]+', query) if len(r) >= 2]
+    if not runs:
+        return ""
+    return max(runs, key=len)[:n]
+
+
 def _cjk_two_phase_search(query: str, bigrams: list[str], *, category, app,
                           filename_contains, limit) -> Optional[list[dict]]:
     """Single-term GIN fetch + re-check, then None (legacy scan).
@@ -864,7 +878,8 @@ def _cjk_two_phase_search(query: str, bigrams: list[str], *, category, app,
     with get_conn() as conn:
         with conn.cursor() as cur:
             anchor = _cjk_anchor_bigrams(query, 4)
-            if len(anchor) < 2:
+            pattern = _cjk_anchor_pattern(query, 4)
+            if len(anchor) < 2 or not pattern:
                 return None
 
             for rest_cond, rest_params in (
@@ -879,7 +894,7 @@ def _cjk_two_phase_search(query: str, bigrams: list[str], *, category, app,
                 conditions = ["d.active = TRUE", f"({rest_conds})"]
                 # Placeholder order = SQL text order: CTE lead term, SELECT
                 # CASEs over all bigrams, WHERE rest, doc filters, LIMIT.
-                params: list = [f"%{anchor[0]}%"]
+                params: list = [f"%{pattern}%"]
                 params += [f"%{bg}%" for bg in bigrams]
                 params += [f"%{bg}%" for bg in rest_params]
                 if category:
@@ -912,7 +927,7 @@ def _cjk_two_phase_search(query: str, bigrams: list[str], *, category, app,
                 cur.execute(sql, params)
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-                if len(rows) >= _MIN_GOOD_ROWS:
+                if rows:
                     return rows
             return None
 
@@ -1019,6 +1034,11 @@ def search_reference_docs(
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # Safety net: this is the legacy full-scan path (only reached when
+            # the anchor found zero candidates). A full bigram-OR scan measured
+            # 130-170s in prod — cap it so a section can never be held hostage;
+            # on timeout the caller gets an error and the agent adapts.
+            cur.execute("SET LOCAL statement_timeout = '60s'")
             cur.execute(sql, params)
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
