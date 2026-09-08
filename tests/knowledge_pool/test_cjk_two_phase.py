@@ -78,6 +78,11 @@ class TestTwoPhaseSearch:
         assert len(cur.calls) == 1
         sql, params = cur.calls[0]
         assert "WITH cand AS" in sql and "count(*)" not in sql
+        # CTE must carry every column the outer query references
+        # (probe 2026-09-08 caught: column c.page_no does not exist)
+        cte = sql.split("WITH cand AS", 1)[1].split(")", 1)[0]
+        for col in ("doc_id", "page_no", "chunk_index", "chunk_text"):
+            assert col in cte, col
         assert sql.count("%s") == len(params)
         n_bg = len(_BIGRAMS)
         # param order: lead anchor, CASE bigrams, AND-rest, app, limit

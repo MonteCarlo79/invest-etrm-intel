@@ -895,7 +895,7 @@ def _cjk_two_phase_search(query: str, bigrams: list[str], *, category, app,
 
                 sql = f"""
                     WITH cand AS (
-                        SELECT doc_id, chunk_index, chunk_text
+                        SELECT doc_id, page_no, chunk_index, chunk_text
                         FROM staging.spot_knowledge_chunks
                         WHERE chunk_text ILIKE %s
                         LIMIT {_ANCHOR_CANDIDATE_CAP}
