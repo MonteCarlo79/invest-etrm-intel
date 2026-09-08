@@ -107,8 +107,8 @@ def _capture_search_sql(query: str, **kwargs) -> tuple[str, list]:
         ("page_no",), ("chunk_text",), ("rank",),
     ]
     cursor.fetchall.return_value = []
-    cursor.execute.side_effect = lambda sql, params: captured.update(
-        sql=sql, params=list(params)
+    cursor.execute.side_effect = lambda sql, params=None: captured.update(
+        sql=sql, params=list(params or [])
     )
     conn = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cursor
