@@ -28,7 +28,8 @@ _MARKET_CONFIGS = {
 }
 
 
-def run_market_query(market: str, question: str, api_key: str, pg_url: str = "") -> str:
+def run_market_query(market: str, question: str, api_key: str, pg_url: str = "",
+                      kb_app: str | None = "strategist") -> str:
     """Route a question to the right market headless agent and return the answer."""
     pg_url = pg_url or os.environ.get("PGURL") or os.environ.get("DATABASE_URL", "")
 
@@ -54,7 +55,7 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "")
         return run_bess_map_query(question=question, api_key=api_key, pg_url=pg_url)
 
     if market == "spot":
-        return _run_spot_query(question=question, api_key=api_key)
+        return _run_spot_query(question=question, api_key=api_key, kb_app=kb_app)
 
     if market in ("mengxi", "im", "inner-mongolia"):
         from services.mengxi_trading.headless_agent import run_mengxi_query
@@ -79,7 +80,7 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "")
     return f"Unknown market '{market}'. Available: gb, au, ercot, caiso, pjm, ph, po, bess-map, spot, mengxi, deal, asset-risk, retail-risk, internet"
 
 
-def _run_spot_query(question: str, api_key: str) -> str:
+def _run_spot_query(question: str, api_key: str, kb_app: str | None = "strategist") -> str:
     """Full Strategist-parity spot market agent with 7 data tools."""
     import anthropic
     from shared.anthropic_client import make_client as _make_anthropic_client
@@ -237,7 +238,7 @@ def _run_spot_query(question: str, api_key: str) -> str:
                 rows = _srd(
                     query=inputs["query"],
                     category=inputs.get("category"),
-                    app="strategist",
+                    app=kb_app,  # None → span all corpora (committee policy searches)
                     limit=min(int(inputs.get("limit", 5)), 10),
                 )
                 result = {"count": len(rows), "chunks": rows}

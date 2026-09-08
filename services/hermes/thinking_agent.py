@@ -199,59 +199,6 @@ class ThinkingAgent:
 
     # ── Tool: check_etl_freshness ─────────────────────────────────────────────
 
-    _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$")
-
-    def _query_rows(self, sql: str, params: tuple = (), timeout_ms: int = 10000) -> list[tuple]:
-        """Raw row access for internal queries (unlike _tool_query_db which
-        returns markdown for the LLM). Raises on error — callers handle."""
-        conn = psycopg2.connect(self._pg_url, options=f"-c statement_timeout={timeout_ms}")
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql, params)
-                    return cur.fetchall()
-        finally:
-            conn.close()
-
-    def _resolve_date_column(self, dataset: str, configured: str) -> str | None:
-        """Pick the best freshness column for a table: the configured one if it
-        exists, else common names, else the first date/timestamp column.
-        (Seed config predates column renames — e.g. md_* uses trade_date/datetime.)"""
-        schema, table = dataset.split(".", 1)
-        rows = self._query_rows(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema = %s AND table_name = %s "
-            "AND (data_type = 'date' OR data_type LIKE 'timestamp%%') "
-            "ORDER BY ordinal_position",
-            (schema, table),
-        )
-        cols = [r[0] for r in rows]
-        if not cols:
-            return None
-        for preferred in (configured, "data_date", "trade_date", "datetime"):
-            if preferred in cols:
-                return preferred
-        return cols[0]
-
-    def _table_max_date(self, dataset: str, date_col: str) -> tuple[str, str]:
-        """Return (max_date_str, resolved_col) or ("ERROR: ...", col) on failure.
-        Identifiers are validated before interpolation."""
-        if not self._IDENTIFIER.match(dataset):
-            return (f"ERROR: bad identifier {dataset}", date_col)
-        try:
-            col = self._resolve_date_column(dataset, date_col)
-            if not col:
-                return ("ERROR: no date column", date_col)
-            if not re.match(r"^[a-z_][a-z0-9_]*$", col):
-                return (f"ERROR: bad column {col}", date_col)
-            rows = self._query_rows(f"SELECT MAX({col}) FROM {dataset}", timeout_ms=30000)
-            mx = rows[0][0] if rows else None
-            if mx is None:
-                return ("(empty table)", col)
-            return (str(mx.date() if hasattr(mx, "date") else mx), col)
-        except Exception as exc:
-            return (f"ERROR: {exc}", date_col)
-
     def _tool_check_etl_freshness(self) -> str:
         sql = """
             SELECT
@@ -274,39 +221,6 @@ class ThinkingAgent:
         """
         freshness = self._tool_query_db(sql)
 
-        # Ground truth: actual MAX(date) per expected table. The bookkeeping in
-        # ops.ingestion_dataset_status reflects only the named collector's own
-        # runs — other writers can keep a table fresh (md_* are written daily by
-        # the mengxi Excel ingestion, not by the enos_market collector that
-        # crashed 2026-04→2026-09 while tables stayed current). Never alert on
-        # bookkeeping alone.
-        truth_lines = []
-        today = datetime.now(tz=timezone.utc).date()
-        try:
-            expected = self._query_rows(
-                "SELECT dataset, date_column, max_lag_days "
-                "FROM ops.ingestion_expected_freshness WHERE active = TRUE"
-            )
-        except Exception as exc:
-            expected = []
-            truth_lines.append(f"(ground-truth check unavailable: {exc})")
-        for dataset, date_col, max_lag in expected:
-            max_str, used_col = self._table_max_date(dataset, date_col)
-            verdict = "?"
-            if not max_str.startswith("ERROR") and not max_str.startswith("("):
-                try:
-                    d = datetime.strptime(max_str[:10], "%Y-%m-%d").date()
-                    behind = (today - d).days
-                    verdict = "OK" if behind <= max_lag else f"STALE({behind}d)"
-                    max_str = f"{max_str} (-{behind}d)"
-                except ValueError:
-                    verdict = "?"
-            truth_lines.append(f"- `{dataset}` (col {used_col}): max={max_str} → **{verdict}**")
-        ground_truth = (
-            "**Ground-truth table freshness (AUTHORITATIVE — judge by this, not by "
-            "collector bookkeeping):**\n" + "\n".join(truth_lines) if truth_lines else ""
-        )
-
         year = datetime.now(tz=timezone.utc).year
         nodal_sql = f"""
             SELECT COUNT(*) as plant_count, MAX(computed_at) as last_computed
@@ -318,10 +232,7 @@ class ThinkingAgent:
         lineage_hint = "\n\n**Data source reference:**\n" + "\n".join(
             f"- `{tbl}`: {src}" for tbl, src in DATA_LINEAGE.items()
         )
-        return (
-            f"**ETL Freshness Status (collector bookkeeping — diagnostic only):**\n{freshness}"
-            f"\n\n{ground_truth}\n\n**Nodal PF Annual ({year}):**\n{nodal}{lineage_hint}"
-        )
+        return f"**ETL Freshness Status:**\n{freshness}\n\n**Nodal PF Annual ({year}):**\n{nodal}{lineage_hint}"
 
     # ── Tool: read_source_file ────────────────────────────────────────────────
 
@@ -482,12 +393,8 @@ class ThinkingAgent:
             "你是 Hermes，BESS 平台的 AI 助理。请检查平台数据的健康状况。\n\n"
             "步骤：\n"
             "1. 调用 `check_etl_freshness` 查看哪些数据集已过期。\n"
-            "2. 以返回中的 **Ground-truth table freshness**（表内最新数据日期）为准判断："
-            "   仅当表内最新日期超过 max_lag_days 未更新，才视为数据缺失。"
-            "   collector bookkeeping（last_success_at / failure_count）只用于诊断采集器本身——"
-            "   若 failure_count 高但表数据新鲜，说明采集器故障但数据另有写入方，"
-            "   不要就数据缺失告警，可简要提及采集器故障。\n"
-            "3. 如确有数据缺失，调用 `send_feishu_message` 发送一条简洁的中文消息给用户，"
+            "2. 如有异常（STALE 状态或失败计数 >0），用 `query_db` 进一步确认。\n"
+            "3. 如发现问题，调用 `send_feishu_message` 发送一条简洁的中文消息给用户，"
             "   说明具体哪个数据集有问题，以及原始数据来源（参考 DATA_LINEAGE）。\n"
             "4. 如果一切正常，调用 `send_feishu_message` 传入空字符串。\n\n"
             "要求：只发送一条消息。不要发噪音。"

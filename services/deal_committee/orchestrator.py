@@ -17,7 +17,12 @@ QueryFn = Callable[[str, str, str], str]  # (agent_key, question, api_key) -> ma
 
 def default_query_fn(market: str, question: str, api_key: str) -> str:
     from services.hermes.market_agent_bridge import run_market_query  # lazy: hermes deps
-    return run_market_query(market, question, api_key=api_key)
+    # Committee spot sections (market_background/policy) span BOTH apps' corpora
+    # (kb_app=None → strategist+trader+shared): 蒙西储能 operational docs are
+    # trader-tagged, and strategist-only anchors came back thin (2026-09-08).
+    # Hermes chat keeps its strategist scoping (bridge default).
+    return run_market_query(market, question, api_key=api_key,
+                            kb_app=None if market == "spot" else "strategist")
 
 
 @dataclass

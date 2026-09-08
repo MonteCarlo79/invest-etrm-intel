@@ -1,5 +1,4 @@
 import os
-import datetime as dt
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -229,75 +228,3 @@ class TestRun:
         agent = _make_agent()
         with pytest.raises(ValueError, match="Unknown mode"):
             agent.run("invalid")
-
-
-class TestEtlFreshnessGroundTruth:
-    """Ground-truth table freshness: judge by MAX(table date), not collector
-    bookkeeping (the 2026-09 false-alert: md_* fresh while enos bookkeeping
-    showed 137 failures)."""
-
-    def _agent_with_db(self, expected, col_lookup, max_lookup, bookkeeping="(book)"):
-        agent = _make_agent()
-        agent._tool_query_db = MagicMock(return_value=bookkeeping)
-
-        def qr(sql, params=(), timeout_ms=10000):
-            if "ingestion_expected_freshness" in sql:
-                return expected
-            if "information_schema.columns" in sql:
-                return col_lookup(params[1])
-            if sql.startswith("SELECT MAX("):
-                return max_lookup
-            raise AssertionError(f"unexpected SQL: {sql[:80]}")
-
-        agent._query_rows = MagicMock(side_effect=qr)
-        return agent
-
-    def test_fresh_table_ok_despite_bookkeeping(self):
-        agent = self._agent_with_db(
-            expected=[("marketdata.md_da_cleared_energy", "data_date", 2)],
-            col_lookup=lambda t: [("province",), ("data_date",), ("datetime",)],
-            max_lookup=[(dt.datetime(2099, 1, 1, 0, 0),)],
-        )
-        out = agent._tool_check_etl_freshness()
-        assert "Ground-truth" in out
-        assert "AUTHORITATIVE" in out
-        assert "marketdata.md_da_cleared_energy" in out
-        assert "OK" in out
-
-    def test_date_column_falls_back_when_configured_missing(self):
-        captured = {}
-        agent = _make_agent()
-        agent._tool_query_db = MagicMock(return_value="(book)")
-
-        def qr(sql, params=(), timeout_ms=10000):
-            if "ingestion_expected_freshness" in sql:
-                return [("marketdata.md_rt_nodal_price", "data_date", 2)]
-            if "information_schema.columns" in sql:
-                return [("datetime",), ("node_name",)]
-            if sql.startswith("SELECT MAX("):
-                captured["sql"] = sql
-                return [(dt.datetime(2099, 1, 1),)]
-            raise AssertionError(sql)
-
-        agent._query_rows = MagicMock(side_effect=qr)
-        out = agent._tool_check_etl_freshness()
-        assert "MAX(datetime)" in captured["sql"]
-        assert "col datetime" in out
-
-    def test_missing_date_column_reports_error_not_crash(self):
-        agent = self._agent_with_db(
-            expected=[("marketdata.md_x", "data_date", 2)],
-            col_lookup=lambda t: [],
-            max_lookup=[],
-        )
-        out = agent._tool_check_etl_freshness()
-        assert "no date column" in out
-
-    def test_stale_ground_truth_flagged(self):
-        agent = self._agent_with_db(
-            expected=[("marketdata.md_da_fuel_summary", "data_date", 2)],
-            col_lookup=lambda t: [("data_date",)],
-            max_lookup=[(dt.date(2020, 1, 1),)],
-        )
-        out = agent._tool_check_etl_freshness()
-        assert "STALE(" in out
