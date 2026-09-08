@@ -9,9 +9,6 @@ WORKDIR /app
 COPY apps/hermes-service/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Chromium for services/common/render_fetch.py (Aliyun-WAF-gated sources like bjx)
-RUN playwright install --with-deps chromium
-
 # CJK font for matplotlib Chinese labels
 RUN apt-get update && apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk fonts-wqy-microhei \
     && fc-cache -fv && rm -rf /var/lib/apt/lists/*

@@ -1,9 +1,9 @@
-"""Unit tests for the two-phase CJK anchor search (no DB needed).
+"""Unit tests for the single-term-GIN CJK anchor search (no DB needed).
 
-2026-09-07 iteration 3: OR-ing all bigrams seq-scans 2.8M chunks (~130-530s);
-counting all bigrams costs ~60-90s cold; "rare" market bigrams still match
-20-40K rows. The anchor AND (first 2 bigrams of the longest CJK run) intersects
-to a few hundred rows via GIN. Ladder: anchor-AND → rare-union → legacy scan.
+2026-09-08 iteration 4: 2-term ANDs and count(*)-guided unions plan unreliably
+(planner ILIKE estimates are useless — 24-191s in prod). New shape: one ILIKE
+on the anchor's lead bigram (always GIN), re-check the rest on those rows.
+Ladder: lead AND second → lead AND any-of-rest → legacy scan. No count queries.
 """
 from unittest.mock import MagicMock, patch
 
@@ -17,9 +17,6 @@ class TestAnchorBigrams:
     def test_picks_longest_run_with_latin_mix(self):
         assert kd._cjk_anchor_bigrams("蒙西 BESS 容量电价") == ["容量", "量电", "电价"]
 
-    def test_caps_at_n(self):
-        assert kd._cjk_anchor_bigrams("蒙西电力现货", n=2) == ["蒙西", "西电"]
-
     def test_empty_when_no_cjk_run(self):
         assert kd._cjk_anchor_bigrams("BESS 2026") == []
 
@@ -27,43 +24,11 @@ class TestAnchorBigrams:
         assert kd._cjk_anchor_bigrams("电 BESS") == []
 
 
-class TestPickRareBigrams:
-    def test_selective_only_two_rarest(self):
-        rare, est = kd._pick_rare_bigrams(
-            ["蒙西", "规则", "现货"], [344, 8880, 18525])
-        assert rare == ["蒙西", "规则"]
-        assert est == 344 + 8880
-
-    def test_skips_common_and_zero(self):
-        rare, est = kd._pick_rare_bigrams(["电力", "蒙西", "甲某"], [46472, 344, 0])
-        assert rare == ["蒙西"]
-        assert est == 344
-
-    def test_all_common_falls_back_to_two_smallest(self):
-        rare, est = kd._pick_rare_bigrams(
-            ["电力", "市场", "结算"], [46472, 57512, 26246])
-        assert rare == ["结算", "电力"]
-        assert est == 26246 + 46472
-
-
-class TestBigramCountCache:
-    def setup_method(self):
-        kd._count_cache.clear()
-
-    def test_caches_within_ttl(self):
-        cur = MagicMock()
-        cur.fetchone.return_value = (344,)
-        assert kd._bigram_count(cur, "蒙西") == 344
-        assert kd._bigram_count(cur, "蒙西") == 344
-        assert cur.execute.call_count == 1
-
-
 class _FakeCursor:
-    """Captures execute() calls; count queries return scripted counts; candidate
-    searches return scripted rows per call."""
+    """Captures execute() calls; each candidate search returns the next
+    scripted row set (empty when exhausted)."""
 
-    def __init__(self, count_map, search_row_sets):
-        self.count_map = count_map
+    def __init__(self, search_row_sets):
         self.search_row_sets = list(search_row_sets)
         self.calls = []
 
@@ -75,11 +40,6 @@ class _FakeCursor:
 
     def execute(self, sql, params=None):
         self.calls.append((sql, list(params or [])))
-        self._current = sql
-
-    def fetchone(self):
-        bg = self.calls[-1][1][0].strip("%")
-        return (self.count_map.get(bg, 100),)
 
     def fetchall(self):
         return self.search_row_sets.pop(0) if self.search_row_sets else []
@@ -107,55 +67,59 @@ _ROWS3 = [(1, "f.pdf", "c", "shared", 1, "t1", 11.0),
 
 
 class TestTwoPhaseSearch:
-    def setup_method(self):
-        kd._count_cache.clear()
-
-    def test_anchor_and_short_circuits(self):
-        cur = _FakeCursor(count_map={}, search_row_sets=[_ROWS3])
+    def test_step1_and_short_circuits(self):
+        cur = _FakeCursor([_ROWS3])
         with patch.object(kd, "get_conn", return_value=_fake_conn(cur)):
             rows = kd._cjk_two_phase_search(
                 _QUERY, _BIGRAMS, category=None, app="strategist",
                 filename_contains=None, limit=5)
         assert rows is not None and len(rows) == 3
-        # exactly ONE query (the AND search) — no count queries
+        # exactly ONE query; no count(*) anywhere
         assert len(cur.calls) == 1
         sql, params = cur.calls[0]
-        assert "ILIKE %s AND c.chunk_text ILIKE %s" in sql
-        # CASE over all bigrams, then the 2 anchor params, then app, then limit
+        assert "WITH cand AS" in sql and "count(*)" not in sql
+        assert sql.count("%s") == len(params)
         n_bg = len(_BIGRAMS)
-        assert params[:n_bg] == [f"%{b}%" for b in _BIGRAMS]
-        assert params[n_bg:n_bg + 2] == ["%蒙西%", "%西电%"]
+        # param order: lead anchor, CASE bigrams, AND-rest, app, limit
+        assert params[0] == "%蒙西%"
+        assert params[1:1 + n_bg] == [f"%{b}%" for b in _BIGRAMS]
+        assert params[1 + n_bg] == "%西电%"
         assert params[-2] == "strategist"
         assert params[-1] == 5
-        assert sql.count("%s") == len(params)
+        # step 1 is AND of the second anchor
+        assert "c.chunk_text ILIKE %s\n" not in sql  # only one rest cond
+        assert sql.count("c.chunk_text ILIKE %s") == n_bg + 1  # CASE + rest (CTE is unaliased)
 
-    def test_falls_to_rare_union_when_anchor_thin(self):
-        cur = _FakeCursor(
-            count_map={"蒙西": 344, "西电": 350, "电力": 46472, "力现": 900},
-            search_row_sets=[[(1, "f.pdf", "c", "shared", 1, "t", 5.0)],  # thin AND
-                             _ROWS3],                                     # union ok
-        )
+    def test_step2_or_when_step1_thin(self):
+        cur = _FakeCursor([[(1, "f.pdf", "c", "shared", 1, "t", 5.0)], _ROWS3])
         with patch.object(kd, "get_conn", return_value=_fake_conn(cur)):
             rows = kd._cjk_two_phase_search(
                 _QUERY, _BIGRAMS, category=None, app=None,
                 filename_contains=None, limit=5)
         assert rows is not None and len(rows) == 3
-        # AND search + 4 counts + union search
-        assert len(cur.calls) == 1 + 4 + 1
-        union_sql, union_params = cur.calls[-1]
-        assert " OR " in union_sql
-        # rarest two of the anchor: 蒙西(344), 西电(350)
+        assert len(cur.calls) == 2
+        sql2, params2 = cur.calls[1]
+        # step 2: OR across anchor[1:4]
+        assert " OR ".join([]) == "" and " OR " in sql2
         n_bg = len(_BIGRAMS)
-        assert union_params[n_bg:n_bg + 2] == ["%蒙西%", "%西电%"]
+        assert params2[0] == "%蒙西%"
+        assert params2[1 + n_bg: 1 + n_bg + 3] == ["%西电%", "%电力%", "%力现%"]
 
     def test_returns_none_when_all_thin(self):
-        cur = _FakeCursor(
-            count_map={"蒙西": 344},
-            search_row_sets=[[(1, "f.pdf", "c", "shared", 1, "t", 5.0)],
-                             [(1, "f.pdf", "c", "shared", 1, "t", 5.0)]],
-        )
+        cur = _FakeCursor([[(1, "f.pdf", "c", "shared", 1, "t", 5.0)],
+                           [(1, "f.pdf", "c", "shared", 1, "t", 5.0)]])
         with patch.object(kd, "get_conn", return_value=_fake_conn(cur)):
             rows = kd._cjk_two_phase_search(
                 _QUERY, _BIGRAMS, category=None, app=None,
                 filename_contains=None, limit=5)
         assert rows is None
+        assert len(cur.calls) == 2
+
+    def test_returns_none_when_anchor_too_short(self):
+        cur = _FakeCursor([_ROWS3])
+        with patch.object(kd, "get_conn", return_value=_fake_conn(cur)):
+            rows = kd._cjk_two_phase_search(
+                "BESS", _BIGRAMS, category=None, app=None,
+                filename_contains=None, limit=5)
+        assert rows is None
+        assert len(cur.calls) == 0

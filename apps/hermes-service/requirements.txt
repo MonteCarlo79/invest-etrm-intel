@@ -22,4 +22,3 @@ sqlalchemy>=2.0
 pandas>=2.0
 matplotlib>=3.8
 pulp>=2.7
-playwright>=1.40

@@ -696,14 +696,17 @@ def register_url(
     Raises ValueError when the page is an anti-bot challenge (e.g. WeChat 环境异常)
     so junk verification text is never ingested as document content.
     """
-    import requests
     from bs4 import BeautifulSoup
+
+    from services.common.proxy_fetch import fetch as proxy_fetch
 
     is_wechat = "mp.weixin.qq.com" in url
     headers = dict(_WECHAT_FETCH_HEADERS) if is_wechat else {
         "User-Agent": "Mozilla/5.0 (compatible; SpotMarketBot/1.0)"
     }
-    resp = requests.get(url, headers=headers, timeout=30)
+    # Routed through WECHAT_PROXY_URL when configured (WeChat anti-bot blocks
+    # the NAT datacenter IP); direct fetch otherwise.
+    resp = proxy_fetch(url, headers=headers, timeout=30)
     resp.raise_for_status()
 
     if _is_challenge_page(resp.text):
@@ -827,34 +830,16 @@ def _cjk_bigrams(text: str, max_terms: int = 12) -> list[str]:
 # Rarity = exact per-bigram count(*) (planner EXPLAIN estimates are useless for
 # CJK ILIKE — every bigram estimated ~246 rows regardless of reality).
 
-_COMMON_CAP = 20_000         # bigrams matching ≥ this many chunks are "common"
-_CANDIDATE_EST_CAP = 50_000  # est. union rows above this → legacy full scan
 _MIN_GOOD_ROWS = 3           # fewer hits than this → legacy full scan (recall)
-_COUNT_CACHE_TTL_S = 3600    # in-process rarity cache (corpus shifts slowly)
-
-_count_cache: dict[str, tuple[int, float]] = {}
-
-
-def _bigram_count(cur, bigram: str) -> int:
-    """Exact chunk count for one bigram, cached in-process (1h TTL)."""
-    import time as _time
-    hit = _count_cache.get(bigram)
-    if hit and _time.monotonic() - hit[1] < _COUNT_CACHE_TTL_S:
-        return hit[0]
-    cur.execute(
-        "SELECT count(*) FROM staging.spot_knowledge_chunks"
-        " WHERE chunk_text ILIKE %s", (f"%{bigram}%",))
-    n = int(cur.fetchone()[0])
-    _count_cache[bigram] = (n, _time.monotonic())
-    return n
+_ANCHOR_CANDIDATE_CAP = 20_000  # CTE row cap — bounds re-check cost when the
+                                # lead anchor bigram is common (电力 ~46K rows)
 
 
 def _cjk_anchor_bigrams(query: str, n: int = 4) -> list[str]:
     """First n bigrams of the longest CJK run in the query — the phrase anchor.
 
-    AND-ing the first two anchor bigrams ≈ matching the anchor's first 4 chars
-    (e.g. 蒙西 ∩ 西电 ≈ "蒙西电") — a GIN-intersect of a few hundred rows, vs
-    tens of thousands for single common bigrams.  Run-aware because agents'
+    The lead bigram drives the single-term GIN fetch (e.g. 蒙西 → ~344 rows);
+    the rest are re-checked on those rows only.  Run-aware because agents'
     queries mix CJK phrases with Latin tokens ("蒙西 BESS 容量电价").
     """
     runs = [r for r in re.findall(r'[一-鿿㐀-䶿]+', query) if len(r) >= 2]
@@ -864,90 +849,71 @@ def _cjk_anchor_bigrams(query: str, n: int = 4) -> list[str]:
     return [longest[i:i + 2] for i in range(min(len(longest) - 1, n))]
 
 
-def _pick_rare_bigrams(bigrams: list[str], counts: list[int]) -> tuple[list[str], int]:
-    """(rare_bigrams, est_union_rows): bigrams with 0 < count < _COMMON_CAP,
-    rarest-first, up to 2; when all are common, the 2 smallest."""
-    selective = sorted((c, b) for b, c in zip(bigrams, counts) if 0 < c < _COMMON_CAP)
-    if selective:
-        chosen = selective[:2]
-    else:
-        chosen = sorted((c, b) for b, c in zip(bigrams, counts) if c > 0)[:2]
-    return [b for _, b in chosen], sum(c for c, _ in chosen)
-
-
-def _cjk_candidate_query(bigrams: list[str], candidate_cond: str,
-                         candidate_params: list, *, category, app,
-                         filename_contains, limit, cur) -> list[dict]:
-    """Run the candidate search: full bigram-count rank over rows matching
-    candidate_cond (an AND/OR of ILIKEs, pre-filtered by the GIN index)."""
-    case_parts = " + ".join(
-        "(CASE WHEN c.chunk_text ILIKE %s THEN 1 ELSE 0 END)" for _ in bigrams)
-    conditions = ["d.active = TRUE", f"({candidate_cond})"]
-    # Placeholder order must match SQL text order: SELECT CASEs over all
-    # bigrams, WHERE candidate cond, doc filters, then LIMIT.
-    params: list = [f"%{bg}%" for bg in bigrams]
-    params += candidate_params
-    if category:
-        conditions.append("d.category = %s")
-        params.append(category)
-    if app:
-        conditions.append("(d.app = %s OR d.app = 'shared')")
-        params.append(app)
-    if filename_contains:
-        conditions.append("(" + " OR ".join(
-            "d.file_name ILIKE %s" for _ in filename_contains) + ")")
-        params += [f"%{t}%" for t in filename_contains]
-
-    sql = f"""
-        SELECT d.id AS doc_id, d.file_name, d.category, d.app,
-               c.page_no, c.chunk_text, ({case_parts})::float AS rank
-        FROM staging.spot_knowledge_chunks c
-        JOIN staging.spot_knowledge_docs d ON d.id = c.doc_id
-        WHERE {' AND '.join(conditions)}
-        ORDER BY rank DESC, d.id, c.chunk_index
-        LIMIT %s
-    """
-    params.append(limit)
-    cur.execute(sql, params)
-    cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, r)) for r in cur.fetchall()]
-
-
 def _cjk_two_phase_search(query: str, bigrams: list[str], *, category, app,
                           filename_contains, limit) -> Optional[list[dict]]:
-    """Anchor-AND candidates → rare-union candidates → None (legacy scan).
+    """Single-term GIN fetch + re-check, then None (legacy scan).
 
-    Step 1: AND the first 2 anchor bigrams (GIN intersect, ~hundreds of rows).
-    Step 2: union of the 2 rarest anchor bigrams under _COMMON_CAP (exact
-    counts, cached).  Either returns None when results are too thin so the
-    caller falls back to the legacy full scan."""
+    Why this shape: the planner's ILIKE selectivity estimates are useless for
+    CJK (every bigram estimated ~246 rows), so 2-term ANDs and count(*)-guided
+    unions plan unreliably — measured 24-191s in prod (2026-09-08). A single
+    ILIKE on the anchor's lead bigram ALWAYS takes the GIN bitmap (few hundred
+    ms); re-checking the remaining bigrams on those rows needs no index.
+
+    Ladder: lead-bigram CTE + AND second anchor → same CTE + OR the anchor rest
+    → None (legacy full scan).  No count queries, no 2-term AND planning."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             anchor = _cjk_anchor_bigrams(query, 4)
+            if len(anchor) < 2:
+                return None
 
-            # Step 1 — phrase anchor AND (no count queries needed)
-            if len(anchor) >= 2:
-                rows = _cjk_candidate_query(
-                    bigrams,
-                    "c.chunk_text ILIKE %s AND c.chunk_text ILIKE %s",
-                    [f"%{anchor[0]}%", f"%{anchor[1]}%"],
-                    category=category, app=app,
-                    filename_contains=filename_contains, limit=limit, cur=cur)
+            for rest_cond, rest_params in (
+                ("AND", [anchor[1]]),          # step 1: lead AND second (strict)
+                ("OR", anchor[1:]),            # step 2: lead AND any-of-rest (loose)
+            ):
+                case_parts = " + ".join(
+                    "(CASE WHEN c.chunk_text ILIKE %s THEN 1 ELSE 0 END)"
+                    for _ in bigrams)
+                rest_conds = f" {rest_cond} ".join(
+                    "c.chunk_text ILIKE %s" for _ in rest_params)
+                conditions = ["d.active = TRUE", f"({rest_conds})"]
+                # Placeholder order = SQL text order: CTE lead term, SELECT
+                # CASEs over all bigrams, WHERE rest, doc filters, LIMIT.
+                params: list = [f"%{anchor[0]}%"]
+                params += [f"%{bg}%" for bg in bigrams]
+                params += [f"%{bg}%" for bg in rest_params]
+                if category:
+                    conditions.append("d.category = %s")
+                    params.append(category)
+                if app:
+                    conditions.append("(d.app = %s OR d.app = 'shared')")
+                    params.append(app)
+                if filename_contains:
+                    conditions.append("(" + " OR ".join(
+                        "d.file_name ILIKE %s" for _ in filename_contains) + ")")
+                    params += [f"%{t}%" for t in filename_contains]
+
+                sql = f"""
+                    WITH cand AS (
+                        SELECT doc_id, chunk_index, chunk_text
+                        FROM staging.spot_knowledge_chunks
+                        WHERE chunk_text ILIKE %s
+                        LIMIT {_ANCHOR_CANDIDATE_CAP}
+                    )
+                    SELECT d.id AS doc_id, d.file_name, d.category, d.app,
+                           c.page_no, c.chunk_text, ({case_parts})::float AS rank
+                    FROM cand c
+                    JOIN staging.spot_knowledge_docs d ON d.id = c.doc_id
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY rank DESC, d.id, c.chunk_index
+                    LIMIT %s
+                """
+                params.append(limit)
+                cur.execute(sql, params)
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
                 if len(rows) >= _MIN_GOOD_ROWS:
                     return rows
-
-            # Step 2 — rare-bigram union (exact counts on the anchor only)
-            if anchor:
-                counts = [_bigram_count(cur, bg) for bg in anchor]
-                rare, est_union = _pick_rare_bigrams(anchor, counts)
-                if rare and est_union <= _CANDIDATE_EST_CAP:
-                    union_conds = " OR ".join("c.chunk_text ILIKE %s" for _ in rare)
-                    rows = _cjk_candidate_query(
-                        bigrams, union_conds, [f"%{bg}%" for bg in rare],
-                        category=category, app=app,
-                        filename_contains=filename_contains, limit=limit, cur=cur)
-                    if len(rows) >= _MIN_GOOD_ROWS:
-                        return rows
             return None
 
 
