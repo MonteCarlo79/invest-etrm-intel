@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from services.deal_committee.brief import DealBrief
 
@@ -52,22 +53,31 @@ def build_question(key: str, brief: DealBrief) -> str:
     asset = _asset_desc(brief)
     node_clause = f",并网点/节点:{brief.node}" if brief.node else ""
     site = f"{brief.province}{node_clause}"
+    # Date anchor: the models' internal clock sits at their training cutoff
+    # (~mid-2025) — without this, "近12个月" queries land ~1 year stale
+    # (DAF 2026-09-07 reported 2024-07→2025-06 as "近12个月").
+    today = date.today()
+    anchor = (f"今天是 {today.isoformat()}。所有「近期/近 N 个月」均以该日期为基准,"
+              "工具查询必须使用截至最新可得日期的数据,不要使用你认为的当前日期。")
     questions = {
         "market_background": (
+            f"{anchor}\n"
             f"作为电力市场分析师,评估{site}电力现货市场对新建{asset}项目的吸引力。"
             "请用数据回答:1) 近12个月日前/实时价格水平与走势;2) 价格波动率与峰谷价差;"
             "3) 省间送受电格局;4) 市场成熟度(结算试运行/正式运行)。中文回答。"
         ),
         "policy": (
+            f"{anchor}\n"
             f"梳理{brief.province}电力市场关于{asset}的最新政策与交易规则:"
             "1) 现货市场结算规则要点;2) 独立储能/新能源参与现货与辅助服务的方式;"
             "3) 容量补偿/容量电价机制;4) 未来1-2年的政策风险点。"
             "请检索知识库文档并注明出处,中文回答。"
         ),
         "ops_mengxi": (
+            f"{anchor}\n"
             "基于资产风险台账中蒙西在运储能资产的真实数据,总结其运营表现:"
             "1) 先用 get_asset_list 列出台账中的蒙西储能资产;"
-            "2) 对主要资产用 get_settlement_summary 取近 3 个月结算汇总"
+            "2) 对主要资产用 get_settlement_summary 取最近有数据的 3 个月结算汇总"
             "(放电/充电量、套利收入、套利价差 ¥/MWh——即结算均价水平);"
             "3) 用 get_deviation_analysis 说明申报与实发偏差、受限时段情况;"
             "4) 由放电/充电量估算日均循环次数与等效利用小时。"
@@ -75,11 +85,13 @@ def build_question(key: str, brief: DealBrief) -> str:
             "如某资产无数据请明确说明,不要推测。中文回答。"
         ),
         "ops_asset_risk": (
+            f"{anchor}\n"
             f"汇总资产风险台账中与{brief.province}及同类({asset})资产相关的在运项目"
             "结算与 P&L 表现、最新 VaR 水平;如台账中无该省资产,请给出现有组合的基准数据并明确说明。"
             "中文回答。"
         ),
         "ops_retail_risk": (
+            f"{anchor}\n"
             f"汇总零售风险台账中{brief.province}售电业务的批零价差、结算与保证金风险表现,"
             "评估该省市场流动性与零售侧价格信号;如该省无零售业务,请明确说明。中文回答。"
         ),

@@ -48,3 +48,13 @@ def test_asset_desc_variants():
     wb = DealBrief(asset_type="wind_bess", province="山西", installed_mw=150,
                    capacity_mw=50, capacity_mwh=100)
     assert "风电" in _asset_desc(wb) and "储能" in _asset_desc(wb)
+
+
+def test_questions_carry_date_anchor():
+    # Models' internal clock sits at their training cutoff — without the anchor
+    # "近12个月" queries land ~1y stale (DAF 2026-09-07 reported 2024-07→2025-06).
+    from datetime import date
+    brief = DealBrief(deal_name="t", province="蒙西", capacity_mw=100, capacity_mwh=200)
+    for key in ("market_background", "policy", "ops_mengxi", "ops_asset_risk", "ops_retail_risk"):
+        q = build_question(key, brief)
+        assert f"今天是 {date.today().isoformat()}" in q, key

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,8 @@ def _run_spot_query(question: str, api_key: str) -> str:
             logger.error("spot tool %s error: %s", name, e)
             return json.dumps({"error": str(e)})
 
-    system = """\
+    system = (f"今天是 {date.today().isoformat()}。涉及日期/时期的问题一律以该日期为基准,"
+              "使用最新可得数据——模型的内部日期感可能滞后于真实当前日期。\n\n") + """\
 You are a specialist analyst for China's spot electricity market, \
 answering via the Hermes assistant in Feishu. \
 Your knowledge comes exclusively from the data tools below. \

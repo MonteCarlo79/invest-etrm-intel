@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def run_retail_risk_query(question: str, api_key: str, pg_url: str = "") -> str:
     client = _make_client(api_key)
     engine = _make_engine(pg_url)
 
-    system = _SYSTEM
+    system = (f"今天是 {date.today().isoformat()}。涉及日期/时期的问题一律以该日期为基准,使用最新可得数据——模型的内部日期感可能滞后于真实当前日期。\n\n" + _SYSTEM)
     try:
         from services.knowledge_pool.expert_memory import get_relevant_insights, inject_expert_memory
         insights = get_relevant_insights(question, limit=4)
