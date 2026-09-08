@@ -28,6 +28,8 @@ def economics_to_dict(econ: EconomicsResult | None) -> dict | None:
         "model": econ.model,
         "price_start": econ.price_start,
         "price_end": econ.price_end,
+        "comp_rate_yuan_mwh": econ.comp_rate_yuan_mwh,
+        "comp_annual_yuan": econ.comp_annual_yuan,
     }
 
 
@@ -52,6 +54,8 @@ def dict_to_economics(d: dict | None) -> EconomicsResult | None:
         model=d.get("model", "ou"),
         price_start=d.get("price_start", ""),
         price_end=d.get("price_end", ""),
+        comp_rate_yuan_mwh=d.get("comp_rate_yuan_mwh", 0.0),
+        comp_annual_yuan=d.get("comp_annual_yuan", 0.0),
     )
 
 

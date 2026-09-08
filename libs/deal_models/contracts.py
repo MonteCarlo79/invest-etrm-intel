@@ -61,6 +61,9 @@ class DispatchRequest(BaseModel):
     # Wind-price correlation (cannibalization model)
     price_wind_corr: float = Field(0.0, ge=-1.0, le=1.0)   # ρ: -1=full cannibalization, 0=none
     cf_volatility: float = Field(0.0, ge=0.0, le=0.5)      # σ: annual CF spread (0=no variation)
+    # Capacity compensation (容量补偿): deterministic ¥ per discharged MWh.
+    # 0 = disabled. 蒙西 empirical ≈ 365 (0.35元/kW 放电补偿 2025→0.28 in 2026).
+    comp_rate_yuan_mwh: float = Field(0.0, ge=0.0)
 
 
 class ProjectFinancials(BaseModel):
@@ -112,6 +115,7 @@ class DispatchResult:
     p90: float
     mean: float
     std: float
+    comp_annual_yuan: float = 0.0  # deterministic capacity-comp component (transparency)
 
 
 @dataclass

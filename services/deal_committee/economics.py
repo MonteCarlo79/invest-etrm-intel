@@ -28,6 +28,50 @@ class EconomicsResult:
     model: str
     price_start: str = ""   # ISO date — actual history window used (printed in 测算口径)
     price_end: str = ""
+    comp_rate_yuan_mwh: float = 0.0   # capacity-comp rate applied (0 = none)
+    comp_annual_yuan: float = 0.0     # deterministic comp stream included in revenue
+
+
+# brief.province (中文) → rm_assets.province code in the risk register
+_REGISTER_PROVINCE_MAP = {
+    "蒙西": "inner_mongolia_mengxi",
+    "蒙东": "inner_mongolia_mengdong",
+    "甘肃": "gansu",
+    "广西": "guangxi",
+}
+
+
+def _register_comp_rate(province: str, engine=None) -> float:
+    """Empirical capacity-comp ¥/MWh: register's total capacity_compensation
+    ÷ total discharge volume for this province's books (last 12 months).
+    裕昭沙子坝 2026H1: 125.53M / 344,235 MWh ≈ 364.7 — tracks the 0.35 policy rate.
+    0 when the register has no books for the province."""
+    code = _REGISTER_PROVINCE_MAP.get(province)
+    if not code:
+        return 0.0
+    try:
+        from sqlalchemy import text
+
+        from services.common.db_utils import get_engine
+        engine = engine or get_engine()
+        sql = text("""
+            SELECT
+              SUM(CASE WHEN si.category = 'capacity_compensation'
+                       THEN si.amount_cny END)
+              / NULLIF(SUM(CASE WHEN si.category = 'discharge_energy'
+                                THEN si.volume_mwh END), 0)
+            FROM marketdata.rm_settlement_items si
+            JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
+            JOIN marketdata.rm_books b ON b.id = s.book_id
+            JOIN marketdata.rm_assets a ON a.id = b.asset_id
+            WHERE a.province = :code
+              AND s.settlement_month >= DATE_TRUNC('month', NOW()) - INTERVAL '12 months'
+        """)
+        with engine.connect() as conn:
+            row = conn.execute(sql, {"code": code}).fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0
+    except Exception:
+        return 0.0
 
 
 def _default_fetch(province: str, start: str, end: str) -> list[float]:
@@ -73,6 +117,9 @@ def run_economics(brief: DealBrief, n_simulations: int = 1000,
     prices = fetch_fn(brief.province, start.isoformat(), end.isoformat())
 
     at = brief.asset_type
+    comp_rate = (brief.comp_rate_yuan_mwh
+                 if brief.comp_rate_yuan_mwh is not None
+                 else _register_comp_rate(brief.province))
     dispatch_req = DispatchRequest(
         asset_type=_DISPATCH_TYPE[at],
         capacity_mwh=brief.capacity_mwh if "bess" in at else 0.0,
@@ -80,13 +127,15 @@ def run_economics(brief: DealBrief, n_simulations: int = 1000,
         roundtrip_eff=brief.efficiency,
         cycles_per_day=brief.cycles_per_day,
         installed_mw=brief.installed_mw if at != "bess" else 0.0,
+        comp_rate_yuan_mwh=comp_rate,
     )
     price_req = PriceSimRequest(
         province=brief.province, n_simulations=n_simulations, n_years=1,
         model="ou", price_history_yuan_mwh=prices,
     )
     paths = simulate_prices(price_req, seed=42)
-    base_rev = dispatch_annual(paths, dispatch_req).p50
+    base_dispatch = dispatch_annual(paths, dispatch_req)
+    base_rev = base_dispatch.p50
     fin = ProjectFinancials(
         capex_total_yuan=brief.capex_total_yuan,
         commissioning_year=brief.commissioning_year,
@@ -102,13 +151,21 @@ def run_economics(brief: DealBrief, n_simulations: int = 1000,
         mc=mc, monthly_price=monthly_fn(None, brief.province),
         n_price_hours=len(prices), n_simulations=n_simulations, model="ou",
         price_start=start.isoformat(), price_end=end.isoformat(),
+        comp_rate_yuan_mwh=comp_rate,
+        comp_annual_yuan=base_dispatch.comp_annual_yuan,
     )
 
 
 def economics_section_markdown(res: EconomicsResult, brief: DealBrief) -> str:
     mc = res.mc
     window = f" · 历史价格窗口 {res.price_start}→{res.price_end}" if res.price_start else ""
-    return f"""**测算口径**：{brief.province} · 实时(RT)价格 · {res.model.upper()} 模型 · {res.n_simulations} 条路径 · 历史价格 {res.n_price_hours} 小时{window} · 固定运维 ¥{_FIXED_OM_YUAN/1e6:.1f}M/年
+    comp_tag = f" · 容量补偿 {res.comp_rate_yuan_mwh:.0f} ¥/MWh" if res.comp_rate_yuan_mwh > 0 else ""
+    comp_line = ""
+    if res.comp_annual_yuan > 0:
+        comp_line = (f"\n- 收入构成:现货套利 ¥{(mc.revenue_p50-res.comp_annual_yuan)/1e6:.1f}M + "
+                     f"容量补偿 ¥{res.comp_annual_yuan/1e6:.1f}M/年(确定性流,"
+                     f"费率取自台账实证 {res.comp_rate_yuan_mwh:.0f} ¥/MWh)\n")
+    return f"""**测算口径**：{brief.province} · 实时(RT)价格 · {res.model.upper()} 模型 · {res.n_simulations} 条路径 · 历史价格 {res.n_price_hours} 小时{window} · 固定运维 ¥{_FIXED_OM_YUAN/1e6:.1f}M/年{comp_tag}
 
 | 指标 | P10 | P50 | P90 |
 |---|---|---|---|
@@ -118,4 +175,4 @@ def economics_section_markdown(res: EconomicsResult, brief: DealBrief) -> str:
 
 - 收入 VaR(5%)：¥{mc.revenue_var_5pct/1e6:.1f}M · CVaR：¥{mc.revenue_cvar_5pct/1e6:.1f}M
 - 股权 IRR 低于基准（8%）概率：{mc.irr_prob_below_hurdle:.0%}
-"""
+{comp_line}"""

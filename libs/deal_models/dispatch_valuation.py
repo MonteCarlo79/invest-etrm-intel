@@ -12,7 +12,9 @@ def _percentiles(arr: np.ndarray) -> tuple[float, float, float]:
 def _dispatch_bess(price_paths: np.ndarray, req: DispatchRequest) -> np.ndarray:
     """
     Greedy daily dispatch: charge in cheapest n_cycles hours, discharge in most expensive.
-    Returns (n_sim,) annual revenue yuan.
+    Returns (n_sim,) annual revenue yuan, including the deterministic capacity-
+    compensation stream when req.comp_rate_yuan_mwh > 0 (discharge volume is
+    price-independent in this dispatch, so comp is a constant shift).
     """
     n_sim, n_hours = price_paths.shape
     n_days = n_hours // 24
@@ -34,7 +36,14 @@ def _dispatch_bess(price_paths: np.ndarray, req: DispatchRequest) -> np.ndarray:
     om = req.om_cost_yuan_per_mwh * energy_mwh * req.roundtrip_eff * n_cycles
 
     daily_rev = np.maximum(discharge_rev - charge_cost - om, 0.0)
-    return daily_rev.sum(axis=1)
+
+    # Capacity compensation: ¥/MWh × annual discharged volume (constant per request)
+    comp_annual = 0.0
+    if req.comp_rate_yuan_mwh > 0.0:
+        comp_annual = (req.comp_rate_yuan_mwh * energy_mwh
+                       * req.roundtrip_eff * n_cycles * n_days)
+
+    return daily_rev.sum(axis=1) + comp_annual
 
 
 def _dispatch_wind(price_paths: np.ndarray, req: DispatchRequest, seed: int = 42) -> np.ndarray:
@@ -93,9 +102,16 @@ def dispatch_annual(price_paths: np.ndarray, req: DispatchRequest) -> DispatchRe
         raise ValueError(f"Unknown asset_type: {req.asset_type!r}")
 
     p10, p50, p90 = _percentiles(rev)
+    comp_annual = 0.0
+    if "bess" in req.asset_type and req.comp_rate_yuan_mwh > 0.0:
+        n_cycles = max(1, int(req.cycles_per_day))
+        energy_mwh = min(req.power_mw * 1.0, req.capacity_mwh / n_cycles)
+        comp_annual = (req.comp_rate_yuan_mwh * energy_mwh * req.roundtrip_eff
+                       * n_cycles * (price_paths.shape[1] // 24))
     return DispatchResult(
         revenue_paths=rev,
         p10=p10, p50=p50, p90=p90,
         mean=float(rev.mean()),
         std=float(rev.std()),
+        comp_annual_yuan=comp_annual,
     )

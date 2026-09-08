@@ -36,6 +36,8 @@ class DealBrief(BaseModel):
     debt_ratio: float = Field(0.70, ge=0.0, le=0.95)
     loan_rate: float = Field(0.05, ge=0.0, le=0.30)
     loan_term_years: int = Field(10, ge=1, le=30)
+    # Revenue mechanisms — None = auto (empirical from risk register)
+    comp_rate_yuan_mwh: Optional[float] = None
     # Meta
     field_confidence: dict[str, float] = Field(default_factory=dict)
     confirmed: bool = False
