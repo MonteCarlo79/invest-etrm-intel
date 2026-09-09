@@ -228,7 +228,9 @@ def _history_sections() -> None:
     st.subheader("📚 历史 DAF")
     try:
         from services.common.db_utils import get_engine
-        from services.deal_committee.library import list_results, load_daf, load_result
+        from services.deal_committee.library import (
+            delete_result, list_results, load_daf, load_result,
+        )
         rows = list_results(get_engine())
     except Exception as e:
         st.caption(f"历史库不可用:{e}")
@@ -237,8 +239,34 @@ def _history_sections() -> None:
         st.caption("暂无历史 DAF——生成综合意见后,完整分析结果会自动保存到这里。")
         return
 
+    # Two-step delete confirm banner for 历史 DAF rows
+    del_res = st.session_state.get("_confirm_delete_result_id")
+    if del_res is not None:
+        target = next((r for r in rows if r["id"] == del_res), None)
+        if target is None:
+            st.session_state.pop("_confirm_delete_result_id", None)
+        else:
+            pdf_note = "及其 DAF PDF" if target["daf_id"] else ""
+            st.warning(f"确认删除 **{target['deal_name']}** 的分析结果"
+                       f"({target['created_at'][:16].replace('T', ' ')}){pdf_note}?"
+                       "不可撤销。(交易要素保留在历史交易要素中)")
+            c_yes, c_no, _ = st.columns([1.2, 1.2, 8])
+            if c_yes.button("🗑 确认删除", key="delres_yes", type="primary"):
+                try:
+                    delete_result(get_engine(), del_res)
+                    st.session_state.pop("_confirm_delete_result_id", None)
+                    if st.session_state.get("_history_view") == del_res:
+                        st.session_state.pop("_history_view", None)
+                    st.toast("已删除")
+                except Exception as e:
+                    st.error(f"删除失败:{e}")
+                st.rerun()
+            if c_no.button("取消", key="delres_no"):
+                st.session_state.pop("_confirm_delete_result_id", None)
+                st.rerun()
+
     for r in rows:
-        c1, c2, c3 = st.columns([5, 1, 1])
+        c1, c2, c3, c4 = st.columns([5, 1, 1, 1])
         c1.write(f"**{r['deal_name']}** · {r['created_at'][:16].replace('T', ' ')} · "
                  f"{r['province'] or '—'} · {r['asset_type']} · {r['recommendation'] or '—'}")
         if c2.button("查看", key=f"view_{r['id']}", use_container_width=True):
@@ -249,6 +277,9 @@ def _history_sections() -> None:
                                key=f"dl_{r['id']}", use_container_width=True)
         else:
             c3.caption("无 PDF")
+        if c4.button("🗑 删除", key=f"delres_{r['id']}", use_container_width=True):
+            st.session_state["_confirm_delete_result_id"] = r["id"]
+            st.rerun()
 
     view_id = st.session_state.get("_history_view")
     if view_id is not None:

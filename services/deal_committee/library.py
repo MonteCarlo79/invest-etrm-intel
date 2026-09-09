@@ -212,6 +212,20 @@ def delete_brief(engine, brief_id: int) -> tuple[int, int]:
     return n_results, n_dafs
 
 
+def delete_result(engine, result_id: int) -> bool:
+    """Delete one analysis result plus its linked DAF PDF (via daf_id).
+    The owning brief is NOT touched. Returns True when a linked PDF was deleted."""
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("DELETE FROM marketdata.deal_daf_results WHERE id = :i"
+                 " RETURNING daf_id"), {"i": result_id}).fetchone()
+        if row and row[0]:
+            conn.execute(text("DELETE FROM marketdata.deal_daf_library WHERE id = :i"),
+                         {"i": row[0]})
+            return True
+    return False
+
+
 def list_briefs(engine, limit: int = 20) -> list[dict]:
     """Past deal briefs, each with its latest analysis result id + PDF link (if any)."""
     ensure_tables(engine)
