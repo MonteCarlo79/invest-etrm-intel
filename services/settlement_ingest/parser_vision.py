@@ -71,8 +71,21 @@ Extract every fee/revenue line item from the summary table. Return ONLY a JSON a
 - "amount_cny": number, the line's amount in 元 (negative if it is a charge/deduction)
 - "month": settlement month as printed (YYYY-MM), or null
 
-Skip subtotal/total rows (合计/总计/机组合计) and rows where everything is zero.
+Skip subtotal/total rows (合计/总计/机组合计), rows where everything is zero, and
+section-header rows that carry no numbers at all (no volume, no price, no amount) —
+a header with only a label is not a line item (e.g. a bare "现货结算-其他费用" heading).
 Return raw JSON only, no markdown."""
+
+
+def _row_has_no_numbers(row: dict) -> bool:
+    """True when a vision-extracted row carries no numeric content at all —
+    a section header, not a line item (observed 灵山 2025-04: a bare
+    "现货结算-其他费用" heading emitted with null volume/price/amount,
+    which then violated the NOT NULL amount_cny constraint on insert).
+    Zeros count as numbers — a real 0.00 fee line must survive."""
+    return (row.get("volume") is None
+            and row.get("price") is None
+            and row.get("amount_cny") is None)
 
 
 def parse_settlement_bill_vision(file_path: str, side: str = "discharge") -> list[dict[str, Any]]:
@@ -136,6 +149,8 @@ def parse_settlement_bill_vision(file_path: str, side: str = "discharge") -> lis
 
     items = []
     for row in rows:
+        if _row_has_no_numbers(row):
+            continue
         label = row.get("item_cn", "")
         category = map_settlement_category(label, side)
 

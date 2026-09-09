@@ -31,6 +31,19 @@ def file_sha256(path: str) -> str:
     return h.hexdigest()
 
 
+def split_insertable(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split parsed settlement items into (insertable, dropped).
+
+    Dropped = amount_cny is None. rm_settlement_items.amount_cny is NOT NULL;
+    a single None row aborts the whole-file transaction (observed 灵山 2025-04:
+    vision returned a bare "现货结算-其他费用" header row → full rollback).
+    Zero amounts are valid and kept. Callers should surface the dropped labels."""
+    valid, dropped = [], []
+    for it in items:
+        (dropped if it.get("amount_cny") is None else valid).append(it)
+    return valid, dropped
+
+
 def is_already_ingested(file_hash: str) -> bool:
     """Check if a file has already been ingested (by hash)."""
     with get_conn() as conn:
@@ -268,13 +281,20 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped", "error": f"Unknown PDF type: {pdf_type}"})
                 continue
 
+            items, dropped = split_insertable(items)
             if not items:
-                results.append({"path": rel_path, "asset": asset_name, "status": "empty", "error": "No items extracted"})
+                results.append({"path": rel_path, "asset": asset_name, "status": "empty",
+                                "error": f"No amount-bearing items extracted (dropped {len(dropped)} no-amount rows)"})
                 continue
 
             # Write to DB
             _write_settlement(asset_name, month_str, pdf_path.name, pdf_type, fhash, items)
-            results.append({"path": rel_path, "asset": asset_name, "month": month_str, "type": pdf_type, "status": "ingested", "items": len(items)})
+            result = {"path": rel_path, "asset": asset_name, "month": month_str, "type": pdf_type,
+                      "status": "ingested", "items": len(items)}
+            if dropped:
+                result["warning"] = (f"dropped {len(dropped)} no-amount row(s): "
+                                     + ", ".join((d.get("notes") or "?") for d in dropped[:5]))
+            results.append(result)
 
         except Exception as e:
             results.append({"path": rel_path, "asset": asset_name, "status": "error", "error": str(e)})

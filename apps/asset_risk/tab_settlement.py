@@ -337,6 +337,18 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
         st.warning("No settlement items extracted from PDF. Check file format.")
         return
 
+    # amount_cny is NOT NULL in rm_settlement_items — drop no-amount rows
+    # (section headers / unreadable cells) instead of rolling back the whole file
+    from services.settlement_ingest.scanner import split_insertable
+    items, dropped = split_insertable(items)
+    if dropped:
+        st.warning(f"**{uploaded.name}**: dropped {len(dropped)} row(s) with no amount "
+                   "(section header or unreadable cell — review if one was a real fee): "
+                   + ", ".join((d.get("notes") or d.get("category") or "?") for d in dropped))
+    if not items:
+        st.warning("No amount-bearing settlement items extracted from PDF. Check file format.")
+        return
+
     with engine.begin() as conn:
         result = conn.execute(text("""
             INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
