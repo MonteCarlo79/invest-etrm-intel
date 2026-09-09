@@ -109,3 +109,55 @@ class TestDealReads:
             "services.deal_committee.library.list_briefs", lambda engine, limit=20: [])
         out = sa.tool_get_deal_result("不存在")
         assert "error" in out
+
+
+class TestUpdateParameters:
+    def _row(self):
+        return {"id": 7, "deal_name": "谷山梁二期", "created_at": "x",
+                "brief": {"deal_name": "谷山梁二期", "asset_type": "bess",
+                          "province": "蒙西", "capacity_mw": 500.0,
+                          "capacity_mwh": 2000.0, "capex_total_yuan": 13e8,
+                          "confirmed": True}}
+
+    def _patch(self, monkeypatch, count=1):
+        from services.deal_structurer import structurer_agent as sa
+        monkeypatch.setattr(
+            "services.deal_structurer.structurer_agent._engine", lambda: MagicMock())
+        monkeypatch.setattr(
+            "services.deal_committee.library.load_brief",
+            lambda engine, i: self._row())
+        monkeypatch.setattr(
+            "services.deal_committee.library.count_results_for_brief",
+            lambda engine, i: count)
+        self.saved = []
+        monkeypatch.setattr(
+            "services.deal_committee.library.update_brief",
+            lambda engine, i, brief: self.saved.append(brief))
+
+    def test_whitelist_patch(self, monkeypatch):
+        self._patch(monkeypatch, count=1)
+        from services.deal_structurer import structurer_agent as sa
+        out = sa.tool_update_deal_parameters(
+            7, {"comp_rate_yuan_mwh": 280.0}, challenge_note="费率下调")
+        assert out["ok"] and out["changed"]["comp_rate_yuan_mwh"] == [None, 280.0]
+        assert out["rev_name"] == "谷山梁二期 (rev 2)"
+        assert self.saved[0].comp_rate_yuan_mwh == 280.0
+        assert "费率下调" in (self.saved[0].structure_notes or "")
+
+    def test_reset_comp_to_auto(self, monkeypatch):
+        self._patch(monkeypatch)
+        from services.deal_structurer import structurer_agent as sa
+        out = sa.tool_update_deal_parameters(7, {"comp_rate_yuan_mwh": None})
+        assert out["ok"] and self.saved[0].comp_rate_yuan_mwh is None
+
+    def test_reject_non_whitelist(self, monkeypatch):
+        self._patch(monkeypatch)
+        from services.deal_structurer import structurer_agent as sa
+        out = sa.tool_update_deal_parameters(7, {"structure_notes": "hack"})
+        assert "error" in out and not self.saved
+
+    def test_reject_bad_type(self, monkeypatch):
+        self._patch(monkeypatch)
+        from services.deal_structurer import structurer_agent as sa
+        out = sa.tool_update_deal_parameters(7, {"capacity_mw": "五百"})
+        assert "error" in out

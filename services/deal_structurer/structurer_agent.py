@@ -103,3 +103,52 @@ def tool_get_deal_result(deal) -> dict:
         "synthesis": (rec["synthesis"] or "")[:1500],
         "recommendation": rec["recommendation"], "daf_id": rec["daf_id"],
     }
+
+
+_UPDATE_WHITELIST = {
+    "province", "node", "capacity_mw", "capacity_mwh", "efficiency",
+    "cycles_per_day", "installed_mw", "capex_total_yuan", "commissioning_year",
+    "tenor_years", "debt_ratio", "loan_rate", "loan_term_years", "deal_name",
+    "comp_rate_yuan_mwh",
+}
+
+
+def tool_update_deal_parameters(brief_id: int, updates: dict,
+                                challenge_note: str = "") -> dict:
+    if not isinstance(updates, dict) or not updates:
+        return {"error": "updates 必须是非空 {field: value} 字典"}
+    bad = [f for f in updates if f not in _UPDATE_WHITELIST]
+    if bad:
+        return {"error": f"字段不在白名单: {bad}。可改: {sorted(_UPDATE_WHITELIST)}"}
+
+    from services.deal_committee.brief import DealBrief
+    from services.deal_committee.library import (
+        count_results_for_brief, load_brief, update_brief,
+    )
+    engine = _engine()
+    row = load_brief(engine, brief_id)
+    brief = DealBrief(**(row["brief"] or {}))
+
+    changed = {}
+    for field, value in updates.items():
+        old = getattr(brief, field)
+        if old == value and value is not None:
+            continue
+        try:
+            setattr(brief, field, value)
+            brief = DealBrief(**brief.model_dump())  # pydantic re-validate
+        except Exception as e:
+            return {"error": f"字段 {field} 取值非法 ({value!r}): {e}"}
+        changed[field] = [old, value]
+    if not changed:
+        return {"error": "updates 与现值相同,无变化"}
+
+    if challenge_note:
+        note = f"rev{count_results_for_brief(engine, brief_id) + 1}: {challenge_note}"
+        brief.structure_notes = ((brief.structure_notes or "") + "\n" + note).strip()
+
+    update_brief(engine, brief_id, brief)
+    return {
+        "ok": True, "brief_id": brief_id, "changed": changed,
+        "rev_name": f"{brief.deal_name} (rev {count_results_for_brief(engine, brief_id) + 1})",
+    }
