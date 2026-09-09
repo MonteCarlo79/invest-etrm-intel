@@ -51,6 +51,9 @@ def map_settlement_category(label: str, side: str = "discharge") -> str:
         return "subsidy"
     if "退补" in s or "返还" in s:
         return "rebate" if side == "discharge" else energy_cat
+    if side == "discharge" and "交易电费" in s:
+        # 电网电费结算单's market-energy revenue line (灵山 2026-03..07 scans)
+        return "discharge_energy"
     if "现货" in s or "上网" in s or "电能电费" in s or "电能量" in s or "购电" in s or "下网" in s:
         return energy_cat
     return "other"

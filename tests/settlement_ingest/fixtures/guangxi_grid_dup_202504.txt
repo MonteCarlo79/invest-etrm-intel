@@ -1,0 +1,70 @@
+t t t t t
+f f f f f
+o o o o o
+s s s s s
+g g g g g
+y y y y y
+电网名称：广西电网有限责任公司
+t 电厂名称：灵山县远祥新能源有限公司 t t t t
+f f f f f
+o o o o o
+享受 享受 享受
+s s s s s
+可再 可再 可再
+g 是否 g g g g
+丰枯 其他 其他 其他 生能 生能 生能
+结算 纳入 平段 平段 平段 容量 容量 容量
+y 电价 税率 备注 y 电费 电费 电费 源发 源发 源发 y y y
+单元 财政 电量 电价 电费 电量 电价 电费
+标识 电量 电价 电费 电补 电补 电补
+补贴
+贴电 贴电 贴电
+量 价 费
+平段
+电量
+电费
+为上
+网电
+量电
+t t t t t
+f 费或 f f f f
+o 应进 o o o o
+s 未进 s s s s
+g 电费 g g g g
+；容
+y y y y y
+量电
+费为
+市场
+化交
+易电
+费
+；享
+远祥 受可
+73848 12322. 43623
+储能 13% 再生 0 0 0 0 0 0 0 0 354.02
+34 2 52.85
+站 能源
+t t t t t
+f 发电 f f f f
+o 补贴 o o o o
+s 电费 s s s s
+g 为调 g g g g
+试电
+y y y y y
+量电
+费
+；其
+他电
+费为
+两个
+细则
+考核
+补偿
+费用
+t t t t t
+f 73848 f f f f
+o 34.0元 o o o o
+s 。 s s s s
+g g g g g
+y y y y y

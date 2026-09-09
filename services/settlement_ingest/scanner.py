@@ -252,23 +252,46 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
         # Ingest
         try:
             if pdf_type == "charge":
-                # Gansu 下网 layout first (Mengxi regex produces junk, not failure)
-                from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
+                # Deterministic provincial layouts first — 广西 电费通知单 (灵山):
+                # vision produced 1000x unit errors; 甘肃 layout: Mengxi regex
+                # produces junk, not failure (民勤)
                 import pdfplumber as _pp
                 _text = ""
                 with _pp.open(str(pdf_path)) as _pdf:
                     for _pg in _pdf.pages:
                         _text += (_pg.extract_text() or "") + "\n"
-                if is_gansu_charge_bill(_text):
-                    items = parse_gansu_charge_pdf(str(pdf_path))
+                from services.settlement_ingest.parser_guangxi import (
+                    is_guangxi_charge_bill, parse_guangxi_charge_text,
+                )
+                if is_guangxi_charge_bill(_text):
+                    items = parse_guangxi_charge_text(_text)
                 else:
-                    items = parse_charging_cost_pdf(str(pdf_path))
-                    if not items:
-                        # Non-Mengxi charge layout — generic vision fallback
-                        from services.settlement_ingest.parser_vision import parse_charge_bill_vision
-                        items = parse_charge_bill_vision(str(pdf_path))
+                    from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
+                    if is_gansu_charge_bill(_text):
+                        items = parse_gansu_charge_pdf(str(pdf_path))
+                    else:
+                        items = parse_charging_cost_pdf(str(pdf_path))
+                        if not items:
+                            # Non-Mengxi charge layout — generic vision fallback
+                            from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                            items = parse_charge_bill_vision(str(pdf_path))
             elif pdf_type == "discharge":
-                items = parse_discharge_settlement_pdf(str(pdf_path))
+                import pdfplumber as _pp
+                _text = ""
+                with _pp.open(str(pdf_path)) as _pdf:
+                    for _pg in _pdf.pages:
+                        _text += (_pg.extract_text() or "") + "\n"
+                from services.settlement_ingest.parser_guangxi import (
+                    is_guangxi_discharge_bill, is_guangxi_grid_duplicate, parse_guangxi_discharge_text,
+                )
+                if is_guangxi_grid_duplicate(_text):
+                    results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                                    "error": "电网版上网结算单 — overlaps 交易中心结算依据, not ingested"})
+                    continue
+                if is_guangxi_discharge_bill(_text):
+                    items = parse_guangxi_discharge_text(_text)
+                else:
+                    items = parse_discharge_settlement_pdf(str(pdf_path))
             elif pdf_type == "voucher":
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
                                 "error": "结算凭证 (trading-center voucher) — duplicates 结算单 data, not ingested"})
