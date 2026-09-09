@@ -435,9 +435,10 @@ def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh
     total_discharge_vol = yr_monthly[yr_monthly["category_cn"] == "放电收入"]["volume"].sum()
     total_charge_vol = yr_monthly[yr_monthly["category_cn"] == "充电电费"]["volume"].sum()
     if total_discharge_vol > 0 and "价差收入" in pivot.columns:
-        # 价差收入 = 放电 + 充电 (不含容量补偿); 度电总价差 = (价差收入 + 容量补偿) / 放电量
+        # 价差收入 = 放电 + 充电 (不含容量补偿); 度电总价差 = (价差收入 + 容量补偿 + 调频) / 放电量
         cap_total = row[cap_col] if (cap_col and cap_col in pivot.columns) else 0
-        row["度电总价差"] = (row["价差收入"] + cap_total) / total_discharge_vol
+        freq_total = row["调频"] if "调频" in pivot.columns else 0
+        row["度电总价差"] = (row["价差收入"] + cap_total + freq_total) / total_discharge_vol
         if cap_col and "容量补偿价差" in pivot.columns:
             row["容量补偿价差"] = cap_total / total_discharge_vol
         if "套利价差" in pivot.columns:
@@ -571,8 +572,9 @@ def _render_analytics(book_id: int, engine):
         cap_amount = pivot[cap_col] if cap_col else 0
         pivot["价差收入"] = pivot[discharge_col] + pivot[charge_col]
 
-        # 度电总价差 = (价差收入 + 容量补偿) / 放电电量 — 含容量补偿的综合度电收益
-        pivot["度电总价差"] = ((pivot["价差收入"] + cap_amount) / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
+        # 度电总价差 = (价差收入 + 容量补偿 + 调频) / 放电电量 — 全部收入(套利+容量+调频)的综合度电收益
+        freq_amount = pivot["调频"] if "调频" in pivot.columns else 0
+        pivot["度电总价差"] = ((pivot["价差收入"] + cap_amount + freq_amount) / discharge_vol.values).replace([float("inf"), float("-inf")], 0).fillna(0)
 
         # 容量补偿价差 = 容量补偿 / 放电电量
         if cap_col:
