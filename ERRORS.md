@@ -290,3 +290,19 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 **What worked:**
 - Plain retry — attempt 4 succeeded. Docker re-uploads only missing layers, so each retry starts cheaper; every other layer was already `Layer already exists`.
 - If a layer ever never survives: split the Dockerfile's monolithic `RUN pip install -r requirements.txt` into several smaller RUN layers (scipy+numpy / pandas+plotly+streamlit / boto3+anthropic / then -r) so each blob is ≲60MB. Not needed this time.
+
+---
+
+## Vision parsing of TEXT-LAYER settlement bills: silent corruption at scale (灵山 2026-09-09)
+
+**What didn't work:**
+1. Routing 广西 灵山 PDFs to the Claude-vision parser produced corruption that aggregate checks never caught: 基本电费 100000 kVA × 21.4 misread as 1000 × 21.4 → **−21,400,000/month** (1000x); digit-level misreads (126704.66 → 126701.63); parent + dotted child rows both ingested (double-count); a hallucinated "total" row (−5,070,890 invented from the real −5,790,601.77 合计); an all-null section header row that violated NOT NULL and rolled back a whole file's transaction.
+2. Treating the two identical-looking per-page tables in 电费通知单 as vision duplicates — they are TWO 计量点 (metering points), both real. "Duplicate tables" in a bill ≠ duplicate data.
+3. Bucket verification by amount sign — discharge-side rebate rows are negative and pollute any sign-based "charge total". Bucket by the notes prefix (充电结算/放电结算) instead.
+
+**What worked:**
+- **Deterministic regex parser on the text layer** (`services/settlement_ingest/parser_guangxi.py`, mirrors the parser_gansu precedent) with the bills' own printed totals as the test oracle: every parse must equal 计量点电费小计 per page and 电费合计/合计 per file (114 tests, fixtures from real bills).
+- Row-structure rules that survive bill-format revisions: match energy rows by (N)+label+3-numbers (label may wrap mid-word; 类型 column text may interleave before (N)); match 基本电费/功率因数 blocks by LABEL not row number (numbering shifts: 2026 (11)(12)/(13)-16 vs 2025 (13)(14)/(15)-18); shared column blocks (N)(N…)(元) come in 4-col AND 2-col variants (a 2-col block hid a ¥2.27M 退补 credit); truncate pages at 用电状况栏/备注 — footnote formulas reference (N) too.
+- Scanned docs (no text layer) that deterministic parsing can't touch: render to PNG and read values manually, cross-check row sum vs printed 小计 and ×1.13 tax — 5 grid-format 结算单 (2026-03..07) + 2 old-format charge bills verified this way.
+- Before/after evidence for any cleanup: full per-file dry-run table (parsed vs printed, OK/MISMATCH) → then delete + insert in ONE transaction → then verify per-month totals == expected. Backup first: `SELECT json_agg(...)` of the doomed rows to a local file (灵山: /tmp/lingshan_backup_20260909.json).
+- 电网版上网结算单2/结算依据2 docs overlap the 交易中心 statement — detect by content (`电网名称：广西电网` without `结算依据`) and skip, or they double-count.
