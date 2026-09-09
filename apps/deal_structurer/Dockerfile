@@ -39,6 +39,7 @@ COPY services/common/         ./services/common/
 COPY shared/                  ./shared/
 # deal committee layer
 COPY services/deal_committee/  ./services/deal_committee/
+COPY services/deal_structurer/ ./services/deal_structurer/
 COPY db/ddl/marketdata/deal_committee.sql ./db/ddl/marketdata/deal_committee.sql
 COPY services/knowledge_pool/  ./services/knowledge_pool/
 # headless agents dispatched via services.hermes.market_agent_bridge
