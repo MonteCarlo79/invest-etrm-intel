@@ -33,6 +33,34 @@ def test_tab_renders_uploader_chat_and_revision_panel():
     assert any("result `#1`" in m.value for m in at.markdown)
 
 
+def test_uploader_ingests_each_file_once(monkeypatch):
+    """Same (name, size) attached across reruns → extract_text called exactly once."""
+    import services.deal_committee.intake_parser as _ip
+
+    calls = []
+
+    def _fake_extract(data, filename, api_key=""):
+        calls.append(filename)
+        return f"fake text for {filename}"
+
+    monkeypatch.setattr(_ip, "extract_text", _fake_extract)
+
+    _write_harness()
+    at = AppTest.from_file(HARNESS, default_timeout=60)
+    at.run()
+    assert not at.exception
+
+    at.file_uploader[0].set_value(("brief.txt", b"hello world", "text/plain"))
+    at.run()
+    assert not at.exception
+    assert calls == ["brief.txt"]
+
+    # File still attached on the next rerun (chat interaction): guard must skip it.
+    at.run()
+    assert not at.exception
+    assert calls == ["brief.txt"]
+
+
 def test_nav_label_is_structurer():
     src = open(
         "/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform"

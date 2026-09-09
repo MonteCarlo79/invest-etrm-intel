@@ -88,14 +88,22 @@ def render() -> None:
         accept_multiple_files=True, key="structurer_uploads")
     if uploads:
         from services.deal_committee.intake_parser import extract_text
+        ingested = st.session_state.setdefault("_structurer_ingested", set())
+        new_docs = []
         for f in uploads:
+            fp = (f.name, f.size)
+            if fp in ingested:
+                continue
             try:
                 text = extract_text(f.getvalue(), f.name,
                                     api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
                 _sa.add_uploaded_doc(f.name, text)
+                ingested.add(fp)
+                new_docs.append(f.name)
             except Exception as e:
                 st.error(f"{f.name}: {e}")
-        st.success(f"已载入:{', '.join(_sa.list_uploaded_docs())}")
+        if new_docs:
+            st.success(f"已载入:{', '.join(_sa.list_uploaded_docs())}")
 
     revisions = _sa.get_session_revisions()
     if revisions:
