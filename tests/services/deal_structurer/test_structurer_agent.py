@@ -245,3 +245,102 @@ class TestRerunAnalysis:
         sa = self._setup(monkeypatch)
         out = sa.tool_rerun_analysis(7, "nonsense", api_key="k")
         assert "error" in out
+
+
+class TestDispatchRouting:
+    def test_schemas_present(self):
+        from libs.deal_models.adapters.agent_tools import AGENT_TOOLS
+        names = {t["name"] for t in AGENT_TOOLS}
+        assert {"list_deals", "get_deal_result", "update_deal_parameters",
+                "rerun_analysis", "read_uploaded_doc"} <= names
+
+    def test_dispatch_read_uploaded_doc(self):
+        from libs.deal_models.adapters.agent_tools import dispatch_tool
+        from services.deal_structurer import structurer_agent as sa
+        sa._UPLOADED_DOCS.clear()
+        sa.add_uploaded_doc("daf.pdf", "hello daf content")
+        import json as _json
+        out = _json.loads(dispatch_tool("read_uploaded_doc",
+                                        {"filename": "daf.pdf", "query": "daf"}))
+        assert "daf" in out["excerpt"]
+
+    def test_dispatch_unknown_still_errors(self):
+        import json as _json
+        from libs.deal_models.adapters.agent_tools import dispatch_tool
+        out = _json.loads(dispatch_tool("nope_tool", {}))
+        assert "error" in out
+
+    def _rerun_fixture_with_result(self, monkeypatch):
+        """list_briefs row WITH result_id + load_result with economics section
+        → _load_current_result returns cur non-None."""
+        from services.deal_structurer import structurer_agent as sa
+        monkeypatch.setattr(
+            "services.deal_structurer.structurer_agent._engine", lambda: MagicMock())
+        monkeypatch.setattr(
+            "services.deal_committee.library.load_brief",
+            lambda engine, i: {"id": 7, "deal_name": "谷山梁二期",
+                               "brief": {"deal_name": "谷山梁二期", "province": "蒙西",
+                                         "capacity_mw": 500.0, "capacity_mwh": 2000.0,
+                                         "capex_total_yuan": 13e8},
+                               "created_at": "x"})
+        monkeypatch.setattr(
+            "services.deal_committee.library.count_results_for_brief",
+            lambda engine, i: 1)
+        monkeypatch.setattr(
+            "services.deal_committee.library.list_results",
+            lambda engine, limit=50: [])
+        monkeypatch.setattr(
+            "services.deal_committee.library.list_briefs",
+            lambda engine, limit=20: [
+                {"id": 7, "deal_name": "谷山梁二期", "confirmed": True,
+                 "created_at": "x", "brief": {"province": "蒙西"},
+                 "result_id": 12, "recommendation": "NO-GO", "daf_id": None}])
+        monkeypatch.setattr(
+            "services.deal_committee.library.load_result",
+            lambda engine, rid: {
+                "brief": {"deal_name": "谷山梁二期", "province": "蒙西"},
+                "sections": [{"key": "economics", "title": "经济性测算",
+                              "status": "ok", "markdown": "OLD ECON"}],
+                "economics": None,
+                "synthesis": "OLD SYNTH", "recommendation": "NO-GO",
+                "deal_name": "谷山梁二期", "daf_id": None})
+        self.saved_results = []
+        monkeypatch.setattr(
+            "services.deal_committee.library.save_result",
+            lambda engine, bid, result: self.saved_results.append(result) or 42)
+        monkeypatch.setattr(
+            "services.deal_committee.library.save_daf",
+            lambda engine, bid, brief, pdf, fname, rec: 77)
+        return sa
+
+    def test_rerun_economics_replaces_existing_section(self, monkeypatch):
+        sa = self._rerun_fixture_with_result(monkeypatch)
+        from services.deal_committee.economics import EconomicsResult
+        fake_res = EconomicsResult(mc=None, monthly_price=[], n_price_hours=9504,
+                                   n_simulations=500, model="ou",
+                                   price_start="2025-08-01", price_end="2026-09-01",
+                                   comp_rate_yuan_mwh=280.0, comp_annual_yuan=1.74e8)
+        monkeypatch.setattr(
+            "services.deal_committee.economics.run_economics",
+            lambda brief, n_simulations=500: fake_res)
+        monkeypatch.setattr(
+            "services.deal_committee.economics.economics_section_markdown",
+            lambda res, brief: "NEW ECON MD")
+        out = sa.tool_rerun_analysis(7, "economics", api_key="k")
+        assert out["ok"] and out["result_id"] == 42
+        saved = self.saved_results[0]
+        econ_secs = [s for s in saved.sections if s.key == "economics"]
+        assert len(econ_secs) == 1  # replaced in place, not appended
+        assert econ_secs[0].markdown == "NEW ECON MD"
+
+    def test_rerun_daf_links_current_result(self, monkeypatch):
+        sa = self._rerun_fixture_with_result(monkeypatch)
+        monkeypatch.setattr(
+            "services.deal_committee.daf_builder.build_daf", lambda result: b"%PDF-x")
+        linked = []
+        monkeypatch.setattr(
+            "services.deal_committee.library.link_result_pdf",
+            lambda engine, rid, did: linked.append((rid, did)))
+        out = sa.tool_rerun_analysis(7, "daf", api_key="k")
+        assert out["ok"] and out["daf_id"] == 77
+        assert linked == [(12, 77)]  # current result id + new daf id

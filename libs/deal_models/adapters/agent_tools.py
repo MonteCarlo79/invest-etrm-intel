@@ -115,6 +115,46 @@ AGENT_TOOLS = [
             "required": ["structure_type"],
         },
     },
+    {
+        "name": "list_deals",
+        "description": "List recent deal briefs with their latest analysis result ids and recommendations. Use to find brief_id for other deal tools.",
+        "input_schema": {"type": "object", "properties": {
+            "limit": {"type": "integer", "description": "Max rows (default 10)"}}},
+    },
+    {
+        "name": "get_deal_result",
+        "description": "Get a deal's brief parameters, economics, committee sections (truncated), synthesis and recommendation. Deal can be a brief_id (int) or exact deal_name.",
+        "input_schema": {"type": "object", "properties": {
+            "deal": {"description": "brief_id (int) or exact deal_name (str)"}},
+            "required": ["deal"]},
+    },
+    {
+        "name": "update_deal_parameters",
+        "description": "Patch deal brief parameters (whitelist only: province, node, capacity_mw, capacity_mwh, efficiency, cycles_per_day, installed_mw, capex_total_yuan, commissioning_year, tenor_years, debt_ratio, loan_rate, loan_term_years, deal_name, comp_rate_yuan_mwh; comp_rate_yuan_mwh=null resets to register-empirical auto). Always follow with rerun_analysis to recompute.",
+        "input_schema": {"type": "object", "properties": {
+            "brief_id": {"type": "integer"},
+            "updates": {"type": "object", "description": "{field: value} within the whitelist"},
+            "challenge_note": {"type": "string", "description": "The user's challenge, recorded in structure_notes"},
+        }, "required": ["brief_id", "updates"]},
+    },
+    {
+        "name": "rerun_analysis",
+        "description": "Recompute after parameter change. scope: 'economics' (local, default), 'section:<key>' (one committee section), 'synthesis', 'daf' (rebuild PDF), 'full' (all 7 sections, requires confirmed=true). Saves a new versioned result row (rev N).",
+        "input_schema": {"type": "object", "properties": {
+            "brief_id": {"type": "integer"},
+            "scope": {"type": "string"},
+            "confirmed": {"type": "boolean", "description": "Required true for scope='full'"},
+        }, "required": ["brief_id", "scope"]},
+    },
+    {
+        "name": "read_uploaded_doc",
+        "description": "Read a user-uploaded document (投委会 DAF PDF etc.) by page or keyword window. Call without args pattern: first list via error.available when unsure of filename.",
+        "input_schema": {"type": "object", "properties": {
+            "filename": {"type": "string"},
+            "page": {"type": "integer"},
+            "query": {"type": "string", "description": "Keyword to locate (returns ±1500 chars)"},
+        }, "required": ["filename"]},
+    },
 ]
 
 
@@ -122,6 +162,26 @@ def dispatch_tool(name: str, inputs: dict) -> str:
     """Route a tool call from the Claude API to the appropriate function."""
     global _last_mc_result, _last_price_paths
     try:
+        if name in ("list_deals", "get_deal_result", "update_deal_parameters",
+                    "rerun_analysis", "read_uploaded_doc"):
+            from services.deal_structurer import structurer_agent as _sa
+            if name == "list_deals":
+                return _j(_sa.tool_list_deals(inputs.get("limit", 10)))
+            if name == "get_deal_result":
+                return _j(_sa.tool_get_deal_result(inputs["deal"]))
+            if name == "update_deal_parameters":
+                return _j(_sa.tool_update_deal_parameters(
+                    int(inputs["brief_id"]), inputs.get("updates") or {},
+                    inputs.get("challenge_note", "")))
+            if name == "rerun_analysis":
+                return _j(_sa.tool_rerun_analysis(
+                    int(inputs["brief_id"]), inputs["scope"],
+                    bool(inputs.get("confirmed", False)),
+                    api_key=__import__("os").environ.get("ANTHROPIC_API_KEY", "")))
+            if name == "read_uploaded_doc":
+                return _j(_sa.tool_read_uploaded_doc(
+                    inputs["filename"], inputs.get("page"), inputs.get("query")))
+
         if name == "run_price_simulation":
             ou = OUParams(
                 kappa=inputs.get("kappa", 2.0),
