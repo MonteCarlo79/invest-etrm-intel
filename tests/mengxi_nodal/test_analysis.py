@@ -120,6 +120,29 @@ class TestCstBounds:
         assert e == "2026-09-01 00:00:00+08"
 
 
+class TestNodePriceVectorParams:
+    def test_start_end_bound_as_scalar_cst_strings(self, monkeypatch):
+        """Regression: s was bound to the whole _cst_bounds(start) tuple
+        (missing [0]) → psycopg2 'operator does not exist: timestamptz >= record'
+        in Price Zone Explorer."""
+        import pandas as pd
+        from services.mengxi_nodal import data as nodal_data
+
+        captured = {}
+
+        def fake_read_sql(q, engine, params=None):
+            captured.update(params)
+            return pd.DataFrame(columns=["node_name", "d", "time_order_96", "avg_node_price"])
+
+        monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+        nodal_data.get_node_price_vectors(None, ["n1"], date(2026, 8, 1), date(2026, 8, 30))
+
+        assert captured["s"] == "2026-08-01 00:00:00+08"
+        assert captured["e2"] == "2026-08-31 00:00:00+08"
+        assert isinstance(captured["s"], str)
+        assert isinstance(captured["e2"], str)
+
+
 class TestZonesConfig:
     def test_all_six_current_assets_present_with_substation(self):
         assert len(CURRENT_ASSETS) == 6

@@ -73,7 +73,7 @@ def get_node_price_vectors(engine, node_names: list[str], start: date, end: date
         WHERE node_name = ANY(:names)
           AND metric_time >= :s AND metric_time < :e2
     """)
-    s, e2 = _cst_bounds(start), _cst_bounds(end)[1]
+    s, e2 = _cst_bounds(start)[0], _cst_bounds(end)[1]
     df = pd.read_sql(q, engine, params={"names": node_names, "s": s, "e2": e2})
     out: dict[str, dict[date, np.ndarray]] = {}
     for (node, d), g in df.groupby(["node_name", "d"]):
