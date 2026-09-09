@@ -239,3 +239,54 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 **What didn't work:** reproducing prod agent behavior locally (deal committee sections) — every direct `api.anthropic.com` call from this network returns 400 region-blocked, even with the real key.
 
 **What worked:** run the probe/migration **inside the prod environment** instead: `aws ecs run-task` with the app's own task definition (inherits PGURL/ANTHROPIC_API_KEY/BEDROCK_REGION) + `containerOverrides` `python -c <script>`, read output from CloudWatch. Pattern also dodges local-PyPI flakiness for DB work: no local psql needed (image has psycopg2). Note `load_dotenv()` does NOT override existing shell env — local `ANTHROPIC_*` (Kimi backend) must be popped first when testing SDK paths.
+
+---
+
+## ECS jq-swap from family-name task-def silently drops hand-added env vars (2026-09-07)
+
+**What didn't work:**
+1. `aws ecs describe-task-definition --task-definition bess-platform-hermes` (family name, no revision) → jq-swap + register → td:176. Expected td:173's env + `WECHAT_PROXY_URL`; got terraform's 11 managed vars + the new one — **16 hand-injected vars silently lost** (FEISHU_APP_ID/SECRET, TELEGRAM_BOT_TOKEN, ONEDRIVE_*, FENGXING_API_KEY, HERMES_DB_URL, AZURE_*, DEEPSEEK_*…).
+2. Hermes went deaf on Feishu: `if feishu:` false → no WS thread → messages silently dropped (no "Feishu WS connecting..." in logs). Chased three wrong hypotheses first: firewall-rule timing on the new tinyproxy VPS, WeChat TLS fingerprinting (disproved: python urllib through the proxy from the VPS got `js_content`), and Feishu WS delivery sticking to the draining old task.
+
+**Root cause:** family-only describe resolves to the latest ACTIVE *revision*, which was a terraform-registered one carrying only terraform's minimal env subset. The real env had accumulated via hand jq-swaps (td has `ignore_changes=[container_definitions]`), so jq copied the wrong revision's containerDefinitions.
+
+**What worked:**
+- Rebuild from the RUNNING revision explicitly: `describe-task-definition --task-definition bess-platform-hermes:173` → same jq → td:177 (31 env vars) → force-new-deployment. Feishu WS connected on boot; WeChat ingest through the China proxy verified end-to-end.
+- Rule: **jq-swap td edits must describe the service's current taskDefinitionArn (from `describe-services`), never the family name.**
+- Telltale I glossed over: boot logs said `Nodal scraper NOT scheduled: missing FENGXING_API_KEY` — direct evidence of missing env. When a fresh task schedules fewer jobs than before, diff the td env first, not last.
+
+---
+
+## Aliyun WAF / Sogou: datacenter IPs can't scrape bjx/Sogou/sgcc even with headless chromium (2026-09-08)
+
+**What didn't work:**
+1. `requests` from the AWS Singapore NAT IP → bjx returns Aliyun-WAF JS shell (`aliyun_waf_*` metas, empty webpack page); weixin.sogou.com returns a 5KB JS gate (no news-list); sgcc provincial sites (daili sources, 31 provinces) TCP-block outright.
+2. Same from a Tencent Cloud Shanghai VPS (China *datacenter* IP) — identical failures everywhere except direct mp.weixin.qq.com article fetches (those pass, see WECHAT_PROXY_URL work).
+3. Headless chromium (playwright + stealth UA/webdriver-flag) via either IP → bjx escalates to a 滑动验证 slider CAPTCHA (cookie `acw_tc`, title 滑动验证页面, never progresses); Sogou renders a static interactive-captcha UI. Slider/interactive CAPTCHAs are not worth chasing — don't retry headless stealth against them.
+
+**Root cause:** anti-bot systems score IP ASN (datacenter = guilty) jointly with client fingerprint; China datacenter IPs are nearly as bad as foreign ones. Only residential-IP egress changes the verdict (~¥360/月 tunnel proxy).
+
+**What worked / decision:** user declined the residential tunnel — monthly daili/sysopfee/capacity data goes via the bot's manual-upload Excel paths. mp.weixin.qq.com article fetch stays on the Tencent VPS via WECHAT_PROXY_URL. Playwright infra kept in image tag v20260908pw (NOT :latest) for milder JS shells; `services/common/render_fetch.py` remains available.
+
+---
+
+## Fargate CannotPullContainerError from Mac builds: image is arm64, Fargate needs linux/amd64 (2026-09-09)
+
+**What didn't work:**
+- Plain `docker build -f apps/asset_risk/Dockerfile -t bess-asset-risk:v65 .` on the Apple-Silicon MacBook → pushed, jq-swapped into td:67 → deployment stuck IN_PROGRESS 10+ min: `CannotPullContainerError: image Manifest does not contain descriptor matching platform 'linux/amd64'`. Default `docker build` on arm64 Mac emits an arm64-only manifest; ECS retries placement forever. Old task keeps serving throughout — no outage, but the rollout never lands.
+
+**What worked:**
+- Rebuild with `docker build --platform linux/amd64 ...` (QEMU; re-runs uncached layers slowly), re-push the same tag — the IN_PROGRESS deployment's next placement retry succeeds on its own, no second update-service needed.
+- Verify platform BEFORE update-service: `docker buildx imagetools inspect <ecr-uri>:<tag> | grep Platform` must list `linux/amd64` (an `unknown/unknown` attestation entry alongside is normal BuildKit output).
+- Verify code actually inside the image: `docker run --rm --platform linux/amd64 --entrypoint grep <image> -c "<unique-string>" /app/<path>`.
+- Root cause of the full rebuild: `python:3.11-slim` base had moved (3.11.16), busting cache for the 881MB pip layer.
+
+## ECR push broken pipe on large layers (Mac, no system proxy) (2026-09-09)
+
+**What didn't work:**
+1. `docker push` of a ~300MB-compressed layer died 3× with `write tcp ...->192.168.65.1:3128: write: broken pipe`. 192.168.65.1:3128 is Docker Desktop's internal forwarder (`http.docker.internal`); macOS has no system proxy. Small layers and all `aws` CLI calls succeed — only large sustained uploads get killed (same flakiness as github.com being unreachable the day before).
+2. `docker push ... | tail -2` masks failures: pipeline exit status is tail's, so `&&`-chained steps (e.g. a second push) run even after "failed to copy". Push unpiped, or `set -o pipefail`.
+
+**What worked:**
+- Plain retry — attempt 4 succeeded. Docker re-uploads only missing layers, so each retry starts cheaper; every other layer was already `Layer already exists`.
+- If a layer ever never survives: split the Dockerfile's monolithic `RUN pip install -r requirements.txt` into several smaller RUN layers (scipy+numpy / pandas+plotly+streamlit / boto3+anthropic / then -r) so each blob is ≲60MB. Not needed this time.
