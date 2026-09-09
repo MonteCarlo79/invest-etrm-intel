@@ -161,3 +161,87 @@ class TestUpdateParameters:
         from services.deal_structurer import structurer_agent as sa
         out = sa.tool_update_deal_parameters(7, {"capacity_mw": "五百"})
         assert "error" in out
+
+
+class TestRerunAnalysis:
+    def _setup(self, monkeypatch):
+        from services.deal_structurer import structurer_agent as sa
+        monkeypatch.setattr(
+            "services.deal_structurer.structurer_agent._engine", lambda: MagicMock())
+        monkeypatch.setattr(
+            "services.deal_committee.library.load_brief",
+            lambda engine, i: {"id": 7, "deal_name": "谷山梁二期",
+                               "brief": {"deal_name": "谷山梁二期", "province": "蒙西",
+                                         "capacity_mw": 500.0, "capacity_mwh": 2000.0,
+                                         "capex_total_yuan": 13e8},
+                               "created_at": "x"})
+        monkeypatch.setattr(
+            "services.deal_committee.library.count_results_for_brief",
+            lambda engine, i: 1)
+        monkeypatch.setattr(
+            "services.deal_committee.library.list_results",
+            lambda engine, limit=5: [{"id": 12, "deal_name": "谷山梁二期",
+                                      "province": "蒙西", "asset_type": "bess",
+                                      "recommendation": "GO", "created_at": "x",
+                                      "daf_id": None, "filename": None}])
+        monkeypatch.setattr(
+            "services.deal_committee.library.load_result",
+            lambda engine, rid: {
+                "brief": {"deal_name": "谷山梁二期", "province": "蒙西",
+                          "capacity_mw": 500.0, "capacity_mwh": 2000.0,
+                          "capex_total_yuan": 13e8},
+                "sections": [{"key": "economics", "title": "经济性测算",
+                              "status": "ok", "markdown": "OLD"}],
+                "economics": {"revenue_p50": 6.36e7},
+                "synthesis": "OLD SYNTH", "recommendation": "NO-GO",
+                "deal_name": "谷山梁二期", "daf_id": None})
+        self.saved_results = []
+        self.saved_dafs = []
+        monkeypatch.setattr(
+            "services.deal_committee.library.save_result",
+            lambda engine, bid, result: self.saved_results.append(result) or 42)
+        monkeypatch.setattr(
+            "services.deal_committee.library.save_daf",
+            lambda engine, bid, brief, pdf, fname, rec: self.saved_dafs.append(fname) or 77)
+        monkeypatch.setattr(
+            "services.deal_committee.library.link_result_pdf", lambda engine, rid, did: None)
+        return sa
+
+    def test_economics_scope(self, monkeypatch):
+        sa = self._setup(monkeypatch)
+        from services.deal_committee.economics import EconomicsResult
+        fake_res = EconomicsResult(mc=None, monthly_price=[], n_price_hours=9504,
+                                   n_simulations=500, model="ou",
+                                   price_start="2025-08-01", price_end="2026-09-01",
+                                   comp_rate_yuan_mwh=280.0, comp_annual_yuan=1.74e8)
+        monkeypatch.setattr(
+            "services.deal_committee.economics.run_economics",
+            lambda brief, n_simulations=500: fake_res)
+        monkeypatch.setattr(
+            "services.deal_committee.economics.economics_section_markdown",
+            lambda res, brief: "NEW ECON MD")
+        out = sa.tool_rerun_analysis(7, "economics", api_key="k")
+        assert out["ok"] and out["result_id"] == 42
+        assert out["rev_name"] == "谷山梁二期 (rev 2)"
+        saved = self.saved_results[0]
+        assert saved.deal_name == "谷山梁二期 (rev 2)"
+        econ_sec = next(s for s in saved.sections if s.key == "economics")
+        assert econ_sec.markdown == "NEW ECON MD"
+
+    def test_daf_scope_builds_pdf_no_new_result(self, monkeypatch):
+        sa = self._setup(monkeypatch)
+        monkeypatch.setattr(
+            "services.deal_committee.daf_builder.build_daf", lambda result: b"%PDF-x")
+        out = sa.tool_rerun_analysis(7, "daf", api_key="k")
+        assert out["ok"] and out.get("daf_id") == 77
+        assert self.saved_results == []  # daf scope saves no result row
+
+    def test_full_scope_requires_confirmation(self, monkeypatch):
+        sa = self._setup(monkeypatch)
+        out = sa.tool_rerun_analysis(7, "full", api_key="k")
+        assert "needs_confirmation" in out and self.saved_results == []
+
+    def test_unknown_scope(self, monkeypatch):
+        sa = self._setup(monkeypatch)
+        out = sa.tool_rerun_analysis(7, "nonsense", api_key="k")
+        assert "error" in out

@@ -152,3 +152,135 @@ def tool_update_deal_parameters(brief_id: int, updates: dict,
         "ok": True, "brief_id": brief_id, "changed": changed,
         "rev_name": f"{brief.deal_name} (rev {count_results_for_brief(engine, brief_id) + 1})",
     }
+
+
+def _load_current_result(engine, brief_id: int):
+    """(latest_result_row, CommitteeResult-like parts) for a brief."""
+    from services.deal_committee.library import list_results, load_result
+    from services.deal_committee.result_store import dict_to_economics, sections_from_dicts
+    row = next((r for r in list_results(engine, limit=50)
+                if r.get("brief_id") == brief_id or True), None)
+    # list_results lacks brief_id; resolve via list_briefs instead
+    from services.deal_committee.library import list_briefs
+    b = next((x for x in list_briefs(engine, limit=20) if x["id"] == brief_id), None)
+    if b is None or not b["result_id"]:
+        return None, None
+    rec = load_result(engine, b["result_id"])
+    return rec, {
+        "brief": rec["brief"],
+        "sections": sections_from_dicts(rec["sections"]),
+        "economics": dict_to_economics(rec["economics"]),
+        "synthesis": rec["synthesis"], "recommendation": rec["recommendation"],
+        "result_id": b["result_id"],
+    }
+
+
+def _save_revision(engine, brief_id: int, brief, sections, economics,
+                   synthesis: str, recommendation: str, challenge: str = ""):
+    from services.deal_committee.library import count_results_for_brief, save_result
+    from services.deal_committee.orchestrator import CommitteeResult
+    n = count_results_for_brief(engine, brief_id) + 1
+    brief.deal_name = f"{brief.deal_name.split(' (rev ')[0]} (rev {n})"
+    result = CommitteeResult(brief=brief, sections=sections, economics=economics,
+                             synthesis=synthesis, recommendation=recommendation)
+    # CommitteeResult carries deal_name only via .brief; mirror the rev-suffixed
+    # name onto the object so savers/callers can read it directly.
+    result.deal_name = brief.deal_name
+    result_id = save_result(engine, brief_id, result)
+    _note_revision(result_id, brief.deal_name)
+    return result_id, brief.deal_name, result
+
+
+def tool_rerun_analysis(brief_id: int, scope: str, confirmed: bool = False,
+                        api_key: str = "") -> dict:
+    engine = _engine()
+    from services.deal_committee.brief import DealBrief
+    from services.deal_committee.library import load_brief
+    brief = DealBrief(**(load_brief(engine, brief_id)["brief"] or {}))
+
+    rec, cur = _load_current_result(engine, brief_id)
+    sections = cur["sections"] if cur else []
+    economics = cur["economics"] if cur else None
+    synthesis = cur["synthesis"] if cur else ""
+    recommendation = cur["recommendation"] if cur else ""
+
+    if scope == "economics":
+        from services.deal_committee.economics import (
+            economics_section_markdown, run_economics,
+        )
+        res = run_economics(brief, n_simulations=500)
+        economics = res
+        sections = [s if s.key != "economics" else type(s)(
+            key=s.key, title=s.title,
+            markdown=economics_section_markdown(res, brief), status="ok")
+            for s in sections]
+        if not sections:
+            from services.deal_committee.sections import SectionResult
+            sections = [SectionResult(key="economics", title="经济性测算",
+                                      markdown=economics_section_markdown(res, brief))]
+        rid, rev_name, _ = _save_revision(engine, brief_id, brief, sections,
+                                          economics, synthesis, recommendation)
+        mc = res.mc
+        # mc is always a real MCResult from run_economics in production; the
+        # None-guard only keeps mc-less EconomicsResult stubs (tests) usable.
+        summary = (f"收入 P50 {mc.revenue_p50/1e6:.1f}M · 股权IRR {mc.equity_irr_p50:.1%} "
+                   f"· NPV {mc.npv_p50/1e6:.1f}M · 容量补偿 {res.comp_rate_yuan_mwh:.0f} ¥/MWh"
+                   if mc is not None else
+                   f"容量补偿 {res.comp_rate_yuan_mwh:.0f} ¥/MWh")
+        return {"ok": True, "result_id": rid, "rev_name": rev_name,
+                "summary": summary}
+
+    if scope.startswith("section:"):
+        key = scope.split(":", 1)[1]
+        from services.deal_committee.orchestrator import default_query_fn, run_single_section
+        sec, econ2 = run_single_section(key, brief, default_query_fn, api_key, timeout_s=600)
+        if sec.status != "ok":
+            return {"error": f"章节 {key} 重算失败: {sec.error}"}
+        sections = [s if s.key != key else sec for s in sections]
+        if key == "economics" and econ2 is not None:
+            economics = econ2
+        rid, rev_name, _ = _save_revision(engine, brief_id, brief, sections,
+                                          economics, synthesis, recommendation)
+        return {"ok": True, "result_id": rid, "rev_name": rev_name,
+                "summary": f"章节 {sec.title} 已重算 ({len(sec.markdown)} chars)"}
+
+    if scope == "synthesis":
+        from services.deal_committee.synthesis import run_synthesis
+        synthesis, recommendation = run_synthesis(brief, sections, economics, api_key)
+        rid, rev_name, _ = _save_revision(engine, brief_id, brief, sections,
+                                          economics, synthesis, recommendation)
+        return {"ok": True, "result_id": rid, "rev_name": rev_name,
+                "summary": f"新结论: {recommendation or '—'}"}
+
+    if scope == "daf":
+        from services.deal_committee.daf_builder import build_daf
+        from services.deal_committee.library import link_result_pdf, save_daf
+        from services.deal_committee.orchestrator import CommitteeResult
+        result = CommitteeResult(brief=brief, sections=sections,
+                                 economics=economics, synthesis=synthesis,
+                                 recommendation=recommendation)
+        pdf = build_daf(result)
+        fname = f"DAF_{brief.deal_name or 'deal'}_{brief.province}.pdf"
+        daf_id = save_daf(engine, brief_id, brief, pdf, fname, recommendation)
+        if cur and cur.get("result_id"):
+            link_result_pdf(engine, cur["result_id"], daf_id)
+        return {"ok": True, "daf_id": daf_id, "filename": fname}
+
+    if scope == "full":
+        if not confirmed:
+            return {"needs_confirmation": "重跑全部 7 个章节约 5-10 分钟。"
+                                          "请用户明确回复「确认」后再以 confirmed=true 调用"}
+        from services.deal_committee.orchestrator import default_query_fn, run_committee
+        from services.deal_committee.synthesis import run_synthesis
+        result = run_committee(brief, query_fn=default_query_fn,
+                               api_key=api_key, timeout_s=600)
+        result.synthesis, result.recommendation = run_synthesis(
+            brief, result.sections, result.economics, api_key)
+        rid, rev_name, _ = _save_revision(
+            engine, brief_id, brief, result.sections, result.economics,
+            result.synthesis, result.recommendation)
+        ok = sum(1 for s in result.sections if s.status == "ok")
+        return {"ok": True, "result_id": rid, "rev_name": rev_name,
+                "summary": f"全量重算完成 {ok}/7 · 结论 {result.recommendation or '—'}"}
+
+    return {"error": f"未知 scope {scope!r} — 支持: economics | section:<key> | synthesis | daf | full"}
