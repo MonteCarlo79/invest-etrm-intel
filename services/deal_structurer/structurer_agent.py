@@ -156,12 +156,8 @@ def tool_update_deal_parameters(brief_id: int, updates: dict,
 
 def _load_current_result(engine, brief_id: int):
     """(latest_result_row, CommitteeResult-like parts) for a brief."""
-    from services.deal_committee.library import list_results, load_result
+    from services.deal_committee.library import list_briefs, load_result
     from services.deal_committee.result_store import dict_to_economics, sections_from_dicts
-    row = next((r for r in list_results(engine, limit=50)
-                if r.get("brief_id") == brief_id or True), None)
-    # list_results lacks brief_id; resolve via list_briefs instead
-    from services.deal_committee.library import list_briefs
     b = next((x for x in list_briefs(engine, limit=20) if x["id"] == brief_id), None)
     if b is None or not b["result_id"]:
         return None, None

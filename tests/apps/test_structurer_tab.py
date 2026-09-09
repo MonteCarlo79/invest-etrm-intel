@@ -1,13 +1,16 @@
 """Structurer tab render test (AppTest, no LLM calls)."""
 import sys
+from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
+
+ROOT = Path(__file__).resolve().parents[2]
 
 HARNESS = "/tmp/structurer_tab_harness.py"
 
 
 def _write_harness():
-    root = "/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform"
+    root = str(ROOT)
     with open(HARNESS, "w") as f:
         f.write(
             "import sys\n"
@@ -62,8 +65,6 @@ def test_uploader_ingests_each_file_once(monkeypatch):
 
 
 def test_nav_label_is_structurer():
-    src = open(
-        "/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform"
-        "/apps/deal_structurer/app.py").read()
+    src = open(str(ROOT) + "/apps/deal_structurer/app.py").read()
     assert "💬 Structurer" in src
     assert "💬 Strategist" not in src
