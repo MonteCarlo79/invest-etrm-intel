@@ -256,6 +256,13 @@ def tool_rerun_analysis(brief_id: int, scope: str, confirmed: bool = False,
         from services.deal_committee.daf_builder import build_daf
         from services.deal_committee.library import link_result_pdf, save_daf
         from services.deal_committee.orchestrator import CommitteeResult
+        # DB-loaded economics carries scalars only (revenue_paths=[] by design);
+        # the distribution chart needs real paths. simulate_prices(seed=42) makes
+        # a fresh local run deterministic, so scalars match the stored result.
+        _paths = getattr(getattr(economics, "mc", None), "revenue_paths", None)
+        if economics is None or _paths is None or len(_paths) == 0:
+            from services.deal_committee.economics import run_economics
+            economics = run_economics(brief, n_simulations=500)
         result = CommitteeResult(brief=brief, sections=sections,
                                  economics=economics, synthesis=synthesis,
                                  recommendation=recommendation)

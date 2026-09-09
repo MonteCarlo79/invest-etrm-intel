@@ -230,6 +230,12 @@ class TestRerunAnalysis:
 
     def test_daf_scope_builds_pdf_no_new_result(self, monkeypatch):
         sa = self._setup(monkeypatch)
+        from services.deal_committee.economics import EconomicsResult
+        monkeypatch.setattr(
+            "services.deal_committee.economics.run_economics",
+            lambda brief, n_simulations=500: EconomicsResult(
+                mc=None, monthly_price=[], n_price_hours=9504,
+                n_simulations=500, model="ou", price_start="s", price_end="e"))
         monkeypatch.setattr(
             "services.deal_committee.daf_builder.build_daf", lambda result: b"%PDF-x")
         out = sa.tool_rerun_analysis(7, "daf", api_key="k")
@@ -335,6 +341,12 @@ class TestDispatchRouting:
 
     def test_rerun_daf_links_current_result(self, monkeypatch):
         sa = self._rerun_fixture_with_result(monkeypatch)
+        from services.deal_committee.economics import EconomicsResult
+        monkeypatch.setattr(
+            "services.deal_committee.economics.run_economics",
+            lambda brief, n_simulations=500: EconomicsResult(
+                mc=None, monthly_price=[], n_price_hours=9504,
+                n_simulations=500, model="ou", price_start="s", price_end="e"))
         monkeypatch.setattr(
             "services.deal_committee.daf_builder.build_daf", lambda result: b"%PDF-x")
         linked = []
@@ -344,3 +356,42 @@ class TestDispatchRouting:
         out = sa.tool_rerun_analysis(7, "daf", api_key="k")
         assert out["ok"] and out["daf_id"] == 77
         assert linked == [(12, 77)]  # current result id + new daf id
+
+
+class TestDafScopeRefreshesEmptyPaths:
+    def test_daf_scope_reruns_economics_when_paths_empty(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from services.deal_structurer import structurer_agent as sa
+        monkeypatch.setattr(
+            "services.deal_structurer.structurer_agent._engine", lambda: MagicMock())
+        monkeypatch.setattr(
+            "services.deal_committee.library.load_brief",
+            lambda engine, i: {"id": 7, "deal_name": "谷山梁二期",
+                               "brief": {"deal_name": "谷山梁二期", "province": "蒙西",
+                                         "capacity_mw": 500.0, "capacity_mwh": 2000.0,
+                                         "capex_total_yuan": 13e8},
+                               "created_at": "x"})
+        monkeypatch.setattr(
+            "services.deal_committee.library.count_results_for_brief",
+            lambda engine, i: 1)
+        # cur is None here (list_briefs unpatched) → economics None → refresh expected
+        calls = []
+        from services.deal_committee.economics import EconomicsResult
+        fake_res = EconomicsResult(mc=None, monthly_price=[], n_price_hours=9504,
+                                   n_simulations=500, model="ou",
+                                   price_start="s", price_end="e")
+        monkeypatch.setattr(
+            "services.deal_committee.economics.run_economics",
+            lambda brief, n_simulations=500: calls.append(brief) or fake_res)
+        monkeypatch.setattr(
+            "services.deal_committee.daf_builder.build_daf",
+            lambda result: b"%PDF-x")
+        monkeypatch.setattr(
+            "services.deal_committee.library.save_daf",
+            lambda engine, bid, brief, pdf, fname, rec: 77)
+        monkeypatch.setattr(
+            "services.deal_committee.library.link_result_pdf",
+            lambda engine, rid, did: None)
+        out = sa.tool_rerun_analysis(7, "daf", api_key="k")
+        assert out["ok"] and out["daf_id"] == 77
+        assert len(calls) == 1  # run_economics was invoked to refresh paths
