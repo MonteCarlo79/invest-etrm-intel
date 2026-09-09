@@ -234,7 +234,7 @@ python services/bess_map/run_capture_pipeline.py --province shandong --model ols
 
 **Standard deploy sequence:**
 ```bash
-docker build -f <app>/Dockerfile -t <repo>:<vN> .
+docker build --platform linux/amd64 -f <app>/Dockerfile -t <repo>:<vN> .
 docker tag <repo>:<vN> 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<repo>:<vN>
 docker push 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/<repo>:<vN>
 # Also push as :latest so docker-compose.local.yml picks up the new version
@@ -247,11 +247,17 @@ $tdArn = aws ecs describe-task-definition --task-definition <family> --region ap
 aws ecs update-service --cluster bess-platform-cluster --service <svc> --task-definition $tdArn --force-new-deployment --region ap-southeast-1
 ```
 
+**Always build with `--platform linux/amd64`.** Fargate is amd64; plain `docker build` on the Apple-Silicon MacBook produces arm64-only images that Fargate cannot pull (`CannotPullContainerError: image Manifest does not contain descriptor matching platform 'linux/amd64'`, deployment retries forever while the old task keeps serving — asset-risk v65 incident 2026-09-09; see ERRORS.md). Pre-deploy check: `docker buildx imagetools inspect <ecr-uri>:<tag> | grep Platform` must list `linux/amd64`.
+
 **If Terraform shows "No changes" despite image tag change:** State has drifted. Run `terraform refresh` then `terraform apply`.
 
 **If Docker COPY layers cache old code despite `--no-cache`:** Disable BuildKit: `$env:DOCKER_BUILDKIT="0"; docker build ...`
 
 **ECR token expires after ~12h:** Re-login with `$pass = aws ecr get-login-password --region ap-southeast-1; docker login --username AWS --password $pass 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com`
+
+**jq-swap task-def edits (hermes, deal-structurer):** build the new revision from the service's CURRENT taskDefinitionArn (`aws ecs describe-services --cluster bess-platform-cluster --service <svc> --query 'services[0].taskDefinition' --output text`), never from the bare family name — family-latest can resolve to a terraform-registered revision that lacks hand-injected env vars (hermes td:176 incident 2026-09-07: lost FEISHU/TELEGRAM/ONEDRIVE/FENGXING env, bot deaf on Feishu for hours; see ERRORS.md).
+
+**Never move a service to an OLDER task-def revision.** A parallel session flipped hermes td:177→td:173 on 2026-09-08, silently dropping `WECHAT_PROXY_URL` for 7.6h (173 lacks it). Hermes must stay on the latest hand-injected revision (currently **td:177**: 31 env vars incl. FEISHU creds + WECHAT_PROXY_URL). Multiple Claude sessions share the terraform-admin identity — before touching a service you don't own, check its current tdArn and leave it as found. If a rollback is genuinely needed, diff the target revision's env list against the running one first.
 
 **All deployments require explicit in-session confirmation.** "You mentioned this earlier" is not confirmation.
 
