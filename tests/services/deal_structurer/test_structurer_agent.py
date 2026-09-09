@@ -53,3 +53,59 @@ class TestUploadedDocs:
         sa.add_uploaded_doc("a.pdf", "hello")
         out = sa.tool_read_uploaded_doc("nope.pdf")
         assert "error" in out and out["available"] == ["a.pdf"]
+
+
+class TestDealReads:
+    def _engine(self):
+        return MagicMock()
+
+    def test_list_deals(self, monkeypatch):
+        from services.deal_structurer import structurer_agent as sa
+        monkeypatch.setattr(
+            "services.deal_structurer.structurer_agent._engine", lambda: self._engine())
+        monkeypatch.setattr(
+            "services.deal_committee.library.list_briefs",
+            lambda engine, limit=10: [
+                {"id": 7, "deal_name": "谷山梁二期", "confirmed": True,
+                 "created_at": "2026-09-06 00:31", "brief": {"province": "蒙西", "asset_type": "bess"},
+                 "result_id": 12, "recommendation": "有条件 GO", "daf_id": None},
+            ])
+        out = sa.tool_list_deals()
+        assert out["deals"][0]["brief_id"] == 7
+        assert out["deals"][0]["result_id"] == 12
+
+    def test_get_result_by_name(self, monkeypatch):
+        from services.deal_structurer import structurer_agent as sa
+        monkeypatch.setattr(
+            "services.deal_structurer.structurer_agent._engine", lambda: self._engine())
+        monkeypatch.setattr(
+            "services.deal_committee.library.list_briefs",
+            lambda engine, limit=20: [
+                {"id": 7, "deal_name": "谷山梁二期", "confirmed": True,
+                 "created_at": "x", "brief": {"province": "蒙西", "asset_type": "bess"},
+                 "result_id": 12, "recommendation": "有条件 GO", "daf_id": None},
+            ])
+        monkeypatch.setattr(
+            "services.deal_committee.library.load_result",
+            lambda engine, rid: {
+                "brief": {"deal_name": "谷山梁二期", "province": "蒙西"},
+                "sections": [{"key": "economics", "title": "经济性测算",
+                              "status": "ok", "markdown": "M" * 1000}],
+                "economics": {"revenue_p50": 2.8e8},
+                "synthesis": "S" * 3000, "recommendation": "有条件 GO",
+                "deal_name": "谷山梁二期", "daf_id": None,
+            })
+        out = sa.tool_get_deal_result("谷山梁二期")
+        assert out["result_id"] == 12
+        assert out["brief"]["province"] == "蒙西"
+        assert len(out["sections"][0]["markdown_head"]) == 400
+        assert len(out["synthesis"]) == 1500
+
+    def test_get_result_unknown(self, monkeypatch):
+        from services.deal_structurer import structurer_agent as sa
+        monkeypatch.setattr(
+            "services.deal_structurer.structurer_agent._engine", lambda: self._engine())
+        monkeypatch.setattr(
+            "services.deal_committee.library.list_briefs", lambda engine, limit=20: [])
+        out = sa.tool_get_deal_result("不存在")
+        assert "error" in out

@@ -53,3 +53,53 @@ def _note_revision(result_id: int, label: str) -> None:
 
 def get_session_revisions() -> list[dict]:
     return list(_session_revisions)
+
+
+def _engine():
+    from services.common.db_utils import get_engine
+    return get_engine()
+
+
+def tool_list_deals(limit: int = 10) -> dict:
+    from services.deal_committee.library import list_briefs
+    rows = list_briefs(_engine(), limit=limit)
+    return {"deals": [
+        {"brief_id": b["id"], "deal_name": b["deal_name"],
+         "province": (b["brief"] or {}).get("province"),
+         "asset_type": (b["brief"] or {}).get("asset_type"),
+         "result_id": b["result_id"], "recommendation": b["recommendation"],
+         "created_at": b["created_at"][:16]}
+        for b in rows
+    ]}
+
+
+def _resolve_brief_row(deal) -> dict | None:
+    from services.deal_committee.library import list_briefs
+    for b in list_briefs(_engine(), limit=20):
+        if isinstance(deal, int) and b["id"] == deal:
+            return b
+        if isinstance(deal, str) and b["deal_name"] == deal:
+            return b
+    return None
+
+
+def tool_get_deal_result(deal) -> dict:
+    row = _resolve_brief_row(deal)
+    if row is None:
+        return {"error": f"找不到交易 {deal!r} — 先用 list_deals 查看"}
+    if not row["result_id"]:
+        return {"error": f"{row['deal_name']} 尚无分析结果", "brief_id": row["id"]}
+    from services.deal_committee.library import load_result
+    rec = load_result(_engine(), row["result_id"])
+    return {
+        "brief_id": row["id"], "deal_name": row["deal_name"],
+        "result_id": row["result_id"], "brief": rec["brief"],
+        "economics": rec["economics"],
+        "sections": [
+            {"key": s["key"], "title": s["title"], "status": s.get("status", "ok"),
+             "markdown_head": (s.get("markdown") or "")[:400]}
+            for s in rec["sections"]
+        ],
+        "synthesis": (rec["synthesis"] or "")[:1500],
+        "recommendation": rec["recommendation"], "daf_id": rec["daf_id"],
+    }
