@@ -43,7 +43,7 @@ with st.sidebar:
         "Navigate",
         ["0 · Deal Intake", "1 · Price Simulation", "2 · Dispatch Revenue",
          "3 · Project Cash Flow", "4 · Monte Carlo", "5 · Deal Pricing",
-         "6 · 投委会", "💬 Strategist"],
+         "6 · 投委会", "💬 Structurer"],
         label_visibility="collapsed",
         key="nav",
     )

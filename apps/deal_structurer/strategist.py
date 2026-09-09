@@ -5,20 +5,19 @@ import streamlit as st
 from shared.anthropic_client import make_client as _make_anthropic_client, is_llm_available
 from libs.deal_models.adapters.agent_tools import AGENT_TOOLS, dispatch_tool
 
-_SYSTEM = """You are a quantitative deal-structuring advisor for renewable energy assets in China's spot markets.
+_SYSTEM = """你是 Structurer — 电力资产交易结构化与投委会分析助手,服务中国电力现货市场。
 
-You have access to the following tools:
-- run_price_simulation: simulate forward price paths (OU or PCA)
-- run_dispatch_valuation: estimate BESS/wind annual revenue from price paths
-- run_project_cashflow: compute project IRR, DSCR, NPV
-- run_monte_carlo: full probabilistic analysis (price→dispatch→cashflow)
-- price_deal_structure: price a floor/cap/collar/swap/tolling/PPA against MC revenue paths
+## 铁律(grounding)
+数字只能来自 DB 读取(list_deals/get_deal_result)或工具重算(rerun_analysis/金融模型工具)。
+禁止凭记忆给出任何价格、收益、IRR、容量补偿费率。不知道就说没有数据。
 
-Guidelines:
-- Always run run_monte_carlo before price_deal_structure
-- Cite P10/P50/P90 statistics when answering revenue questions
-- Express premiums and revenues in ¥M/year for readability
-- When asked "what floor guarantees X% IRR at P90?", iterate: try floor=P10 revenue, compute cashflow at P10, adjust
+## 工具使用
+- 用户上传的文档(投委会 DAF、可研报告等)用 read_uploaded_doc 按页或关键词读取。
+- 质疑/挑战流程:先 get_deal_result 读当前口径 → update_deal_parameters 改参数(白名单)
+  → rerun_analysis("economics") 重算(默认;章节级用 "section:<key>",综合意见用 "synthesis",
+  PDF 用 "daf")。全量 7 章重算("full")必须先请用户明确说「确认」,再以 confirmed=true 调用。
+- 每次修订必须在回复中引用 原口径 → 新口径 数字对比。
+- 中文回答,金额用 ¥M/年 或 亿元 表达。
 """
 
 _TOOL_ICONS = {
@@ -78,17 +77,40 @@ def _run_agent_turn(messages: list, text_ph) -> tuple[str, list]:
 
 
 def render() -> None:
-    st.header("💬 Strategist")
-    st.caption("Ask quantitative questions about deal structure, pricing, and project returns.")
+    st.header("💬 Structurer")
+    st.caption("上传投委会文档提问,挑战各 tab 结果,改参重算并生成修订版 DAF。")
+
+    from services.deal_structurer import structurer_agent as _sa
+
+    uploads = st.file_uploader(
+        "上传文档(投委会 DAF / 可研 / 条款,可多选)",
+        type=["pdf", "pptx", "docx", "xlsx", "xls", "txt", "png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True, key="structurer_uploads")
+    if uploads:
+        from services.deal_committee.intake_parser import extract_text
+        for f in uploads:
+            try:
+                text = extract_text(f.getvalue(), f.name,
+                                    api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+                _sa.add_uploaded_doc(f.name, text)
+            except Exception as e:
+                st.error(f"{f.name}: {e}")
+        st.success(f"已载入:{', '.join(_sa.list_uploaded_docs())}")
+
+    revisions = _sa.get_session_revisions()
+    if revisions:
+        with st.expander(f"📝 本次修订记录 ({len(revisions)})", expanded=True):
+            for r in revisions:
+                st.markdown(f"- result `#{r['result_id']}` — {r['label']}")
 
     if "agent_messages" not in st.session_state:
         st.session_state["agent_messages"] = []
     if "agent_display" not in st.session_state:
         st.session_state["agent_display"] = [{"role": "assistant", "content": (
-            "Hello! I can help you structure and price renewable energy deals. Try asking:\n"
-            "- *What floor revenue guarantees 8% equity IRR at P90?*\n"
-            "- *Price a revenue floor at ¥15M/year for this BESS project*\n"
-            "- *How sensitive is IRR to capex vs average price?*"
+            "你好!我可以:\n"
+            "- 读取上传的投委会文档并回答细节问题\n"
+            "- 针对 tab 1-6 的结果接受挑战(如「容量补偿降到 280 重算」)\n"
+            "- 改参重算并生成修订版 DAF(历史库中留痕)\n"
         )}]
 
     if st.button("🗑 Clear Chat", key="strat_clear"):
