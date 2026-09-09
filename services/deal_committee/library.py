@@ -169,6 +169,23 @@ def update_brief(engine, brief_id: int, brief: DealBrief) -> None:
         })
 
 
+def load_brief(engine, brief_id: int) -> dict:
+    sql = text("SELECT id, deal_name, brief, created_at"
+               " FROM marketdata.deal_briefs WHERE id = :i")
+    with engine.connect() as conn:
+        row = conn.execute(sql, {"i": brief_id}).fetchone()
+    if row is None:
+        raise KeyError(f"要素 id={brief_id} 不存在")
+    return {"id": row[0], "deal_name": row[1], "brief": row[2],
+            "created_at": str(row[3])}
+
+
+def count_results_for_brief(engine, brief_id: int) -> int:
+    sql = text("SELECT count(*) FROM marketdata.deal_daf_results WHERE brief_id = :i")
+    with engine.connect() as conn:
+        return int(conn.execute(sql, {"i": brief_id}).fetchone()[0])
+
+
 def brief_linked_counts(engine, brief_id: int) -> tuple[int, int]:
     """(n_results, n_daf_pdfs) linked to a brief — shown in the delete confirm."""
     sql = text("""
