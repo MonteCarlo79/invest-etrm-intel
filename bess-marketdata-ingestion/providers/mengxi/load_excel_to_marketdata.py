@@ -487,10 +487,32 @@ def ensure_schema_and_log(engine: Engine, schema: str):
     ensure_data_quality_table(engine, schema)
 
 
+def drop_null_key_rows(df: pd.DataFrame, keys: list[str], table: str) -> pd.DataFrame:
+    """Drop rows with null/empty conflict keys and log them.
+
+    One malformed source row (e.g. 上湾电厂 rows with empty 时刻 in
+    日内各时段出清电量, observed daily since 2026-08-26) must not abort the
+    whole sheet-day with a NotNullViolation on the staging COPY — a null key
+    can never merge correctly anyway.
+    """
+    null_mask = df[keys].isna().any(axis=1)
+    for k in keys:
+        if df[k].dtype == object:
+            null_mask = null_mask | df[k].astype(str).str.strip().isin(["", "NaT", "nan", "None"])
+    if not null_mask.any():
+        return df
+    dropped = int(null_mask.sum())
+    sample_cols = [c for c in ("plant_name", "dispatch_unit_name", "node_name") if c in df.columns]
+    sample = df.loc[null_mask, sample_cols].head(3).to_dict("records") if sample_cols else []
+    print(f"[DROP NULL-KEY] {table}: {dropped} rows dropped (keys={keys}); sample={sample}")
+    return df.loc[~null_mask]
+
+
 def upsert(engine, schema, table, df):
     keys = pick_conflict_keys(table, df)
     value_cols = VALUE_COL_HINTS.get(table, [])
     df = dedup_keep_best(df, keys, value_cols)
+    df = drop_null_key_rows(df, keys, table)
 
     if df.empty:
         return
