@@ -262,31 +262,9 @@ def _create_unique_index(engine: Engine, schema: str, table: str, keys: list[str
         c.execute(text(f"CREATE UNIQUE INDEX {idx} ON {qs}.{qt} ({qkeys});"))
 
 
-def _drop_null_key_rows(df: pd.DataFrame, keys: list[str], table: str) -> pd.DataFrame:
-    """Drop rows with null/empty conflict keys and log a warning.
-
-    One malformed source row (e.g. 上湾电厂 rows with empty 时刻 in
-    日内各时段出清电量) must not abort the whole sheet-day with a
-    NotNullViolation on the staging COPY — a null key can never merge anyway.
-    Mirrors bess-marketdata-ingestion/providers/mengxi/load_excel_to_marketdata.py.
-    """
-    null_mask = df[keys].isna().any(axis=1)
-    for k in keys:
-        if df[k].dtype == object:
-            null_mask = null_mask | df[k].astype(str).str.strip().isin(["", "NaT", "nan", "None"])
-    if not null_mask.any():
-        return df
-    dropped = int(null_mask.sum())
-    sample_cols = [c for c in ("plant_name", "dispatch_unit_name", "node_name") if c in df.columns]
-    sample = df.loc[null_mask, sample_cols].head(3).to_dict("records") if sample_cols else []
-    print(f"[DROP NULL-KEY] {table}: {dropped} rows dropped (keys={keys}); sample={sample}")
-    return df.loc[~null_mask]
-
-
 def _upsert(engine: Engine, schema: str, table: str, df: pd.DataFrame):
     keys = _pick_conflict_keys(table, df)
     df = _dedup_keep_best(df, keys, VALUE_COL_HINTS.get(table, []))
-    df = _drop_null_key_rows(df, keys, table)
     if df.empty:
         return
     stage = f"_stg_{table}_{uuid4().hex}"

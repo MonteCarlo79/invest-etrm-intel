@@ -212,11 +212,13 @@ def parse_charging_text(full_text: str) -> list[dict[str, Any]]:
         items.append({"category": "govt_surcharges", "amount_cny": amt, "notes": "政府基金及附加"})
 
     # 10. 退补电费 (refund/supplement — sometimes the only non-zero line)
-    # Pattern: "退补电费" section with a number, or the row "目录/输配电费 容量电费 ... <amount>"
-    amt = _extract_amount(full_text, r'退补电费\s*\n.*?([\d,]+\.\d{2})')
+    # Pattern: "退补电费" section with a SIGNED number, or the row
+    # "目录/输配电费 容量电费 ... <amount>". Printed negative = bill reduction
+    # (money back to the user); the minus must survive extraction.
+    amt = _extract_amount(full_text, r'退补电费\s*\n.*?(-?[\d,]+\.\d{2})')
     if not amt:
         # Alternative: look for the summary row after "退补电费" heading
-        m = re.search(r'目录/输配电费\s+容量电费.*?([\d,]+\.\d{2})\s*$', full_text, re.MULTILINE)
+        m = re.search(r'目录/输配电费\s+容量电费.*?(-?[\d,]+\.\d{2})\s*$', full_text, re.MULTILINE)
         if m:
             amt = _parse_number(m.group(1))
     if amt and amt != 0:
@@ -244,10 +246,12 @@ def parse_charging_text(full_text: str) -> list[dict[str, Any]]:
     if not items and total_amt and total_amt != 0:
         items.append({"category": "charge_energy", "amount_cny": total_amt, "volume_mwh": volume_mwh, "notes": "总电费(全额)"})
 
-    # Negate all amounts (charging = cost = negative for P&L)
+    # Charging = cost = negative for P&L: stored = −printed for EVERY row.
+    # Negating only positives kept printed-negative 退补 refunds as costs
+    # (observed 四子王旗 2026-03: printed -216,439.05 refund stored as -216,439.05
+    # instead of +216,439.05, understating 净利润 by 2× the refund).
     for item in items:
-        if item["amount_cny"] > 0:
-            item["amount_cny"] = -item["amount_cny"]
+        item["amount_cny"] = -item["amount_cny"]
 
     return items
 
