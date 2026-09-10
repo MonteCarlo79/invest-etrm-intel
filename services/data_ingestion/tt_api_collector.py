@@ -53,9 +53,14 @@ def run(ctx: RunContext):
     try:
         # Lazy import: captures the env vars set above at module init time.
         from services.loader.province_misc_to_db_v2 import main as province_main
-        province_main()
-        logger.info(json.dumps({"event": "province_misc_ok",
-                                "start": str(ctx.start_date), "end": str(ctx.end_date)}))
+        if os.getenv("SKIP_PROVINCE_MISC", "").lower() in ("1", "true"):
+            # Backfill ops for matrix tables only — province misc tables are
+            # fresh; reprocessing 300+ days of them is pure churn.
+            logger.info(json.dumps({"event": "province_misc_skipped"}))
+        else:
+            province_main()
+            logger.info(json.dumps({"event": "province_misc_ok",
+                                    "start": str(ctx.start_date), "end": str(ctx.end_date)}))
 
         from column_to_matrix_all import Column_to_Matrix, MARKET_MAP
         markets = (ctx.dataset_filter or ",".join(MARKET_MAP.keys())).split(",")
