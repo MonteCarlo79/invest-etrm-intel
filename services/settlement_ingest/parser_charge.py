@@ -220,7 +220,10 @@ def parse_charging_text(full_text: str) -> list[dict[str, Any]]:
         if m:
             amt = _parse_number(m.group(1))
     if amt and amt != 0:
-        items.append({"category": "charge_energy", "amount_cny": amt, "notes": "退补电费"})
+        # 退补电费 = billing adjustment/refund, not energy — rebate, not charge_energy
+        # (same class as 灵山's large 退补 credits; in charge_energy it distorts
+        # 充电电费 and the 价差收入 = 放电 − 充电成本 identity)
+        items.append({"category": "rebate", "amount_cny": amt, "notes": "退补电费"})
 
     # Total for validation — try multiple patterns
     total_amt = _extract_amount(full_text, r'总电费\s*[（(]元[)）]\s*\n?\s*([\d,.]+|-[\d,.]+)')
