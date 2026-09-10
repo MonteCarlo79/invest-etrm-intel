@@ -308,10 +308,32 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                         items = parse_stategrid_discharge(p1_text)
                         st.info("网上国网发电侧电费账单 detected — parsed deterministically (no vision).")
                     else:
-                        from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
-                        if is_gansu_bill(bill_text):
-                            items = parse_gansu_discharge_text(bill_text)
-                            st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
+                        from services.settlement_ingest.parser_stategrid import (
+                            is_local_discharge, is_sdtc_settlement, parse_local_discharge,
+                            parse_sdtc_settlement,
+                        )
+                        if is_sdtc_settlement(bill_text):
+                            sides = parse_sdtc_settlement(bill_text)
+                            items = []
+                            if "售电侧" in sides:
+                                if _has_category(engine, book_id, settlement_month, "discharge_energy"):
+                                    st.info("交易中心结算单： 售电侧 skipped — this book+month already has "
+                                            "discharge data (it duplicates the 电费账单).")
+                                else:
+                                    items.append(sides["售电侧"])
+                            if "购电侧" in sides:
+                                items.append(sides["购电侧"])
+                            st.info("山东电力交易中心交易结算单 detected — parsed deterministically (no vision).")
+                        elif is_local_discharge(bill_text):
+                            with pdfplumber.open(tmp_path) as _pdf:
+                                p1_text = _pdf.pages[0].extract_text() or ""
+                            items = parse_local_discharge(p1_text)
+                            st.info("山东省地方电厂市场化结算单 detected — parsed deterministically (no vision).")
+                        else:
+                            from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
+                            if is_gansu_bill(bill_text):
+                                items = parse_gansu_discharge_text(bill_text)
+                                st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
             if items is None:
                 if is_scanned:
                     st.info("Detected scanned PDF — using AI Vision to extract data...")

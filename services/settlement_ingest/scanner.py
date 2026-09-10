@@ -307,7 +307,23 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                         with _pp2.open(str(pdf_path)) as _pdf2:
                             items = parse_stategrid_discharge(_pdf2.pages[0].extract_text() or "")
                     else:
-                        items = parse_discharge_settlement_pdf(str(pdf_path))
+                        from services.settlement_ingest.parser_stategrid import (
+                            is_local_discharge, is_sdtc_settlement, parse_local_discharge,
+                            parse_sdtc_settlement,
+                        )
+                        if is_sdtc_settlement(_text):
+                            sides = parse_sdtc_settlement(_text)
+                            items = []
+                            if "售电侧" in sides and not _has_discharge_items(asset_name, month_str):
+                                items.append(sides["售电侧"])
+                            if "购电侧" in sides:
+                                items.append(sides["购电侧"])
+                        elif is_local_discharge(_text):
+                            import pdfplumber as _pp2
+                            with _pp2.open(str(pdf_path)) as _pdf2:
+                                items = parse_local_discharge(_pdf2.pages[0].extract_text() or "")
+                        else:
+                            items = parse_discharge_settlement_pdf(str(pdf_path))
             elif pdf_type == "voucher":
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
                                 "error": "结算凭证 (trading-center voucher) — duplicates 结算单 data, not ingested"})
@@ -339,6 +355,22 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
             results.append({"path": rel_path, "asset": asset_name, "status": "error", "error": str(e)})
 
     return results
+
+
+def _has_discharge_items(asset_name: str, month: str) -> bool:
+    """True if the asset's book already has discharge_energy items for the month
+    (used to skip a 交易中心结算单's 售电侧 when the 电费账单 is already in)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1 FROM marketdata.rm_settlement_items si
+                JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
+                JOIN marketdata.rm_books b ON b.id = s.book_id
+                JOIN marketdata.rm_assets a ON a.id = b.asset_id
+                WHERE a.name = %s AND s.settlement_month = %s AND si.category = 'discharge_energy'
+                LIMIT 1
+            """, (asset_name, f"{month}-01" if len(month) == 7 else month))
+            return cur.fetchone() is not None
 
 
 def _write_settlement(asset_name: str, month: str, filename: str, file_type: str, file_hash: str, items: list[dict]):
