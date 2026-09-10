@@ -306,3 +306,16 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 - Scanned docs (no text layer) that deterministic parsing can't touch: render to PNG and read values manually, cross-check row sum vs printed 小计 and ×1.13 tax — 5 grid-format 结算单 (2026-03..07) + 2 old-format charge bills verified this way.
 - Before/after evidence for any cleanup: full per-file dry-run table (parsed vs printed, OK/MISMATCH) → then delete + insert in ONE transaction → then verify per-month totals == expected. Backup first: `SELECT json_agg(...)` of the doomed rows to a local file (灵山: /tmp/lingshan_backup_20260909.json).
 - 电网版上网结算单2/结算依据2 docs overlap the 交易中心 statement — detect by content (`电网名称：广西电网` without `结算依据`) and skip, or they double-count.
+
+---
+
+## Bulk sign flips without per-bill verification + stale-index commit sweep (蒙西 退补, 2026-09-10)
+
+**What didn't work:**
+1. Flipping 7 退补 rows to positive on the strength of ONE verified bill (四子王旗 2026-03, printed −216,439.05 refund). Five were wrong: their bills print 退补 as POSITIVE retroactive charges (+218,639.68 etc.) that were already stored correctly as negative. The bill's 电费构成 prints components as SIGNED addends — the same label is a refund one month and a charge the next. Verify every affected bill before bulk sign edits; never infer sign from the label.
+2. The 退补 parser regexes dropped the printed minus (`[\d,.]+\.\d{2}` char class has no `-`), so extraction could not distinguish charge from refund at all. Then "negate positives only" made everything a cost. Sign-capture + uniform `stored = −printed` is the only consistent convention (same fix as parser_guangxi had from birth).
+3. `git add <explicit paths> && git commit` swept PRE-STAGED index entries along: a stale staged revert (OneDrive hydration gap artifact) of the null-key-drop feature rode into 5abb1a6 and deleted a test file from the repo while it sat intact on disk. Before committing on this repo: `git diff --cached --stat` — if it shows files you didn't just stage, unstage or commit separately.
+
+**What worked:**
+- Per-bill ground truth before each correction: extract the printed 退补/功率因数 values from the actual PDFs, set storage = −printed, then verify the month's charge-side total == −(bill 总电费/电费构成). 8 months reconciled to the cent.
+- The audit pattern that caught the systemic class: re-parse every charge bill with the fixed parser and diff per book+month vs DB; delta ≈ 2× the mis-signed component.
