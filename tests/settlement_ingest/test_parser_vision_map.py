@@ -48,10 +48,18 @@ class TestGuangxiGridBill:
     def test_trade_energy_stays_other_on_charge_side(self):
         assert map_settlement_category("交易电费", side="charge") == "other"
 
+    def test_tuibu_is_rebate_on_both_sides(self):
+        # 退补电费 = billing adjustment/refund, not energy (灵山 charge bills: ¥2-5M/month)
+        assert map_settlement_category("退补电费", side="charge") == "rebate"
+        assert map_settlement_category("(16)退补电费(元)", side="charge") == "rebate"
+        assert map_settlement_category("市场损益及分摊返还电费", side="discharge") == "rebate"
+
     def test_basic_fee(self):
         assert map_settlement_category("功率因数调整电费", side="charge") == "basic_fee"
         assert map_settlement_category("容(需)量电费", side="charge") == "basic_fee"
 
     def test_rebate_is_side_aware(self):
-        assert map_settlement_category("退补电费", side="charge") == "charge_energy"
+        # 退补电费 = billing adjustment/refund, not energy — rebate on both sides
+        # (changed 2026-09-10: charge-side membership broke 灵山's 价差收入 identity)
+        assert map_settlement_category("退补电费", side="charge") == "rebate"
         assert map_settlement_category("退补电费", side="discharge") == "rebate"

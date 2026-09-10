@@ -50,7 +50,10 @@ def map_settlement_category(label: str, side: str = "discharge") -> str:
     if "补贴" in s:
         return "subsidy"
     if "退补" in s or "返还" in s:
-        return "rebate" if side == "discharge" else energy_cat
+        # 退补电费 is a billing adjustment/refund, not energy — rebate on BOTH sides.
+        # 灵山 charge bills carry ¥2-5M/month 退补 credits; in charge_energy they
+        # flipped 充电电费 positive and broke the 价差收入 = 放电 − 充电成本 identity.
+        return "rebate"
     if side == "discharge" and "交易电费" in s:
         # 电网电费结算单's market-energy revenue line (灵山 2026-03..07 scans)
         return "discharge_energy"
