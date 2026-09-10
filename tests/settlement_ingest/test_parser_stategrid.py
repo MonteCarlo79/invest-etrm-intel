@@ -92,9 +92,10 @@ class TestChargeBill:
         assert rows[0]["category"] == "other"
 
     def test_sign_and_categories(self, items):
-        assert _by_notes(items, "直接交易电费")[0] == {
-            "category": "charge_energy", "volume_mwh": None, "price_cny_kwh": None,
-            "amount_cny": pytest.approx(-17452.62), "notes": "充电结算: 直接交易电费"}
+        energy = _by_notes(items, "直接交易电费")[0]
+        assert energy["category"] == "charge_energy"
+        assert energy["amount_cny"] == pytest.approx(-17452.62)
+        assert energy["volume_mwh"] == pytest.approx(5498.064)  # 本期电量 5,498,064 kWh
         assert _by_notes(items, "电量电费")[0]["category"] == "transmission"
         assert _by_notes(items, "煤电容量电费")[0]["category"] == "coal_capacity_charge"
         assert _by_notes(items, "电价交叉补贴新增损益")[0]["category"] == "subsidy"

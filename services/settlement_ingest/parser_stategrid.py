@@ -153,13 +153,24 @@ def parse_stategrid_discharge_total(text: str) -> float | None:
     return None
 
 
+def parse_stategrid_charge_volume(text: str) -> float | None:
+    """Total monthly charging volume in MWh from the page-1 header
+    (本期电量 X千瓦时)."""
+    m = re.search(r"本期电量\s*([\d,]+)\s*千瓦时", text)
+    if m:
+        return float(m.group(1).replace(",", "")) / 1000.0
+    return None
+
+
 def parse_stategrid_charge(text: str) -> list[dict[str, Any]]:
     """Parse page-1 账单概况 of a 用电侧下网电费账单 into charge items.
 
     Keeps leaf fees, drops grand total + numbered subtotal groups + 合计.
     stored = −printed. Handles wrapped labels (amount on next line) and
-    right-column 用能分析 interleave.
+    right-column 用能分析 interleave. The month's total volume (本期电量)
+    is attached to the energy row (直接交易电费 → charge_energy).
     """
+    total_vol_mwh = parse_stategrid_charge_volume(text)
     items: list[dict[str, Any]] = []
     lines = [l.strip() for l in text.split("\n")]
     i = 0
@@ -196,9 +207,10 @@ def parse_stategrid_charge(text: str) -> list[dict[str, Any]]:
                 continue
         label = re.sub(r"^[①②③④⑤其中:：\s]+", "", label)
         if label in _CHARGE_CAT and amt != 0:
+            cat = _CHARGE_CAT[label]
             items.append({
-                "category": _CHARGE_CAT[label],
-                "volume_mwh": None,
+                "category": cat,
+                "volume_mwh": total_vol_mwh if cat == "charge_energy" else None,
                 "price_cny_kwh": None,
                 "amount_cny": -amt,
                 "notes": f"充电结算: {label}",
