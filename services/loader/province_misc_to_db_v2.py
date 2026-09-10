@@ -417,15 +417,12 @@ def _replace_matrix(engine, tbl: str, mat_df: pd.DataFrame, metric_name: str):
 def _shift15_pivot_hour(df_long: pd.DataFrame) -> pd.DataFrame:
     w = df_long.copy()
     w["shifted_time"] = w["time"] - pd.Timedelta(minutes=15)
-    w = w.dropna(subset=["shifted_time"])  # NaT rows would make hour labels float
     w["date"] = w["shifted_time"].dt.date
-    w["hour"] = w["shifted_time"].dt.hour.astype(int)
+    w["hour"] = w["shifted_time"].dt.hour
     hourly = w.groupby(["metric", "date", "hour"], as_index=False)["price"].mean()
     mat = hourly.pivot_table(index=["metric", "date"], columns="hour", values="price")
     mat = mat.sort_index()
-    # Int labels required: float labels ("0.0") yield "Hour_0.0" columns that
-    # don't exist in the wide tables (Hour_00..Hour_23) — UndefinedColumn.
-    mat.columns = [f"Hour_{int(c):02d}" for c in mat.columns]
+    mat.columns = [f"Hour_{str(c).zfill(2)}" for c in mat.columns]
     return mat.reset_index()
 
 

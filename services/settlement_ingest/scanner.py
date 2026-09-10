@@ -266,15 +266,23 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                 if is_guangxi_charge_bill(_text):
                     items = parse_guangxi_charge_text(_text)
                 else:
-                    from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
-                    if is_gansu_charge_bill(_text):
-                        items = parse_gansu_charge_pdf(str(pdf_path))
+                    from services.settlement_ingest.parser_stategrid import (
+                        is_stategrid_charge, parse_stategrid_charge,
+                    )
+                    if is_stategrid_charge(_text):
+                        import pdfplumber as _pp2
+                        with _pp2.open(str(pdf_path)) as _pdf2:
+                            items = parse_stategrid_charge(_pdf2.pages[0].extract_text() or "")
                     else:
-                        items = parse_charging_cost_pdf(str(pdf_path))
-                        if not items:
-                            # Non-Mengxi charge layout — generic vision fallback
-                            from services.settlement_ingest.parser_vision import parse_charge_bill_vision
-                            items = parse_charge_bill_vision(str(pdf_path))
+                        from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
+                        if is_gansu_charge_bill(_text):
+                            items = parse_gansu_charge_pdf(str(pdf_path))
+                        else:
+                            items = parse_charging_cost_pdf(str(pdf_path))
+                            if not items:
+                                # Non-Mengxi charge layout — generic vision fallback
+                                from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                                items = parse_charge_bill_vision(str(pdf_path))
             elif pdf_type == "discharge":
                 import pdfplumber as _pp
                 _text = ""
@@ -291,7 +299,15 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                 if is_guangxi_discharge_bill(_text):
                     items = parse_guangxi_discharge_text(_text)
                 else:
-                    items = parse_discharge_settlement_pdf(str(pdf_path))
+                    from services.settlement_ingest.parser_stategrid import (
+                        is_stategrid_discharge, parse_stategrid_discharge,
+                    )
+                    if is_stategrid_discharge(_text):
+                        import pdfplumber as _pp2
+                        with _pp2.open(str(pdf_path)) as _pdf2:
+                            items = parse_stategrid_discharge(_pdf2.pages[0].extract_text() or "")
+                    else:
+                        items = parse_discharge_settlement_pdf(str(pdf_path))
             elif pdf_type == "voucher":
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
                                 "error": "结算凭证 (trading-center voucher) — duplicates 结算单 data, not ingested"})

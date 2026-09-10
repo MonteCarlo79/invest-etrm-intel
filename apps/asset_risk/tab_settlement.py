@@ -296,10 +296,22 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                     items = parse_guangxi_discharge_text(bill_text)
                     st.info("广西电力交易结算依据 detected — parsed deterministically (no vision).")
                 else:
-                    from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
-                    if is_gansu_bill(bill_text):
-                        items = parse_gansu_discharge_text(bill_text)
-                        st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
+                    # 网上国网 发电侧电费账单 (山东): 上网电费 is the TOTAL (its rows
+                    # decompose it) and page 2 repeats the table — vision counted
+                    # total+components AND both pages (滨州 2026: 4x inflation).
+                    from services.settlement_ingest.parser_stategrid import (
+                        is_stategrid_discharge, parse_stategrid_discharge,
+                    )
+                    if is_stategrid_discharge(bill_text):
+                        with pdfplumber.open(tmp_path) as _pdf:
+                            p1_text = _pdf.pages[0].extract_text() or ""
+                        items = parse_stategrid_discharge(p1_text)
+                        st.info("网上国网发电侧电费账单 detected — parsed deterministically (no vision).")
+                    else:
+                        from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
+                        if is_gansu_bill(bill_text):
+                            items = parse_gansu_discharge_text(bill_text)
+                            st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
             if items is None:
                 if is_scanned:
                     st.info("Detected scanned PDF — using AI Vision to extract data...")
@@ -327,19 +339,30 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                 items = parse_guangxi_charge_text(bill_text)
                 st.info("广西电网电费通知单 detected — parsed deterministically (no vision).")
             else:
-                from services.settlement_ingest.parser_gansu import (
-                    is_gansu_charge_bill, parse_gansu_charge_text,
+                # 网上国网 用电侧电费账单 (山东): 3-level hierarchy — vision stored
+                # subtotals AND leaves AND a page-2 repeat (滨州 2026: ~2.7x)
+                from services.settlement_ingest.parser_stategrid import (
+                    is_stategrid_charge, parse_stategrid_charge,
                 )
-                if is_gansu_charge_bill(bill_text):
-                    items = parse_gansu_charge_text(bill_text)
-                    st.info("国网甘肃 charge bill detected — parsed deterministically (no vision).")
+                if is_stategrid_charge(bill_text):
+                    with pdfplumber.open(tmp_path) as _pdf:
+                        p1_text = _pdf.pages[0].extract_text() or ""
+                    items = parse_stategrid_charge(p1_text)
+                    st.info("网上国网用电侧电费账单 detected — parsed deterministically (no vision).")
                 else:
-                    from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
-                    items = parse_charging_cost_pdf(tmp_path)
-                    if not items:
-                        # Non-Mengxi charge layout — generic vision fallback
-                        from services.settlement_ingest.parser_vision import parse_charge_bill_vision
-                        items = parse_charge_bill_vision(tmp_path)
+                    from services.settlement_ingest.parser_gansu import (
+                        is_gansu_charge_bill, parse_gansu_charge_text,
+                    )
+                    if is_gansu_charge_bill(bill_text):
+                        items = parse_gansu_charge_text(bill_text)
+                        st.info("国网甘肃 charge bill detected — parsed deterministically (no vision).")
+                    else:
+                        from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
+                        items = parse_charging_cost_pdf(tmp_path)
+                        if not items:
+                            # Non-Mengxi charge layout — generic vision fallback
+                            from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                            items = parse_charge_bill_vision(tmp_path)
             if not items:
                 # Non-Mengxi charge layout (e.g. 甘肃) — generic vision fallback
                 st.info("Charge regex parser found nothing — trying AI Vision (generic provincial layout)...")

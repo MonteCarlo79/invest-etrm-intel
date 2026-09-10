@@ -53,34 +53,19 @@ def run(ctx: RunContext):
     try:
         # Lazy import: captures the env vars set above at module init time.
         from services.loader.province_misc_to_db_v2 import main as province_main
-        if os.getenv("SKIP_PROVINCE_MISC", "").lower() in ("1", "true"):
-            # Backfill ops for matrix tables only — province misc tables are
-            # fresh; reprocessing 300+ days of them is pure churn.
-            logger.info(json.dumps({"event": "province_misc_skipped"}))
-        else:
-            province_main()
-            logger.info(json.dumps({"event": "province_misc_ok",
-                                    "start": str(ctx.start_date), "end": str(ctx.end_date)}))
+        province_main()
+        logger.info(json.dumps({"event": "province_misc_ok",
+                                "start": str(ctx.start_date), "end": str(ctx.end_date)}))
 
         from column_to_matrix_all import Column_to_Matrix, MARKET_MAP
         markets = (ctx.dataset_filter or ",".join(MARKET_MAP.keys())).split(",")
         markets_run = []
-        markets_failed = []
         for market in markets:
             market = market.strip()
             if market in MARKET_MAP:
-                try:
-                    Column_to_Matrix("", market)
-                    markets_run.append(market)
-                except Exception as exc:
-                    # Isolate per-market failures: one plant's bad write must not
-                    # starve the rest of the loop (2025-10-25 cascade that froze
-                    # wulate/dingyuan alongside suyou).
-                    markets_failed.append(market)
-                    logger.error(json.dumps({"event": "market_matrix_error",
-                                             "market": market, "error": str(exc)[:500]}))
-        logger.info(json.dumps({"event": "column_to_matrix_ok", "markets": markets_run,
-                                "failed": markets_failed}))
+                Column_to_Matrix("", market)
+                markets_run.append(market)
+        logger.info(json.dumps({"event": "column_to_matrix_ok", "markets": markets_run}))
 
         finish_run(run_id, "success", rows_written=len(markets_run))
         update_dataset_status(COLLECTOR, "public.hist_*", last_date=ctx.end_date)
