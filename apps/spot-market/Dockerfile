@@ -5,6 +5,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     "streamlit==1.58.0" \
     "plotly==6.0.1" \
+    "streamlit-echarts==0.7.0" \
     pandas \
     "psycopg2-binary==2.9.10" \
     matplotlib \
@@ -41,6 +42,8 @@ COPY services/knowledge_pool/           ./services/knowledge_pool/
 COPY services/market_fundamentals/      ./services/market_fundamentals/
 COPY services/common/                   ./services/common/
 COPY services/exchange_reports/         ./services/exchange_reports/
+COPY services/interconnector/           ./services/interconnector/
+COPY assets/geo/                        ./assets/geo/
 COPY apps/spot-watcher/                 ./apps/spot-watcher/
 # data/market-fundamentals/ omitted — ECS reads from S3, not local folder
 

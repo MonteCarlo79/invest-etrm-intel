@@ -99,6 +99,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_dist":             "Distributions",
         "tab_geo":              "Geo Map",
         "tab_interprov":        "Inter-Provincial Flow",
+        "tab_ic":               "Interconnector",
         "tab_fundamentals":     "Market Fundamentals",
         "tab_agent":            "Strategist",
         "tab_news":             "📡 News Sources",
@@ -410,6 +411,7 @@ _T: dict[str, dict[str, str]] = {
         "tab_dist":             "价格分布",
         "tab_geo":              "地理分布图",
         "tab_interprov":        "省间现货交易",
+        "tab_ic":               "跨区通道",
         "tab_fundamentals":     "市场基础数据",
         "tab_agent":            "策略分析师",
         "tab_news":             "📡 新闻来源",
@@ -1708,11 +1710,11 @@ st.divider()
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_overview, tab_spread, tab_heatmap, tab_intraday, tab_province, tab_dist, tab_geo, \
-tab_interprov, tab_fundamentals, tab_agent, tab_news, tab_library, tab_jizhi, tab_supply, \
+tab_interprov, tab_ic, tab_fundamentals, tab_agent, tab_news, tab_library, tab_jizhi, tab_supply, \
 tab_forecast, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"), _t("tab_intraday"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
-    _t("tab_interprov"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_news"),
+    _t("tab_interprov"), _t("tab_ic"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_news"),
     "Library", "机制竞价", "供需结构", "价格预测", _t("tab_mgmt"),
 ])
 
@@ -2422,6 +2424,12 @@ with tab_interprov:
                     _sub.style.format(_fmt, na_rep="—"),
                     use_container_width=True, hide_index=True,
                 )
+
+
+# ── Tab 7b: Interconnector ──────────────────────────────────────────────────
+with tab_ic:
+    import interconnector_tab
+    interconnector_tab.render(__conn())
 
 
 # ── Tab 8: Market Fundamentals ───────────────────────────────────────────────
