@@ -342,3 +342,49 @@ def render(conn) -> None:
         st.plotly_chart(px.line(mx, x="m", y="gwh", color="send",
                                 labels={"m": "", "gwh": "外送电量 GWh", "send": ""}),
                         use_container_width=True)
+
+    # S4 (A3) added by Task 15.
+    st.header("4 · 价差回测 Month-Ahead Spread Backtest")
+    st.caption("月前价代理 = 交易月前一月披露月报中的合约均价 (contract_avg_price，"
+               "报告月 M−1 对应交割月 M)；交割月现货 = LingFeng 日前月度均价；"
+               "落地价 = 该省对当月覆盖交易加权 (VWAP)。缺口月份显示 无数据，不插值。"
+               "净价差 = 受端现货 − 送端现货 − 通道费；净价差仅在存在该省对交易时扣减通道费，"
+               "无交易月份按零费显示。")
+    if trades:
+        pairs = sorted({(t["send_anchor"], t["recv_province"]) for t in trades})
+        pair = st.selectbox("省对", pairs, format_func=lambda p: f"{p[0]} → {p[1]}",
+                            key="ic_a3_pair")
+        months = sorted({t["month_start"] for t in trades})
+        msel = st.multiselect("交割月", months, default=months[-3:], key="ic_a3_months")
+        # month-ahead proxy: contract_avg_price at report month M-1 → keyed to delivery month M
+        emm2 = pd.read_sql(
+            "SELECT province, report_month, contract_avg_price_yuan_mwh"
+            " FROM staging.exchange_monthly_metrics", conn)
+        emm2["report_month"] = pd.to_datetime(emm2["report_month"])
+        month_ahead = {}
+        for _, r in emm2.iterrows():
+            if pd.notna(r["contract_avg_price_yuan_mwh"]):
+                dm = (r["report_month"] + pd.offsets.MonthBegin(1)).date()
+                month_ahead[(r["province"], dm)] = float(r["contract_avg_price_yuan_mwh"])
+        # spot_prices_hourly columns are province/datetime/da_price (app.py:866-903)
+        spot = pd.read_sql(
+            "SELECT province, date_trunc('month', datetime)::date AS m,"
+            " AVG(da_price) AS p FROM marketdata.spot_prices_hourly"
+            " GROUP BY 1, 2", conn)
+        spot_monthly = {(r["province"], r["m"]): float(r["p"]) for _, r in spot.iterrows()
+                        if pd.notna(r["p"])}
+        bt = ic_data.backtest_rows([pair], msel, month_ahead, spot_monthly, trades)
+        st.dataframe(pd.DataFrame([{
+            "送出": r["send"], "受入": r["recv"], "交割月": r["month"],
+            "送出月前价(元/MWh)": _nd(r["send_ahead"]), "送出现货均价(元/MWh)": _nd(r["send_spot"]),
+            "受入月前价(元/MWh)": _nd(r["recv_ahead"]), "受入现货均价(元/MWh)": _nd(r["recv_spot"]),
+            "落地价VWAP(元/MWh)": _nd(r["landing"]),
+            "落地-受端现货(元/MWh)": _nd(r["premium_over_recv_spot"]),
+            "净价差(元/MWh)": _nd(r["realized_spread"])} for r in bt]),
+            use_container_width=True, hide_index=True)
+        hits = [r for r in bt if r["premium_over_recv_spot"] is not None]
+        if hits:
+            beat = sum(1 for r in hits if r["premium_over_recv_spot"] < 0)
+            st.metric("落地价低于受端现货的月份占比", f"{100*beat/len(hits):.0f}% ({beat}/{len(hits)})")
+    else:
+        st.info("尚未导入华东跨省数据汇总。")
