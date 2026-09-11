@@ -91,3 +91,41 @@ def recycle_gap(required_gwh: float, within_gwh: float, exported_gwh: float,
         return None
     shortfall = max(0.0, required_gwh - within_gwh - exported_gwh)
     return shortfall * abs(mlt_price - spot_price)
+
+def _pair_vwap(trades, send, recv, price_key):
+    num = den = 0.0
+    for r in trades:
+        if r["send_anchor"] == send and r["recv_province"] == recv and r[price_key] is not None and r["vol_post_mwh"]:
+            num += r[price_key] * r["vol_post_mwh"]; den += r["vol_post_mwh"]
+    return num/den if den else None
+
+def backtest_rows(pairs, delivery_months, month_ahead, spot_monthly, trades):
+    out = []
+    for send, recv in pairs:
+        fee = _pair_vwap(trades, send, recv, "channel_fee")
+        for m in delivery_months:
+            covering = [r for r in trades if r["send_anchor"] == send
+                        and r["recv_province"] == recv
+                        and r["month_start"] <= m <= r["month_end"]]
+            land = _pair_vwap(covering, send, recv, "land_price") if covering else None
+            ss, rs = spot_monthly.get((send, m)), spot_monthly.get((recv, m))
+            out.append(dict(send=send, recv=recv, month=m,
+                send_ahead=month_ahead.get((send, m)), send_spot=ss,
+                recv_ahead=month_ahead.get((recv, m)), recv_spot=rs,
+                landing=land,
+                premium_over_recv_spot=(land - rs) if (land is not None and rs is not None) else None,
+                realized_spread=(rs - ss - (fee or 0)) if (ss is not None and rs is not None) else None))
+    return out
+
+def green_premium(snapshot_rows: list[dict]) -> list[dict]:
+    by: dict[tuple, dict] = {}
+    for r in snapshot_rows:
+        if r["is_subtotal"] or r["landing_price"] is None:
+            continue
+        k = (r["send_prov"], r["recv_prov"], r["channel"])
+        e = by.setdefault(k, {})
+        if r["trade_type"] == "省间绿电交易（市场化交易）": e["green"] = r["landing_price"]
+        elif r["trade_type"] == "其他市场化交易": e["other"] = r["landing_price"]
+    return [dict(send=k[0], recv=k[1], channel=k[2], green_price=v["green"],
+                 other_price=v["other"], premium=round(v["green"]-v["other"], 2))
+            for k, v in by.items() if "green" in v and "other" in v]

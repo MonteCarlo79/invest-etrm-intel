@@ -68,3 +68,31 @@ def test_recycle_gap_math():
     assert data.recycle_gap(1000, 600, 200, 300, 250) == pytest.approx(200*50)
     assert data.recycle_gap(1000, 900, 200, 300, 250) == 0        # no shortfall → 0
     assert data.recycle_gap(1000, 0, 0, None, 250) is None        # missing price → None
+
+def test_backtest_rows_alignment_and_none_policy():
+    trades = [_t(send="山西", recv="江苏", vol=100, land=380, fee=70,
+                 month=date(2026,7,1))]
+    trades[0]["month_end"] = date(2026,7,31)
+    month_ahead = {("山西", date(2026,7,1)): 330.0, ("江苏", date(2026,7,1)): 400.0}
+    spot = {("山西", date(2026,7,1)): 310.0, ("江苏", date(2026,7,1)): 420.0}
+    rows = data.backtest_rows([("山西","江苏")], [date(2026,7,1)], month_ahead, spot, trades)
+    r = rows[0]
+    assert r["landing"] == 380 and r["premium_over_recv_spot"] == 380-420
+    assert r["realized_spread"] == 420-310-70
+    # month with no spot → None fields, row still present
+    rows2 = data.backtest_rows([("山西","江苏")], [date(2026,8,1)], month_ahead, spot, trades)
+    assert rows2[0]["recv_spot"] is None and rows2[0]["realized_spread"] is None
+
+def test_green_premium():
+    snap = [
+        dict(send_prov="黑龙江", recv_prov="安徽", channel="雁淮直流",
+             trade_type="省间绿电交易（市场化交易）", is_subtotal=False,
+             volume_100m_kwh=9.07, landing_price=376.58),
+        dict(send_prov="黑龙江", recv_prov="安徽", channel="雁淮直流",
+             trade_type="其他市场化交易", is_subtotal=False,
+             volume_100m_kwh=2.01, landing_price=334.89),
+    ]
+    out = data.green_premium(snap)
+    assert out == [dict(send="黑龙江", recv="安徽", channel="雁淮直流",
+                        green_price=376.58, other_price=334.89,
+                        premium=pytest.approx(41.69))] or abs(out[0]["premium"] - 41.69) < 0.01
