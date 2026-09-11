@@ -2,6 +2,8 @@
 """Aggregations for the interconnector tab. Pure functions over row dicts — no DB here."""
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 
 def aggregate_flows(trades: list[dict]) -> list[dict]:
@@ -52,3 +54,19 @@ def monthly_volume_by_recv(trades: list[dict]) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
     return df.pivot_table(index="m", columns="recv", values="gwh", aggfunc="sum").fillna(0)
+
+def balance_of_year(channels: list[dict], channel_agg: dict, as_of: date) -> list[dict]:
+    """A1: capability vs YTD traded (traded-volume proxy — NOT physical flow)."""
+    year_end = date(as_of.year, 12, 31)
+    remaining_days = (year_end - as_of).days + 1
+    remaining_hours = remaining_days * 24
+    out = []
+    for c in channels:
+        cap = c["gw"] * 8760
+        traded = channel_agg.get(c["name"], {}).get("vol_gwh", 0.0)
+        out.append(dict(name=c["name"], gw=c["gw"], capability_gwh=round(cap, 1),
+            traded_gwh=traded,
+            utilization_pct=(100*traded/cap) if cap else 0.0,
+            remaining_hours=remaining_hours,
+            remaining_capability_gwh=round(c["gw"]*remaining_hours, 1)))
+    return sorted(out, key=lambda x: -x["gw"])

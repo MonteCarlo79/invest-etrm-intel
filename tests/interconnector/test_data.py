@@ -39,3 +39,17 @@ def test_monthly_volume_by_recv():
     assert pv.loc[date(2026,1,1), "江苏"] == pytest.approx(0.1)
     assert pv.loc[date(2026,2,1), "江苏"] == pytest.approx(0.2)
     assert pv.loc[date(2026,1,1), "上海"] == pytest.approx(0.05)
+
+def test_balance_of_year_math():
+    channels = [dict(name="锡泰直流", gw=10.0), dict(name="云霄直流", gw=2.0)]
+    agg = {"锡泰直流": {"vol_gwh": 6139.0, "land": 346, "trades": 93}}
+    out = {c["name"]: c for c in data.balance_of_year(channels, agg, date(2026,10,1))}
+    xt = out["锡泰直流"]
+    assert xt["capability_gwh"] == pytest.approx(10*8760)
+    assert xt["traded_gwh"] == pytest.approx(6139.0)
+    assert xt["utilization_pct"] == pytest.approx(100*6139/(10*8760), rel=1e-3)
+    # remaining hours Oct 1 → Dec 31 = (31+30+31)*24 = 2208
+    assert xt["remaining_hours"] == 2208
+    assert xt["remaining_capability_gwh"] == pytest.approx(10*2208)
+    yx = out["云霄直流"]
+    assert yx["traded_gwh"] == 0 and yx["utilization_pct"] == 0
