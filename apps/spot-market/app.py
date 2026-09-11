@@ -2429,7 +2429,7 @@ with tab_interprov:
 # ── Tab 7b: Interconnector ──────────────────────────────────────────────────
 with tab_ic:
     import interconnector_tab
-    interconnector_tab.render(__conn())
+    interconnector_tab.render(_conn())
 
 
 # ── Tab 8: Market Fundamentals ───────────────────────────────────────────────

@@ -131,9 +131,14 @@ _TRADES_INSERT = """INSERT INTO staging.interconnector_trades (
 def replace_trades(conn, rows: list[dict], source_file: str) -> int:
     """Full replace: the 华东 file is a cumulative snapshot."""
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM staging.interconnector_trades")
-        cur.executemany(_TRADES_INSERT, [dict(r, source_file=source_file) for r in rows])
-    conn.commit()
+        try:
+            cur.execute("BEGIN")
+            cur.execute("DELETE FROM staging.interconnector_trades")
+            cur.executemany(_TRADES_INSERT, [dict(r, source_file=source_file) for r in rows])
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
     return len(rows)
 
 # ── 跨区组织交易情况 snapshot ─────────────────────────────────────────────────
@@ -166,9 +171,14 @@ _SNAP_INSERT = """INSERT INTO staging.interconnector_mlt_snapshot (
 
 def replace_snapshot(conn, label: str, rows: list[dict]) -> int:
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM staging.interconnector_mlt_snapshot WHERE snapshot_label = %s", (label,))
-        cur.executemany(_SNAP_INSERT, [dict(r, snapshot_label=label) for r in rows])
-    conn.commit()
+        try:
+            cur.execute("BEGIN")
+            cur.execute("DELETE FROM staging.interconnector_mlt_snapshot WHERE snapshot_label = %s", (label,))
+            cur.executemany(_SNAP_INSERT, [dict(r, snapshot_label=label) for r in rows])
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
     return len(rows)
 
 # ── channels + MLT% overrides ─────────────────────────────────────────────────

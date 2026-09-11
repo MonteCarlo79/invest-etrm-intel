@@ -75,10 +75,12 @@ def test_replace_trades_deletes_then_inserts():
              "vol_pre_mwh":1.0,"vol_post_mwh":1.0,"send_price":1,"land_price":2,
              "jingrong_vol_mwh":None,"jingrong_price":None,"channel_fee":1}]
     n = ingest.replace_trades(conn, rows, "src.xlsx:123")
-    assert n == 1 and conn.committed == 1
-    assert "DELETE FROM staging.interconnector_trades" in conn.cur.calls[0][0]
-    assert "INSERT INTO staging.interconnector_trades" in conn.cur.calls[1][0]
-    assert conn.cur.calls[1][1][0]["source_file"] == "src.xlsx:123"
+    assert n == 1 and conn.committed == 0      # explicit COMMIT, not conn.commit()
+    assert conn.cur.calls[0][0] == "BEGIN"
+    assert "DELETE FROM staging.interconnector_trades" in conn.cur.calls[1][0]
+    assert "INSERT INTO staging.interconnector_trades" in conn.cur.calls[2][0]
+    assert conn.cur.calls[2][1][0]["source_file"] == "src.xlsx:123"
+    assert conn.cur.calls[3][0] == "COMMIT"
 
 def _snapshot_fixture(tmp_path):
     f = tmp_path / "kj.xlsx"
@@ -108,9 +110,11 @@ def test_replace_snapshot_deletes_label_then_inserts():
              "volume_100m_kwh":0.02,"landing_price":322.72}]
     n = ingest.replace_snapshot(conn, "2025-full", rows)
     assert n == 1
-    assert "DELETE FROM staging.interconnector_mlt_snapshot WHERE snapshot_label" in conn.cur.calls[0][0]
-    assert conn.cur.calls[0][1] == ("2025-full",)
-    assert conn.cur.calls[1][1][0]["snapshot_label"] == "2025-full"
+    assert conn.cur.calls[0][0] == "BEGIN"
+    assert "DELETE FROM staging.interconnector_mlt_snapshot WHERE snapshot_label" in conn.cur.calls[1][0]
+    assert conn.cur.calls[1][1] == ("2025-full",)
+    assert conn.cur.calls[2][1][0]["snapshot_label"] == "2025-full"
+    assert conn.cur.calls[3][0] == "COMMIT"
 
 def test_upsert_channels_writes_all_fields():
     conn = _Conn()

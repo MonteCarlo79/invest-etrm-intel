@@ -94,11 +94,56 @@ def _channels(_conn) -> list[dict]:
             for r in df.to_dict("records")]
 
 
+@st.cache_data(ttl=300)
+def _interprov_flow(_conn, start, end) -> list[dict]:
+    return pd.read_sql(
+        "SELECT report_date, direction, metric_type, price_yuan_kwh, total_vol_100gwh "
+        "FROM staging.spot_interprov_flow WHERE report_date BETWEEN %s AND %s",
+        _conn, params=(start, end)).to_dict("records")
+
+
+@st.cache_data(ttl=300)
+def _exchange_monthly(_conn) -> pd.DataFrame:
+    """S3 A2 inputs — numerics coerced here (NUMERIC→Decimal breaks .mean())."""
+    df = pd.read_sql(
+        "SELECT province, report_month, medium_longterm_volume_gwh, contract_avg_price_yuan_mwh,"
+        " spot_avg_price_yuan_mwh, wind_volume_gwh, solar_volume_gwh"
+        " FROM staging.exchange_monthly_metrics", _conn)
+    df["report_month"] = pd.to_datetime(df["report_month"]).dt.date
+    for c in ("medium_longterm_volume_gwh", "contract_avg_price_yuan_mwh",
+              "spot_avg_price_yuan_mwh", "wind_volume_gwh", "solar_volume_gwh"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
+def _contract_prices(_conn) -> pd.DataFrame:
+    df = pd.read_sql(
+        "SELECT province, report_month, contract_avg_price_yuan_mwh"
+        " FROM staging.exchange_monthly_metrics", _conn)
+    df["report_month"] = pd.to_datetime(df["report_month"])
+    return df
+
+
+@st.cache_data(ttl=300)
+def _spot_monthly_avg(_conn) -> pd.DataFrame:
+    # Unbounded GROUP BY over marketdata.spot_prices_hourly (the platform's
+    # largest table) — must not run on every rerun; the 5-min cache bounds it.
+    return pd.read_sql(
+        "SELECT province, date_trunc('month', datetime)::date AS m,"
+        " AVG(da_price) AS p FROM marketdata.spot_prices_hourly"
+        " GROUP BY 1, 2", _conn)
+
+
 def _clear_ic_caches() -> None:
     # Targeted clear — st.cache_data.clear() would nuke every price cache for
     # all sessions on what is a small staging-table change.
     _trades.clear()
     _channels.clear()
+    _interprov_flow.clear()
+    _exchange_monthly.clear()
+    _contract_prices.clear()
+    _spot_monthly_avg.clear()
 
 
 def _upload_section(conn) -> None:
@@ -181,6 +226,12 @@ def render(conn) -> None:
             else:
                 coords = _flow_coords()
                 flows = ic_data.aggregate_flows(trades)
+                # flows_options only colors receivers in RECV_COLORS — surface
+                # any new receiver so an upload never silently drops flows.
+                dropped_recv = sorted({f["recv"] for f in flows} - set(ic_topo.RECV_COLORS))
+                if dropped_recv:
+                    st.warning(f"以下受端无配色，流向图未显示：{', '.join(dropped_recv)}"
+                               " — 请在 topology.RECV_COLORS 中补充。")
                 # Defensive: anchors without map coords (e.g. 蒙西) would KeyError
                 # inside flows_options — drop them and say so.
                 dropped = sorted({a for f in flows for a in (f["send"], f["recv"])
@@ -188,6 +239,7 @@ def render(conn) -> None:
                 flows = [f for f in flows if f["send"] in coords and f["recv"] in coords]
                 if dropped:
                     st.caption(f"以下锚点缺地图坐标，流向图未包含：{', '.join(dropped)}")
+                st.caption("受端配色仅覆盖 江苏/上海/浙江/福建。")
                 opts = ic_topo.flows_options(flows, coords)
         result = st_echarts(options=opts, map=Map("china", _geo()),
                             events={"click": _CLICK_JS}, height="640px", key="ic_map")
@@ -225,10 +277,7 @@ def render(conn) -> None:
     st.subheader("省间现货日报趋势 (A5)")
     dr = st.date_input("日期范围", value=(date(2026, 1, 1), date.today()), key="ic_a5_range")
     if isinstance(dr, tuple) and len(dr) == 2:
-        rows = pd.read_sql(
-            "SELECT report_date, direction, metric_type, price_yuan_kwh, total_vol_100gwh "
-            "FROM staging.spot_interprov_flow WHERE report_date BETWEEN %s AND %s",
-            conn, params=(dr[0], dr[1])).to_dict("records")
+        rows = _interprov_flow(conn, dr[0], dr[1])
         trend = ic_data.daily_interprov_trend(rows)
         if trend.empty:
             st.info("所选时段无省间现货数据。")
@@ -268,14 +317,7 @@ def render(conn) -> None:
     rules = ic_data.load_mlt_rules(
         Path(__file__).resolve().parents[2] / "knowledge" / "interconnectors" / "mlt_contract_requirements.md")
     overrides = ic_ingest.get_pct_overrides(conn)
-    emm = pd.read_sql(
-        "SELECT province, report_month, medium_longterm_volume_gwh, contract_avg_price_yuan_mwh,"
-        " spot_avg_price_yuan_mwh, wind_volume_gwh, solar_volume_gwh"
-        " FROM staging.exchange_monthly_metrics", conn)
-    emm["report_month"] = pd.to_datetime(emm["report_month"]).dt.date
-    for c in ("medium_longterm_volume_gwh", "contract_avg_price_yuan_mwh",
-              "spot_avg_price_yuan_mwh", "wind_volume_gwh", "solar_volume_gwh"):
-        emm[c] = pd.to_numeric(emm[c], errors="coerce")   # NUMERIC→Decimal breaks .mean()
+    emm = _exchange_monthly(conn)
     senders = sorted({t["send_anchor"] for t in trades}
                      | {r["send_prov"] for r in snap if not r["is_subtotal"]})
     flows = ic_data.aggregate_flows(trades) if trades else []
@@ -357,20 +399,14 @@ def render(conn) -> None:
         months = sorted({t["month_start"] for t in trades})
         msel = st.multiselect("交割月", months, default=months[-3:], key="ic_a3_months")
         # month-ahead proxy: contract_avg_price at report month M-1 → keyed to delivery month M
-        emm2 = pd.read_sql(
-            "SELECT province, report_month, contract_avg_price_yuan_mwh"
-            " FROM staging.exchange_monthly_metrics", conn)
-        emm2["report_month"] = pd.to_datetime(emm2["report_month"])
+        emm2 = _contract_prices(conn)
         month_ahead = {}
         for _, r in emm2.iterrows():
             if pd.notna(r["contract_avg_price_yuan_mwh"]):
                 dm = (r["report_month"] + pd.offsets.MonthBegin(1)).date()
                 month_ahead[(r["province"], dm)] = float(r["contract_avg_price_yuan_mwh"])
         # spot_prices_hourly columns are province/datetime/da_price (app.py:866-903)
-        spot = pd.read_sql(
-            "SELECT province, date_trunc('month', datetime)::date AS m,"
-            " AVG(da_price) AS p FROM marketdata.spot_prices_hourly"
-            " GROUP BY 1, 2", conn)
+        spot = _spot_monthly_avg(conn)
         spot_monthly = {(r["province"], r["m"]): float(r["p"]) for _, r in spot.iterrows()
                         if pd.notna(r["p"])}
         bt = ic_data.backtest_rows([pair], msel, month_ahead, spot_monthly, trades)

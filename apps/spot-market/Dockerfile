@@ -44,6 +44,7 @@ COPY services/common/                   ./services/common/
 COPY services/exchange_reports/         ./services/exchange_reports/
 COPY services/interconnector/           ./services/interconnector/
 COPY assets/geo/                        ./assets/geo/
+COPY knowledge/interconnectors/         ./knowledge/interconnectors/
 COPY apps/spot-watcher/                 ./apps/spot-watcher/
 # data/market-fundamentals/ omitted — ECS reads from S3, not local folder
 
