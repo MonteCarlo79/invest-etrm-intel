@@ -135,3 +135,38 @@ def replace_trades(conn, rows: list[dict], source_file: str) -> int:
         cur.executemany(_TRADES_INSERT, [dict(r, source_file=source_file) for r in rows])
     conn.commit()
     return len(rows)
+
+# ── 跨区组织交易情况 snapshot ─────────────────────────────────────────────────
+def _is_subtotal(trade_type, channel, send_prov, recv_prov) -> bool:
+    return any("汇总" in str(x) for x in (trade_type, channel, send_prov, recv_prov))
+
+def parse_mlt_snapshot(fileobj, sheet: str) -> list[dict]:
+    df = pd.read_excel(fileobj, sheet_name=sheet)
+    df.columns = [str(c).strip() for c in df.columns]
+    out = []
+    for _, r in df.iterrows():
+        send_prov = str(r["送出省份"]).strip()
+        recv_prov = str(r["受入省份"]).strip()
+        if send_prov.lower() == "nan" or recv_prov.lower() == "nan":
+            continue
+        tt = str(r["交易类型2"]).strip()
+        ch = _clean_ch(r["输电通道"])
+        out.append(dict(sheet=sheet,
+            send_region=str(r["送出区域"]).strip(), send_prov=send_prov, recv_prov=recv_prov,
+            trade_type=tt.replace(" 汇总", ""), channel=ch,
+            is_subtotal=_is_subtotal(tt, ch, send_prov, recv_prov),
+            volume_100m_kwh=_num(r["落地均价（亿千瓦时）"]), landing_price=_num(r["落地均价"])))
+    return out
+
+_SNAP_INSERT = """INSERT INTO staging.interconnector_mlt_snapshot (
+    snapshot_label, sheet, send_region, send_prov, recv_prov,
+    trade_type, channel, is_subtotal, volume_100m_kwh, landing_price
+) VALUES (%(snapshot_label)s, %(sheet)s, %(send_region)s, %(send_prov)s, %(recv_prov)s,
+    %(trade_type)s, %(channel)s, %(is_subtotal)s, %(volume_100m_kwh)s, %(landing_price)s)"""
+
+def replace_snapshot(conn, label: str, rows: list[dict]) -> int:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM staging.interconnector_mlt_snapshot WHERE snapshot_label = %s", (label,))
+        cur.executemany(_SNAP_INSERT, [dict(r, snapshot_label=label) for r in rows])
+    conn.commit()
+    return len(rows)

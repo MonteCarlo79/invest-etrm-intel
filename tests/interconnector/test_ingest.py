@@ -79,3 +79,35 @@ def test_replace_trades_deletes_then_inserts():
     assert "DELETE FROM staging.interconnector_trades" in conn.cur.calls[0][0]
     assert "INSERT INTO staging.interconnector_trades" in conn.cur.calls[1][0]
     assert conn.cur.calls[1][1][0]["source_file"] == "src.xlsx:123"
+
+def _snapshot_fixture(tmp_path):
+    f = tmp_path / "kj.xlsx"
+    rows = [
+        {"送出区域":"东北","送出省份":"黑龙江","受入省份":"安徽","交易类型2":"其他市场化交易","输电通道":"锡泰直流","落地均价（亿千瓦时）":0.02,"落地均价":322.72},
+        {"送出区域":"东北","送出省份":"黑龙江","受入省份":"安徽","交易类型2":"其他市场化交易 汇总","输电通道":"汇总","落地均价（亿千瓦时）":2.03,"落地均价":334.79},
+        {"送出区域":"东北","送出省份":"黑龙江 汇总","受入省份":"安徽 汇总","交易类型2":"省间绿电交易（市场化交易）","输电通道":"雁淮直流","落地均价（亿千瓦时）":9.07,"落地均价":376.58},
+    ]
+    with pd.ExcelWriter(f) as w:
+        pd.DataFrame(rows).to_excel(w, sheet_name="中长期", index=False)
+    return f
+
+def test_parse_mlt_snapshot_flags_subtotals(tmp_path):
+    out = ingest.parse_mlt_snapshot(_snapshot_fixture(tmp_path), sheet="中长期")
+    assert len(out) == 3
+    assert out[0]["is_subtotal"] is False
+    assert out[1]["is_subtotal"] is True            # 交易类型 汇总
+    assert out[2]["is_subtotal"] is True            # 省份 汇总
+    assert out[0]["volume_100m_kwh"] == pytest.approx(0.02)
+    assert out[0]["landing_price"] == pytest.approx(322.72)
+    assert out[0]["trade_type"] == "其他市场化交易"
+
+def test_replace_snapshot_deletes_label_then_inserts():
+    conn = _Conn()
+    rows = [{"sheet":"中长期","send_region":"东北","send_prov":"黑龙江","recv_prov":"安徽",
+             "trade_type":"其他市场化交易","channel":"锡泰直流","is_subtotal":False,
+             "volume_100m_kwh":0.02,"landing_price":322.72}]
+    n = ingest.replace_snapshot(conn, "2025-full", rows)
+    assert n == 1
+    assert "DELETE FROM staging.interconnector_mlt_snapshot WHERE snapshot_label" in conn.cur.calls[0][0]
+    assert conn.cur.calls[0][1] == ("2025-full",)
+    assert conn.cur.calls[1][1][0]["snapshot_label"] == "2025-full"
