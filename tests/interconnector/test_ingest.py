@@ -111,3 +111,19 @@ def test_replace_snapshot_deletes_label_then_inserts():
     assert "DELETE FROM staging.interconnector_mlt_snapshot WHERE snapshot_label" in conn.cur.calls[0][0]
     assert conn.cur.calls[0][1] == ("2025-full",)
     assert conn.cur.calls[1][1][0]["snapshot_label"] == "2025-full"
+
+def test_upsert_channels_writes_all_fields():
+    conn = _Conn()
+    from services.interconnector.registry import CHANNELS
+    n = ingest.upsert_channels(conn, CHANNELS[:1])
+    assert n == 1
+    sql, params = conn.cur.calls[0]
+    assert "INSERT INTO staging.interconnector_channels" in sql
+    assert "ON CONFLICT (name) DO UPDATE" in sql
+    assert params[0]["name"] == "锡泰直流" and params[0]["send_lon"] == 116.07
+
+def test_pct_override_roundtrip_sql():
+    conn = _Conn()
+    ingest.set_pct_override(conn, "蒙西", 85.0)
+    sql, params = conn.cur.calls[0]
+    assert "interconnector_mlt_pct_override" in sql and params == ("蒙西", 85.0)

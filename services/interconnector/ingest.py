@@ -170,3 +170,39 @@ def replace_snapshot(conn, label: str, rows: list[dict]) -> int:
         cur.executemany(_SNAP_INSERT, [dict(r, snapshot_label=label) for r in rows])
     conn.commit()
     return len(rows)
+
+# ── channels + MLT% overrides ─────────────────────────────────────────────────
+_CHANNEL_UPSERT = """INSERT INTO staging.interconnector_channels (
+    name, formal_name, send_station, send_prov, send_lon, send_lat,
+    recv_station, recv_prov, recv_lon, recv_lat, kv, gw, commissioned, km, category, note
+) VALUES (%(name)s, %(formal)s, %(send)s, %(send_prov)s, %(send_lon)s, %(send_lat)s,
+    %(recv)s, %(recv_prov)s, %(recv_lon)s, %(recv_lat)s, %(kv)s, %(gw)s, %(commissioned)s, %(km)s,
+    %(category)s, %(note)s)
+ON CONFLICT (name) DO UPDATE SET
+    formal_name=EXCLUDED.formal_name, send_station=EXCLUDED.send_station,
+    send_prov=EXCLUDED.send_prov, send_lon=EXCLUDED.send_lon, send_lat=EXCLUDED.send_lat,
+    recv_station=EXCLUDED.recv_station, recv_prov=EXCLUDED.recv_prov,
+    recv_lon=EXCLUDED.recv_lon, recv_lat=EXCLUDED.recv_lat, kv=EXCLUDED.kv, gw=EXCLUDED.gw,
+    commissioned=EXCLUDED.commissioned, km=EXCLUDED.km, category=EXCLUDED.category,
+    note=EXCLUDED.note, updated_at=NOW()"""
+
+def upsert_channels(conn, channels: list[dict]) -> int:
+    params = [dict(c, send_lon=c["sc"][0], send_lat=c["sc"][1],
+                   recv_lon=c["rc"][0], recv_lat=c["rc"][1]) for c in channels]
+    with conn.cursor() as cur:
+        cur.executemany(_CHANNEL_UPSERT, params)
+    conn.commit()
+    return len(channels)
+
+def set_pct_override(conn, province: str, pct: float) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""INSERT INTO staging.interconnector_mlt_pct_override (province, pct)
+                       VALUES (%s, %s)
+                       ON CONFLICT (province) DO UPDATE SET pct=EXCLUDED.pct, updated_at=NOW()""",
+                    (province, pct))
+    conn.commit()
+
+def get_pct_overrides(conn) -> dict[str, float]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT province, pct FROM staging.interconnector_mlt_pct_override")
+        return {p: float(v) for p, v in cur.fetchall()}
