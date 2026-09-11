@@ -109,6 +109,8 @@ apps/bess-inner-mongolia/
 !services/spot_mcp/
 !services/knowledge_pool/
 !services/market_fundamentals/
+# interconnector tab reads knowledge/interconnectors/mlt_contract_requirements.md
+!knowledge/interconnectors/
 
 # bess-map image exceptions
 !auth/
