@@ -148,3 +148,18 @@ def test_load_mlt_rules(tmp_path):
 
 def test_load_mlt_rules_missing_file(tmp_path):
     assert data.load_mlt_rules(tmp_path / "nope.md") == {}
+
+def test_speculation_premium():
+    assert data.speculation_premium(380.0, 330.0) == pytest.approx(50.0)
+    assert data.speculation_premium(None, 330.0) is None
+    assert data.speculation_premium(380.0, None) is None
+
+def test_monthly_exported_by_sender():
+    trades = [_t(send="山西", vol=100, month=date(2026,1,1)),
+              _t(send="山西", vol=200, month=date(2026,2,1)),
+              _t(send="甘肃", vol=50, month=date(2026,1,1))]
+    pv = data.monthly_exported_by_sender(trades)
+    assert pv.loc[date(2026,1,1), "山西"] == pytest.approx(0.1)
+    assert pv.loc[date(2026,2,1), "山西"] == pytest.approx(0.2)
+    assert pv.loc[date(2026,1,1), "甘肃"] == pytest.approx(0.05)
+    assert data.monthly_exported_by_sender([]).empty

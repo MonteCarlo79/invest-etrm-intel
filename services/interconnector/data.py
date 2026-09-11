@@ -161,3 +161,17 @@ def green_premium(snapshot_rows: list[dict]) -> list[dict]:
     return [dict(send=k[0], recv=k[1], channel=k[2], green_price=v["green"],
                  other_price=v["other"], premium=round(v["green"]-v["other"], 2))
             for k, v in by.items() if "green" in v and "other" in v]
+
+def speculation_premium(sendp: float | None, within_mlt: float | None) -> float | None:
+    """A2 speculation signal: 上网VWAP − 省内中长期均价. None-safe."""
+    if sendp is None or within_mlt is None:
+        return None
+    return sendp - within_mlt
+
+def monthly_exported_by_sender(trades: list[dict]) -> pd.DataFrame:
+    """Monthly exported GWh pivot: index month_start, columns send_anchor."""
+    df = pd.DataFrame([{"m": r["month_start"], "send": r["send_anchor"],
+                        "gwh": (r["vol_post_mwh"] or 0)/1000} for r in trades])
+    if df.empty:
+        return pd.DataFrame()
+    return df.pivot_table(index="m", columns="send", values="gwh", aggfunc="sum").fillna(0)

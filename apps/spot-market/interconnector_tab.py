@@ -270,20 +270,59 @@ def render(conn) -> None:
     overrides = ic_ingest.get_pct_overrides(conn)
     emm = pd.read_sql(
         "SELECT province, report_month, medium_longterm_volume_gwh, contract_avg_price_yuan_mwh,"
-        " wind_volume_gwh, solar_volume_gwh FROM staging.exchange_monthly_metrics", conn)
+        " spot_avg_price_yuan_mwh, wind_volume_gwh, solar_volume_gwh"
+        " FROM staging.exchange_monthly_metrics", conn)
     emm["report_month"] = pd.to_datetime(emm["report_month"]).dt.date
-    senders = sorted({t["send_anchor"] for t in trades}) if trades else []
+    for c in ("medium_longterm_volume_gwh", "contract_avg_price_yuan_mwh",
+              "spot_avg_price_yuan_mwh", "wind_volume_gwh", "solar_volume_gwh"):
+        emm[c] = pd.to_numeric(emm[c], errors="coerce")   # NUMERIC→Decimal breaks .mean()
+    senders = sorted({t["send_anchor"] for t in trades}
+                     | {r["send_prov"] for r in snap if not r["is_subtotal"]})
+    flows = ic_data.aggregate_flows(trades) if trades else []
+    cur_month = date.today().replace(day=1)
     rows = []
     for prov in senders:
         pct, src = ic_data.resolve_mlt_pct(prov, rules, overrides)
         # T12M windows: table has no ordering guarantee — sort before .tail(12).
         pe = emm[emm["province"] == prov].sort_values("report_month")
-        renewable_gwh = float((pe["wind_volume_gwh"].fillna(0) + pe["solar_volume_gwh"].fillna(0)).tail(12).sum()) if not pe.empty else None
-        exported_gwh = sum((t["vol_post_mwh"] or 0) for t in trades if t["send_anchor"] == prov) / 1000
+        ws = pe["wind_volume_gwh"].fillna(0) + pe["solar_volume_gwh"].fillna(0)
+        monthly_map = {m: float(v) for m, v in zip(pe["report_month"], ws)}
+        renewable_gwh = float(ws.tail(12).sum()) if not pe.empty else None
         within_gwh = float(pe["medium_longterm_volume_gwh"].fillna(0).tail(12).sum()) if not pe.empty else None
+        mlt_price = pe["contract_avg_price_yuan_mwh"].tail(12).mean() if not pe.empty else None
+        mlt_price = None if mlt_price is None or pd.isna(mlt_price) else float(mlt_price)
+        spot_price = pe["spot_avg_price_yuan_mwh"].tail(12).mean() if not pe.empty else None
+        spot_price = None if spot_price is None or pd.isna(spot_price) else float(spot_price)
+        exported_gwh = round(sum((t["vol_post_mwh"] or 0) for t in trades
+                                 if t["send_anchor"] == prov) / 1000, 1)
+        required_gwh = round(renewable_gwh * pct / 100, 1) if renewable_gwh is not None else None
+        exposure = (ic_data.recycle_gap(required_gwh, within_gwh, exported_gwh, mlt_price, spot_price)
+                    if required_gwh is not None and within_gwh is not None else None)
+        fl = [f for f in flows if f["send"] == prov and f["sendp"] is not None and f["vol_gwh"]]
+        sendp = (round(sum(f["sendp"] * f["vol_gwh"] for f in fl)
+                       / sum(f["vol_gwh"] for f in fl), 1) if fl else None)
+        premium = ic_data.speculation_premium(sendp, mlt_price)
+        signal = ("无数据" if premium is None else "出口溢价 (export wins)" if premium > 0
+                  else "省内溢价 (sell at home)" if premium < 0 else "持平")
+        ya_est = ic_data.year_ago_estimate(monthly_map, cur_month) if monthly_map else None
         rows.append(dict(prov=prov, pct=pct, src=src, renewable_gwh=renewable_gwh,
-                         within_gwh=within_gwh, exported_gwh=round(exported_gwh, 1),
-                         required_gwh=round(renewable_gwh * pct / 100, 1) if renewable_gwh else None))
+                         within_gwh=within_gwh, exported_gwh=exported_gwh,
+                         required_gwh=required_gwh, mlt_price=mlt_price, spot_price=spot_price,
+                         exposure=exposure, sendp=sendp, premium=premium, signal=signal,
+                         ya_est=ya_est))
+
+    def _nd(v):
+        return "无数据" if v is None else round(v, 1)
+    st.dataframe(pd.DataFrame([{
+        "省份": r["prov"], "MLT%": r["pct"],
+        "可再生T12M(GWh)": _nd(r["renewable_gwh"]), "要求(GWh)": _nd(r["required_gwh"]),
+        "省内中长期T12M(GWh)": _nd(r["within_gwh"]), "外送(GWh)": _nd(r["exported_gwh"]),
+        "中长期均价(元/MWh)": _nd(r["mlt_price"]), "现货均价(元/MWh)": _nd(r["spot_price"]),
+        "回收敞口(千元)": _nd(r["exposure"]),
+        "上网VWAP(元/MWh)": _nd(r["sendp"]), "投机溢价(元/MWh)": _nd(r["premium"]),
+        "信号": r["signal"],
+        "当月可再生估计·历史同期(GWh)": _nd(r["ya_est"])} for r in rows]),
+        use_container_width=True, hide_index=True)
     for r in rows:
         c1, c2 = st.columns([3, 1])
         label = f"{r['prov']} — MLT% ({'默认80%' if r['src']=='default' else ('规则库' if r['src']=='rule' else '已覆盖')})"
@@ -292,5 +331,14 @@ def render(conn) -> None:
         if new_pct != r["pct"]:
             ic_ingest.set_pct_override(conn, r["prov"], new_pct)
             st.rerun()
-        c1.write(f"可再生(T12M): {r['renewable_gwh'] or '无数据':>12} GWh · 要求: {r['required_gwh'] or '—'} GWh · "
-                 f"省内中长期: {r['within_gwh'] or '—'} GWh · 外送: {r['exported_gwh']} GWh")
+        c1.write(f"可再生(T12M): {r['renewable_gwh'] if r['renewable_gwh'] is not None else '无数据'} GWh · "
+                 f"要求: {r['required_gwh'] if r['required_gwh'] is not None else '—'} GWh · "
+                 f"省内中长期: {r['within_gwh'] if r['within_gwh'] is not None else '—'} GWh · "
+                 f"外送: {r['exported_gwh']} GWh")
+    if trades:
+        import plotly.express as px
+        mx = ic_data.monthly_exported_by_sender(trades).reset_index().melt(
+            id_vars="m", var_name="send", value_name="gwh")
+        st.plotly_chart(px.line(mx, x="m", y="gwh", color="send",
+                                labels={"m": "", "gwh": "外送电量 GWh", "send": ""}),
+                        use_container_width=True)
