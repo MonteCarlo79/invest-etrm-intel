@@ -85,14 +85,29 @@ def test_backtest_rows_alignment_and_none_policy():
 
 def test_daily_interprov_trend():
     rows = [
-        dict(report_date=date(2026,8,1), direction="送出", price_yuan_kwh=0.30, total_vol_100gwh=2.0),
-        dict(report_date=date(2026,8,1), direction="受入", price_yuan_kwh=0.35, total_vol_100gwh=2.0),
-        dict(report_date=date(2026,8,2), direction="送出", price_yuan_kwh=0.32, total_vol_100gwh=1.0),
+        dict(report_date=date(2026,8,1), direction="送出", metric_type="最高均价",
+             price_yuan_kwh=0.30, total_vol_100gwh=2.0),
+        dict(report_date=date(2026,8,1), direction="送出", metric_type="最高均价",
+             price_yuan_kwh=0.34, total_vol_100gwh=None),
+        dict(report_date=date(2026,8,1), direction="送出", metric_type="最低均价",
+             price_yuan_kwh=0.22, total_vol_100gwh=None),
+        dict(report_date=date(2026,8,1), direction="受入", metric_type="最高均价",
+             price_yuan_kwh=0.35, total_vol_100gwh=2.0),
+        dict(report_date=date(2026,8,2), direction="送出", metric_type="最高均价",
+             price_yuan_kwh=0.32, total_vol_100gwh=1.0),
     ]
     df = data.daily_interprov_trend(rows)
-    s = df[(df.report_date == date(2026,8,1)) & (df.direction == "送出")].iloc[0]
-    assert s["price_yuan_kwh"] == pytest.approx(0.30) and s["total_vol_100gwh"] == pytest.approx(2.0)
-    assert len(df) == 3
+    # same date+direction but different metric_type → separate rows, never blended
+    day1_out = df[(df.report_date == date(2026,8,1)) & (df.direction == "送出")]
+    assert len(day1_out) == 2
+    hi = day1_out[day1_out.metric_type == "最高均价"].iloc[0]
+    lo = day1_out[day1_out.metric_type == "最低均价"].iloc[0]
+    assert hi["price_yuan_kwh"] == pytest.approx(0.32)   # mean within 最高均价 only
+    assert lo["price_yuan_kwh"] == pytest.approx(0.22)   # not averaged with 最高均价
+    # volume sums only across rows that carry it (None skipped)
+    assert hi["total_vol_100gwh"] == pytest.approx(2.0)
+    assert len(df) == 4
+    assert data.daily_interprov_trend([]).empty
 
 def test_green_premium():
     snap = [

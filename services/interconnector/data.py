@@ -72,11 +72,13 @@ def balance_of_year(channels: list[dict], channel_agg: dict, as_of: date) -> lis
     return sorted(out, key=lambda x: -x["gw"])
 
 def daily_interprov_trend(rows: list[dict]) -> pd.DataFrame:
-    """A5: per report_date+direction — avg spot price, total volume."""
+    """A5: per report_date+direction+metric_type — avg spot price, total volume.
+    metric_type stays in the key: 最高均价/最低均价 are distinct price bands
+    (mirrors the spot-market Inter-Provincial Flow tab) — never blend them."""
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    return (df.groupby(["report_date", "direction"], as_index=False)
+    return (df.groupby(["report_date", "direction", "metric_type"], as_index=False)
               .agg(price_yuan_kwh=("price_yuan_kwh", "mean"),
                    total_vol_100gwh=("total_vol_100gwh", "sum"))
               .sort_values("report_date"))

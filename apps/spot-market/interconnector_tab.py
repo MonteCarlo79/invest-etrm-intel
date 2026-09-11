@@ -226,7 +226,7 @@ def render(conn) -> None:
     dr = st.date_input("日期范围", value=(date(2026, 1, 1), date.today()), key="ic_a5_range")
     if isinstance(dr, tuple) and len(dr) == 2:
         rows = pd.read_sql(
-            "SELECT report_date, direction, price_yuan_kwh, total_vol_100gwh "
+            "SELECT report_date, direction, metric_type, price_yuan_kwh, total_vol_100gwh "
             "FROM staging.spot_interprov_flow WHERE report_date BETWEEN %s AND %s",
             conn, params=(dr[0], dr[1])).to_dict("records")
         trend = ic_data.daily_interprov_trend(rows)
@@ -234,10 +234,15 @@ def render(conn) -> None:
             st.info("所选时段无省间现货数据。")
         else:
             import plotly.express as px
-            fig = px.line(trend, x="report_date", y="price_yuan_kwh", color="direction",
-                          labels={"report_date": "", "price_yuan_kwh": "均价 元/kWh", "direction": ""})
+            # 最高均价 (solid) / 最低均价 (dashed) are distinct bands per direction
+            # — same split as the Inter-Provincial Flow tab, never blended.
+            fig = px.line(trend, x="report_date", y="price_yuan_kwh",
+                          color="direction", line_dash="metric_type",
+                          labels={"report_date": "", "price_yuan_kwh": "均价 元/kWh",
+                                  "direction": "", "metric_type": ""})
             st.plotly_chart(fig, use_container_width=True)
-            fig2 = px.bar(trend, x="report_date", y="total_vol_100gwh", color="direction",
+            vol = trend[trend["metric_type"] == "最高均价"]  # volume only on 最高均价 rows
+            fig2 = px.bar(vol, x="report_date", y="total_vol_100gwh", color="direction",
                           labels={"report_date": "", "total_vol_100gwh": "总电量 亿kWh", "direction": ""})
             st.plotly_chart(fig2, use_container_width=True)
 
