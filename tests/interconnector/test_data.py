@@ -163,3 +163,145 @@ def test_monthly_exported_by_sender():
     assert pv.loc[date(2026,2,1), "山西"] == pytest.approx(0.2)
     assert pv.loc[date(2026,1,1), "甘肃"] == pytest.approx(0.05)
     assert data.monthly_exported_by_sender([]).empty
+
+
+# ── A4 pattern explorer helpers ──────────────────────────────────────────────
+
+def _snap(send="山西", recv="江苏", ttype="其他市场化交易", ch="雁淮直流",
+          vol=10.0, price=330.0, subtotal=False):
+    return dict(send_prov=send, recv_prov=recv, trade_type=ttype, channel=ch,
+                is_subtotal=subtotal, volume_100m_kwh=vol, landing_price=price)
+
+def test_snapshot_volume_by_trade_type_excludes_subtotals():
+    rows = [_snap(ttype="其他市场化交易", vol=10.0),
+            _snap(ttype="其他市场化交易", vol=5.0),
+            _snap(ttype="省间绿电交易（市场化交易）", vol=2.0),
+            _snap(ttype="其他市场化交易", vol=99.0, subtotal=True)]   # excluded
+    out = {r["label"]: r["vol_gwh"] for r in data.snapshot_volume_by(rows, "trade_type")}
+    assert out["其他市场化交易"] == pytest.approx(1500.0)     # 15 亿kWh × 100
+    assert out["省间绿电交易（市场化交易）"] == pytest.approx(200.0)
+    assert len(out) == 2                                     # subtotal not a label
+
+def test_snapshot_volume_by_channel_and_pair():
+    rows = [_snap(ch="雁淮直流", send="山西", recv="江苏", vol=10.0),
+            _snap(ch="雁淮直流", send="山西", recv="浙江", vol=4.0),
+            _snap(ch="锡泰直流", send="蒙东", recv="江苏", vol=6.0)]
+    by_ch = {r["label"]: r["vol_gwh"] for r in data.snapshot_volume_by(rows, "channel")}
+    assert by_ch["雁淮直流"] == pytest.approx(1400.0)
+    assert by_ch["锡泰直流"] == pytest.approx(600.0)
+    by_pair = {r["label"]: r["vol_gwh"] for r in data.snapshot_volume_by(rows, "pair")}
+    assert by_pair["山西→江苏"] == pytest.approx(1000.0)
+    assert by_pair["山西→浙江"] == pytest.approx(400.0)
+
+def test_trades_volume_by_channel_and_pair():
+    trades = [_t(vol=1000, ch=("雁淮直流",)),          # 1 GWh on 雁淮直流
+              _t(vol=500, ch=("雁淮直流", "锡泰直流")),  # full vol on each (series path)
+              _t(recv="上海", vol=250, ch=("锡泰直流",))]
+    by_ch = {r["label"]: r["vol_gwh"] for r in data.trades_volume_by(trades, "channel")}
+    assert by_ch["雁淮直流"] == pytest.approx(1.5)
+    assert by_ch["锡泰直流"] == pytest.approx(0.75)
+    by_pair = {r["label"]: r["vol_gwh"] for r in data.trades_volume_by(trades, "pair")}
+    assert by_pair["蒙东→江苏"] == pytest.approx(1.5)
+    assert by_pair["蒙东→上海"] == pytest.approx(0.25)
+
+def test_yoy_volume_compare_inner_join_only():
+    snap = [_snap(ch="雁淮直流", vol=10.0), _snap(ch="灵绍直流", vol=5.0)]
+    trades = [_t(vol=1000, ch=("雁淮直流",)), _t(vol=500, ch=("锡泰直流",))]
+    out = {r["label"]: r for r in data.yoy_volume_compare(snap, trades, "channel")}
+    assert set(out) == {"雁淮直流"}                    # only pairings present in both
+    assert out["雁淮直流"]["vol_2025_gwh"] == pytest.approx(1000.0)
+    assert out["雁淮直流"]["vol_2026_gwh"] == pytest.approx(1.0)
+    assert data.yoy_volume_compare(snap, [], "channel") == []
+
+def test_snapshot_price_by_trade_type_vwap():
+    rows = [_snap(ttype="其他市场化交易", vol=10.0, price=300.0),
+            _snap(ttype="其他市场化交易", vol=30.0, price=400.0),
+            _snap(ttype="省间绿电交易（市场化交易）", vol=5.0, price=None),  # no price
+            _snap(ttype="其他市场化交易", vol=99.0, price=1.0, subtotal=True)]
+    out = {r["trade_type"]: r for r in data.snapshot_price_by_trade_type(rows)}
+    m = out["其他市场化交易"]
+    assert m["landing_price"] == pytest.approx((300*10 + 400*30)/40)   # VWAP 375
+    assert m["vol_gwh"] == pytest.approx(4000.0)    # volume counts all non-subtotal rows
+    g = out["省间绿电交易（市场化交易）"]
+    assert g["landing_price"] is None and g["vol_gwh"] == pytest.approx(500.0)
+
+# ── MLT explorer filter ──────────────────────────────────────────────────────
+
+def _ft(send="山西", recv="江苏", ch=("雁淮直流",), period="月度",
+        ms=date(2026,1,1), me=date(2026,1,31)):
+    return dict(send_anchor=send, recv_province=recv, send_raw=send,
+                channel_1=ch[0], channel_2=ch[1] if len(ch) > 1 else None,
+                channel_3=None, period_type=period, month_start=ms, month_end=me,
+                vol_post_mwh=100.0, send_price=150.0, land_price=300.0,
+                jingrong_vol_mwh=None, jingrong_price=None, channel_fee=120.0)
+
+def test_filter_trades_no_criteria_returns_all():
+    trades = [_ft(), _ft(recv="上海")]
+    assert data.filter_trades(trades) == trades
+    assert data.filter_trades(trades, recv=[], send=[], channels=[]) == trades
+
+def test_filter_trades_recv_send_channel_period():
+    trades = [_ft(send="山西", recv="江苏", ch=("雁淮直流",), period="月度"),
+              _ft(send="甘肃", recv="上海", ch=("灵绍直流",), period="年度"),
+              _ft(send="山西", recv="上海", ch=("锡泰直流",), period="多月")]
+    assert data.filter_trades(trades, recv=["上海"]) == trades[1:]
+    assert data.filter_trades(trades, send=["山西"]) == [trades[0], trades[2]]
+    # channel matches any of channel_1/2/3
+    assert data.filter_trades(trades, channels=["雁淮直流"]) == [trades[0]]
+    assert data.filter_trades(trades, periods=["年度", "多月"]) == trades[1:]
+    # combined
+    assert data.filter_trades(trades, send=["山西"], recv=["上海"]) == [trades[2]]
+
+def test_filter_trades_channel_matches_secondary_slot():
+    t = _ft(ch=("雁淮直流", "锡泰直流"))
+    assert data.filter_trades([t], channels=["锡泰直流"]) == [t]
+
+def test_filter_trades_month_range_overlap():
+    jan = _ft(ms=date(2026,1,1), me=date(2026,1,31))
+    year = _ft(ms=date(2026,1,1), me=date(2026,12,31), period="年度")
+    jun = _ft(ms=date(2026,6,1), me=date(2026,6,30))
+    trades = [jan, year, jun]
+    # overlap semantics: a trade is in range if its span intersects the filter span
+    assert data.filter_trades(trades, months=(date(2026,6,1), date(2026,6,30))) == [year, jun]
+    assert data.filter_trades(trades, months=(date(2026,1,1), date(2026,1,31))) == [jan, year]
+    assert data.filter_trades(trades, months=(date(2026,3,1), date(2026,3,31))) == [year]
+
+# ── A5 sub-panel helpers ─────────────────────────────────────────────────────
+
+def _flow(d=date(2026,8,3), direction="送端", metric="最高均价", prov="浙江",
+          share=35.0, price=0.30, vol=2.0):
+    return dict(report_date=d, direction=direction, metric_type=metric,
+                province_cn=prov, province_share=share,
+                price_yuan_kwh=price, price_chg_pct=None, total_vol_100gwh=vol)
+
+def test_province_share_table_avg_and_days():
+    rows = [_flow(d=date(2026,8,3), prov="浙江", share=30.0),
+            _flow(d=date(2026,8,4), prov="浙江", share=40.0),
+            _flow(d=date(2026,8,4), prov="江苏", share=20.0),
+            _flow(d=date(2026,8,4), prov="蒙东", share=None),        # excluded
+            _flow(d=date(2026,8,4), direction="受端", prov="江苏", share=50.0)]
+    out = data.province_share_table(rows)
+    zj = [r for r in out if r["province"] == "浙江"][0]
+    assert zj["avg_share"] == pytest.approx(35.0) and zj["days"] == 2
+    assert all(r["province"] != "蒙东" for r in out)
+    # sorted: direction asc, then avg_share desc
+    recv = [r for r in out if r["direction"] == "受端"]
+    assert recv[0]["province"] == "江苏" and recv[0]["avg_share"] == pytest.approx(50.0)
+    assert data.province_share_table([]) == []
+
+def test_day_type_split_weekday_vs_weekend():
+    # 2026-08-01 = Saturday, 2026-08-03 = Monday, 2026-08-04 = Tuesday
+    trend = data.daily_interprov_trend([
+        _flow(d=date(2026,8,1), price=0.30, vol=2.0),                 # weekend
+        _flow(d=date(2026,8,3), price=0.40, vol=2.0),                 # weekday
+        _flow(d=date(2026,8,4), price=0.50, vol=6.0),                 # weekday
+        _flow(d=date(2026,8,4), metric="最低均价", price=0.10, vol=None),  # band excluded
+    ])
+    out = {(r["direction"], r["day_type"]): r for r in data.day_type_split(trend)}
+    wd = out[("送端", "工作日")]
+    assert wd["days"] == 2
+    assert wd["avg_price"] == pytest.approx((0.40*2 + 0.50*6)/8)      # vol-weighted
+    assert wd["total_vol_100gwh"] == pytest.approx(8.0)
+    we = out[("送端", "周末")]
+    assert we["days"] == 1 and we["avg_price"] == pytest.approx(0.30)
+    assert data.day_type_split(data.daily_interprov_trend([])) == []

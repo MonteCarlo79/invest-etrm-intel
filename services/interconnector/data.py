@@ -175,3 +175,149 @@ def monthly_exported_by_sender(trades: list[dict]) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
     return df.pivot_table(index="m", columns="send", values="gwh", aggfunc="sum").fillna(0)
+
+def _num(v) -> float | None:
+    """NUMERIC comes back from the DB as Decimal — coerce to float/None."""
+    return None if v is None or pd.isna(v) else float(v)
+
+# ── A4 pattern explorer (2025 snapshot vs 2026 trades) ───────────────────────
+# Units: snapshot volume is 亿kWh (volume_100m_kwh) → ×100 = GWh;
+# trades volume is MWh (vol_post_mwh) → /1000 = GWh.
+
+def _snap_label(r: dict, dim: str) -> str | None:
+    if dim == "trade_type":
+        return r.get("trade_type") or None
+    if dim == "channel":
+        return r.get("channel") or None
+    if dim == "pair":
+        s, v = r.get("send_prov"), r.get("recv_prov")
+        return f"{s}→{v}" if s and v else None
+    raise ValueError(f"unknown dim {dim}")
+
+def snapshot_volume_by(rows: list[dict], dim: str) -> list[dict]:
+    """A4: snapshot volume grouped by dim ('trade_type'|'channel'|'pair').
+    Subtotal rows excluded. Returns [{label, vol_gwh}] sorted desc."""
+    agg: dict[str, float] = {}
+    for r in rows:
+        if r.get("is_subtotal"):
+            continue
+        label = _snap_label(r, dim)
+        if not label:
+            continue
+        agg[label] = agg.get(label, 0.0) + (_num(r.get("volume_100m_kwh")) or 0.0) * 100
+    return [dict(label=k, vol_gwh=round(v, 3)) for k, v in
+            sorted(agg.items(), key=lambda kv: -kv[1])]
+
+def trades_volume_by(trades: list[dict], dim: str) -> list[dict]:
+    """A4: 2026 trade volume (GWh) by dim ('channel'|'pair'). Channel attribution
+    counts full volume on EVERY listed channel (series path wheeling)."""
+    agg: dict[str, float] = {}
+    for r in trades:
+        vol = (r.get("vol_post_mwh") or 0.0) / 1000
+        if dim == "channel":
+            labels = {c for c in (r.get("channel_1"), r.get("channel_2"), r.get("channel_3")) if c}
+        elif dim == "pair":
+            s, v = r.get("send_anchor"), r.get("recv_province")
+            labels = {f"{s}→{v}"} if s and v else set()
+        else:
+            raise ValueError(f"unknown dim {dim}")
+        for label in labels:
+            agg[label] = agg.get(label, 0.0) + vol
+    return [dict(label=k, vol_gwh=round(v, 3)) for k, v in
+            sorted(agg.items(), key=lambda kv: -kv[1])]
+
+def yoy_volume_compare(snapshot_rows: list[dict], trades: list[dict], dim: str) -> list[dict]:
+    """A4 YoY: labels present in BOTH the 2025 snapshot and 2026 trades.
+    Returns [{label, vol_2025_gwh, vol_2026_gwh}] sorted by 2025 desc."""
+    s25 = {r["label"]: r["vol_gwh"] for r in snapshot_volume_by(snapshot_rows, dim)}
+    s26 = {r["label"]: r["vol_gwh"] for r in trades_volume_by(trades, dim)}
+    both = sorted(set(s25) & set(s26), key=lambda k: -s25[k])
+    return [dict(label=k, vol_2025_gwh=s25[k], vol_2026_gwh=s26[k]) for k in both]
+
+def snapshot_price_by_trade_type(rows: list[dict]) -> list[dict]:
+    """A4: volume-weighted 落地均价 by trade type (subtotals excluded).
+    vol_gwh counts ALL non-subtotal rows of the type; VWAP only rows with price.
+    Returns [{trade_type, vol_gwh, landing_price}] sorted by vol_gwh desc."""
+    agg: dict[str, dict] = {}
+    for r in rows:
+        if r.get("is_subtotal") or not r.get("trade_type"):
+            continue
+        a = agg.setdefault(r["trade_type"], dict(vol=0.0, pv=0.0, pvol=0.0))
+        a["vol"] += (_num(r.get("volume_100m_kwh")) or 0.0) * 100
+        p = _num(r.get("landing_price"))
+        w = _num(r.get("volume_100m_kwh")) or 0.0
+        if p is not None and w:
+            a["pv"] += p * w; a["pvol"] += w
+    return [dict(trade_type=k, vol_gwh=round(a["vol"], 1),
+                 landing_price=round(a["pv"]/a["pvol"], 2) if a["pvol"] else None)
+            for k, a in sorted(agg.items(), key=lambda kv: -kv[1]["vol"])]
+
+# ── MLT explorer filter ──────────────────────────────────────────────────────
+
+def filter_trades(trades: list[dict], recv=None, send=None, channels=None,
+                  months=None, periods=None) -> list[dict]:
+    """MLT explorer filter — each criterion None/empty → no constraint on that dim.
+    channels matches ANY of channel_1/2/3; months=(lo, hi) keeps trades whose
+    [month_start, month_end] span OVERLAPS the filter span. Order preserved."""
+    out = []
+    for r in trades:
+        if recv and r.get("recv_province") not in recv:
+            continue
+        if send and r.get("send_anchor") not in send:
+            continue
+        if channels and not ({r.get("channel_1"), r.get("channel_2"), r.get("channel_3")}
+                             - {None}) & set(channels):
+            continue
+        if periods and r.get("period_type") not in periods:
+            continue
+        if months:
+            lo, hi = months
+            end = r.get("month_end") or r.get("month_start")
+            if r.get("month_start") is None or r["month_start"] > hi or end < lo:
+                continue
+        out.append(r)
+    return out
+
+# ── A5 sub-panels ────────────────────────────────────────────────────────────
+
+def province_share_table(rows: list[dict]) -> list[dict]:
+    """A5: avg reported province_share by (direction, province_cn) over the range.
+    province_share is parsed per-row by interprov_parser ('浙江(35%)' → 35.0);
+    rows without a share are excluded. Sorted direction asc, avg_share desc."""
+    agg: dict[tuple, dict] = {}
+    for r in rows:
+        share, prov = _num(r.get("province_share")), r.get("province_cn")
+        if share is None or not prov:
+            continue
+        k = (r.get("direction"), prov)
+        a = agg.setdefault(k, dict(s=0.0, days=set()))
+        a["s"] += share; a["days"].add(r.get("report_date"))
+    return [dict(direction=k[0], province=k[1],
+                 avg_share=round(a["s"]/len(a["days"]), 1), days=len(a["days"]))
+            for k, a in sorted(agg.items(), key=lambda kv: (kv[0][0], -kv[1]["s"]/len(kv[1]["days"])))]
+
+def day_type_split(trend: pd.DataFrame) -> list[dict]:
+    """A5: weekday vs weekend split on 最高均价 rows (the volume-carrying band).
+    Avg price is volume-weighted (simple mean if no volume); volume in 亿kWh."""
+    if trend is None or trend.empty:
+        return []
+    df = trend[trend["metric_type"] == "最高均价"].copy()
+    if df.empty:
+        return []
+    df["dow"] = pd.to_datetime(df["report_date"]).dt.dayofweek
+    df["day_type"] = df["dow"].map(lambda d: "周末" if d >= 5 else "工作日")
+    out = []
+    for (direction, day_type), g in df.groupby(["direction", "day_type"]):
+        g = g.copy()
+        g["p"] = g["price_yuan_kwh"].map(_num)
+        g["v"] = g["total_vol_100gwh"].map(_num)
+        priced = g.dropna(subset=["p"])
+        w = priced["v"].fillna(0)
+        avg = (float((priced["p"]*w).sum()/w.sum()) if w.sum() > 0
+               else (float(priced["p"].mean()) if not priced.empty else None))
+        out.append(dict(direction=direction, day_type=day_type,
+                        avg_price=round(avg, 4) if avg is not None else None,
+                        total_vol_100gwh=round(float(g["v"].fillna(0).sum()), 2),
+                        days=len(g)))
+    order = {"工作日": 0, "周末": 1}
+    return sorted(out, key=lambda r: (r["direction"], order.get(r["day_type"], 9)))

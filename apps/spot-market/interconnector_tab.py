@@ -23,8 +23,8 @@ _GEO_PATH = Path(__file__).resolve().parents[2] / "assets" / "geo" / "china_prov
 # Click handler (Task 1 spike §5): _ts nonce is MANDATORY — chart_event is
 # persistent component state, so without a per-event timestamp every unrelated
 # rerun would re-process the last click. meta carries the full channel/flow
-# dict for series (line) clicks — consumed by later tasks; geo clicks drive
-# the province panel below.
+# dict for series (line) clicks — rendered as a detail card in the side panel;
+# geo clicks drive the province panel below.
 _CLICK_JS = ("function(params) { return {name: params.name || null, "
              "componentType: params.componentType, seriesType: params.seriesType || null, "
              "meta: (params.data && params.data.meta) ? params.data.meta : null, "
@@ -96,9 +96,12 @@ def _channels(_conn) -> list[dict]:
 
 @st.cache_data(ttl=300)
 def _interprov_flow(_conn, start, end) -> list[dict]:
+    # province_cn/province_share feed the A5 share table; price_chg_pct the
+    # 环比 distribution — all parsed per-row by interprov_parser.
     return pd.read_sql(
-        "SELECT report_date, direction, metric_type, price_yuan_kwh, total_vol_100gwh "
-        "FROM staging.spot_interprov_flow WHERE report_date BETWEEN %s AND %s",
+        "SELECT report_date, direction, metric_type, price_yuan_kwh, total_vol_100gwh,"
+        " province_cn, province_share, price_chg_pct"
+        " FROM staging.spot_interprov_flow WHERE report_date BETWEEN %s AND %s",
         _conn, params=(start, end)).to_dict("records")
 
 
@@ -174,7 +177,37 @@ def _upload_section(conn) -> None:
             st.success(f"通道注册表已重建：{n} 回。")
 
 
-def _panel(selected: str | None, channels: list[dict], agg: dict) -> None:
+def _line_card(m: dict) -> None:
+    """Detail card for a clicked line: channel dict (physical view, has 'gw')
+    or flow dict (flows view, has 'send'/'recv'). Same _panel styling."""
+    if st.button("返回 (reset)", key="ic_line_reset"):
+        st.session_state["ic_sel_line"] = None
+        st.rerun()
+    if "gw" in m:  # physical channel
+        st.markdown(f"**{m['kv']} {m['name']}** — {m['gw']:g} GW · {m['category']}  ")
+        st.caption(f"{m['send']}({m['send_prov']}) → {m['recv']}({m['recv_prov']}) · "
+                   f"{m['commissioned']}投运")
+        st.caption(f"2026成交 {m.get('vol_gwh') or 0:,.0f} GWh"
+                   + (f" · 落地 {m['land']:,.0f} 元/MWh" if m.get("land") else ""))
+        if m.get("note"):
+            st.caption(m["note"])
+    else:  # trade-flow arc
+        st.markdown(f"**{m['send']} → {m['recv']}** — {m.get('vol_gwh') or 0:,.0f} GWh · "
+                    f"{m.get('trades') or 0}笔  ")
+        parts = [f"落地 {m['land']:,.0f}" if m.get("land") else None,
+                 f"上网 {m['sendp']:,.0f}" if m.get("sendp") else None,
+                 f"通道费 {m['fee']:,.0f}" if m.get("fee") else None]
+        st.caption(" · ".join(p for p in parts if p) + " 元/MWh" if any(parts) else "价格无数据")
+        if m.get("channels"):
+            st.caption(f"通道: {', '.join(m['channels'])}")
+        if m.get("send_raws"):
+            st.caption(f"送出方: {', '.join(m['send_raws'])}")
+
+
+def _panel(selected: str | None, line: dict | None, channels: list[dict], agg: dict) -> None:
+    if line:
+        _line_card(line["meta"])
+        return
     if not selected:
         st.caption("点击省份查看其连接的通道与容量；点击通道线查看明细。")
         top = sorted(channels, key=lambda c: -c["gw"])[:8]
@@ -189,6 +222,7 @@ def _panel(selected: str | None, channels: list[dict], agg: dict) -> None:
     inc = [c for c in channels if c["recv_prov"] == selected]
     if st.button("返回 (reset)", key="ic_panel_reset"):
         st.session_state["ic_sel_prov"] = None
+        st.session_state["ic_sel_line"] = None
         st.rerun()
     st.markdown(f"**{selected}** — 送出 {len(out)} 回 · 受入 {len(inc)} 回 · "
                 f"合计 {sum(c['gw'] for c in out + inc):.1f} GW")
@@ -212,6 +246,9 @@ def render(conn) -> None:
         channels = _channels(conn)
     trades = _trades(conn)
     agg = ic_data.per_channel_agg(trades) if trades else {}
+
+    def _nd(v):
+        return "无数据" if v is None else round(v, 1)
 
     st.header("1 · 通道拓扑 Channel Topology")
     view = st.radio("视图", ["物理通道", "交易流向"], horizontal=True, key="ic_view")
@@ -250,9 +287,18 @@ def render(conn) -> None:
                 prov = _short(evt["name"])
                 if prov != st.session_state.get("ic_sel_prov"):
                     st.session_state["ic_sel_prov"] = prov
+                    st.session_state["ic_sel_line"] = None
+                    st.rerun()
+            elif evt.get("seriesType") == "lines" and evt.get("meta"):
+                sel = {"view": view, "meta": evt["meta"]}
+                if sel != st.session_state.get("ic_sel_line"):
+                    st.session_state["ic_sel_line"] = sel
                     st.rerun()
     with col_panel:
-        _panel(st.session_state.get("ic_sel_prov"), channels, agg)
+        line = st.session_state.get("ic_sel_line")
+        if line and line.get("view") != view:   # stale selection from the other view
+            line = None
+        _panel(st.session_state.get("ic_sel_prov"), line, channels, agg)
 
     st.subheader("通道明细 (by capacity)")
     st.dataframe(pd.DataFrame([{
@@ -298,17 +344,152 @@ def render(conn) -> None:
                           labels={"report_date": "", "total_vol_100gwh": "总电量 亿kWh", "direction": ""})
             st.plotly_chart(fig2, use_container_width=True)
 
+            share = ic_data.province_share_table(rows)
+            if share:
+                st.caption("省份占比 — 所选区间日报披露占比的均值 (%)")
+                st.dataframe(pd.DataFrame([{
+                    "方向": s["direction"], "省份": s["province"],
+                    "平均占比%": s["avg_share"], "披露天数": s["days"]} for s in share]),
+                    use_container_width=True, hide_index=True)
+            else:
+                st.info("所选时段无省份占比披露。")
+            dts = ic_data.day_type_split(trend)
+            if dts:
+                st.caption("日类型拆分 (最高均价口径：均价按电量加权，电量单位亿kWh)")
+                st.dataframe(pd.DataFrame([{
+                    "方向": d["direction"], "日类型": d["day_type"],
+                    "均价(元/kWh)": d["avg_price"], "总电量(亿kWh)": d["total_vol_100gwh"],
+                    "天数": d["days"]} for d in dts]),
+                    use_container_width=True, hide_index=True)
+            chg = pd.DataFrame([r for r in rows
+                                if r.get("price_chg_pct") is not None
+                                and r.get("metric_type") == "最高均价"])
+            if not chg.empty:
+                fig_c = px.histogram(chg, x="price_chg_pct", color="direction", nbins=40,
+                                     barmode="overlay", opacity=0.7,
+                                     labels={"price_chg_pct": "日环比 % (最高均价)", "direction": ""})
+                st.plotly_chart(fig_c, use_container_width=True)
+
     # S3 (A4+A2) added by Task 14; S4 section added by Task 15 — appends below.
     st.header("3 · 中长期交易 MLT Patterns & 新能源中长期义务")
     snap_label = st.text_input("历史快照标签", value="2025-full", key="ic_snap_read")
     snap = pd.read_sql("SELECT * FROM staging.interconnector_mlt_snapshot WHERE snapshot_label = %s",
                        conn, params=(snap_label,)).to_dict("records")
     if snap:
+        st.subheader("A4 交易结构对比 (2025快照 vs 2026)")
+        st.caption("快照原始单位为亿kWh，下表统一换算为 GWh (×100)；2026交易为 MWh→GWh。")
+        tt = ic_data.snapshot_price_by_trade_type(snap)
+        st.caption("按交易类型 — 2025快照 (落地均价按电量加权)")
+        st.dataframe(pd.DataFrame([{
+            "交易类型": r["trade_type"], "电量GWh(2025快照)": r["vol_gwh"],
+            "落地均价(元/MWh)": _nd(r["landing_price"])} for r in tt]),
+            use_container_width=True, hide_index=True)
+        c_a4a, c_a4b = st.columns(2)
+        if trades:
+            yoy_ch = ic_data.yoy_volume_compare(snap, trades, "channel")
+            yoy_pair = ic_data.yoy_volume_compare(snap, trades, "pair")
+            with c_a4a:
+                st.caption("按通道 YoY (GWh) — 仅两侧均有的通道；2026为成交量口径，串联交易全额计入每回通道")
+                if yoy_ch:
+                    st.dataframe(pd.DataFrame([{
+                        "通道": r["label"], "2025快照GWh": r["vol_2025_gwh"],
+                        "2026GWh": r["vol_2026_gwh"]} for r in yoy_ch]),
+                        use_container_width=True, hide_index=True)
+                else:
+                    st.info("快照与2026交易无共同通道。")
+            with c_a4b:
+                st.caption("按省对 YoY (GWh) — 仅两侧均有的省对")
+                if yoy_pair:
+                    st.dataframe(pd.DataFrame([{
+                        "省对": r["label"], "2025快照GWh": r["vol_2025_gwh"],
+                        "2026GWh": r["vol_2026_gwh"]} for r in yoy_pair]),
+                        use_container_width=True, hide_index=True)
+                else:
+                    st.info("快照与2026交易无共同省对。")
+        else:
+            st.caption("2026交易未导入 — 仅显示2025快照结构 (GWh)。")
+            with c_a4a:
+                st.dataframe(pd.DataFrame([{
+                    "通道": r["label"], "2025快照GWh": r["vol_gwh"]}
+                    for r in ic_data.snapshot_volume_by(snap, "channel")]),
+                    use_container_width=True, hide_index=True)
+            with c_a4b:
+                st.dataframe(pd.DataFrame([{
+                    "省对": r["label"], "2025快照GWh": r["vol_gwh"]}
+                    for r in ic_data.snapshot_volume_by(snap, "pair")]),
+                    use_container_width=True, hide_index=True)
         gp = ic_data.green_premium(snap)
         st.subheader("绿电溢价 (2025快照, 市场化绿电 vs 其他市场化)")
         st.dataframe(pd.DataFrame(gp), use_container_width=True, hide_index=True)
     else:
         st.info(f"快照 {snap_label} 无数据 — 请在数据上传区导入跨区组织交易情况。")
+
+    st.subheader("MLT 交易浏览器 (2026明细)")
+    if not trades:
+        st.info("尚未导入华东跨省数据汇总。")
+    else:
+        all_recv = sorted({t["recv_province"] for t in trades})
+        all_send = sorted({t["send_anchor"] for t in trades})
+        all_ch = sorted({c for t in trades
+                         for c in (t["channel_1"], t["channel_2"], t["channel_3"]) if c})
+        all_period = sorted({t["period_type"] for t in trades if t.get("period_type")})
+        all_months = sorted({t["month_start"] for t in trades})
+        f1, f2, f3 = st.columns(3)
+        sel_recv = f1.multiselect("受入省", all_recv, default=all_recv, key="ic_mlt_recv")
+        sel_send = f2.multiselect("送出方", all_send, default=all_send, key="ic_mlt_send")
+        sel_ch = f3.multiselect("通道", all_ch, default=all_ch, key="ic_mlt_ch")
+        f4, f5 = st.columns(2)
+        sel_period = f4.multiselect("期间类型", all_period, default=all_period, key="ic_mlt_period")
+        sel_months = f5.select_slider("月份范围", options=all_months,
+                                      value=(all_months[0], all_months[-1]),
+                                      format_func=lambda d: str(d)[:7], key="ic_mlt_months")
+        ft = ic_data.filter_trades(trades, recv=sel_recv, send=sel_send, channels=sel_ch,
+                                   months=sel_months, periods=sel_period)
+        if not ft:
+            st.info("筛选结果为空。")
+        else:
+            st.dataframe(pd.DataFrame([{
+                "起始月": str(t["month_start"])[:7], "期间": t.get("period_type"),
+                "送出": t["send_raw"], "受入": t["recv_province"],
+                "通道": " / ".join(c for c in (t["channel_1"], t["channel_2"], t["channel_3"]) if c),
+                "校核后电量MWh": t["vol_post_mwh"], "上网价(元/MWh)": t["send_price"],
+                "落地价(元/MWh)": t["land_price"], "通道费(元/MWh)": t["channel_fee"]}
+                for t in ft]), use_container_width=True, hide_index=True)
+            import plotly.express as px
+            pv = ic_data.monthly_volume_by_recv(ft)
+            if not pv.empty:
+                mpv = pv.reset_index().melt(id_vars="m", var_name="recv", value_name="gwh")
+                st.plotly_chart(px.bar(mpv, x="m", y="gwh", color="recv", barmode="stack",
+                                       labels={"m": "", "gwh": "月度电量 GWh", "recv": "受入省"}),
+                                use_container_width=True)
+            sdf = pd.DataFrame([t for t in ft
+                                if t["send_price"] is not None and t["land_price"] is not None])
+            if not sdf.empty:
+                fig_s = px.scatter(sdf, x="send_price", y="land_price", size="vol_post_mwh",
+                                   color="recv_province",
+                                   labels={"send_price": "上网价 元/MWh", "land_price": "落地价 元/MWh",
+                                           "recv_province": "受入省"})
+                lo = float(min(sdf["send_price"].min(), sdf["land_price"].min()))
+                hi = float(max(sdf["send_price"].max(), sdf["land_price"].max()))
+                fig_s.add_shape(type="line", x0=lo, y0=lo, x1=hi, y1=hi,
+                                line=dict(dash="dash", color="#9aa6b5"))
+                fig_s.add_annotation(x=hi, y=hi, text="通道费", showarrow=False,
+                                     xanchor="right", yanchor="bottom",
+                                     font=dict(size=11, color="#5b6675"))
+                st.plotly_chart(fig_s, use_container_width=True)
+            jr = [t for t in ft if t.get("jingrong_price") is not None]
+            if jr:
+                st.caption("景融 vs 落地 (元/MWh)")
+                st.dataframe(pd.DataFrame([{
+                    "起始月": str(t["month_start"])[:7], "受入": t["recv_province"],
+                    "送出": t["send_raw"],
+                    "景融电量MWh": t["jingrong_vol_mwh"], "景融价": t["jingrong_price"],
+                    "落地价": t["land_price"],
+                    "景融-落地": (round(t["jingrong_price"] - t["land_price"], 1)
+                                 if t["land_price"] is not None else None)} for t in jr]),
+                    use_container_width=True, hide_index=True)
+            else:
+                st.info("筛选结果中无景融量价数据。")
 
     st.subheader("A2 新能源中长期义务与出口信号")
     st.caption("义务为省级口径：省内中长期 + 外送中长期 均可履约；"
@@ -353,8 +534,6 @@ def render(conn) -> None:
                          exposure=exposure, sendp=sendp, premium=premium, signal=signal,
                          ya_est=ya_est))
 
-    def _nd(v):
-        return "无数据" if v is None else round(v, 1)
     st.dataframe(pd.DataFrame([{
         "省份": r["prov"], "MLT%": r["pct"],
         "可再生T12M(GWh)": _nd(r["renewable_gwh"]), "要求(GWh)": _nd(r["required_gwh"]),
