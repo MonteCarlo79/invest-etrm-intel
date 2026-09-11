@@ -71,6 +71,16 @@ def balance_of_year(channels: list[dict], channel_agg: dict, as_of: date) -> lis
             remaining_capability_gwh=round(c["gw"]*remaining_hours, 1)))
     return sorted(out, key=lambda x: -x["gw"])
 
+def daily_interprov_trend(rows: list[dict]) -> pd.DataFrame:
+    """A5: per report_date+direction — avg spot price, total volume."""
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return (df.groupby(["report_date", "direction"], as_index=False)
+              .agg(price_yuan_kwh=("price_yuan_kwh", "mean"),
+                   total_vol_100gwh=("total_vol_100gwh", "sum"))
+              .sort_values("report_date"))
+
 def resolve_mlt_pct(province: str, rules: dict[str, float], overrides: dict[str, float],
                     default: float = 80.0) -> tuple[float, str]:
     if province in overrides: return overrides[province], "override"

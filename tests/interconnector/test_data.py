@@ -83,6 +83,17 @@ def test_backtest_rows_alignment_and_none_policy():
     rows2 = data.backtest_rows([("山西","江苏")], [date(2026,8,1)], month_ahead, spot, trades)
     assert rows2[0]["recv_spot"] is None and rows2[0]["realized_spread"] is None
 
+def test_daily_interprov_trend():
+    rows = [
+        dict(report_date=date(2026,8,1), direction="送出", price_yuan_kwh=0.30, total_vol_100gwh=2.0),
+        dict(report_date=date(2026,8,1), direction="受入", price_yuan_kwh=0.35, total_vol_100gwh=2.0),
+        dict(report_date=date(2026,8,2), direction="送出", price_yuan_kwh=0.32, total_vol_100gwh=1.0),
+    ]
+    df = data.daily_interprov_trend(rows)
+    s = df[(df.report_date == date(2026,8,1)) & (df.direction == "送出")].iloc[0]
+    assert s["price_yuan_kwh"] == pytest.approx(0.30) and s["total_vol_100gwh"] == pytest.approx(2.0)
+    assert len(df) == 3
+
 def test_green_premium():
     snap = [
         dict(send_prov="黑龙江", recv_prov="安徽", channel="雁淮直流",

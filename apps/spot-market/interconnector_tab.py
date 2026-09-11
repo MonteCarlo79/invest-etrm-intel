@@ -6,6 +6,7 @@ S2/S3/S4 sections are appended by Tasks 13-15 below the S1 section.
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -211,4 +212,33 @@ def render(conn) -> None:
         "备注": c["note"]} for c in sorted(channels, key=lambda x: -x["gw"])]),
         use_container_width=True, hide_index=True)
 
-    # S2/S3/S4 sections added by Tasks 13-15 — they append below.
+    st.header("2 · 通道裕度 Capacity & Balance of Year")
+    st.caption("成交量口径：通道成交电量（华东跨省数据汇总）为交易代理，非调度口径物理潮流；"
+               "物理容量 ≠ 可交易容量（ATC 需扣除配套优先/中长期/保供/安全约束）。")
+    boy = ic_data.balance_of_year(channels, agg, date.today())
+    st.dataframe(pd.DataFrame([{
+        "通道": b["name"], "容量GW": b["gw"], "年能力GWh": b["capability_gwh"],
+        "2026成交GWh": b["traded_gwh"], "利用率%": b["utilization_pct"],
+        "剩余小时": b["remaining_hours"], "剩余能力GWh": b["remaining_capability_gwh"]}
+        for b in boy]), use_container_width=True, hide_index=True)
+
+    st.subheader("省间现货日报趋势 (A5)")
+    dr = st.date_input("日期范围", value=(date(2026, 1, 1), date.today()), key="ic_a5_range")
+    if isinstance(dr, tuple) and len(dr) == 2:
+        rows = pd.read_sql(
+            "SELECT report_date, direction, price_yuan_kwh, total_vol_100gwh "
+            "FROM staging.spot_interprov_flow WHERE report_date BETWEEN %s AND %s",
+            conn, params=(dr[0], dr[1])).to_dict("records")
+        trend = ic_data.daily_interprov_trend(rows)
+        if trend.empty:
+            st.info("所选时段无省间现货数据。")
+        else:
+            import plotly.express as px
+            fig = px.line(trend, x="report_date", y="price_yuan_kwh", color="direction",
+                          labels={"report_date": "", "price_yuan_kwh": "均价 元/kWh", "direction": ""})
+            st.plotly_chart(fig, use_container_width=True)
+            fig2 = px.bar(trend, x="report_date", y="total_vol_100gwh", color="direction",
+                          labels={"report_date": "", "total_vol_100gwh": "总电量 亿kWh", "direction": ""})
+            st.plotly_chart(fig2, use_container_width=True)
+
+    # S3/S4 sections added by Tasks 14-15 — they append below.
