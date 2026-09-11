@@ -1,0 +1,54 @@
+# services/interconnector/data.py
+"""Aggregations for the interconnector tab. Pure functions over row dicts — no DB here."""
+from __future__ import annotations
+
+import pandas as pd
+
+def aggregate_flows(trades: list[dict]) -> list[dict]:
+    agg = {}
+    for r in trades:
+        k = (r["send_anchor"], r["recv_province"])
+        a = agg.setdefault(k, dict(send=r["send_anchor"], recv=r["recv_province"],
+                                   vol=0.0, lv=0.0, lvol=0.0, sv=0.0, svol=0.0,
+                                   fv=0.0, fvol=0.0, n=0,
+                                   channels=set(), send_raws=set(), months=set()))
+        vol = r["vol_post_mwh"] or 0.0
+        a["vol"] += vol
+        if r["land_price"] is not None and vol:
+            a["lv"] += r["land_price"] * vol; a["lvol"] += vol
+        if r["send_price"] is not None and vol:
+            a["sv"] += r["send_price"] * vol; a["svol"] += vol
+        if r["channel_fee"] is not None and vol:
+            a["fv"] += r["channel_fee"] * vol; a["fvol"] += vol
+        a["n"] += 1
+        a["channels"].update(c for c in (r["channel_1"], r["channel_2"], r["channel_3"]) if c)
+        a["send_raws"].add(r["send_raw"]); a["months"].add(r["month_start"])
+    out = []
+    for a in agg.values():
+        out.append(dict(send=a["send"], recv=a["recv"], vol_gwh=round(a["vol"]/1000, 3),
+            land=round(a["lv"]/a["lvol"]) if a["lvol"] else None,
+            sendp=round(a["sv"]/a["svol"]) if a["svol"] else None,
+            fee=round(a["fv"]/a["fvol"]) if a["fvol"] else None, trades=a["n"],
+            channels=sorted(a["channels"]), send_raws=sorted(a["send_raws"]), months=len(a["months"])))
+    return sorted(out, key=lambda x: -x["vol_gwh"])
+
+def per_channel_agg(trades: list[dict]) -> dict[str, dict]:
+    """Full trade volume attributed to EVERY listed channel (series path wheeling)."""
+    agg: dict[str, dict] = {}
+    for r in trades:
+        vol = r["vol_post_mwh"] or 0.0
+        for ch in {c for c in (r["channel_1"], r["channel_2"], r["channel_3"]) if c}:
+            a = agg.setdefault(ch, dict(vol=0.0, lv=0.0, lvol=0.0, n=0))
+            a["vol"] += vol; a["n"] += 1
+            if r["land_price"] is not None and vol:
+                a["lv"] += r["land_price"] * vol; a["lvol"] += vol
+    return {ch: dict(vol_gwh=round(a["vol"]/1000, 3),
+                     land=round(a["lv"]/a["lvol"]) if a["lvol"] else None,
+                     trades=a["n"]) for ch, a in agg.items()}
+
+def monthly_volume_by_recv(trades: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame([{"m": r["month_start"], "recv": r["recv_province"],
+                        "gwh": (r["vol_post_mwh"] or 0)/1000} for r in trades])
+    if df.empty:
+        return pd.DataFrame()
+    return df.pivot_table(index="m", columns="recv", values="gwh", aggfunc="sum").fillna(0)
