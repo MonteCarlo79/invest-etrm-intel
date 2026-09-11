@@ -109,6 +109,23 @@ def test_daily_interprov_trend():
     assert len(df) == 4
     assert data.daily_interprov_trend([]).empty
 
+def test_price_bands_filters_to_avg_price_metrics():
+    rows = [
+        dict(report_date=date(2026,8,1), direction="送出", metric_type="最高均价",
+             price_yuan_kwh=0.30, total_vol_100gwh=2.0),
+        dict(report_date=date(2026,8,1), direction="送出", metric_type="最低均价",
+             price_yuan_kwh=0.22, total_vol_100gwh=None),
+        dict(report_date=date(2026,8,1), direction="送出", metric_type="最高价",
+             price_yuan_kwh=0.45, total_vol_100gwh=None),
+        dict(report_date=date(2026,8,1), direction="送出", metric_type="最高电量",
+             price_yuan_kwh=0.28, total_vol_100gwh=None),
+    ]
+    trend = data.daily_interprov_trend(rows)
+    assert len(trend) == 4                                # data level keeps all metric types
+    bands = data.price_bands(trend)
+    assert len(bands) == 2
+    assert set(bands["metric_type"]) == {"最高均价", "最低均价"}   # 最高价/最高电量 excluded
+
 def test_green_premium():
     snap = [
         dict(send_prov="黑龙江", recv_prov="安徽", channel="雁淮直流",

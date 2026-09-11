@@ -235,9 +235,12 @@ def render(conn) -> None:
         else:
             import plotly.express as px
             # 最高均价 (solid) / 最低均价 (dashed) are distinct bands per direction
-            # — same split as the Inter-Provincial Flow tab, never blended.
-            fig = px.line(trend, x="report_date", y="price_yuan_kwh",
+            # — same split as the Inter-Provincial Flow tab, never blended. The
+            # dash map is pinned: appearance-order assignment inverts on real data.
+            bands = ic_data.price_bands(trend)
+            fig = px.line(bands, x="report_date", y="price_yuan_kwh",
                           color="direction", line_dash="metric_type",
+                          line_dash_map={"最高均价": "solid", "最低均价": "dash"},
                           labels={"report_date": "", "price_yuan_kwh": "均价 元/kWh",
                                   "direction": "", "metric_type": ""})
             st.plotly_chart(fig, use_container_width=True)

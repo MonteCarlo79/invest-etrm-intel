@@ -83,6 +83,13 @@ def daily_interprov_trend(rows: list[dict]) -> pd.DataFrame:
                    total_vol_100gwh=("total_vol_100gwh", "sum"))
               .sort_values("report_date"))
 
+_PRICE_BANDS = ("最高均价", "最低均价")
+
+def price_bands(trend: pd.DataFrame) -> pd.DataFrame:
+    """A5 price chart rows: only the two 均价 bands — 最高价/最高电量 rows also
+    carry price_yuan_kwh but are extremes/volume, not average-price series."""
+    return trend[trend["metric_type"].isin(_PRICE_BANDS)]
+
 def resolve_mlt_pct(province: str, rules: dict[str, float], overrides: dict[str, float],
                     default: float = 80.0) -> tuple[float, str]:
     if province in overrides: return overrides[province], "override"
