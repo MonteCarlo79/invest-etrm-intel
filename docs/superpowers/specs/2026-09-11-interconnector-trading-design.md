@@ -16,7 +16,7 @@ New tab **"Interconnector / 跨区通道"** in the spot-market app for cross-reg
 **Analytical framework (user's, 2026-09-11):**
 
 - **A1 — Spare capacity:** from interconnector capacity and historical flow volume, derive spare capacity and volume for the balance of the year.
-- **A2 — Renewable export requirement:** from the MLT-contract percentage of renewable generation in sending provinces, derive how much volume must be exported to meet their MLT percentage — otherwise they face revenue recycle of the MLT-vs-spot price spread.
+- **A2 — Renewable export requirement:** from the MLT-contract percentage of renewable generation in sending provinces, derive how much renewable MLT volume must be contracted (**within-province or exported — the obligation is province-level, not export-specific**) — otherwise they face revenue recycle of the MLT-vs-spot price spread. The speculation question is whether **export 上网价 > within-province MLT price** (export wins) or vice versa (sell at home).
 - **A3 — Month-ahead spread backtest:** month-ahead contract prices in both export and import provinces (exchange-published reports) vs spot price of the delivery month → backtest actual price spread.
 - **A4 — Historical MLT trade patterns:** 2025 + 2026 cross-region MLT trades → patterns.
 - **A5 — Daily 省间现货 patterns:** spot reports' daily cross-region spot trading prices and volumes → patterns.
@@ -34,7 +34,7 @@ Visual/interaction design validated via prototype v3: physical channel view (con
 | 5 | `marketdata.spot_prices_hourly` (existing, LingFeng) | Provincial DA/RT spot prices | — | Read-only (A3 delivery-month spot) |
 | 6 | `marketdata.spot_fundamentals_hourly` (existing, LingFeng, 29 markets) | Provincial fundamentals incl. renewable output | — | Read-only (A2); **verify at build whether actual or day-ahead forecast renewable; prefer actual column if present** |
 | 7 | `staging.exchange_monthly_metrics` (existing, `services/exchange_reports/`) | Parsed provincial monthly exchange reports: avg transaction/settlement price, spot-vs-MLT volume split, 省间受入/送出 volumes, renewable share | — | Read-only (A3 month-ahead MLT prices) |
-| 8 | `knowledge/interconnectors/mlt_contract_requirements.md` (new) | MLT contract-percentage requirement per sending province | — | **Extracted from policy docs in the knowledge pool (`staging.spot_knowledge_docs`) + `data/policies/`; reviewed by user before use.** Tab treats missing province as "not set", never guesses |
+| 8 | `knowledge/interconnectors/mlt_contract_requirements.md` (new) | MLT contract-percentage requirement per sending province | — | **Extracted from policy docs in the knowledge pool (`staging.spot_knowledge_docs`) + `data/policies/`; reviewed by user before use.** Province-specific rules override the **default 80%** (user decision), which is visually marked as default |
 
 ### `staging.interconnector_trades` schema
 
@@ -65,7 +65,9 @@ Physical channel view (converter-station lines, width ∝ GW, color = voltage cl
 ### S3 中长期交易 (A4 + A2: MLT patterns & export requirement)
 
 - **A4 pattern explorer:** 2025 snapshot (table 2, label `2025-full`) vs 2026 trades (table 1): volume by trade type （市场化/绿电/优先计划）, by channel, by province pair, YoY comparison where pairings exist; price levels （落地均价） by trade type; green-power premium （绿电 vs 其他市场化 same pair).
-- **A2 export-requirement table:** per sending province (from trades + snapshot senders): monthly renewable output (table 6), MLT % requirement (table 8, user-reviewed), required MLT volume = renewable × %, actual exported MLT volume (tables 1+2) → **gap = required − actual** → recycle-risk exposure (gap × |MLT − spot| spread from A3 inputs). Provinces without a reviewed % show "未设定".
+- **A2 MLT-obligation & speculation table:** per sending province (from trades + snapshot senders): monthly renewable output (table 6), MLT % requirement (table 8; **default 80% when no province-specific rule found, visually marked as default**), required renewable MLT volume = renewable × %. The obligation is province-level: it can be met by **within-province MLT** (from exchange reports where available) **or exported MLT** (tables 1+2). Two outputs:
+  - **Recycle-risk exposure** = max(0, required − within-province MLT − exported MLT) × |MLT − spot| spread (from A3 inputs);
+  - **Speculation signal** = export 上网价 vs within-province MLT price → export premium/discount (export wins when positive), with exported volume trend alongside.
 - **S2/S3 shared MLT explorer** (from earlier design, retained): filters （受入/送出/通道/月份/期间类型）, trade-level table, monthly volume stacked by receiving province, landing-vs-sending price scatter (diagonal = channel fee), 景融 vs 落地 comparison (146/234 rows).
 
 ### S4 价差回测 (A3: month-ahead spread backtest)
@@ -112,7 +114,7 @@ Physical channel view (converter-station lines, width ∝ GW, color = voltage cl
 
 1. Search knowledge pool (`staging.spot_knowledge_docs`) + `data/policies/` for provincial rules on 新能源中长期签约/交易比例 (e.g. 蒙西/甘肃/宁夏/新疆/青海/山西/黑龙江 requirements).
 2. Draft `knowledge/interconnectors/mlt_contract_requirements.md`: province → required %, source doc + quote, effective period.
-3. **User reviews and corrects before the tab reads it.** Missing/unreviewed provinces render as 未设定.
+3. **User reviews and corrects before the tab reads it.** Provinces without a found rule use the **default 80%** (user decision 2026-09-11), visually marked as default; reviewed province-specific values override.
 4. Rules change mid-year — the file carries an effective-date column; tab uses the rule active for the delivery month.
 
 ## 8. Testing & Verification
