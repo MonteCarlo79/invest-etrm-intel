@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 
@@ -95,6 +96,18 @@ def resolve_mlt_pct(province: str, rules: dict[str, float], overrides: dict[str,
     if province in overrides: return overrides[province], "override"
     if province in rules: return rules[province], "rule"
     return default, "default"
+
+def load_mlt_rules(path) -> dict[str, float]:
+    import re
+    rules = {}
+    p = Path(path)
+    if not p.exists():
+        return rules
+    for line in p.read_text().splitlines():
+        m = re.match(r"\s*-\s*([一-鿿]{2,4})[:：]\s*(\d+(?:\.\d+)?)\s*%", line)
+        if m:
+            rules[m.group(1)] = float(m.group(2))
+    return rules
 
 def year_ago_estimate(monthly: dict, month: date) -> float | None:
     """Forward-month estimate = year-ago same-month actual (历史同期). Never forecast."""

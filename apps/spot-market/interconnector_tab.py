@@ -249,4 +249,48 @@ def render(conn) -> None:
                           labels={"report_date": "", "total_vol_100gwh": "总电量 亿kWh", "direction": ""})
             st.plotly_chart(fig2, use_container_width=True)
 
-    # S3/S4 sections added by Tasks 14-15 — they append below.
+    # S3 (A4+A2) added by Task 14; S4 section added by Task 15 — appends below.
+    st.header("3 · 中长期交易 MLT Patterns & 新能源中长期义务")
+    snap_label = st.text_input("历史快照标签", value="2025-full", key="ic_snap_read")
+    snap = pd.read_sql("SELECT * FROM staging.interconnector_mlt_snapshot WHERE snapshot_label = %s",
+                       conn, params=(snap_label,)).to_dict("records")
+    if snap:
+        gp = ic_data.green_premium(snap)
+        st.subheader("绿电溢价 (2025快照, 市场化绿电 vs 其他市场化)")
+        st.dataframe(pd.DataFrame(gp), use_container_width=True, hide_index=True)
+    else:
+        st.info(f"快照 {snap_label} 无数据 — 请在数据上传区导入跨区组织交易情况。")
+
+    st.subheader("A2 新能源中长期义务与出口信号")
+    st.caption("义务为省级口径：省内中长期 + 外送中长期 均可履约；"
+               "回收风险 = max(0, 要求 − 省内 − 外送) × |中长期价 − 现货价|。"
+               "新能源电量为历史实际（远期月份=历史同期估计）；% 可在此修改并保存。")
+    rules = ic_data.load_mlt_rules(
+        Path(__file__).resolve().parents[2] / "knowledge" / "interconnectors" / "mlt_contract_requirements.md")
+    overrides = ic_ingest.get_pct_overrides(conn)
+    emm = pd.read_sql(
+        "SELECT province, report_month, medium_longterm_volume_gwh, contract_avg_price_yuan_mwh,"
+        " wind_volume_gwh, solar_volume_gwh FROM staging.exchange_monthly_metrics", conn)
+    emm["report_month"] = pd.to_datetime(emm["report_month"]).dt.date
+    senders = sorted({t["send_anchor"] for t in trades}) if trades else []
+    rows = []
+    for prov in senders:
+        pct, src = ic_data.resolve_mlt_pct(prov, rules, overrides)
+        # T12M windows: table has no ordering guarantee — sort before .tail(12).
+        pe = emm[emm["province"] == prov].sort_values("report_month")
+        renewable_gwh = float((pe["wind_volume_gwh"].fillna(0) + pe["solar_volume_gwh"].fillna(0)).tail(12).sum()) if not pe.empty else None
+        exported_gwh = sum((t["vol_post_mwh"] or 0) for t in trades if t["send_anchor"] == prov) / 1000
+        within_gwh = float(pe["medium_longterm_volume_gwh"].fillna(0).tail(12).sum()) if not pe.empty else None
+        rows.append(dict(prov=prov, pct=pct, src=src, renewable_gwh=renewable_gwh,
+                         within_gwh=within_gwh, exported_gwh=round(exported_gwh, 1),
+                         required_gwh=round(renewable_gwh * pct / 100, 1) if renewable_gwh else None))
+    for r in rows:
+        c1, c2 = st.columns([3, 1])
+        label = f"{r['prov']} — MLT% ({'默认80%' if r['src']=='default' else ('规则库' if r['src']=='rule' else '已覆盖')})"
+        new_pct = c2.number_input(label, 0.0, 100.0, float(r["pct"]), 0.5,
+                                  key=f"ic_pct_{r['prov']}", label_visibility="visible")
+        if new_pct != r["pct"]:
+            ic_ingest.set_pct_override(conn, r["prov"], new_pct)
+            st.rerun()
+        c1.write(f"可再生(T12M): {r['renewable_gwh'] or '无数据':>12} GWh · 要求: {r['required_gwh'] or '—'} GWh · "
+                 f"省内中长期: {r['within_gwh'] or '—'} GWh · 外送: {r['exported_gwh']} GWh")

@@ -139,3 +139,12 @@ def test_green_premium():
     assert out == [dict(send="黑龙江", recv="安徽", channel="雁淮直流",
                         green_price=376.58, other_price=334.89,
                         premium=pytest.approx(41.69))] or abs(out[0]["premium"] - 41.69) < 0.01
+
+def test_load_mlt_rules(tmp_path):
+    f = tmp_path / "rules.md"
+    f.write_text("# MLT rules\n\n- 蒙西: 85%\n- 甘肃: 80%\n")
+    rules = data.load_mlt_rules(f)
+    assert rules == {"蒙西": 85.0, "甘肃": 80.0}
+
+def test_load_mlt_rules_missing_file(tmp_path):
+    assert data.load_mlt_rules(tmp_path / "nope.md") == {}
