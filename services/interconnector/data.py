@@ -70,3 +70,24 @@ def balance_of_year(channels: list[dict], channel_agg: dict, as_of: date) -> lis
             remaining_hours=remaining_hours,
             remaining_capability_gwh=round(c["gw"]*remaining_hours, 1)))
     return sorted(out, key=lambda x: -x["gw"])
+
+def resolve_mlt_pct(province: str, rules: dict[str, float], overrides: dict[str, float],
+                    default: float = 80.0) -> tuple[float, str]:
+    if province in overrides: return overrides[province], "override"
+    if province in rules: return rules[province], "rule"
+    return default, "default"
+
+def year_ago_estimate(monthly: dict, month: date) -> float | None:
+    """Forward-month estimate = year-ago same-month actual (历史同期). Never forecast."""
+    try:
+        prev = date(month.year - 1, month.month, 1)
+    except ValueError:
+        return None
+    return monthly.get(prev)
+
+def recycle_gap(required_gwh: float, within_gwh: float, exported_gwh: float,
+                mlt_price: float | None, spot_price: float | None) -> float | None:
+    if mlt_price is None or spot_price is None:
+        return None
+    shortfall = max(0.0, required_gwh - within_gwh - exported_gwh)
+    return shortfall * abs(mlt_price - spot_price)

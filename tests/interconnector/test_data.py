@@ -53,3 +53,18 @@ def test_balance_of_year_math():
     assert xt["remaining_capability_gwh"] == pytest.approx(10*2208)
     yx = out["云霄直流"]
     assert yx["traded_gwh"] == 0 and yx["utilization_pct"] == 0
+
+def test_resolve_mlt_pct_priority():
+    assert data.resolve_mlt_pct("蒙西", {"蒙西": 85.0}, {"蒙西": 90.0}) == (90.0, "override")
+    assert data.resolve_mlt_pct("蒙西", {"蒙西": 85.0}, {}) == (85.0, "rule")
+    assert data.resolve_mlt_pct("青海", {}, {}) == (80.0, "default")
+
+def test_year_ago_estimate():
+    monthly = {date(2025,7,1): 12000.0, date(2026,7,1): 13500.0}
+    assert data.year_ago_estimate(monthly, date(2026,7,1)) == 12000.0
+    assert data.year_ago_estimate(monthly, date(2026,3,1)) is None
+
+def test_recycle_gap_math():
+    assert data.recycle_gap(1000, 600, 200, 300, 250) == pytest.approx(200*50)
+    assert data.recycle_gap(1000, 900, 200, 300, 250) == 0        # no shortfall → 0
+    assert data.recycle_gap(1000, 0, 0, None, 250) is None        # missing price → None
