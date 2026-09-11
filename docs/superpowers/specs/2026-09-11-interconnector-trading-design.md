@@ -34,7 +34,8 @@ Visual/interaction design validated via prototype v3: physical channel view (con
 | 5 | `marketdata.spot_prices_hourly` (existing, LingFeng) | Provincial DA/RT spot prices | — | Read-only (A3 delivery-month spot) |
 | 6 | `marketdata.spot_fundamentals_hourly` (existing, LingFeng, 29 markets) | Provincial fundamentals incl. renewable output | — | Read-only (A2); **verify at build whether actual or day-ahead forecast renewable; prefer actual column if present** |
 | 7 | `staging.exchange_monthly_metrics` (existing, `services/exchange_reports/`) | Parsed provincial monthly exchange reports: avg transaction/settlement price, spot-vs-MLT volume split, 省间受入/送出 volumes, renewable share | — | Read-only (A3 month-ahead MLT prices) |
-| 8 | `knowledge/interconnectors/mlt_contract_requirements.md` (new) | MLT contract-percentage requirement per sending province | — | **Extracted from policy docs in the knowledge pool (`staging.spot_knowledge_docs`) + `data/policies/`; reviewed by user before use.** Province-specific rules override the **default 80%** (user decision), which is visually marked as default |
+| 8 | `knowledge/interconnectors/mlt_contract_requirements.md` (new) | MLT contract-percentage requirement per sending province | — | **Extracted from policy docs in the knowledge pool (`staging.spot_knowledge_docs`) + `data/policies/`; reviewed by user before use.** Priority: **user input-box override (DB-persisted) > knowledge-file rule > default 80%** (default visually marked) |
+| 9 | `staging.interconnector_mlt_pct_override` (new) | User MLT% corrections from the tab input box: `province PK, pct NUM, updated_at` | — | Written by the tab's input box; upsert per province |
 
 ### `staging.interconnector_trades` schema
 
@@ -65,7 +66,7 @@ Physical channel view (converter-station lines, width ∝ GW, color = voltage cl
 ### S3 中长期交易 (A4 + A2: MLT patterns & export requirement)
 
 - **A4 pattern explorer:** 2025 snapshot (table 2, label `2025-full`) vs 2026 trades (table 1): volume by trade type （市场化/绿电/优先计划）, by channel, by province pair, YoY comparison where pairings exist; price levels （落地均价） by trade type; green-power premium （绿电 vs 其他市场化 same pair).
-- **A2 MLT-obligation & speculation table:** per sending province (from trades + snapshot senders): monthly renewable output (table 6), MLT % requirement (table 8; **default 80% when no province-specific rule found, visually marked as default**), required renewable MLT volume = renewable × %. The obligation is province-level: it can be met by **within-province MLT** (from exchange reports where available) **or exported MLT** (tables 1+2). Two outputs:
+- **A2 MLT-obligation & speculation table:** per sending province (from trades + snapshot senders): renewable output basis = **historical actuals** (seasonality + uncertainty — never forecasts): trailing-12-month actual monthly renewable output (table 6 actual column, verified at build; fallback table 7 renewable volumes); **forward months estimated as year-ago same-month actual, labeled "历史同期"**. MLT % requirement per province with **input box in the tab for user correction** (persisted to table 9; priority: input-box override > table 8 rule > default 80%, defaults visually marked). Required renewable MLT volume = renewable × %. The obligation is province-level: it can be met by **within-province MLT** (from exchange reports where available) **or exported MLT** (tables 1+2). Two outputs:
   - **Recycle-risk exposure** = max(0, required − within-province MLT − exported MLT) × |MLT − spot| spread (from A3 inputs);
   - **Speculation signal** = export 上网价 vs within-province MLT price → export premium/discount (export wins when positive), with exported volume trend alongside.
 - **S2/S3 shared MLT explorer** (from earlier design, retained): filters （受入/送出/通道/月份/期间类型）, trade-level table, monthly volume stacked by receiving province, landing-vs-sending price scatter (diagonal = channel fee), 景融 vs 落地 comparison (146/234 rows).
@@ -101,7 +102,7 @@ Physical channel view (converter-station lines, width ∝ GW, color = voltage cl
 | `knowledge/interconnectors/channel_registry.md` | ✅ Done — reviewed registry + analytical framework |
 | `knowledge/interconnectors/mlt_contract_requirements.md` | MLT % per province, extracted from policy KB, user-reviewed (see §7) |
 | `tests/interconnector/test_ingest.py` | Fixture Excels → parse asserts; month normalization; subtotal flagging; fingerprint dedup; registry↔trade channel name match |
-| `tests/interconnector/test_data.py` | VWAP math; per-channel attribution; A2 gap math; backtest alignment (M−1 report → delivery month M) |
+| `tests/interconnector/test_data.py` | VWAP math; per-channel attribution; A2 gap math; MLT% priority resolution (override > rule > 80%); year-ago same-month renewable estimation; backtest alignment (M−1 report → delivery month M) |
 
 ## 6. Analytical Framing (from reviewed registry)
 
@@ -114,7 +115,7 @@ Physical channel view (converter-station lines, width ∝ GW, color = voltage cl
 
 1. Search knowledge pool (`staging.spot_knowledge_docs`) + `data/policies/` for provincial rules on 新能源中长期签约/交易比例 (e.g. 蒙西/甘肃/宁夏/新疆/青海/山西/黑龙江 requirements).
 2. Draft `knowledge/interconnectors/mlt_contract_requirements.md`: province → required %, source doc + quote, effective period.
-3. **User reviews and corrects before the tab reads it.** Provinces without a found rule use the **default 80%** (user decision 2026-09-11), visually marked as default; reviewed province-specific values override.
+3. **User reviews and corrects before the tab reads it.** Effective priority at runtime: **tab input-box override (table 9) > knowledge-file rule > default 80%** (default visually marked).
 4. Rules change mid-year — the file carries an effective-date column; tab uses the rule active for the delivery month.
 
 ## 8. Testing & Verification
