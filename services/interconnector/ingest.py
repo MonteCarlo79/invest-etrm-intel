@@ -41,6 +41,13 @@ DDL = [
     """CREATE TABLE IF NOT EXISTS staging.interconnector_mlt_pct_override (
         province TEXT PRIMARY KEY, pct NUMERIC, updated_at TIMESTAMPTZ DEFAULT NOW()
     )""",
+    """CREATE TABLE IF NOT EXISTS staging.interconnector_gov_agreements (
+        id SERIAL PRIMARY KEY,
+        send_prov TEXT, recv_prov TEXT, annual_gwh NUMERIC, period TEXT,
+        channel_hint TEXT, source TEXT, note TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(send_prov, recv_prov, period)
+    )""",
 ]
 
 # The original snapshot UNIQUE key omitted send_region; the same sending base
@@ -234,3 +241,60 @@ def get_pct_overrides(conn) -> dict[str, float]:
     with conn.cursor() as cur:
         cur.execute("SELECT province, pct FROM staging.interconnector_mlt_pct_override")
         return {p: float(v) for p, v in cur.fetchall()}
+
+
+# ── 政府间协议电量 (inter-government annual volume agreements) ───────────────
+# Seeded from public reports 2026-09-12 — user verifies/edits in the tab.
+AGREEMENT_SEED = [
+    dict(send_prov="青海", recv_prov="上海", annual_gwh=4000.0, period="2026-2028",
+         channel_hint="青豫/灵绍/庆东", source="人民日报 2026-06-15",
+         note="青电入沪绿电长协: 40亿kWh/年×3年=120亿; 待核实"),
+    dict(send_prov="山西", recv_prov="上海", annual_gwh=5000.0, period="2023-2025",
+         channel_hint="雁淮", source="电力网 2023-11-29",
+         note="晋电入沪3年150亿kWh(≈50亿/年); 待核实"),
+    dict(send_prov="云南", recv_prov="广东", annual_gwh=153300.0, period="2026",
+         channel_hint="云广/昆柳龙", source="北极星 2025-12-08",
+         note="云南西电东送2026优先计划1533亿kWh(含多受端); 待核实"),
+    dict(send_prov="新疆", recv_prov="重庆", annual_gwh=8000.0, period="2026",
+         channel_hint="坤渝", source="重庆市政府 2025-05-21",
+         note="疆电入渝2026预计>80亿kWh; 待核实"),
+]
+
+_AGR_INSERT = """INSERT INTO staging.interconnector_gov_agreements (
+    send_prov, recv_prov, annual_gwh, period, channel_hint, source, note
+) VALUES (%(send_prov)s, %(recv_prov)s, %(annual_gwh)s, %(period)s, %(channel_hint)s,
+    %(source)s, %(note)s)
+ON CONFLICT (send_prov, recv_prov, period) DO UPDATE SET
+    annual_gwh=EXCLUDED.annual_gwh, channel_hint=EXCLUDED.channel_hint,
+    source=EXCLUDED.source, note=EXCLUDED.note, updated_at=NOW()"""
+
+def get_agreements(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""SELECT send_prov, recv_prov, annual_gwh, period,
+                              channel_hint, source, note
+                       FROM staging.interconnector_gov_agreements
+                       ORDER BY annual_gwh DESC NULLS LAST""")
+        cols = ["send_prov","recv_prov","annual_gwh","period","channel_hint","source","note"]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+def save_agreements(conn, rows: list[dict]) -> int:
+    """Full replace from the tab's data editor."""
+    with conn.cursor() as cur:
+        cur.execute("BEGIN")
+        try:
+            cur.execute("DELETE FROM staging.interconnector_gov_agreements")
+            cur.executemany(_AGR_INSERT, rows)
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
+    return len(rows)
+
+def seed_agreements_if_empty(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM staging.interconnector_gov_agreements")
+        if cur.fetchone()[0] > 0:
+            return 0
+        cur.executemany(_AGR_INSERT, AGREEMENT_SEED)
+    conn.commit()
+    return len(AGREEMENT_SEED)

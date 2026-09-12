@@ -141,6 +141,14 @@ def _spot_monthly_avg(_conn) -> pd.DataFrame:
         " GROUP BY 1, 2", _conn)
 
 
+@st.cache_data(ttl=300)
+def _agreements(_conn) -> list[dict]:
+    rows = ic_ingest.get_agreements(_conn)
+    for r in rows:  # NUMERIC → Decimal breaks st.data_editor numeric editing
+        r["annual_gwh"] = float(r["annual_gwh"]) if r["annual_gwh"] is not None else None
+    return rows
+
+
 def _clear_ic_caches() -> None:
     # Targeted clear — st.cache_data.clear() would nuke every price cache for
     # all sessions on what is a small staging-table change.
@@ -150,6 +158,7 @@ def _clear_ic_caches() -> None:
     _exchange_monthly.clear()
     _contract_prices.clear()
     _spot_monthly_avg.clear()
+    _agreements.clear()
 
 
 def _upload_section(conn) -> None:
@@ -247,6 +256,8 @@ def render(conn) -> None:
         ic_ingest.upsert_channels(conn, get_channels())
         _clear_ic_caches()
         channels = _channels(conn)
+    if ic_ingest.seed_agreements_if_empty(conn):   # one-time gov-agreement seed
+        _clear_ic_caches()
     trades = _trades(conn)
     agg = ic_data.per_channel_agg(trades) if trades else {}
 
@@ -325,6 +336,34 @@ def render(conn) -> None:
         "2026成交GWh": b["traded_gwh"], "利用率%": b["utilization_pct"],
         "剩余小时": b["remaining_hours"], "剩余能力GWh": b["remaining_capability_gwh"]}
         for b in boy]), use_container_width=True, hide_index=True)
+
+    st.subheader("政府间协议电量 (Gov Agreements)")
+    st.caption("政府间框架/优先计划年送电量（GWh/年），行可直接编辑/增删，保存后入库并持久化。"
+               "「2026华东成交」列为该省对在本 tab 华东交易中的实际成交（仅覆盖江苏/上海/浙江/福建受端）。"
+               "种子数据来自公开报道，备注「待核实」— 请以官方文件为准修正。")
+    _agr = _agreements(conn)
+    _agr_rows = [dict(r, **{"2026华东成交": round(sum(
+        (t["vol_post_mwh"] or 0) for t in trades
+        if t["send_anchor"] == r["send_prov"] and t["recv_province"] == r["recv_prov"]) / 1000, 1)})
+        for r in _agr]
+    edited = st.data_editor(
+        pd.DataFrame(_agr_rows).rename(columns={
+            "send_prov": "送出省", "recv_prov": "受入省", "annual_gwh": "协议年电量GWh",
+            "period": "协议期", "channel_hint": "通道", "source": "来源",
+            "note": "备注", "2026华东成交": "2026华东成交GWh"}),
+        num_rows="dynamic", use_container_width=True, hide_index=True,
+        key="ic_agr_editor")
+    if st.button("保存协议电量", key="ic_agr_save"):
+        renamed = edited.rename(columns={
+            "送出省": "send_prov", "受入省": "recv_prov", "协议年电量GWh": "annual_gwh",
+            "协议期": "period", "通道": "channel_hint", "来源": "source", "备注": "note"})
+        keep = renamed[renamed["send_prov"].notna() & renamed["recv_prov"].notna()]
+        n = ic_ingest.save_agreements(conn, keep[
+            ["send_prov", "recv_prov", "annual_gwh", "period",
+             "channel_hint", "source", "note"]].to_dict("records"))
+        _clear_ic_caches()
+        st.success(f"已保存 {n} 条协议。")
+        st.rerun()
 
     st.subheader("省间现货日报趋势 (A5)")
     dr = st.date_input("日期范围", value=(date(2026, 1, 1), date.today()), key="ic_a5_range")

@@ -165,3 +165,38 @@ class TestSnapshotNaturalKey:
         ingest.ensure_tables(conn)
         sqls = [c[0] for c in conn.cur.calls]
         assert any("ic_mlt_snapshot_uq" in s for s in sqls)
+
+
+class TestGovAgreements:
+    def test_ddl_has_agreements_table(self):
+        assert any("interconnector_gov_agreements" in stmt for stmt in ingest.DDL)
+
+    def test_save_agreements_full_replace_in_txn(self):
+        conn = _Conn()
+        rows = [dict(send_prov="青海", recv_prov="上海", annual_gwh=4000.0, period="2026-2028",
+                     channel_hint="青豫/灵绍/庆东", source="人民日报2026-06", note="绿电长协,待核实")]
+        n = ingest.save_agreements(conn, rows)
+        assert n == 1
+        sqls = [c[0] for c in conn.cur.calls]
+        assert "BEGIN" in sqls[0]
+        assert "DELETE FROM staging.interconnector_gov_agreements" in sqls[1]
+        assert "INSERT INTO staging.interconnector_gov_agreements" in sqls[2]
+        assert conn.cur.calls[2][1][0]["send_prov"] == "青海"
+
+    def test_seed_agreements_only_when_empty(self):
+        class CurCount(_Cur):
+            def __init__(self, n): super().__init__(); self._n = n
+            def fetchone(self): return (self._n,)
+        class ConnCount(_Conn):
+            def __init__(self, n): super().__init__(); self.cur = CurCount(n)
+        # empty table → seeds and returns >0
+        n = ingest.seed_agreements_if_empty(ConnCount(0))
+        assert n > 0
+        # non-empty → no-op
+        assert ingest.seed_agreements_if_empty(ConnCount(5)) == 0
+
+    def test_seed_rows_carry_source_and_unverified_note(self):
+        for r in ingest.AGREEMENT_SEED:
+            assert r["source"] and r["note"], r
+        sends = {(r["send_prov"], r["recv_prov"]) for r in ingest.AGREEMENT_SEED}
+        assert ("青海", "上海") in sends
