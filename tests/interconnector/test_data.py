@@ -280,14 +280,14 @@ def test_province_share_table_avg_and_days():
             _flow(d=date(2026,8,4), prov="江苏", share=20.0),
             _flow(d=date(2026,8,4), prov="蒙东", share=None),        # excluded
             _flow(d=date(2026,8,4), direction="受端", prov="江苏", share=50.0)]
-    out = data.province_share_table(rows)
+    out, dropped = data.province_share_table(rows)
     zj = [r for r in out if r["province"] == "浙江"][0]
     assert zj["avg_share"] == pytest.approx(35.0) and zj["days"] == 2
     assert all(r["province"] != "蒙东" for r in out)
     # sorted: direction asc, then avg_share desc
     recv = [r for r in out if r["direction"] == "受端"]
     assert recv[0]["province"] == "江苏" and recv[0]["avg_share"] == pytest.approx(50.0)
-    assert data.province_share_table([]) == []
+    assert data.province_share_table([]) == ([], [])
 
 def test_day_type_split_weekday_vs_weekend():
     # 2026-08-01 = Saturday, 2026-08-03 = Monday, 2026-08-04 = Tuesday
