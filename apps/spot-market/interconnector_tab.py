@@ -650,3 +650,135 @@ def render(conn) -> None:
             st.metric("落地价低于受端现货的月份占比", f"{100*beat/len(hits):.0f}% ({beat}/{len(hits)})")
     else:
         st.info("尚未导入华东跨省数据汇总。")
+
+    # ── S5: Forecast Model (stack + statistical overlay) ─────────────────────
+    st.header("5 · 预测模型 Forecast Model")
+    st.caption("确定性 merit-order 堆栈 + 价差回归参照。受入侧需求从落地成本最低的来源向上填充；"
+               "送出侧可送电量 = 协议基线 + 义务缺口 ÷ 年内剩余月数 + 价差机会量"
+               "（受通道剩余能力与历史月度峰值 ×1.2 约束）。下月月度口径；"
+               "回归参照需 ≥4 个月历史点（月度省对成交量 ~ 当月价差）。")
+    if not trades:
+        st.info("尚未导入华东跨省数据汇总 — 无法建模。")
+    else:
+        import plotly.graph_objects as go
+        from services.interconnector import model as ic_model
+
+        flows_all = ic_data.aggregate_flows(trades)
+        agr = _agreements(conn)
+        spot = _spot_monthly_avg(conn)
+        spot_monthly = {(r["province"], r["m"]): float(r["p"]) for _, r in spot.iterrows()
+                        if pd.notna(r["p"])}
+        latest_m = max((m for (_, m) in spot_monthly), default=None)
+
+        receivers = sorted({t["recv_province"] for t in trades})
+        c1, c2, c3 = st.columns(3)
+        recv = c1.selectbox("受入省", receivers,
+                            index=receivers.index("上海") if "上海" in receivers else 0,
+                            key="ic_s5_recv")
+        recv_flows = [f for f in flows_all if f["recv"] == recv]
+        months_n = max((f["months"] for f in recv_flows), default=1) or 1
+        demand0 = round(sum(f["vol_gwh"] for f in recv_flows) / months_n, 0)
+        demand = c2.number_input("下月需求 GWh（默认可编辑）", 0.0, 50000.0,
+                                 float(demand0), 50.0, key="ic_s5_demand")
+        sens = c3.slider("价差敏感度（机会量弹性）", 0.0, 2.0, 1.0, 0.1, key="ic_s5_sens")
+
+        # pair-level monthly volumes (regression points + historical max)
+        pair_vol: dict[tuple, dict] = {}
+        for t in trades:
+            if t["recv_province"] != recv or not t["vol_post_mwh"]:
+                continue
+            k = (t["send_anchor"], t["month_start"])
+            pair_vol[k] = pair_vol.get(k, 0.0) + t["vol_post_mwh"] / 1000
+
+        # A2 gap per sender (same inputs as S3: renewable T12M, within, exported, pct)
+        emm5 = _exchange_monthly(conn)
+        emm5["report_month"] = pd.to_datetime(emm5["report_month"]).dt.date
+        remaining_months = max(1, 12 - date.today().month + 1)
+
+        def _gap_monthly(prov: str) -> float:
+            pe = emm5[emm5["province"] == prov].sort_values("report_month")
+            if pe.empty:
+                return 0.0
+            pct, _ = ic_data.resolve_mlt_pct(prov, rules, overrides)
+            renewable = float((pe["wind_volume_gwh"].fillna(0) + pe["solar_volume_gwh"].fillna(0)).tail(12).sum())
+            within = float(pe["medium_longterm_volume_gwh"].fillna(0).tail(12).sum())
+            exported = sum((t["vol_post_mwh"] or 0) for t in trades if t["send_anchor"] == prov) / 1000
+            gap = max(0.0, renewable * pct / 100 - within - exported)
+            return gap / remaining_months
+
+        sends = sorted({t["send_anchor"] for t in trades if t["recv_province"] == recv}
+                       | {a["send_prov"] for a in agr if a["recv_prov"] == recv})
+        candidates, overlay = [], []
+        for s in sends:
+            f = next((x for x in flows_all if x["send"] == s and x["recv"] == recv), None)
+            sendp = f["sendp"] if f else None
+            fee = f["fee"] if f else None
+            agr_m = ic_model.monthly_agreement_volume(agr, s, recv)
+            gap_m = _gap_monthly(s)
+            local = spot_monthly.get((s, latest_m))
+            spread = round(sendp - local, 1) if (sendp is not None and local is not None) else None
+            monthly_vols = sorted(((m, v) for (sd, m), v in pair_vol.items() if sd == s))
+            hist_max = max((v for _, v in monthly_vols), default=0.0)
+            hist_avg = (sum(v for _, v in monthly_vols[-3:]) / len(monthly_vols[-3:])
+                        if monthly_vols else 0.0)
+            opp = ic_model.opportunistic_volume(spread, hist_max, sens)
+            fc = ic_model.exporter_forecast(agr_m, hist_avg, gap_m, opp, None, hist_max or None)
+            cost = ic_model.landed_cost(sendp, fee)
+            candidates.append(dict(send=s, cost=cost, volume=fc["total"],
+                                   drivers=fc, sendp=sendp, fee=fee, spread=spread))
+            pts = [(spot_monthly[(recv, m)] - spot_monthly[(s, m)] - (fee or 0), v)
+                   for (sd, m), v in pair_vol.items()
+                   if sd == s and (recv, m) in spot_monthly and (s, m) in spot_monthly]
+            cur_spread = (spot_monthly.get((recv, latest_m), 0) - (local or 0) - (fee or 0))
+            reg = ic_model.spread_regression(pts)
+            overlay.append(dict(send=s, n=reg.get("n", 0), r2=reg.get("r2"),
+                                reg_fc=round(reg["forecast"](cur_spread), 1) if reg.get("ok") else None))
+
+        result = ic_model.importer_stack(candidates, demand)
+        recv_spot = spot_monthly.get((recv, latest_m))
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("预计流入", f"{result['inflow']:,.0f} GWh")
+        m2.metric("边际落地成本", _nd(result["marginal_price"]) + (" 元/MWh" if result["marginal_price"] else ""))
+        m3.metric("需求缺口", f"{result['unfilled']:,.0f} GWh")
+        m4.metric(f"{recv}现货均价({latest_m}月)" if latest_m else f"{recv}现货",
+                  _nd(recv_spot) + (" 元/MWh" if recv_spot else ""))
+
+        # stack chart: allocated (solid) + unallocated (faded), cost-ordered, demand line
+        fig = go.Figure()
+        fig.add_bar(y=[a["send"] for a in result["stack"]],
+                    x=[a["allocated"] for a in result["stack"]],
+                    orientation="h", name="分配量", marker_color="#2563eb")
+        fig.add_bar(y=[a["send"] for a in result["stack"]],
+                    x=[a["available"] - a["allocated"] for a in result["stack"]],
+                    orientation="h", name="未分配余量", marker_color="rgba(37,99,235,0.25)")
+        fig.add_vline(x=demand, line_dash="dash", line_color="#e11d48",
+                      annotation_text=f"需求 {demand:,.0f}")
+        fig.update_layout(barmode="stack", height=60 + 44 * len(result["stack"]),
+                          margin=dict(l=40, r=20, t=10, b=40),
+                          xaxis_title="GWh/月", yaxis=dict(autorange="reversed"),
+                          legend=dict(orientation="h", y=1.12))
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("送出侧分解与回归参照")
+        ov_by_send = {o["send"]: o for o in overlay}
+        st.dataframe(pd.DataFrame([{
+            "送出": c["send"],
+            "落地成本(元/MWh)": _nd(c["cost"]),
+            "上网VWAP": _nd(c["sendp"]), "通道费": _nd(c["fee"]),
+            "与省内价差": _nd(c["spread"]),
+            "协议GWh": f"{c['drivers']['agreement']:,.1f}",
+            "历史基线GWh": f"{c['drivers']['hist_baseline']:,.1f}",
+            "基线GWh": f"{c['drivers']['baseline']:,.1f}",
+            "义务缺口GWh": f"{c['drivers']['obligation']:,.1f}",
+            "机会量GWh": f"{c['drivers']['opportunistic']:,.1f}",
+            "可送合计GWh": f"{c['drivers']['total']:,.1f}",
+            "分配GWh": f"{next(a['allocated'] for a in result['stack'] if a['send']==c['send']):,.1f}",
+            "回归预测GWh": _nd(ov_by_send[c["send"]]["reg_fc"]),
+            "回归(n,r²)": f"({ov_by_send[c['send']]['n']}, {ov_by_send[c['send']]['r2'] if ov_by_send[c['send']]['r2'] is not None else '—'})"}
+            for c in sorted(candidates, key=lambda x: (x["cost"] is None, x["cost"] or 0))]),
+            use_container_width=True, hide_index=True)
+        if result["marginal_price"] and recv_spot:
+            diff = result["marginal_price"] - recv_spot
+            st.caption(f"边际落地成本 vs {recv}现货: {diff:+.1f} 元/MWh — "
+                       + ("受入仍优于本地现货。" if diff < 0 else "本地现货更优，堆栈上段缺乏经济性。"))
