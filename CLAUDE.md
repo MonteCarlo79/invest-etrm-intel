@@ -144,7 +144,7 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
-| Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v38 (td:137) |
+| Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v39 (td:138) |
 | Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v63 (td:94) |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v22 (td:33) |
 | Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v11 (td:67) |
