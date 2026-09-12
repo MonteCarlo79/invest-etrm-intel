@@ -251,7 +251,10 @@ def render(conn) -> None:
     agg = ic_data.per_channel_agg(trades) if trades else {}
 
     def _nd(v):
-        return "无数据" if v is None else round(v, 1)
+        # uniform str output: mixed float+str columns crash Arrow's
+        # st.dataframe serializer (falls back noisily). String-formatted keeps
+        # the explicit 无数据 marker AND serializes clean.
+        return "无数据" if v is None else f"{v:,.1f}"
 
     st.header("1 · 通道拓扑 Channel Topology")
     view = st.radio("视图", ["物理通道", "交易流向"], horizontal=True, key="ic_view")
