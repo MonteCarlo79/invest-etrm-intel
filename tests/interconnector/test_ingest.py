@@ -131,3 +131,37 @@ def test_pct_override_roundtrip_sql():
     ingest.set_pct_override(conn, "蒙西", 85.0)
     sql, params = conn.cur.calls[0]
     assert "interconnector_mlt_pct_override" in sql and params == ("蒙西", 85.0)
+
+
+class TestSnapshotNaturalKey:
+    def test_same_sender_under_two_grid_regions_both_insert(self, tmp_path):
+        """锡盟二期 appears as 华北 and 蒙西 region rows — same (send_prov, recv,
+        type, channel) but different send_region. Both must survive: the unique
+        key includes send_region."""
+        f = tmp_path / "kj2.xlsx"
+        rows = [
+            {"送出区域":"华北","送出省份":"锡盟二期","受入省份":"江苏","交易类型2":"省间绿电交易（市场化交易）","输电通道":"锡泰直流","落地均价（亿千瓦时）":1.98,"落地均价":388.89},
+            {"送出区域":"蒙西","送出省份":"锡盟二期","受入省份":"江苏","交易类型2":"省间绿电交易（市场化交易）","输电通道":"锡泰直流","落地均价（亿千瓦时）":0.03,"落地均价":238.75},
+        ]
+        pd.DataFrame(rows).to_excel(f, sheet_name="中长期", index=False)
+        out = ingest.parse_mlt_snapshot(f, sheet="中长期")
+        assert len(out) == 2
+        conn = _Conn()
+        n = ingest.replace_snapshot(conn, "2025-full", out)
+        assert n == 2
+        params = conn.cur.calls[2][1]  # after BEGIN, DELETE
+        regions = {p["send_region"] for p in params}
+        assert regions == {"华北", "蒙西"}
+
+    def test_snapshot_unique_key_includes_send_region(self):
+        ddl = " ".join(ingest.DDL)
+        assert "send_region" in ddl.split("interconnector_mlt_snapshot")[1].split("UNIQUE")[1]
+        # migration must fix pre-existing narrow-constraint tables idempotently
+        assert "ic_mlt_snapshot_uq" in ingest._MIGRATE_SNAPSHOT_UQ
+        assert "DROP CONSTRAINT IF EXISTS" in ingest._MIGRATE_SNAPSHOT_UQ
+
+    def test_ensure_tables_runs_snapshot_uq_migration(self):
+        conn = _Conn()
+        ingest.ensure_tables(conn)
+        sqls = [c[0] for c in conn.cur.calls]
+        assert any("ic_mlt_snapshot_uq" in s for s in sqls)

@@ -35,17 +35,35 @@ DDL = [
         trade_type TEXT, channel TEXT, is_subtotal BOOLEAN DEFAULT FALSE,
         volume_100m_kwh NUMERIC, landing_price NUMERIC,
         uploaded_at TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE(snapshot_label, sheet, send_prov, recv_prov, trade_type, channel)
+        CONSTRAINT ic_mlt_snapshot_uq
+            UNIQUE(snapshot_label, sheet, send_region, send_prov, recv_prov, trade_type, channel)
     )""",
     """CREATE TABLE IF NOT EXISTS staging.interconnector_mlt_pct_override (
         province TEXT PRIMARY KEY, pct NUMERIC, updated_at TIMESTAMPTZ DEFAULT NOW()
     )""",
 ]
 
+# The original snapshot UNIQUE key omitted send_region; the same sending base
+# (e.g. 锡盟二期) legitimately appears under two grid regions (华北/蒙西) with
+# different volumes/prices — widening the key to include send_region. Idempotent.
+_MIGRATE_SNAPSHOT_UQ = """
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ic_mlt_snapshot_uq') THEN
+        ALTER TABLE staging.interconnector_mlt_snapshot
+            DROP CONSTRAINT IF EXISTS interconnector_mlt_snapshot_snapshot_label_sheet_send_prov__key;
+        ALTER TABLE staging.interconnector_mlt_snapshot
+            ADD CONSTRAINT ic_mlt_snapshot_uq
+            UNIQUE (snapshot_label, sheet, send_region, send_prov, recv_prov, trade_type, channel);
+    END IF;
+END $$;
+"""
+
 def ensure_tables(conn) -> None:
     with conn.cursor() as cur:
         for stmt in DDL:
             cur.execute(stmt)
+        cur.execute(_MIGRATE_SNAPSHOT_UQ)
     conn.commit()
 
 def file_fingerprint(name: str, size: int) -> str:
