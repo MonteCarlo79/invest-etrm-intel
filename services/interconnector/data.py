@@ -15,16 +15,18 @@ def aggregate_flows(trades: list[dict]) -> list[dict]:
                                    vol=0.0, lv=0.0, lvol=0.0, sv=0.0, svol=0.0,
                                    fv=0.0, fvol=0.0, n=0,
                                    channels=set(), send_raws=set(), months=set()))
-        vol = r["vol_post_mwh"] or 0.0
+        # pd.notna guards: pandas read paths turn NULL into float('nan') — NaN is
+        # truthy and poisons accumulators; treat it as missing (priced-row-only VWAP).
+        vol = r["vol_post_mwh"] if pd.notna(r["vol_post_mwh"]) else 0.0
         a["vol"] += vol
-        if r["land_price"] is not None and vol:
+        if pd.notna(r["land_price"]) and vol:
             a["lv"] += r["land_price"] * vol; a["lvol"] += vol
-        if r["send_price"] is not None and vol:
+        if pd.notna(r["send_price"]) and vol:
             a["sv"] += r["send_price"] * vol; a["svol"] += vol
-        if r["channel_fee"] is not None and vol:
+        if pd.notna(r["channel_fee"]) and vol:
             a["fv"] += r["channel_fee"] * vol; a["fvol"] += vol
         a["n"] += 1
-        a["channels"].update(c for c in (r["channel_1"], r["channel_2"], r["channel_3"]) if c)
+        a["channels"].update(c for c in (r["channel_1"], r["channel_2"], r["channel_3"]) if isinstance(c, str))
         a["send_raws"].add(r["send_raw"]); a["months"].add(r["month_start"])
     out = []
     for a in agg.values():
@@ -39,11 +41,11 @@ def per_channel_agg(trades: list[dict]) -> dict[str, dict]:
     """Full trade volume attributed to EVERY listed channel (series path wheeling)."""
     agg: dict[str, dict] = {}
     for r in trades:
-        vol = r["vol_post_mwh"] or 0.0
-        for ch in {c for c in (r["channel_1"], r["channel_2"], r["channel_3"]) if c}:
+        vol = r["vol_post_mwh"] if pd.notna(r["vol_post_mwh"]) else 0.0
+        for ch in {c for c in (r["channel_1"], r["channel_2"], r["channel_3"]) if isinstance(c, str)}:
             a = agg.setdefault(ch, dict(vol=0.0, lv=0.0, lvol=0.0, n=0))
             a["vol"] += vol; a["n"] += 1
-            if r["land_price"] is not None and vol:
+            if pd.notna(r["land_price"]) and vol:
                 a["lv"] += r["land_price"] * vol; a["lvol"] += vol
     return {ch: dict(vol_gwh=round(a["vol"]/1000, 3),
                      land=round(a["lv"]/a["lvol"]) if a["lvol"] else None,
@@ -51,7 +53,7 @@ def per_channel_agg(trades: list[dict]) -> dict[str, dict]:
 
 def monthly_volume_by_recv(trades: list[dict]) -> pd.DataFrame:
     df = pd.DataFrame([{"m": r["month_start"], "recv": r["recv_province"],
-                        "gwh": (r["vol_post_mwh"] or 0)/1000} for r in trades])
+                        "gwh": (r["vol_post_mwh"] if pd.notna(r["vol_post_mwh"]) else 0)/1000} for r in trades])
     if df.empty:
         return pd.DataFrame()
     return df.pivot_table(index="m", columns="recv", values="gwh", aggfunc="sum").fillna(0)
@@ -127,7 +129,7 @@ def recycle_gap(required_gwh: float, within_gwh: float, exported_gwh: float,
 def _pair_vwap(trades, send, recv, price_key):
     num = den = 0.0
     for r in trades:
-        if r["send_anchor"] == send and r["recv_province"] == recv and r[price_key] is not None and r["vol_post_mwh"]:
+        if r["send_anchor"] == send and r["recv_province"] == recv and pd.notna(r[price_key]) and pd.notna(r["vol_post_mwh"]):
             num += r[price_key] * r["vol_post_mwh"]; den += r["vol_post_mwh"]
     return num/den if den else None
 

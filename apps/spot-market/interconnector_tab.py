@@ -74,7 +74,10 @@ def _trades(_conn) -> list[dict]:
     for c in _NUM_TRADE_COLS:
         if c in df.columns:
             df[c] = df[c].map(_f)
-    return df.to_dict("records")
+    # Series.map re-coerces None back to NaN (float64 inference), and on pandas 3.x
+    # df.where(pd.notna(df), None) no longer converts NaN→None — astype(object) first
+    # is the only form that preserves None through to_dict.
+    return df.astype(object).where(pd.notna(df), None).to_dict("records")
 
 
 @st.cache_data(ttl=300)

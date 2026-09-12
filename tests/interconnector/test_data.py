@@ -305,3 +305,35 @@ def test_day_type_split_weekday_vs_weekend():
     we = out[("送端", "周末")]
     assert we["days"] == 1 and we["avg_price"] == pytest.approx(0.30)
     assert data.day_type_split(data.daily_interprov_trend([])) == []
+
+
+class TestNanTolerance:
+    """DB read path via pandas turns NULL into float('nan') — and Series.map
+    re-coerces None back to NaN. Aggregations must be NaN-safe regardless."""
+
+    def _nan_row(self, vol=100.0, land=float('nan'), sendp=150.0, fee=120.0):
+        return dict(send_anchor="蒙东", recv_province="江苏", vol_post_mwh=vol,
+                    land_price=land, send_price=sendp, channel_fee=fee,
+                    channel_1="鲁固直流", channel_2=None, channel_3=None,
+                    month_start=date(2026, 1, 1), send_raw="蒙东")
+
+    def test_per_channel_agg_nan_price_and_vol_no_crash(self):
+        rows = [self._nan_row(), self._nan_row(vol=float('nan'))]
+        agg = data.per_channel_agg(rows)
+        assert agg["鲁固直流"]["vol_gwh"] == pytest.approx(0.1)  # NaN vol counts as 0
+        assert agg["鲁固直流"]["land"] is None
+
+    def test_aggregate_flows_nan_price_excluded_from_vwap(self):
+        rows = [self._nan_row(land=300.0), self._nan_row()]
+        f = data.aggregate_flows(rows)[0]
+        assert f["land"] == 300                     # priced rows only
+        assert f["vol_gwh"] == pytest.approx(0.2)   # unpriced volume still counts
+        assert f["sendp"] == 150
+
+    def test_aggregate_flows_all_nan_prices_gives_none(self):
+        f = data.aggregate_flows([self._nan_row(sendp=float('nan'))])[0]
+        assert f["land"] is None and f["sendp"] is None
+
+    def test_pair_vwap_nan_safe(self):
+        rows = [self._nan_row(land=300.0), self._nan_row()]
+        assert data._pair_vwap(rows, "蒙东", "江苏", "land_price") == 300
