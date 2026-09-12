@@ -48,6 +48,9 @@ DDL = [
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(send_prov, recv_prov, period)
     )""",
+    """CREATE TABLE IF NOT EXISTS staging.interconnector_mech_share_override (
+        province TEXT PRIMARY KEY, share_pct NUMERIC, updated_at TIMESTAMPTZ DEFAULT NOW()
+    )""",
 ]
 
 # The original snapshot UNIQUE key omitted send_region; the same sending base
@@ -298,3 +301,42 @@ def seed_agreements_if_empty(conn) -> int:
         cur.executemany(_AGR_INSERT, AGREEMENT_SEED)
     conn.commit()
     return len(AGREEMENT_SEED)
+
+
+# ── 机制电量占比 (136号文 mechanism share of renewable volume) ───────────────
+# Seeded from data/136号文件 extraction (knowledge/interconnectors/mechanism_136.md).
+# share_pct = % of a province's renewable volume locked under the price mechanism;
+# market-seeking renewable = total × (1 − share/100). User edits in the tab.
+MECH_SHARE_SEED = [
+    dict(province="新疆", share_pct=62.5),   # 风电项目级 62.5% (4省1017表)
+    dict(province="甘肃", share_pct=8.0),    # 推导约8% (无公示)
+    dict(province="河北", share_pct=80.0),   # 项目级均值 80%
+    dict(province="安徽", share_pct=73.9),   # 项目级均值 73.9%
+    dict(province="山东", share_pct=70.0),   # 风电 70%
+    dict(province="云南", share_pct=65.0),   # 风电 ~65% (光伏 75%)
+    dict(province="四川", share_pct=80.0),   # 风电 80%
+    dict(province="陕西", share_pct=49.8),   # 项目级 49.8%
+]
+
+_MECH_INSERT = """INSERT INTO staging.interconnector_mech_share_override (province, share_pct)
+    VALUES (%(province)s, %(share_pct)s)
+    ON CONFLICT (province) DO UPDATE SET share_pct=EXCLUDED.share_pct, updated_at=NOW()"""
+
+def get_mech_shares(conn) -> dict[str, float]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT province, share_pct FROM staging.interconnector_mech_share_override")
+        return {p: float(v) for p, v in cur.fetchall()}
+
+def set_mech_share(conn, province: str, share_pct: float) -> None:
+    with conn.cursor() as cur:
+        cur.execute(_MECH_INSERT, dict(province=province, share_pct=share_pct))
+    conn.commit()
+
+def seed_mech_share_if_empty(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM staging.interconnector_mech_share_override")
+        if cur.fetchone()[0] > 0:
+            return 0
+        cur.executemany(_MECH_INSERT, MECH_SHARE_SEED)
+    conn.commit()
+    return len(MECH_SHARE_SEED)

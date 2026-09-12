@@ -337,3 +337,28 @@ def day_type_split(trend: pd.DataFrame) -> list[dict]:
                         days=len(g)))
     order = {"工作日": 0, "周末": 1}
     return sorted(out, key=lambda r: (r["direction"], order.get(r["day_type"], 9)))
+
+
+def benchmark_per_channel(snapshot_rows: list[dict], trades: list[dict],
+                          spot_2025_gwh: float, spot_2026_gwh: float) -> list[dict]:
+    """Per-channel benchmark: 2025 MLT actual (snapshot) + 2025/2026 spot allocated
+    by each channel's MLT volume share (assumption, labeled) + 2026 YTD MLT actual.
+    snapshot volumes are 亿kWh (×100 → GWh); trades are MWh (÷1000 → GWh)."""
+    mlt25: dict[str, float] = {}
+    for r in snapshot_rows:
+        if r["is_subtotal"] or not r["channel"] or r["volume_100m_kwh"] is None:
+            continue
+        mlt25[r["channel"]] = mlt25.get(r["channel"], 0.0) + r["volume_100m_kwh"] * 100.0
+    tot25 = sum(mlt25.values()) or 1.0
+    mlt26 = {ch: a["vol_gwh"] for ch, a in per_channel_agg(trades).items()}
+    tot26 = sum(mlt26.values()) or 1.0
+    out = []
+    for ch in sorted(set(mlt25) | set(mlt26)):
+        s25 = mlt25.get(ch, 0.0)
+        out.append(dict(channel=ch,
+            mlt_2025_gwh=round(s25, 1),
+            spot_2025_gwh=round(spot_2025_gwh * s25 / tot25, 1),
+            total_2025_gwh=round(s25 + spot_2025_gwh * s25 / tot25, 1),
+            mlt_2026_gwh=round(mlt26.get(ch, 0.0), 1),
+            spot_2026_gwh=round(spot_2026_gwh * mlt26.get(ch, 0.0) / tot26, 1)))
+    return sorted(out, key=lambda b: -b["mlt_2025_gwh"])

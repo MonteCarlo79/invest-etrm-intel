@@ -200,3 +200,22 @@ class TestGovAgreements:
             assert r["source"] and r["note"], r
         sends = {(r["send_prov"], r["recv_prov"]) for r in ingest.AGREEMENT_SEED}
         assert ("青海", "上海") in sends
+
+
+class TestMechShare:
+    def test_ddl_has_mech_share_table(self):
+        assert any("interconnector_mech_share_override" in stmt for stmt in ingest.DDL)
+
+    def test_seed_mech_share_from_136_data(self):
+        class CurCount(_Cur):
+            def __init__(self, n): super().__init__(); self._n = n
+            def fetchone(self): return (self._n,)
+        class ConnCount(_Conn):
+            def __init__(self, n): super().__init__(); self.cur = CurCount(n)
+        n = ingest.seed_mech_share_if_empty(ConnCount(0))
+        assert n > 0
+        assert ingest.seed_mech_share_if_empty(ConnCount(3)) == 0
+
+    def test_mech_seed_values(self):
+        by = {r["province"]: r["share_pct"] for r in ingest.MECH_SHARE_SEED}
+        assert by["新疆"] == 62.5 and by["甘肃"] == 8.0 and by["河北"] == 80.0

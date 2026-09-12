@@ -107,3 +107,11 @@ def spread_regression(points: list[tuple[float, float]]) -> dict:
     r2 = 1 - ss_res/ss_tot if ss_tot > 0 else 0.0
     return dict(ok=True, n=n, slope=round(b, 3), intercept=round(a, 2), r2=round(r2, 2),
                 forecast=lambda s: max(0.0, a + b*s))
+
+
+def market_renewable(renewable_gwh: float, mech_share_pct: float | None) -> float:
+    """市场交易新能源电量 = 可再生总量 × (1 − 机制占比/100).
+    机制电量被机制电价锁定,不需中长期/现货找买家; None share → 不扣减."""
+    if mech_share_pct is None:
+        return renewable_gwh
+    return renewable_gwh * (1.0 - mech_share_pct / 100.0)

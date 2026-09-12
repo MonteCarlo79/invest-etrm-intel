@@ -85,3 +85,13 @@ class TestSpreadRegression:
         pts = [(float(s), 10.0 - 0.5*s) for s in (0, 5, 10, 15, 20)]
         out = model.spread_regression(pts)
         assert out["forecast"](100) == 0.0
+
+
+class TestMarketRenewable:
+    def test_mechanism_share_deducted(self):
+        assert model.market_renewable(1000.0, 62.5) == pytest.approx(375.0)
+        assert model.market_renewable(1000.0, 8.0) == pytest.approx(920.0)
+        assert model.market_renewable(1000.0, 0.0) == pytest.approx(1000.0)
+
+    def test_none_share_means_no_deduction(self):
+        assert model.market_renewable(1000.0, None) == pytest.approx(1000.0)

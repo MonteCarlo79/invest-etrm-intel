@@ -15,6 +15,7 @@ from streamlit_echarts import Map, st_echarts
 
 from services.interconnector import data as ic_data
 from services.interconnector import ingest as ic_ingest
+from services.interconnector import model as ic_model
 from services.interconnector import topology as ic_topo
 from services.interconnector.registry import get_channels
 
@@ -258,6 +259,8 @@ def render(conn) -> None:
         channels = _channels(conn)
     if ic_ingest.seed_agreements_if_empty(conn):   # one-time gov-agreement seed
         _clear_ic_caches()
+    if ic_ingest.seed_mech_share_if_empty(conn):   # one-time mechanism-share seed
+        _clear_ic_caches()
     trades = _trades(conn)
     agg = ic_data.per_channel_agg(trades) if trades else {}
 
@@ -364,6 +367,32 @@ def render(conn) -> None:
         _clear_ic_caches()
         st.success(f"已保存 {n} 条协议。")
         st.rerun()
+
+    st.subheader("通道基准交易量 (Benchmark: 2025 actual + 2026 YTD)")
+    st.caption("2025 MLT = 跨区组织快照实测；2026 MLT = 华东汇总实测。"
+               "现货分量按各通道 MLT 电量占比从全国省间现货总量分摊（假设，无通道级现货披露）。"
+               "YoY = 2026 YTD × 12/9 年化 ÷ 2025 全年（MLT+现货分摊）。")
+    _snap_label_bm = st.session_state.get("ic_snap_label", "2025-full")
+    snap_bm = pd.read_sql("SELECT * FROM staging.interconnector_mlt_snapshot WHERE snapshot_label = %s",
+                          conn, params=(_snap_label_bm,)).to_dict("records")
+    spot_tot = pd.read_sql(
+        "SELECT EXTRACT(year FROM report_date)::int AS y, SUM(total_vol_100gwh)*100 AS gwh"
+        " FROM staging.spot_interprov_flow GROUP BY 1", conn)
+    spot_by_year = {int(r["y"]): float(r["gwh"] or 0) for _, r in spot_tot.iterrows()}
+    if snap_bm:
+        bm = ic_data.benchmark_per_channel(snap_bm, trades,
+                                           spot_by_year.get(2025, 0.0), spot_by_year.get(2026, 0.0))
+        st.dataframe(pd.DataFrame([{
+            "通道": b["channel"], "2025MLT(GWh)": f"{b['mlt_2025_gwh']:,.0f}",
+            "2025现货分摊(GWh)": f"{b['spot_2025_gwh']:,.0f}",
+            "2025合计(GWh)": f"{b['total_2025_gwh']:,.0f}",
+            "2026MLT-YTD(GWh)": f"{b['mlt_2026_gwh']:,.0f}",
+            "2026现货分摊(GWh)": f"{b['spot_2026_gwh']:,.0f}",
+            "YoY(年化)": (f"{(b['mlt_2026_gwh']*12/9 + b['spot_2026_gwh']*12/9) / b['total_2025_gwh']:.2f}x"
+                          if b["total_2025_gwh"] > 0 else "—")} for b in bm]),
+            use_container_width=True, hide_index=True)
+    else:
+        st.info(f"快照 {_snap_label_bm} 无数据 — 基准表需 2025 跨区组织数据。")
 
     st.subheader("省间现货日报趋势 (A5)")
     dr = st.date_input("日期范围", value=(date(2026, 1, 1), date.today()), key="ic_a5_range")
@@ -549,15 +578,19 @@ def render(conn) -> None:
     senders = sorted({t["send_anchor"] for t in trades}
                      | {r["send_prov"] for r in snap if not r["is_subtotal"]})
     flows = ic_data.aggregate_flows(trades) if trades else []
+    mech_shares = ic_ingest.get_mech_shares(conn)
     cur_month = date.today().replace(day=1)
     rows = []
     for prov in senders:
         pct, src = ic_data.resolve_mlt_pct(prov, rules, overrides)
+        mech = mech_shares.get(prov)
         # T12M windows: table has no ordering guarantee — sort before .tail(12).
         pe = emm[emm["province"] == prov].sort_values("report_month")
         ws = pe["wind_volume_gwh"].fillna(0) + pe["solar_volume_gwh"].fillna(0)
         monthly_map = {m: float(v) for m, v in zip(pe["report_month"], ws)}
         renewable_gwh = float(ws.tail(12).sum()) if not pe.empty else None
+        market_gwh = (ic_model.market_renewable(renewable_gwh, mech)
+                      if renewable_gwh is not None else None)
         within_gwh = float(pe["medium_longterm_volume_gwh"].fillna(0).tail(12).sum()) if not pe.empty else None
         mlt_price = pe["contract_avg_price_yuan_mwh"].tail(12).mean() if not pe.empty else None
         mlt_price = None if mlt_price is None or pd.isna(mlt_price) else float(mlt_price)
@@ -565,7 +598,8 @@ def render(conn) -> None:
         spot_price = None if spot_price is None or pd.isna(spot_price) else float(spot_price)
         exported_gwh = round(sum((t["vol_post_mwh"] or 0) for t in trades
                                  if t["send_anchor"] == prov) / 1000, 1)
-        required_gwh = round(renewable_gwh * pct / 100, 1) if renewable_gwh is not None else None
+        # 要求 = 市场交易新能源电量(扣机制电量) × MLT%
+        required_gwh = round(market_gwh * pct / 100, 1) if market_gwh is not None else None
         exposure = (ic_data.recycle_gap(required_gwh, within_gwh, exported_gwh, mlt_price, spot_price)
                     if required_gwh is not None and within_gwh is not None else None)
         fl = [f for f in flows if f["send"] == prov and f["sendp"] is not None and f["vol_gwh"]]
@@ -575,7 +609,8 @@ def render(conn) -> None:
         signal = ("无数据" if premium is None else "出口溢价 (export wins)" if premium > 0
                   else "省内溢价 (sell at home)" if premium < 0 else "持平")
         ya_est = ic_data.year_ago_estimate(monthly_map, cur_month) if monthly_map else None
-        rows.append(dict(prov=prov, pct=pct, src=src, renewable_gwh=renewable_gwh,
+        rows.append(dict(prov=prov, pct=pct, src=src, mech=mech, renewable_gwh=renewable_gwh,
+                         market_gwh=market_gwh,
                          within_gwh=within_gwh, exported_gwh=exported_gwh,
                          required_gwh=required_gwh, mlt_price=mlt_price, spot_price=spot_price,
                          exposure=exposure, sendp=sendp, premium=premium, signal=signal,
@@ -583,7 +618,10 @@ def render(conn) -> None:
 
     st.dataframe(pd.DataFrame([{
         "省份": r["prov"], "MLT%": r["pct"],
-        "可再生T12M(GWh)": _nd(r["renewable_gwh"]), "要求(GWh)": _nd(r["required_gwh"]),
+        "机制占比%": (f"{r['mech']:.0f}" if r["mech"] is not None else "待填"),
+        "可再生T12M(GWh)": _nd(r["renewable_gwh"]),
+        "市场交易电量(GWh)": _nd(r["market_gwh"]),
+        "要求(GWh)": _nd(r["required_gwh"]),
         "省内中长期T12M(GWh)": _nd(r["within_gwh"]), "外送(GWh)": _nd(r["exported_gwh"]),
         "中长期均价(元/MWh)": _nd(r["mlt_price"]), "现货均价(元/MWh)": _nd(r["spot_price"]),
         "回收敞口(千元)": _nd(r["exposure"]),
@@ -599,7 +637,15 @@ def render(conn) -> None:
         if new_pct != r["pct"]:
             ic_ingest.set_pct_override(conn, r["prov"], new_pct)
             st.rerun()
+        mech0 = float(r["mech"]) if r["mech"] is not None else 0.0
+        new_mech = c2.number_input(f"{r['prov']} — 机制占比% (136号文, 0=未知/待填)",
+                                   0.0, 100.0, mech0, 1.0,
+                                   key=f"ic_mech_{r['prov']}", label_visibility="visible")
+        if new_mech != mech0:
+            ic_ingest.set_mech_share(conn, r["prov"], new_mech)
+            st.rerun()
         c1.write(f"可再生(T12M): {r['renewable_gwh'] if r['renewable_gwh'] is not None else '无数据'} GWh · "
+                 f"市场交易: {r['market_gwh'] if r['market_gwh'] is not None else '—'} GWh · "
                  f"要求: {r['required_gwh'] if r['required_gwh'] is not None else '—'} GWh · "
                  f"省内中长期: {r['within_gwh'] if r['within_gwh'] is not None else '—'} GWh · "
                  f"外送: {r['exported_gwh']} GWh")
@@ -701,9 +747,10 @@ def render(conn) -> None:
                 return 0.0
             pct, _ = ic_data.resolve_mlt_pct(prov, rules, overrides)
             renewable = float((pe["wind_volume_gwh"].fillna(0) + pe["solar_volume_gwh"].fillna(0)).tail(12).sum())
+            market_gwh = ic_model.market_renewable(renewable, mech_shares.get(prov))
             within = float(pe["medium_longterm_volume_gwh"].fillna(0).tail(12).sum())
             exported = sum((t["vol_post_mwh"] or 0) for t in trades if t["send_anchor"] == prov) / 1000
-            gap = max(0.0, renewable * pct / 100 - within - exported)
+            gap = max(0.0, market_gwh * pct / 100 - within - exported)
             return gap / remaining_months
 
         sends = sorted({t["send_anchor"] for t in trades if t["recv_province"] == recv}

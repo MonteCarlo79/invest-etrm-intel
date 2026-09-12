@@ -357,3 +357,29 @@ class TestProvinceShareWhitelist:
                      report_date=date(2026,8,1)) for p in ["甘肃","青海","宁夏","新疆","蒙西","蒙东","冀北","京津唐"]]
         out, dropped = data.province_share_table(rows)
         assert len(out) == 8 and dropped == []
+
+
+class TestBenchmarkPerChannel:
+    def test_mlt_actual_plus_spot_allocated_by_share(self):
+        snap = [
+            dict(send_prov="甘肃", recv_prov="江苏", channel="祁韶直流", trade_type="其他市场化交易",
+                 is_subtotal=False, volume_100m_kwh=2.0, landing_price=300.0),
+            dict(send_prov="新疆", recv_prov="上海", channel="吉泉直流", trade_type="其他市场化交易",
+                 is_subtotal=False, volume_100m_kwh=1.0, landing_price=350.0),
+        ]
+        trades = [_t(vol=1000.0, ch=("祁韶直流",)), _t(vol=500.0, ch=("吉泉直流",))]
+        out = {b["channel"]: b for b in data.benchmark_per_channel(snap, trades, 2400.0, 900.0)}
+        qx = out["祁韶直流"]
+        assert qx["mlt_2025_gwh"] == pytest.approx(200.0)          # 2.0亿 → 200 GWh
+        assert qx["spot_2025_gwh"] == pytest.approx(1600.0)        # 2/3 share of 2400
+        assert qx["mlt_2026_gwh"] == pytest.approx(1.0)            # 1000 MWh
+        assert qx["spot_2026_gwh"] == pytest.approx(600.0)         # 1000/1500 share of 900
+        jq = out["吉泉直流"]
+        assert jq["spot_2025_gwh"] == pytest.approx(800.0)
+        assert jq["mlt_2026_gwh"] == pytest.approx(0.5)
+
+    def test_zero_mlt_share_channels_get_no_spot(self):
+        snap = [dict(send_prov="甘肃", recv_prov="江苏", channel="祁韶直流", trade_type="其他市场化交易",
+                     is_subtotal=False, volume_100m_kwh=2.0, landing_price=300.0)]
+        out = data.benchmark_per_channel(snap, [], 2400.0, 900.0)
+        assert out[0]["channel"] == "祁韶直流" and out[0]["spot_2026_gwh"] == 0.0
