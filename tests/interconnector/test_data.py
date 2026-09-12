@@ -337,3 +337,23 @@ class TestNanTolerance:
     def test_pair_vwap_nan_safe(self):
         rows = [self._nan_row(land=300.0), self._nan_row()]
         assert data._pair_vwap(rows, "蒙东", "江苏", "land_price") == 300
+
+
+class TestProvinceShareWhitelist:
+    def test_garbage_province_names_dropped_with_report(self):
+        rows = [
+            dict(direction="受端", province_cn="上海", province_share=45.1, report_date=date(2026,8,1)),
+            dict(direction="受端", province_cn="请上海", province_share=39.0, report_date=date(2026,8,2)),
+            dict(direction="受端", province_cn="四川主网", province_share=36.9, report_date=date(2026,8,1)),
+            dict(direction="受端", province_cn="河北南网", province_share=32.0, report_date=date(2026,8,1)),
+        ]
+        out, dropped = data.province_share_table(rows)
+        provs = {r["province"] for r in out}
+        assert provs == {"上海", "四川主网", "河北南网"}
+        assert dropped == ["请上海"]
+
+    def test_all_31_provinces_pass(self):
+        rows = [dict(direction="送端", province_cn=p, province_share=10.0,
+                     report_date=date(2026,8,1)) for p in ["甘肃","青海","宁夏","新疆","蒙西","蒙东","冀北","京津唐"]]
+        out, dropped = data.province_share_table(rows)
+        assert len(out) == 8 and dropped == []

@@ -282,21 +282,35 @@ def filter_trades(trades: list[dict], recv=None, send=None, channels=None,
 
 # ── A5 sub-panels ────────────────────────────────────────────────────────────
 
-def province_share_table(rows: list[dict]) -> list[dict]:
+_PROVINCES = {"北京","天津","上海","重庆","河北","山西","山东","江苏","浙江","安徽","福建",
+              "江西","河南","湖北","湖南","广东","广西","海南","四川","贵州","云南","西藏",
+              "陕西","甘肃","青海","宁夏","新疆","辽宁","吉林","黑龙江","内蒙古"}
+# region labels seen in daily 省间 reports (grid sub-regions, not provinces)
+_REGION_LABELS = {"冀北","冀南","河北南网","四川主网","甘肃东部","京津唐","蒙西","蒙东"}
+
+def province_share_table(rows: list[dict]) -> tuple[list[dict], list[str]]:
     """A5: avg reported province_share by (direction, province_cn) over the range.
-    province_share is parsed per-row by interprov_parser ('浙江(35%)' → 35.0);
-    rows without a share are excluded. Sorted direction asc, avg_share desc."""
+    province_cn comes verbatim from daily-report cells — source typos (e.g. 请上海)
+    are dropped (whitelist = 31 provinces + known grid region labels) and reported
+    in the second return value, never silently shown as a province.
+    Rows without a share are excluded. Sorted direction asc, avg_share desc."""
     agg: dict[tuple, dict] = {}
+    dropped: list[str] = []
     for r in rows:
         share, prov = _num(r.get("province_share")), r.get("province_cn")
         if share is None or not prov:
             continue
+        if prov not in _PROVINCES and prov not in _REGION_LABELS:
+            if prov not in dropped:
+                dropped.append(prov)
+            continue
         k = (r.get("direction"), prov)
         a = agg.setdefault(k, dict(s=0.0, days=set()))
         a["s"] += share; a["days"].add(r.get("report_date"))
-    return [dict(direction=k[0], province=k[1],
-                 avg_share=round(a["s"]/len(a["days"]), 1), days=len(a["days"]))
-            for k, a in sorted(agg.items(), key=lambda kv: (kv[0][0], -kv[1]["s"]/len(kv[1]["days"])))]
+    return ([dict(direction=k[0], province=k[1],
+                  avg_share=round(a["s"]/len(a["days"]), 1), days=len(a["days"]))
+             for k, a in sorted(agg.items(), key=lambda kv: (kv[0][0], -kv[1]["s"]/len(kv[1]["days"])))],
+            dropped)
 
 def day_type_split(trend: pd.DataFrame) -> list[dict]:
     """A5: weekday vs weekend split on 最高均价 rows (the volume-carrying band).

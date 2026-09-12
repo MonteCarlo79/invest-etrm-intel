@@ -389,13 +389,15 @@ def render(conn) -> None:
                           labels={"report_date": "", "total_vol_100gwh": "总电量 亿kWh", "direction": ""})
             st.plotly_chart(fig2, use_container_width=True)
 
-            share = ic_data.province_share_table(rows)
+            share, dropped_provs = ic_data.province_share_table(rows)
             if share:
                 st.caption("省份占比 — 所选区间日报披露占比的均值 (%)")
                 st.dataframe(pd.DataFrame([{
                     "方向": s["direction"], "省份": s["province"],
                     "平均占比%": s["avg_share"], "披露天数": s["days"]} for s in share]),
                     use_container_width=True, hide_index=True)
+                if dropped_provs:
+                    st.caption(f"已剔除日报源文件中的异常省份名（源文件笔误，未并入任何省份）: {', '.join(dropped_provs)}")
             else:
                 st.info("所选时段无省份占比披露。")
             dts = ic_data.day_type_split(trend)
