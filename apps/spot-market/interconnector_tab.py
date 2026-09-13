@@ -707,7 +707,6 @@ def render(conn) -> None:
         st.info("尚未导入华东跨省数据汇总 — 无法建模。")
     else:
         import plotly.graph_objects as go
-        from services.interconnector import model as ic_model
 
         flows_all = ic_data.aggregate_flows(trades)
         agr = _agreements(conn)
