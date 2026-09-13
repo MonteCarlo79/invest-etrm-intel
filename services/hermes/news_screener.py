@@ -21,6 +21,7 @@ from typing import Optional
 import psycopg2
 import requests
 
+from services.common.proxy_fetch import fetch as proxy_fetch
 from shared.usage_meter import with_usage_tag
 
 logger = logging.getLogger(__name__)
@@ -261,7 +262,7 @@ def delete_source(pg_url: str, source_id: int) -> None:
 def _extract_biz_id_from_article(article_url: str) -> Optional[str]:
     """Fetch a WeChat article page and extract __biz from the embedded JS."""
     try:
-        resp = requests.get(article_url, headers=_WECHAT_HEADERS, timeout=20)
+        resp = proxy_fetch(article_url, headers=_WECHAT_HEADERS, timeout=20)
         resp.raise_for_status()
         # Try var biz = "..."
         m = re.search(r'var\s+biz\s*=\s*"([^"]+)"', resp.text)
@@ -291,7 +292,7 @@ def _fetch_wechat_article(url: str) -> tuple[str, str, str]:
 
     # Use a desktop UA for mp.weixin.qq.com, but keep mobile UA for Sogou redirects
     headers = dict(_WECHAT_HEADERS)
-    resp = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+    resp = proxy_fetch(url, headers=headers, timeout=30, allow_redirects=True)
     resp.raise_for_status()
 
     # Detect Sogou CAPTCHA / anti-spider page.
@@ -305,6 +306,14 @@ def _fetch_wechat_article(url: str) -> tuple[str, str, str]:
     if ("请输入验证码" in raw_text or "sogou_verify" in raw_text
             or ("sogou" in raw_text.lower() and "验证" in raw_text)):
         raise SogouCaptchaError(f"Sogou CAPTCHA content detected for {url}")
+
+    # WeChat risk-control challenge page ("环境异常/完成验证后即可继续访问") —
+    # served to datacenter IPs since the 2026-08-30 NAT-EIP cutover. Must raise
+    # so the caller skips the article; otherwise challenge text is ingested as
+    # the article body (KB junk docs found 2026-09-08, e.g. doc_id 7818/7819).
+    from services.knowledge_pool.knowledge_docs import _is_challenge_page
+    if _is_challenge_page(resp.text):
+        raise SogouCaptchaError(f"WeChat challenge page (环境异常) for {url}")
 
     soup = BeautifulSoup(resp.content, "html.parser")
     title_tag = (
@@ -363,7 +372,7 @@ def _discover_wechat_paginated(source: dict, start_date: datetime, max_pages: in
             f"&_sug_=n&_sug_type_=&page={page}"
         )
         try:
-            resp = requests.get(url, headers=sogou_headers, timeout=20)
+            resp = proxy_fetch(url, headers=sogou_headers, timeout=20)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.content, "html.parser")
             items = soup.select("ul.news-list li")
@@ -574,7 +583,7 @@ def _discover_wechat_articles(source: dict) -> list[dict]:
     articles: list[dict] = []
 
     try:
-        resp = requests.get(sogou_url, headers=sogou_headers, timeout=20)
+        resp = proxy_fetch(sogou_url, headers=sogou_headers, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.content, "html.parser")
 
@@ -679,7 +688,7 @@ def _discover_wechat_via_sogou_article_search(name: str, headers: dict) -> list[
     )
     articles = []
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
+        resp = proxy_fetch(url, headers=headers, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.content, "html.parser")
         for li in soup.select("ul.news-list li, ul.lst_list li"):
@@ -1228,8 +1237,8 @@ def _build_feishu_card(date_str: str, results: list[dict], api_key: str = "") ->
         # Try a quick redirect-follow; fall back to plain text if it fails.
         if url and "weixin.sogou.com" in url:
             try:
-                _r = requests.get(url, headers=_WECHAT_HEADERS, timeout=4,
-                                  allow_redirects=True)
+                _r = proxy_fetch(url, headers=_WECHAT_HEADERS, timeout=4,
+                                 allow_redirects=True)
                 _final = _r.url
                 if "mp.weixin.qq.com" in _final:
                     url = _final
