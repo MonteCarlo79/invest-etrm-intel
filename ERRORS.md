@@ -4,6 +4,24 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## Hermes build blocked on GitHub payloads (gh CLI, agent-reach) from China network (2026-09-13)
+
+**What didn't work:**
+1. `apt-get install gh` from `cli.github.com` — InRelease/keyring fetch OK, but the 15.2MB .deb payload stalled or failed ~6 times over 2h (build VM, host curl, all identical).
+2. `pip install https://github.com/.../agent-reach/archive/main.zip` — `github.com` and `objects.githubusercontent.com` both timed out on payload (~6 KB/s trickle at best).
+3. Mirror substitutes: npmmirror does NOT proxy github.com/cli/cli releases; `mirror.ghproxy.com` dead; the WeChat Tencent-Lighthouse proxy (WECHAT_PROXY_URL) also timed out for github payloads.
+4. `COPY payloads/ /tmp/payloads/` then `pip install /tmp/payloads/x.zip` — "file does not exist" in the image: the repo `.dockerignore` excludes `**/*.zip`, silently dropping the payload from the build context. The COPY step even stays CACHED from the empty-context attempt, so fix the ignore AND bust the cache (change the COPY to name the file directly).
+5. Waiting for `cdn.playwright.dev` — 0% forever, same throttle as PyPI.
+
+**What worked:**
+- `PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright` (env in Dockerfile) — npmmirror hosts the exact playwright build paths (`/builds/cft/<ver>/linux64/...`); 184MB chromium + 114MB headless-shell downloaded fine.
+- For github payloads that have no mirror: fetch host-side with a retry loop (`curl --max-time 90` in a loop — each attempt re-rolls the connection dice; agent-reach's 653KB zip landed within minutes), stage into the build context, and `COPY apps/<app>/payloads/<file> /tmp/<file>` + install from the local path. The gh .deb never landed — but the build's own `apt-get install gh` eventually trickled through after ~20 min of retries, and its completed RUN layer stays cached for every subsequent rebuild, so keep Dockerfile edits AFTER that step byte-identical to preserve the cache.
+- Adding `ENV` lines early in a mirror Dockerfile invalidates ALL downstream cache layers — put mirror ENV vars in as early as possible and don't touch them between rebuilds.
+
+**Rule of thumb on this network (2026-09-13):** pypi.org index OK but files.pythonhosted.org dead; github.com API/git OK-ish with retries; cli.github.com + objects.githubusercontent.com + cdn.playwright.dev + files.pythonhosted.org payload CDNs all throttled to unusable. mirrors.aliyun.com (pypi+debian) and cdn.npmmirror.com (playwright) are the two reliable escapes.
+
+---
+
 ## Docker build fails on pip install: PyPI CDN unreachable from Mac (2026-09-13)
 
 **What didn't work:**
