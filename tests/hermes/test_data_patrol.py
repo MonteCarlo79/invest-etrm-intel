@@ -205,3 +205,95 @@ def test_extract_from_file_for_gap_txt(monkeypatch):
     )
     assert result["extracted"] is True
     assert result["values"]["cap_comp_yuan_kw"] == 165.0
+
+
+# ── check_ingest_ops (portal Data Operations replacement) ────────────────────
+
+def _ops_cursor(ops_rows, job_rows):
+    """Cursor mock: first execute() (ops_log) returns ops_rows, second (jobs) job_rows."""
+    cur = MagicMock()
+    cur.fetchall.side_effect = [ops_rows, job_rows]
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    return cur
+
+
+def test_check_ingest_ops_aggregates_lingfeng(monkeypatch):
+    import services.hermes.data_patrol as dp
+    ops_rows = [
+        ("lingfeng_ingest", "江西", "2026-09-11→2026-09-12", "success", ""),
+        ("lingfeng_ingest", "广州", "2026-09-11→2026-09-12", "failed", "Failed chunks: [...]"),
+        ("lingfeng_ingest", "冀北", "2026-09-11→2026-09-12", "failed", "Failed chunks: [...]"),
+        ("capture", "all", "2026-09-11→2026-09-12", "success", ""),
+    ]
+    cur = _ops_cursor(ops_rows, [("inner_mongolia",)])
+    monkeypatch.setattr("psycopg2.connect", lambda *a, **k: _make_conn(cur))
+    s = dp.check_ingest_ops("postgresql://test")
+    assert s.available is True
+    assert s.lf_total == 3
+    assert s.lf_success == 1
+    assert [m for m, _ in s.lf_failed] == ["广州", "冀北"]
+    assert s.lf_date_range == "2026-09-11→2026-09-12"
+    assert s.capture_status == "success"
+    assert s.running_jobs == ["inner_mongolia"]
+    assert s.has_failures is True
+
+
+def test_check_ingest_ops_empty(monkeypatch):
+    import services.hermes.data_patrol as dp
+    cur = _ops_cursor([], [])
+    monkeypatch.setattr("psycopg2.connect", lambda *a, **k: _make_conn(cur))
+    s = dp.check_ingest_ops("postgresql://test")
+    assert s.available is False
+    assert s.has_failures is False
+
+
+def test_check_ingest_ops_db_down(monkeypatch):
+    import services.hermes.data_patrol as dp
+    monkeypatch.setattr("psycopg2.connect", MagicMock(side_effect=Exception("no db")))
+    s = dp.check_ingest_ops("postgresql://test")
+    assert s.available is False
+
+
+def test_summary_card_shows_lingfeng_line():
+    import services.hermes.data_patrol as dp
+    ops = dp.IngestOpsSummary(
+        available=True, lf_total=29, lf_success=27,
+        lf_failed=[("广州", "x"), ("冀北", "y")], lf_date_range="2026-09-11→2026-09-12",
+        capture_status="success", capture_date_range="2026-09-11→2026-09-12",
+        running_jobs=["inner_mongolia"],
+    )
+    r = dp.PatrolReport(sources=[], kb_summaries=[], ingest_ops=ops)
+    card_str = str(dp.build_summary_card(r))
+    assert "27/29 成功" in card_str
+    assert "广州" in card_str and "冀北" in card_str
+    assert "inner_mongolia" in card_str
+    assert r.has_alerts is True
+
+
+def test_summary_card_no_alerts_when_all_success():
+    import services.hermes.data_patrol as dp
+    ops = dp.IngestOpsSummary(
+        available=True, lf_total=29, lf_success=29, lf_failed=[],
+        capture_status="success",
+    )
+    r = dp.PatrolReport(sources=[], kb_summaries=[], ingest_ops=ops)
+    card_str = str(dp.build_summary_card(r))
+    assert "29/29 成功" in card_str
+    assert r.has_alerts is False
+
+
+def test_detail_card_lists_failed_markets():
+    import services.hermes.data_patrol as dp
+    ops = dp.IngestOpsSummary(
+        available=True, lf_total=3, lf_success=1,
+        lf_failed=[("广州", "Failed chunks: [(2026-09-11, 2026-09-12)]")],
+        lf_date_range="2026-09-11→2026-09-12",
+        capture_status="success", capture_date_range="2026-09-11→2026-09-12",
+    )
+    r = dp.PatrolReport(sources=[], kb_summaries=[], ingest_ops=ops)
+    card_str = str(dp.build_detail_card(r))
+    assert "采集进度" in card_str
+    assert "1/3 成功" in card_str
+    assert "✗ 广州: Failed chunks" in card_str
+    assert "Capture  success" in card_str

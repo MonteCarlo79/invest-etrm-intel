@@ -520,66 +520,8 @@ with header_right:
 if IS_VIEWER:
     st.info("You are signed in as Viewer. This role has read-only access to the portal.")
 
-# --------------------------------------------------
-# DATA OPERATIONS STATUS
-# --------------------------------------------------
-
-st.subheader("Data Operations Status")
-
-try:
-    import sqlalchemy as _sa
-    from shared.data_ops.status import get_recent_ops, get_pipeline_jobs
-
-    _pgurl = os.environ.get("PGURL") or os.environ.get("DB_DSN", "")
-    _ops_engine = _sa.create_engine(_pgurl) if _pgurl else None
-
-    if _ops_engine is None:
-        st.info("DB not configured (PGURL missing).")
-    else:
-        _ops  = get_recent_ops(_ops_engine, hours=48)
-        _jobs = get_pipeline_jobs(_ops_engine)
-
-        # ── Summary tiles: last run per op type ─────────────────────────
-        if not _ops.empty:
-            _last = _ops.groupby("op_name").first().reset_index()
-            _status_icon = {"success": "✅", "running": "⏳", "failed": "❌"}
-            cols = st.columns(max(len(_last), 1))
-            for i, (_, row) in enumerate(_last.iterrows()):
-                icon = _status_icon.get(row["status"], "❓")
-                cols[i].metric(
-                    label=row["op_name"],
-                    value=f"{icon} {row['status']}",
-                    delta=row.get("market") or "",
-                )
-        else:
-            st.info("No data operations recorded in the last 48 hours.")
-
-        # ── Running pipeline jobs ────────────────────────────────────────
-        if not _jobs.empty:
-            running = _jobs[_jobs["status"] == "running"]
-            if not running.empty:
-                names = ", ".join(running["job_name"].tolist())
-                st.warning(f"{len(running)} pipeline job(s) currently running: {names}")
-
-        # ── Recent ops table (collapsible) ───────────────────────────────
-        if not _ops.empty:
-            with st.expander("Recent operations (last 48 h)", expanded=False):
-                _ops_disp = _ops[["op_name", "market", "date_range", "status", "message",
-                                   "started_at", "duration_s"]].copy()
-                _ops_disp["started_at (CST)"] = (
-                    pd.to_datetime(_ops_disp.pop("started_at"), utc=True)
-                    + pd.Timedelta(hours=8)
-                ).dt.strftime("%Y-%m-%d %H:%M")
-                st.dataframe(
-                    _ops_disp[["op_name", "market", "date_range", "status", "message",
-                                "started_at (CST)", "duration_s"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-except Exception as _e:
-    st.info(f"Data operations status unavailable: {_e}")
-
-st.divider()
+# Data Operations Status section removed 2026-09-13 — moved to Hermes data
+# patrol daily Feishu card (services/hermes/data_patrol.py::check_ingest_ops).
 
 # --------------------------------------------------
 # ADMIN USER MANAGEMENT

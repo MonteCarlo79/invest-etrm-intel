@@ -53,6 +53,7 @@ class PatrolReport:
     sources: list[SourceStatus]
     kb_summaries: list[KBSummary]
     generated_at: datetime = field(default_factory=lambda: datetime.now(_BJ))
+    ingest_ops: Optional[IngestOpsSummary] = None
 
     def count_by_status(self, status: str) -> int:
         return sum(1 for s in self.sources if s.status == status)
@@ -62,7 +63,9 @@ class PatrolReport:
 
     @property
     def has_alerts(self) -> bool:
-        return any(s.status in ("stale", "missing") for s in self.sources)
+        if any(s.status in ("stale", "missing") for s in self.sources):
+            return True
+        return bool(self.ingest_ops and self.ingest_ops.has_failures)
 
 
 def _days_behind(last_date: Optional[date], today: Optional[date] = None) -> int:
@@ -302,7 +305,69 @@ def check_monthly_data(pg_url: str) -> list[SourceStatus]:
     return results
 
 
-# ── Group D: KB activity ──────────────────────────────────────────────────────
+# ── Group D: Ingest ops progress (replaces the removed portal section) ───────
+
+@dataclass
+class IngestOpsSummary:
+    available: bool = False
+    lf_total: int = 0
+    lf_success: int = 0
+    lf_failed: list = field(default_factory=list)   # [(market, message)]
+    lf_date_range: str = ""
+    capture_status: str = ""
+    capture_date_range: str = ""
+    running_jobs: list = field(default_factory=list)  # [job_name]
+
+    @property
+    def has_failures(self) -> bool:
+        return bool(self.lf_failed) or self.capture_status == "failed"
+
+
+def check_ingest_ops(pg_url: str) -> IngestOpsSummary:
+    """Summarise the last 24h of marketdata.data_ops_log + running pipeline jobs.
+
+    Replaces the portal "Data Operations Status" section (removed 2026-09-13):
+    LingFeng per-market ingest outcome, capture status, running job warning.
+    """
+    import psycopg2
+    summary = IngestOpsSummary()
+    try:
+        conn = psycopg2.connect(pg_url)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ON (op_name, market)
+                        op_name, market, date_range, status, COALESCE(message, '')
+                    FROM marketdata.data_ops_log
+                    WHERE started_at >= NOW() - INTERVAL '24 hours'
+                    ORDER BY op_name, market, started_at DESC
+                """)
+                for op_name, market, date_range, status, message in cur.fetchall():
+                    if op_name == "lingfeng_ingest":
+                        summary.lf_total += 1
+                        summary.lf_date_range = summary.lf_date_range or date_range
+                        if status == "success":
+                            summary.lf_success += 1
+                        else:
+                            summary.lf_failed.append((market, message))
+                    elif op_name == "capture" and not summary.capture_status:
+                        summary.capture_status = status
+                        summary.capture_date_range = date_range
+                summary.available = summary.lf_total > 0 or bool(summary.capture_status)
+
+                try:
+                    cur.execute("""
+                        SELECT job_name FROM pipeline_job_status WHERE status = 'running'
+                    """)
+                    summary.running_jobs = [r[0] for r in cur.fetchall()]
+                except Exception as exc:
+                    logger.warning("patrol: pipeline_job_status query failed: %s", exc)
+    except Exception as exc:
+        logger.error("check_ingest_ops: DB unavailable: %s", exc)
+    return summary
+
+
+# ── Group E: KB activity ──────────────────────────────────────────────────────
 
 _KB_TABLES = [
     ("Spot KB", "staging.spot_knowledge_docs", "created_at"),
@@ -385,6 +450,20 @@ def build_summary_card(report: PatrolReport) -> dict:
         f"{'⚠️' if manual_issues else '✅'} 手动上传      {'%d 项需关注' % manual_issues if manual_issues else '正常'}",
         f"{'🔴' if monthly_missing else '✅'} 月度数据      {'%d 项缺失' % monthly_missing if monthly_missing else '正常'}",
     ]
+    ops = report.ingest_ops
+    if ops and ops.available:
+        if ops.lf_failed:
+            failed_names = "、".join(m for m, _ in ops.lf_failed[:5])
+            lines.append(
+                f"⚠️ LingFeng 采集   {ops.lf_success}/{ops.lf_total} 成功 (失败: {failed_names})"
+            )
+        else:
+            lines.append(f"✅ LingFeng 采集   {ops.lf_success}/{ops.lf_total} 成功")
+        if ops.capture_status:
+            cap_icon = {"success": "✅", "running": "⏳", "failed": "🔴"}.get(ops.capture_status, "❓")
+            lines.append(f"{cap_icon} Capture       {ops.capture_status}")
+        if ops.running_jobs:
+            lines.append(f"⏳ 运行中任务      {', '.join(ops.running_jobs)}")
     if kb_line:
         lines.append(kb_line)
 
@@ -455,6 +534,22 @@ def build_detail_card(report: PatrolReport) -> dict:
     _section("⚡ 自动管道", report.by_group("auto"))
     _section("📤 手动上传", report.by_group("manual"))
     _section("🗓 月度数据", report.by_group("monthly"))
+
+    ops = report.ingest_ops
+    if ops and ops.available:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**📥 采集进度 (最近24h)**"}})
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+            "content": f"• LingFeng 采集  {ops.lf_success}/{ops.lf_total} 成功 · {ops.lf_date_range}"}})
+        for market, message in ops.lf_failed:
+            elements.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": f"  ✗ {market}: {message[:120]}"}})
+        if ops.capture_status:
+            elements.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": f"• Capture  {ops.capture_status} · {ops.capture_date_range}"}})
+        if ops.running_jobs:
+            elements.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": f"• 运行中任务: {', '.join(ops.running_jobs)}"}})
+        elements.append({"tag": "hr"})
 
     if report.kb_summaries:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**📚 知识库活跃度**"}})
@@ -552,8 +647,9 @@ def run_patrol(
     sources.extend(check_manual_uploads(pg_url))
     sources.extend(check_monthly_data(pg_url))
     kb = check_kb_activity(pg_url)
+    ops = check_ingest_ops(pg_url)
 
-    report = PatrolReport(sources=sources, kb_summaries=kb)
+    report = PatrolReport(sources=sources, kb_summaries=kb, ingest_ops=ops)
     _last_report = report
 
     if feishu and owner_open_id:

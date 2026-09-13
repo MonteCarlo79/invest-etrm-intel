@@ -191,10 +191,7 @@ python services/lingfeng/run_daily.py --markets 山东,山西 --start-date 2026-
 
 ## Data Operations Status
 
-**Portal (`apps/portal/app.py`):** Replaces the old Portfolio Snapshot. Shows:
-- Metric tiles for last run per op type (success/running/failed)
-- Warning if any pipeline_job_status rows are running
-- Collapsible table of last 48h ops from `data_ops_log`
+**Hermes Data Patrol (daily Feishu card, 08:35 Beijing):** LingFeng per-market ingest outcome (last 24h from `data_ops_log`), capture status, and running `pipeline_job_status` jobs — see `services/hermes/data_patrol.py::check_ingest_ops`. (Moved here from the portal on 2026-09-13; the portal section was removed.)
 
 **bess-map Data Management tab:** "Data Operations Log" section at bottom showing last 48h ops.
 
