@@ -4,6 +4,28 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## Docker build fails on pip install: PyPI CDN unreachable from Mac (2026-09-13)
+
+**What didn't work:**
+1. Plain `docker build` — `ERROR: Could not find a version that satisfies the requirement streamlit==1.58.0 (from versions: none)` (pip index fetch failed entirely).
+2. Retry — got further, then `ReadTimeoutError: HTTPSConnectionPool(host='files.pythonhosted.org', port=443)` on the first large wheel.
+3. `docker build --network host` — same timeout. The failure is at the machine level, not Docker's bridge.
+
+**Root cause:** `files.pythonhosted.org` (PyPI's CDN) stalls from this network — `pypi.org` index works (small responses) but any wheel download hangs. Verified on the host with plain `curl` (exit 28 timeout for a 9MB wheel). VPN on/off made no difference. Small metadata responses succeed; large payloads stall — same signature as the Astrill VPN MTU black-hole seen the same day for Postgres (which VPN-pause fixed, but PyPI stayed broken).
+
+**What worked:** build with Aliyun mirrors injected via a stdin-modified Dockerfile (repo Dockerfile untouched):
+```bash
+sed -e "s|RUN pip install --no-cache-dir|RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/|" \
+    -e "s|RUN apt-get update|RUN sed -i 's\|deb.debian.org\|mirrors.aliyun.com\|g' /etc/apt/sources.list.d/debian.sources \&\& apt-get update|" \
+    apps/<app>/Dockerfile > /tmp/Dockerfile.<app>.mirror
+docker build --platform linux/amd64 -f /tmp/Dockerfile.<app>.mirror -t <app>:vN .
+```
+Whole build (pip + 57MB fonts-noto-cjk) completed in ~4 min at mirror speed. Use for any app build while PyPI is broken from this machine.
+
+**Related:** ECR push of a 348MB image ran at ~800 KB/s (~8 min). Don't mistake a slow push for a stuck one — check `nettop -l 1 -x -P | grep com.docker` for bytes-out progress before retrying.
+
+---
+
 ## OneDrive bulk hydration fails instantly with ETIMEDOUT: sync engine not running (Mac)
 
 **What didn't work:**
