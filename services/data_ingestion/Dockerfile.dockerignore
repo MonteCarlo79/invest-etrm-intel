@@ -1,0 +1,16 @@
+# Paired with services/data_ingestion/Dockerfile — BuildKit reads this instead
+# of the repo-root .dockerignore (see ERRORS.md: a Dockerfile and its
+# <name>.dockerignore are a pair). The root file excludes both directories this
+# image needs (services/data_ingestion/, bess-marketdata-ingestion/), so the
+# data-ingestion image must carry its own ignore file without those exclusions.
+.git
+**/__pycache__/
+**/*.pyc
+.env
+.venv
+venv/
+**/node_modules/
+data/
+debug/
+logs/
+knowledge/

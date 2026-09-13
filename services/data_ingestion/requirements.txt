@@ -8,3 +8,4 @@ requests
 enos-poseidon==0.1.6
 playwright>=1.40
 python-dotenv
+tqdm
