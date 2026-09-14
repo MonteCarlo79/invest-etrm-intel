@@ -25,8 +25,9 @@ def test_load_confirmed_fuel_fleet_none_when_empty():
         assert pft.load_confirmed_fuel_fleet(None, "山东") is None
 
 
-def test_import_blocks_convert_price_and_capacity():
-    trades = pd.DataFrame({"channel_1": ["锦苏直流"], "land_price": [0.30], "month_start": [pd.Timestamp("2026-08-01")]})
+def test_import_blocks_use_land_price_directly():
+    # land_price is already stored in ¥/MWh — no unit conversion
+    trades = pd.DataFrame({"channel_1": ["锦苏直流"], "land_price": [300.0], "month_start": [pd.Timestamp("2026-08-01")]})
     channels = pd.DataFrame({"name": ["锦苏直流"], "gw": [7.2]})
     def fake_read_sql(sql, eng, params=None):
         return trades if "trades" in str(sql) else channels

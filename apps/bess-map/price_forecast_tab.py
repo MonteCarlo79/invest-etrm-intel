@@ -44,7 +44,7 @@ def load_import_blocks(eng, recv_province: str) -> list[dict]:
     for _, r in trades.iterrows():
         gw = cap.get(r["channel_1"])
         blocks.append({"label": r["channel_1"],
-                       "price_yuan_mwh": float(r["land_price"]) * 1000.0,
+                       "price_yuan_mwh": float(r["land_price"]),   # already ¥/MWh
                        "capacity_mw": float(gw) * 1000.0 if gw else 1000.0})
     return blocks
 
@@ -95,4 +95,4 @@ def load_landing_price_latest(eng, recv_province: str):
         eng, params={"p": recv_province})
     if df.empty or df.iloc[0]["wavg"] is None:
         return None
-    return float(df.iloc[0]["wavg"]) * 1000.0   # ¥/kWh → ¥/MWh
+    return float(df.iloc[0]["wavg"])   # land_price already stored in ¥/MWh
