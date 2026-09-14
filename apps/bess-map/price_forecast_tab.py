@@ -98,6 +98,33 @@ def load_landing_price_latest(eng, recv_province: str):
     return float(df.iloc[0]["wavg"])   # land_price already stored in ¥/MWh
 
 
+# ── fuel/fleet draft review (Data Management tab) ─────────────────────────────
+
+def list_pending_fuel_fleet(eng):
+    return pd.read_sql(
+        """SELECT id, province, effective_date, coal_price_yuan_t, gas_price_yuan_m3,
+                  status, source, notes, ingested_at
+           FROM marketdata.province_fuel_fleet
+           WHERE status IN ('draft', 'conflict')
+           ORDER BY ingested_at DESC LIMIT 100""", eng)
+
+
+def confirm_fuel_fleet(eng, row_id):
+    from sqlalchemy import text
+    with eng.begin() as conn:
+        conn.execute(text(
+            "UPDATE marketdata.province_fuel_fleet SET status = 'confirmed', "
+            "ingested_at = NOW() WHERE id = :id"), {"id": row_id})
+
+
+def dismiss_fuel_fleet(eng, row_id):
+    from sqlalchemy import text
+    with eng.begin() as conn:
+        conn.execute(text(
+            "UPDATE marketdata.province_fuel_fleet SET status = 'superseded', "
+            "ingested_at = NOW() WHERE id = :id"), {"id": row_id})
+
+
 # ── Section ①: merit-order explorer ─────────────────────────────────────────
 
 def compute_daily_stack_series(stack, residual_demand, markup_curve, total_capacity_mw):

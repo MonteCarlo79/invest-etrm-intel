@@ -3821,6 +3821,54 @@ with tab_mgmt:
                 load_coverage.clear()
                 st.cache_data.clear()
 
+    # ── Fuel & fleet draft review (Hermes extractions → price forecast inputs) ──
+    st.divider()
+    from price_forecast_tab import (
+        list_pending_fuel_fleet as _list_pending_ff,
+        confirm_fuel_fleet as _confirm_ff,
+        dismiss_fuel_fleet as _dismiss_ff,
+    )
+    try:
+        _ff_pending = _list_pending_ff(_eng())
+    except Exception:
+        _ff_pending = pd.DataFrame()
+
+    with st.expander(f"燃料与装机数据确认 ({len(_ff_pending)} 条待审)", expanded=False):
+        if _ff_pending.empty:
+            st.success("✅ 无待确认的燃料/装机数据。")
+        else:
+            st.caption(
+                "Hermes 自动提取的煤价/气价/装机分段草稿（draft / conflict）。"
+                "确认后供价格预测模型使用；忽略则标记为 superseded。"
+            )
+            _ff_disp = _ff_pending.copy()
+            _ff_disp["source"] = _ff_disp["source"].apply(lambda s: str(s)[:60] if s else "")
+            _ff_disp["notes"] = _ff_disp["notes"].fillna("")
+            st.dataframe(_ff_disp, use_container_width=True, hide_index=True)
+
+            for _, _ff_row in _ff_pending.iterrows():
+                _ff_id = int(_ff_row["id"])
+                _rc1, _rc2, _rc3, _rc4 = st.columns([3, 3, 1, 1])
+                with _rc1:
+                    st.write(f"**{_ff_row['province']}** — {_ff_row['effective_date']}")
+                with _rc2:
+                    st.caption(
+                        f"煤 {_ff_row['coal_price_yuan_t']} ¥/t · "
+                        f"气 {_ff_row['gas_price_yuan_m3']} ¥/m³ · {_ff_row['status']}"
+                    )
+                with _rc3:
+                    if st.button("确认", key=f"ff_confirm_{_ff_id}"):
+                        _confirm_ff(_eng(), _ff_id)
+                        st.success(f"已确认 #{_ff_id}")
+                        st.cache_data.clear()
+                        st.rerun()
+                with _rc4:
+                    if st.button("忽略", key=f"ff_dismiss_{_ff_id}"):
+                        _dismiss_ff(_eng(), _ff_id)
+                        st.success(f"已忽略 #{_ff_id}")
+                        st.cache_data.clear()
+                        st.rerun()
+
     # ── Data Operations Log ──────────────────────────────────────────────────
     st.divider()
     st.subheader(_t("data_ops_log_title"))
