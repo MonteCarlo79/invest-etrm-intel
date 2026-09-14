@@ -54,3 +54,54 @@ def marginal_price(stack, residual_demand_mw):
             return seg["vc_yuan_mwh"]
         remaining -= seg["capacity_mw"]
     return math.nan
+
+
+# ── Scarcity markup calibration ─────────────────────────────────────────────
+
+def fit_markup(observed, structural, tightness, n_bins=5):
+    """Median observed/structural ratio per tightness bin, floored at 1.0,
+    enforced monotone non-decreasing (isotonic via cummax)."""
+    import numpy as np
+    obs = np.asarray(observed, dtype=float)
+    st = np.asarray(structural, dtype=float)
+    ti = np.asarray(tightness, dtype=float)
+    mask = np.isfinite(obs) & np.isfinite(st) & np.isfinite(ti) & (st > 0)
+    if mask.sum() < 20:
+        return [(0.0, 1.0)]
+    obs, st, ti = obs[mask], st[mask], ti[mask]
+    edges = np.quantile(ti, np.linspace(0, 1, n_bins + 1))
+    edges[0], edges[-1] = -np.inf, np.inf
+    pts = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (ti >= lo) & (ti < hi)
+        ratio = np.median(obs[m] / st[m]) if m.sum() else 1.0
+        # representative tightness: mean of bin members keeps xs finite and
+        # increasing even though edge bins have ±inf bounds
+        if m.sum():
+            t_rep = float(ti[m].mean())
+        elif np.isfinite(lo + hi):
+            t_rep = float((lo + hi) / 2)
+        else:
+            t_rep = float(ti.mean())
+        pts.append((t_rep, max(1.0, float(ratio))))
+    # monotone enforcement + keep representative tightness values
+    out, best = [], 1.0
+    for t, mk in pts:
+        best = max(best, mk)
+        out.append((t, best))
+    return out
+
+
+def apply_markup(vc, tightness, curve):
+    if not curve:
+        return vc
+    xs = [p[0] for p in curve]
+    ys = [p[1] for p in curve]
+    t = min(max(tightness, xs[0]), xs[-1])
+    for i in range(len(xs) - 1):
+        if xs[i] <= t <= xs[i + 1]:
+            if xs[i + 1] == xs[i]:
+                return vc * ys[i]
+            frac = (t - xs[i]) / (xs[i + 1] - xs[i])
+            return vc * (ys[i] + frac * (ys[i + 1] - ys[i]))
+    return vc * ys[-1]

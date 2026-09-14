@@ -39,3 +39,35 @@ def test_import_block_placed_by_price():
 def test_demand_above_stack_returns_nan():
     stack = build_stack(_SEGS, 850.0, 3.1)
     assert math.isnan(marginal_price(stack, 999999))
+
+
+import numpy as np
+import pandas as pd
+from services.bess_map.price_lab.merit_order import fit_markup, apply_markup
+
+
+def test_fit_markup_monotone_and_floored():
+    rng = np.random.default_rng(0)
+    n = 500
+    tight = rng.uniform(0.1, 1.2, n)
+    structural = np.full(n, 250.0)
+    observed = 250.0 * (1.0 + np.maximum(tight - 0.6, 0) * 2) + rng.normal(0, 5, n)
+    curve = fit_markup(pd.Series(observed), pd.Series(structural), pd.Series(tight), n_bins=4)
+    markups = [m for _, m in curve]
+    assert all(m >= 1.0 for m in markups)
+    assert markups == sorted(markups)
+    # tight hours should price above base
+    assert apply_markup(250.0, 1.1, curve) > apply_markup(250.0, 0.2, curve)
+
+
+def test_apply_markup_interpolates():
+    curve = [(0.0, 1.0), (1.0, 2.0)]
+    assert apply_markup(100.0, 0.5, curve) == 150.0
+    assert apply_markup(100.0, -1.0, curve) == 100.0   # clamp low
+    assert apply_markup(100.0, 5.0, curve) == 200.0    # clamp high
+
+
+def test_fit_markup_empty_returns_flat():
+    curve = fit_markup(pd.Series([], dtype=float), pd.Series([], dtype=float),
+                       pd.Series([], dtype=float))
+    assert curve == [(0.0, 1.0)]
