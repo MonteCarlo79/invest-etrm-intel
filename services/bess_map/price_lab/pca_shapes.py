@@ -71,3 +71,30 @@ def compute_pca(price_matrix: pd.DataFrame, n_pcs: int = 4) -> dict:
         "dates": list(price_matrix.index), # trading dates aligned with scores
         "_raw_eigvecs": eig_vecs[:, :n_keep],  # ndarray (24, n_keep), un-normalised
     }
+
+
+FEATURE_COLUMNS = ["load_d1_mw", "renewable_total_d1_mw", "bidding_space_d1_mw",
+                   "wind_d1_mw", "solar_d1_mw", "net_import_share",
+                   "landing_price", "dow", "month"]
+
+
+def fit_score_models(scores, features, lam=1.0):
+    import numpy as np
+    X = features.astype(float)
+    mu, sd = X.mean(), X.std(ddof=0).replace(0, 1.0)
+    Xs = ((X - mu) / sd).values
+    Xd = np.column_stack([np.ones(len(Xs)), Xs])
+    I = np.eye(Xd.shape[1]); I[0, 0] = 0.0   # don't penalise intercept
+    w = np.linalg.solve(Xd.T @ Xd + lam * I, Xd.T @ np.asarray(scores))
+    return w, mu, sd
+
+
+def predict_scores(weights, feat_mean, feat_std, features):
+    import numpy as np
+    Xs = ((features.astype(float) - feat_mean) / feat_std).values
+    return np.column_stack([np.ones(len(Xs)), Xs]) @ weights
+
+
+def reconstruct_shape(loadings, scores_row, raw_eigvecs):
+    import numpy as np
+    return np.asarray(scores_row, dtype=float) @ np.asarray(raw_eigvecs).T
