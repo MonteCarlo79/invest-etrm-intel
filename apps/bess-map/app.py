@@ -529,7 +529,7 @@ _T: dict[str, dict[str, str]] = {
         "pca_cumvar":              "累计",
         # price forecast
         "tab_price_forecast":      "价格预测",
-        "pf_caption":              " merit-order 燃料成本栈 + PCA 形状混合预测 — 结构定水平，统计定形状，D-1 时域。",
+        "pf_caption":              "merit-order 燃料成本栈 + PCA 形状混合预测 — 结构定水平，统计定形状，D-1 时域。",
         # bess demand
         "tab_demand":              "储能需求",
         "demand_title":            "储能需求分析",

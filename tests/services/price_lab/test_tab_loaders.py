@@ -42,3 +42,11 @@ def test_net_import_share_sign():
     fund = pd.DataFrame({"net_export_d1_mw": [-2000.0, 1000.0], "load_d1_mw": [20000.0, 20000.0]})
     share = pft.compute_net_import_share(fund)
     assert share.iloc[0] == 0.1 and share.iloc[1] == -0.05
+
+
+def test_loaders_cast_datetime_to_date():
+    # Regression guard: date params must be compared against datetime::date,
+    # otherwise Postgres coerces the end date to midnight and drops end-day rows.
+    import inspect
+    assert "datetime::date" in inspect.getsource(pft.load_fundamentals_d1)
+    assert "datetime::date" in inspect.getsource(pft.load_rt_prices)

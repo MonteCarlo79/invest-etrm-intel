@@ -59,7 +59,7 @@ def load_fundamentals_d1(eng, province: str, start: date, end: date) -> pd.DataF
                   COALESCE(solar_d1_mw, solar_mw)                     AS solar_d1_mw,
                   COALESCE(net_export_d1_mw, net_export_mw)           AS net_export_d1_mw
            FROM marketdata.spot_fundamentals_hourly
-           WHERE province = %(p)s AND datetime BETWEEN %(s)s AND %(e)s
+           WHERE province = %(p)s AND datetime::date BETWEEN %(s)s AND %(e)s
            ORDER BY datetime""",
         eng, params={"p": province, "s": start, "e": end})
     if df.empty:
@@ -71,7 +71,7 @@ def load_fundamentals_d1(eng, province: str, start: date, end: date) -> pd.DataF
 def load_rt_prices(eng, province: str, start: date, end: date) -> pd.DataFrame:
     df = pd.read_sql(
         """SELECT datetime, rt_price FROM marketdata.spot_prices_hourly
-           WHERE province = %(p)s AND datetime BETWEEN %(s)s AND %(e)s
+           WHERE province = %(p)s AND datetime::date BETWEEN %(s)s AND %(e)s
            ORDER BY datetime""",
         eng, params={"p": province, "s": start, "e": end})
     if df.empty:
@@ -93,7 +93,7 @@ def load_landing_price_latest(eng, recv_province: str):
              AND month_start = (SELECT MAX(month_start) FROM staging.interconnector_trades
                                 WHERE recv_province = %(p)s)""",
         eng, params={"p": recv_province})
-    if df.empty or df.iloc[0]["wavg"] is None:
+    if df.empty or pd.isna(df.iloc[0]["wavg"]):
         return None
     return float(df.iloc[0]["wavg"])   # land_price already stored in ¥/MWh
 
