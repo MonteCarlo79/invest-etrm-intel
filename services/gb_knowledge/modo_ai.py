@@ -1,8 +1,13 @@
-"""Modo Energy AI agent distillation via Playwright.
+"""Modo Energy AI agent distillation.
 
-Logs into modoenergy.com with MODO_EMAIL + MODO_PASSWORD, navigates to
-modoenergy.com/home where Modo's AI chat lives, asks a curated set of GB BESS
-market questions, captures each response, and yields them as knowledge documents.
+Authenticates against modoenergy.com's NextAuth `sign_in_with_password`
+credentials provider with MODO_EMAIL + MODO_PASSWORD (browser-free — the SPA
+sign-in page went passwordless ~2026-09-11, but the credentials provider and
+the ask-modo chat API still work), asks a curated set of GB BESS market
+questions via the chat API, and yields the answers as knowledge documents.
+Each run does a fresh login — no session persistence, no keepalive, no
+Playwright, no magic-link dependency.  (The legacy Playwright machinery below
+is retained, unused, as a fallback reference.)
 
 Source:   modo_ai
 Doc type: ai_insight
@@ -11,12 +16,15 @@ URL key:  modo_ai://{YYYY-MM-DD}/q{NN}   (one row per question per day;
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
 import time
 from datetime import date
 from typing import Iterator
+
+import requests
 
 from services.gb_knowledge.base import BaseConnector
 
@@ -87,6 +95,74 @@ _ELEMENT_TIMEOUT = 15_000
 _RESPONSE_TIMEOUT = 90_000   # max wait for AI to start responding
 _SETTLE_POLLS = 8            # poll count (×2 s each) with no change = done
 
+# ---------------------------------------------------------------------------
+# Browser-free Modo API client (primary path since 2026-09-14)
+#
+# The SPA sign-in page went passwordless ~2026-09-11 (every Playwright email
+# submit started spamming a magic-link email and the password field vanished),
+# but the NextAuth `sign_in_with_password` credentials provider still works and
+# the ask-modo chat API accepts the resulting Bearer token.  The backend access
+# token lives 600 s, so long runs simply re-login when it goes stale — no
+# session file, no keepalive, no refresh-token chain to break.
+# ---------------------------------------------------------------------------
+_NEXTAUTH = "https://modoenergy.com/api/auth"
+_ASK_MODO = "https://admin.modo.energy/ask-modo/api/v1"
+_TOKEN_MAX_AGE = 480   # re-login when the token is this old (backend JWT lives 600 s)
+
+
+def _api_login(email: str, password: str) -> tuple[requests.Session, str]:
+    """NextAuth credentials login → (authed session, access_token). No browser."""
+    http = requests.Session()
+    csrf = http.get(f"{_NEXTAUTH}/csrf", timeout=15).json()["csrfToken"]
+    resp = http.post(
+        f"{_NEXTAUTH}/callback/sign_in_with_password",
+        data={"csrfToken": csrf, "email": email, "password": password, "json": "true"},
+        timeout=20, allow_redirects=False,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"sign_in_with_password callback HTTP {resp.status_code}")
+    redirect = resp.json().get("url", "")
+    if "sign-in" in redirect or "error" in redirect.lower():
+        raise RuntimeError(f"credentials rejected (redirect: {redirect})")
+    return http, _api_access_token(http)
+
+
+def _api_access_token(http: requests.Session) -> str:
+    """Read the current access_token out of the NextAuth session."""
+    token = http.get(f"{_NEXTAUTH}/session", timeout=15).json().get("access_token")
+    if not token:
+        raise RuntimeError("no access_token in NextAuth session")
+    return token
+
+
+def _api_ask(http: requests.Session, token: str, question: str) -> str | None:
+    """Ask one question via the ask-modo chat API; return the full answer text.
+
+    SSE stream: `set_chat_id` / `tool_call` events are progress noise; the
+    answer arrives as `message_chunk` events whose `content` deltas concatenate.
+    """
+    resp = http.post(
+        f"{_ASK_MODO}/chats/completion",
+        json={"message": question},
+        headers={"Authorization": f"Bearer {token}", "Accept": "text/event-stream"},
+        timeout=180, stream=True,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"chats/completion HTTP {resp.status_code}")
+    parts: list[str] = []
+    event = ""
+    for raw in resp.iter_lines(decode_unicode=True):
+        if not raw:
+            continue
+        if raw.startswith("event:"):
+            event = raw[6:].strip()
+        elif raw.startswith("data:") and event == "message_chunk":
+            try:
+                parts.append(json.loads(raw[5:].strip()).get("content", ""))
+            except json.JSONDecodeError:
+                pass
+    return "".join(parts).strip() or None
+
 
 # ---------------------------------------------------------------------------
 # Connector
@@ -115,181 +191,71 @@ class ModoAIConnector(BaseConnector):
             logger.warning("[modo_ai] MODO_EMAIL / MODO_PASSWORD not set — skipping")
             return
 
-        try:
-            from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-        except ImportError:
-            logger.warning("[modo_ai] playwright not installed — skipping")
-            return
-
         today = date.today()
 
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
+        try:
+            http, token = _api_login(self._email, self._password)
+        except Exception as exc:
+            logger.error("[modo_ai] API login failed — aborting distillation: %s", exc)
+            return
+        token_at = time.time()
+        logger.info("[modo_ai] API login OK (browser-free)")
+
+        all_questions = [
+            # (question_text, url, is_last)
+            # Daily market intelligence — date-keyed, refreshed every night
+            (q, f"modo_ai://{today.isoformat()}/q{i:02d}", False)
+            for i, q in enumerate(STANDARD_QUESTIONS)
+        ] + [
+            # Modo proprietary research — date-keyed, refreshed every night
+            (q, f"modo_ai://{today.isoformat()}/research{i:02d}", False)
+            for i, q in enumerate(MODO_RESEARCH_QUESTIONS)
+        ] + [
+            # Foundational knowledge — fixed URL, inserted once only
+            (q, f"modo_ai://foundational/q{i:02d}", False)
+            for i, q in enumerate(FOUNDATIONAL_QUESTIONS)
+        ]
+        # Mark last question
+        if all_questions:
+            all_questions[-1] = (all_questions[-1][0], all_questions[-1][1], True)
+
+        total_q = len(all_questions)
+        for idx, (question, url, is_last) in enumerate(all_questions):
+            logger.info(
+                "[modo_ai] Question %d/%d: %s…",
+                idx + 1, total_q, question[:60],
             )
-
-            # Load persisted session so we can skip login on re-runs
-            saved_state = _load_session_state()
-            ctx = browser.new_context(
-                storage_state=saved_state,   # None = fresh context
-                viewport={"width": 1280, "height": 900},
-                user_agent=(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                ),
-                locale="en-GB",
-                timezone_id="Asia/Singapore",
-            )
-            page = ctx.new_page()
-            # Suppress noisy console messages from the React app
-            page.on("console", lambda _: None)
-
-            # NOTE: playwright-stealth was removed because it conflicts with modoenergy.com's
-            # Cloudflare JS challenge and causes blank page body (body=''), preventing any
-            # form interaction.  Without stealth, password login Flow A works correctly
-            # (confirmed via CloudWatch v92 logs).  The magic-link emails that prompted
-            # adding stealth were caused by the modo_reports scraper (now removed from the
-            # 3:30 AM knowledge job) — not by the password login itself.
-            logger.info("[modo_ai] Stealth mode disabled (intentional — see comment above)")
-
-            try:
-                logged_in = False
-
-                # ── 1. Try restored session ───────────────────────────────
-                if saved_state:
-                    logger.info("[modo_ai] Checking restored session from %s", _SESSION_PATH)
-                    try:
-                        page.goto(
-                            "https://modoenergy.com/home",
-                            timeout=_NAV_TIMEOUT,
-                            wait_until="domcontentloaded",
-                        )
-                        page.wait_for_timeout(2_000)
-                        if self._is_authenticated(page):
-                            logged_in = True
-                            logger.info("[modo_ai] Saved session is valid — login skipped")
-                    except Exception as exc:
-                        logger.warning("[modo_ai] Session restore check failed: %s", exc)
-
-                # ── 2. Try magic link URL (set once via env var) ──────────
-                if not logged_in:
-                    magic_link_url = os.environ.get("MODO_MAGIC_LINK_URL", "").strip()
-                    if magic_link_url:
-                        logged_in = self._login_via_magic_link(page, magic_link_url)
-
-                # ── 3. Fall back to password login ────────────────────────
-                if not logged_in:
-                    self._magic_link_sent = False
-                    self._sso_detected = False
-                    for _attempt in range(1, 3):   # max 2 attempts
-                        logger.info("[modo_ai] Login attempt %d/2", _attempt)
-                        logged_in = self._login(page)
-                        if logged_in:
-                            break
-                        if self._magic_link_sent:
-                            logger.error(
-                                "[modo_ai] Magic link auth detected — aborting without retry"
-                            )
-                            _notify_magic_link_required(page.url)
-                            break
-                        if self._sso_detected:
-                            logger.error(
-                                "[modo_ai] SSO auth detected — aborting without retry"
-                            )
-                            _notify_magic_link_required(page.url)
-                            break
-                        if _attempt < 2:
-                            logger.warning(
-                                "[modo_ai] Login attempt %d failed — retrying in 10s", _attempt
-                            )
-                            time.sleep(10)
-                            try:
-                                page.goto(
-                                    "https://modoenergy.com/sign-in",
-                                    timeout=_NAV_TIMEOUT,
-                                    wait_until="domcontentloaded",
-                                )
-                                page.wait_for_timeout(2_000)
-                            except Exception:
-                                pass
-
-                if not logged_in:
-                    if not self._magic_link_sent and not self._sso_detected:
-                        logger.error("[modo_ai] Login failed after all attempts — aborting")
-                        _notify_login_failure(2, page.url)
-                    return
-
-                # Persist session so tomorrow's run (same container) skips login.
-                # NOTE: this snapshot is re-saved at the end of the run (see the
-                # finally block) — mid-run token refreshes rotate the backend
-                # refresh token, orphaning this early snapshot by next morning.
-                _save_session_state(ctx)
-
-                all_questions = [
-                    # (question_text, url, is_last)
-                    # Daily market intelligence — date-keyed, refreshed every night
-                    (q, f"modo_ai://{today.isoformat()}/q{i:02d}", False)
-                    for i, q in enumerate(STANDARD_QUESTIONS)
-                ] + [
-                    # Modo proprietary research — date-keyed, refreshed every night
-                    (q, f"modo_ai://{today.isoformat()}/research{i:02d}", False)
-                    for i, q in enumerate(MODO_RESEARCH_QUESTIONS)
-                ] + [
-                    # Foundational knowledge — fixed URL, inserted once only
-                    (q, f"modo_ai://foundational/q{i:02d}", False)
-                    for i, q in enumerate(FOUNDATIONAL_QUESTIONS)
-                ]
-                # Mark last question
-                if all_questions:
-                    all_questions[-1] = (all_questions[-1][0], all_questions[-1][1], True)
-
-                total_q = len(all_questions)
-                for idx, (question, url, is_last) in enumerate(all_questions):
-                    logger.info(
-                        "[modo_ai] Question %d/%d: %s…",
-                        idx + 1, total_q, question[:60],
-                    )
-                    try:
-                        answer = self._ask_fresh(page, question)
-                    except Exception as exc:
-                        logger.warning("[modo_ai] Question %d error: %s", idx + 1, exc)
-                        continue
-
-                    if not answer or len(answer) < 30:
-                        logger.warning("[modo_ai] No substantive answer for q%d (got: %r)", idx, answer)
-                        continue
-
-                    yield {
-                        "doc_type": "ai_insight",
-                        "title":    f"Modo AI — {question[:80]}",
-                        "url":      url,
-                        "published_date": today,
-                        "content":  f"Q: {question}\n\nA: {answer}",
-                    }
-
-                    # Random pause between questions (15–45 s) to avoid
-                    # looking like automated traffic
-                    if not is_last:
-                        pause = random.uniform(15, 45)
-                        logger.debug("[modo_ai] Pausing %.0fs before next question", pause)
-                        time.sleep(pause)
-
-            finally:
-                # Re-save the session AFTER the Q&A loop.  The backend access
-                # token lives only ~10 min, so during the ~15-min question run
-                # NextAuth refreshes it and the refresh token is ROTATED in the
-                # live cookie jar.  The post-login snapshot above is therefore
-                # stale by tomorrow (restore -> RefreshAccessTokenError -> the
-                # SPA signs itself out -> fresh login -> magic-link email).
-                # Saving the final jar keeps tomorrow's restore/keepalive alive.
-                if logged_in:
-                    _save_session_state(ctx)
+            if time.time() - token_at > _TOKEN_MAX_AGE:
                 try:
-                    ctx.close()
-                    browser.close()
-                except Exception:
-                    pass
+                    http, token = _api_login(self._email, self._password)
+                    token_at = time.time()
+                    logger.info("[modo_ai] token refreshed via re-login")
+                except Exception as exc:
+                    logger.error("[modo_ai] re-login failed — aborting run: %s", exc)
+                    return
+            try:
+                answer = _api_ask(http, token, question)
+            except Exception as exc:
+                logger.warning("[modo_ai] Question %d error: %s", idx + 1, exc)
+                continue
+
+            if not answer or len(answer) < 30:
+                logger.warning("[modo_ai] No substantive answer for q%d (got: %r)", idx, answer)
+                continue
+
+            yield {
+                "doc_type": "ai_insight",
+                "title":    f"Modo AI — {question[:80]}",
+                "url":      url,
+                "published_date": today,
+                "content":  f"Q: {question}\n\nA: {answer}",
+            }
+
+            # Throttle between questions — credit and rate-limit headroom
+            if not is_last:
+                pause = random.uniform(15, 45)
+                logger.debug("[modo_ai] Pausing %.0fs before next question", pause)
+                time.sleep(pause)
 
     # ------------------------------------------------------------------
     # Login
@@ -751,135 +717,54 @@ class ModoAIConnector(BaseConnector):
             logger.warning("[modo_ai] MODO_EMAIL / MODO_PASSWORD not set — skipping")
             return
 
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            logger.warning("[modo_ai] playwright not installed — skipping")
-            return
-
         today = date.today()
 
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
+        try:
+            http, token = _api_login(self._email, self._password)
+        except Exception as exc:
+            logger.error("[modo_ai] API login failed — aborting custom distillation: %s", exc)
+            return
+        token_at = time.time()
+        logger.info("[modo_ai] API login OK (browser-free)")
+
+        for i, question in enumerate(questions):
+            url = f"modo_ai://{url_prefix}/{today.isoformat()}/q{i:02d}"
+            logger.info(
+                "[modo_ai] Custom Q %d/%d: %s…",
+                i + 1, len(questions), question[:60],
             )
-
-            saved_state = _load_session_state()
-            ctx = browser.new_context(
-                storage_state=saved_state,
-                viewport={"width": 1280, "height": 900},
-                user_agent=(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                ),
-                locale="en-GB",
-                timezone_id="Asia/Singapore",
-            )
-            page = ctx.new_page()
-            page.on("console", lambda _: None)
-            # stealth mode removed — see comment in fetch() for rationale
-
-            try:
-                logged_in = False
-
-                # ── 1. Try restored session ───────────────────────────────
-                if saved_state:
-                    try:
-                        page.goto(
-                            "https://modoenergy.com/home",
-                            timeout=_NAV_TIMEOUT,
-                            wait_until="domcontentloaded",
-                        )
-                        page.wait_for_timeout(2_000)
-                        if self._is_authenticated(page):
-                            logged_in = True
-                            logger.info("[modo_ai] Saved session is valid — login skipped")
-                    except Exception as exc:
-                        logger.warning("[modo_ai] Session restore check failed: %s", exc)
-
-                # ── 2. Try magic link URL ─────────────────────────────────
-                if not logged_in:
-                    magic_link_url = os.environ.get("MODO_MAGIC_LINK_URL", "").strip()
-                    if magic_link_url:
-                        logged_in = self._login_via_magic_link(page, magic_link_url)
-
-                # ── 3. Fall back to password login ────────────────────────
-                if not logged_in:
-                    self._magic_link_sent = False
-                    self._sso_detected = False
-                    for _attempt in range(1, 3):
-                        logger.info("[modo_ai] Login attempt %d/2", _attempt)
-                        logged_in = self._login(page)
-                        if logged_in:
-                            break
-                        if self._magic_link_sent or self._sso_detected:
-                            logger.error(
-                                "[modo_ai] %s detected — aborting without retry",
-                                "Magic link" if self._magic_link_sent else "SSO",
-                            )
-                            _notify_magic_link_required(page.url)
-                            break
-                        if _attempt < 2:
-                            logger.warning(
-                                "[modo_ai] Login attempt %d failed — retrying in 10s", _attempt
-                            )
-                            time.sleep(10)
-                            try:
-                                page.goto(
-                                    "https://modoenergy.com/sign-in",
-                                    timeout=_NAV_TIMEOUT,
-                                    wait_until="domcontentloaded",
-                                )
-                                page.wait_for_timeout(2_000)
-                            except Exception:
-                                pass
-
-                if not logged_in:
-                    if not self._magic_link_sent and not self._sso_detected:
-                        logger.error("[modo_ai] Login failed after all attempts — aborting custom distillation")
-                        _notify_login_failure(2, page.url)
-                    return
-
-                _save_session_state(ctx)
-
-                for i, question in enumerate(questions):
-                    url = f"modo_ai://{url_prefix}/{today.isoformat()}/q{i:02d}"
-                    logger.info(
-                        "[modo_ai] Custom Q %d/%d: %s…",
-                        i + 1, len(questions), question[:60],
-                    )
-                    try:
-                        answer = self._ask_fresh(page, question)
-                    except Exception as exc:
-                        logger.warning("[modo_ai] Custom Q%d error: %s", i, exc)
-                        continue
-
-                    if not answer or len(answer) < 30:
-                        logger.warning("[modo_ai] No substantive answer for custom Q%d", i)
-                        continue
-
-                    yield {
-                        "doc_type": "ai_insight",
-                        "title":    f"Modo AI (gap) — {question[:80]}",
-                        "url":      url,
-                        "published_date": today,
-                        "content":  f"Q: {question}\n\nA: {answer}",
-                        "_question": question,
-                        "_answer":   answer,
-                    }
-
-                    if i < len(questions) - 1:
-                        pause = random.uniform(10, 30)
-                        logger.debug("[modo_ai] Pausing %.0fs", pause)
-                        time.sleep(pause)
-
-            finally:
+            if time.time() - token_at > _TOKEN_MAX_AGE:
                 try:
-                    ctx.close()
-                    browser.close()
-                except Exception:
-                    pass
+                    http, token = _api_login(self._email, self._password)
+                    token_at = time.time()
+                    logger.info("[modo_ai] token refreshed via re-login")
+                except Exception as exc:
+                    logger.error("[modo_ai] re-login failed — aborting run: %s", exc)
+                    return
+            try:
+                answer = _api_ask(http, token, question)
+            except Exception as exc:
+                logger.warning("[modo_ai] Custom Q%d error: %s", i, exc)
+                continue
+
+            if not answer or len(answer) < 30:
+                logger.warning("[modo_ai] No substantive answer for custom Q%d", i)
+                continue
+
+            yield {
+                "doc_type": "ai_insight",
+                "title":    f"Modo AI (gap) — {question[:80]}",
+                "url":      url,
+                "published_date": today,
+                "content":  f"Q: {question}\n\nA: {answer}",
+                "_question": question,
+                "_answer":   answer,
+            }
+
+            if i < len(questions) - 1:
+                pause = random.uniform(10, 30)
+                logger.debug("[modo_ai] Pausing %.0fs", pause)
+                time.sleep(pause)
 
     # ------------------------------------------------------------------
     # Response extraction
