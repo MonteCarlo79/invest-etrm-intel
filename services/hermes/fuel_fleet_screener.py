@@ -170,11 +170,23 @@ def _claude_extract(
 # ── JSON extraction ────────────────────────────────────────────────────────────
 
 def _extract_json(text: str) -> Optional[dict]:
-    """Extract first JSON object from agent response text."""
-    # Try to find JSON block (possibly wrapped in markdown code fence)
+    """Extract first JSON object from agent response text.
+
+    Order matters: the prompt instructs raw JSON (no markdown), so try the
+    full response first; the conservative [^{}]+ pattern is LAST because it
+    cannot span nested braces (e.g. fleet_segments: [{...}]) and would
+    otherwise match only an inner dict.
+    """
+    # 1. Whole response is bare JSON (the instructed no-markdown path)
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
+        pass
+    # 2-4. Locate a JSON block inside surrounding text
     patterns = [
-        r'```(?:json)?\s*(\{[^`]+\})\s*```',
-        r'(\{[^{}]+\})',
+        r'```(?:json)?\s*(\{[^`]+\})\s*```',  # fenced block
+        r'(\{.*\})',                          # greedy — spans nested braces
+        r'(\{[^{}]+\})',                      # conservative fallback, flat only
     ]
     for pat in patterns:
         m = re.search(pat, text, re.DOTALL)

@@ -9,6 +9,24 @@ def test_extract_json_from_fenced_block():
     assert data["coal_price_yuan_t"] == 850
 
 
+def test_extract_json_unfenced_nested():
+    # Production-likely path: prompt instructs raw JSON, no markdown fence,
+    # with a nested fleet_segments array — must parse to the full outer dict.
+    text = (
+        '{"coal_price_yuan_t": 850.0, "gas_price_yuan_m3": 3.1, '
+        '"fleet_segments": ['
+        '{"fuel": "coal", "capacity_mw": 40000, "heat_rate_kj_kwh": 8200, '
+        '"vom_yuan_mwh": 12, "label": "coal_usc"}, '
+        '{"fuel": "gas", "capacity_mw": 8000, "heat_rate_kj_kwh": 6400, '
+        '"vom_yuan_mwh": 8, "label": "gas_ccgt"}], '
+        '"confidence": "high", "source_url": "kb:doc1"}'
+    )
+    data = sc._extract_json(text)
+    assert data["coal_price_yuan_t"] == 850.0
+    assert len(data["fleet_segments"]) == 2
+    assert data["fleet_segments"][0]["fuel"] == "coal"
+
+
 def test_screen_upserts_extraction(monkeypatch):
     fake_data = {"coal_price_yuan_t": 850.0, "gas_price_yuan_m3": 3.1,
                  "fleet_segments": [{"fuel": "coal", "capacity_mw": 40000,
