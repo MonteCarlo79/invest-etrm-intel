@@ -340,3 +340,99 @@ def seed_mech_share_if_empty(conn) -> int:
         cur.executemany(_MECH_INSERT, MECH_SHARE_SEED)
     conn.commit()
     return len(MECH_SHARE_SEED)
+
+
+# ── 检修计划 (equipment maintenance / outage windows) ─────────────────────────
+_DDL_MW = """CREATE TABLE IF NOT EXISTS staging.interconnector_maintenance_windows (
+    id SERIAL PRIMARY KEY,
+    source_file TEXT, region TEXT, voltage_kv INT, unit TEXT, equipment TEXT,
+    outage_start TIMESTAMP, outage_end TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+)"""
+DDL.insert(5, _DDL_MW)
+
+_MW_ROW = re.compile(
+    r"#?\s*(\d{1,3})\s+(\d{3,4})\s+(\S+)\s+(\S+?)\s+(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}\s+(\d{4}-\d{2}-\d{2})")
+
+def parse_maintenance_text(text: str) -> list[dict]:
+    """Parse 年度发输变电设备检修计划 text: 序号 电压等级 计划单位 停电设备 停电时间 送电时间.
+    Watermark/noise lines (睿泰景远, repeated dates, page furniture) are skipped
+    by the strict row pattern — anything not matching 电压/单位/设备/双日期 is dropped."""
+    out = []
+    for line in text.splitlines():
+        m = _MW_ROW.search(line)
+        if not m:
+            continue
+        idx, kv, unit, equip, d1, d2 = m.groups()
+        out.append(dict(region=unit, voltage_kv=int(kv), unit=unit, equipment=equip,
+                        outage_start=f"{d1} 00:00:00", outage_end=f"{d2} 00:00:00"))
+    return out
+
+def parse_maintenance_pdf(fileobj) -> list[dict]:
+    import pdfplumber
+    with pdfplumber.open(fileobj) as pdf:
+        text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+    return parse_maintenance_text(text)
+
+_MW_INSERT = """INSERT INTO staging.interconnector_maintenance_windows (
+    source_file, region, voltage_kv, unit, equipment, outage_start, outage_end
+) VALUES (%(source_file)s, %(region)s, %(voltage_kv)s, %(unit)s, %(equipment)s,
+    %(outage_start)s, %(outage_end)s)"""
+
+def replace_maintenance(conn, source_file: str, rows: list[dict]) -> int:
+    with conn.cursor() as cur:
+        try:
+            cur.execute("BEGIN")
+            cur.execute("DELETE FROM staging.interconnector_maintenance_windows")
+            cur.executemany(_MW_INSERT, [dict(r, source_file=source_file) for r in rows])
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
+    return len(rows)
+
+
+_MW_COL_ALIASES = {
+    "voltage_kv": ["电压等级", "电压等级(kV)", "电压等级（kV）", "电压"],
+    "unit": ["计划单位", "单位", "检修单位", "地区"],
+    "equipment": ["停电设备", "设备", "检修设备", "设备名称", "停电设备名称"],
+    "outage_start": ["停电时间", "计划停电时间", "开始时间", "开工时间"],
+    "outage_end": ["送电时间", "计划送电时间", "结束时间", "竣工时间", "复电时间"],
+}
+
+def _mw_pick_col(cols, aliases):
+    for a in aliases:
+        for c in cols:
+            if a in str(c):
+                return c
+    return None
+
+def parse_maintenance_xlsx(fileobj) -> list[dict]:
+    """Parse 发输变电设备检修计划 xlsx — column names matched loosely against
+    known aliases (北交/省公司 formats vary). Rows need unit+equipment+2 dates."""
+    df = pd.read_excel(fileobj)
+    got = {k: _mw_pick_col(df.columns, v) for k, v in _MW_COL_ALIASES.items()}
+    out = []
+    for _, r in df.iterrows():
+        unit = str(r[got["unit"]]).strip() if got["unit"] and pd.notna(r[got["unit"]]) else None
+        equip = str(r[got["equipment"]]).strip() if got["equipment"] and pd.notna(r[got["equipment"]]) else None
+        d1 = pd.to_datetime(r[got["outage_start"]], errors="coerce") if got["outage_start"] else pd.NaT
+        d2 = pd.to_datetime(r[got["outage_end"]], errors="coerce") if got["outage_end"] else pd.NaT
+        if not unit or not equip or pd.isna(d1) or pd.isna(d2):
+            continue
+        kv = None
+        if got["voltage_kv"] and pd.notna(r[got["voltage_kv"]]):
+            m = re.search(r"\d{3,4}", str(r[got["voltage_kv"]]))
+            kv = int(m.group(0)) if m else None
+        out.append(dict(region=unit, voltage_kv=kv, unit=unit, equipment=equip,
+                        outage_start=d1.strftime("%Y-%m-%d %H:%M:%S"),
+                        outage_end=d2.strftime("%Y-%m-%d %H:%M:%S")))
+    return out
+
+def get_maintenance(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""SELECT region, voltage_kv, unit, equipment, outage_start, outage_end
+                       FROM staging.interconnector_maintenance_windows
+                       ORDER BY outage_start""")
+        cols = ["region", "voltage_kv", "unit", "equipment", "outage_start", "outage_end"]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
