@@ -258,31 +258,41 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                 import pdfplumber as _pp
                 _text = ""
                 with _pp.open(str(pdf_path)) as _pdf:
+                    _scanned = len(_pdf.pages[0].chars) == 0 and len(_pdf.pages[0].images) > 0
                     for _pg in _pdf.pages:
                         _text += (_pg.extract_text() or "") + "\n"
-                from services.settlement_ingest.parser_guangxi import (
-                    is_guangxi_charge_bill, parse_guangxi_charge_text,
-                )
-                if is_guangxi_charge_bill(_text):
-                    items = parse_guangxi_charge_text(_text)
+                if _scanned:
+                    # Vision+verify path for scanned 电费计算明细 (定远 family)
+                    from services.settlement_ingest.parser_scan_charge import parse_scanned_charge_bill_vision
+                    items = parse_scanned_charge_bill_vision(str(pdf_path))
+                    if not items:
+                        results.append({"path": rel_path, "asset": asset_name, "status": "error",
+                                        "error": "scanned charge bill — vision extraction failed 电费合计 verification"})
+                        continue
                 else:
-                    from services.settlement_ingest.parser_stategrid import (
-                        is_stategrid_charge, parse_stategrid_charge,
+                    from services.settlement_ingest.parser_guangxi import (
+                        is_guangxi_charge_bill, parse_guangxi_charge_text,
                     )
-                    if is_stategrid_charge(_text):
-                        import pdfplumber as _pp2
-                        with _pp2.open(str(pdf_path)) as _pdf2:
-                            items = parse_stategrid_charge(_pdf2.pages[0].extract_text() or "")
+                    if is_guangxi_charge_bill(_text):
+                        items = parse_guangxi_charge_text(_text)
                     else:
-                        from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
-                        if is_gansu_charge_bill(_text):
-                            items = parse_gansu_charge_pdf(str(pdf_path))
+                        from services.settlement_ingest.parser_stategrid import (
+                            is_stategrid_charge, parse_stategrid_charge,
+                        )
+                        if is_stategrid_charge(_text):
+                            import pdfplumber as _pp2
+                            with _pp2.open(str(pdf_path)) as _pdf2:
+                                items = parse_stategrid_charge(_pdf2.pages[0].extract_text() or "")
                         else:
-                            items = parse_charging_cost_pdf(str(pdf_path))
-                            if not items:
-                                # Non-Mengxi charge layout — generic vision fallback
-                                from services.settlement_ingest.parser_vision import parse_charge_bill_vision
-                                items = parse_charge_bill_vision(str(pdf_path))
+                            from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
+                            if is_gansu_charge_bill(_text):
+                                items = parse_gansu_charge_pdf(str(pdf_path))
+                            else:
+                                items = parse_charging_cost_pdf(str(pdf_path))
+                                if not items:
+                                    # Non-Mengxi charge layout — generic vision fallback
+                                    from services.settlement_ingest.parser_vision import parse_charge_bill_vision
+                                    items = parse_charge_bill_vision(str(pdf_path))
             elif pdf_type == "discharge":
                 import pdfplumber as _pp
                 _text = ""
