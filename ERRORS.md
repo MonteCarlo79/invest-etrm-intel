@@ -4,6 +4,24 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## Parallel session reset a shared feature branch (twice) mid-merge — recovery via reflog (2026-09-14)
+
+**What happened:** Three+ Claude sessions share this repo's working tree. While `feat/price-forecasting` was checked out for merge, a parallel session ran `git reset --mixed 6edc6cd` TWICE (each time after another session had committed on top). Branch tip jumped back 6 commits; ~7 commits of finished, reviewed work appeared "lost", with their content sitting as staged residue in the index. The reflog also showed another session's commit (T18) committed twice, then reset away twice.
+
+**Recovery procedure that worked (nothing lost):**
+1. `git reflog -8` — every reset-away commit is still in the object store. Find the LATEST good commit whose parent chain includes all your work (here: `500c377`, whose parent was the fix-wave tip `2d2f624` — a linear continuation, better than cherry-picking).
+2. `git stash push -u` FIRST (the unstaged WIP of other sessions must not be destroyed by the hard reset — terraform files + a CLAUDE.md deploy hunk).
+3. `git reset --hard <latest-good-commit>`.
+4. Restore foreign WIP selectively: `git checkout stash@{0} -- <paths>` for files whose base is unchanged; re-apply single-file hunks manually (Edit tool) when the stash's base predates content now in history (a wholesale checkout would have reverted a legitimate version bump).
+5. Verify `git stash show --stat` holds only residue already in history → `git stash drop`.
+6. Re-run the test suite, then merge.
+
+**Merge-time trap that followed:** `git checkout main` and `git merge` both refused on OTHER sessions' uncommitted files (CLAUDE.md, terraform). Correct move: stash those files only, merge, `git stash pop` — their WIP survives, merge completes.
+
+**Prevention:** on a shared OneDrive working tree, any session doing `git reset` on a branch it didn't create destroys other sessions' committed work. Before ANY reset on a shared tree: `git log --oneline -5` and confirm every commit is yours. If your session "lost" commits — never re-commit the same work blindly; check `git reflog` first (the T18 work ended up committed 3× in 3 places for exactly this reason).
+
+---
+
 ## Hermes build blocked on GitHub payloads (gh CLI, agent-reach) from China network (2026-09-13)
 
 **What didn't work:**
