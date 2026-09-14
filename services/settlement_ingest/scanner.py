@@ -318,12 +318,24 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                                 items.append(sides["售电侧"])
                             if "购电侧" in sides:
                                 items.append(sides["购电侧"])
-                        elif is_local_discharge(_text):
-                            import pdfplumber as _pp2
-                            with _pp2.open(str(pdf_path)) as _pdf2:
-                                items = parse_local_discharge(_pdf2.pages[0].extract_text() or "")
                         else:
-                            items = parse_discharge_settlement_pdf(str(pdf_path))
+                            from services.settlement_ingest.parser_stategrid import (
+                                is_ah_discharge, is_ah_sdtc, parse_ah_discharge, parse_ah_sdtc,
+                            )
+                            if is_ah_sdtc(_text):
+                                sides = parse_ah_sdtc(_text)
+                                items = [s for s in (sides.get("售电侧"), sides.get("购电侧")) if s]
+                            elif is_ah_discharge(_text):
+                                import pdfplumber as _pp2
+                                with _pp2.open(str(pdf_path)) as _pdf2:
+                                    _ah_text = "".join((pg.extract_text() or "") + "\n" for pg in _pdf2.pages)
+                                items = parse_ah_discharge(_ah_text)
+                            elif is_local_discharge(_text):
+                                import pdfplumber as _pp2
+                                with _pp2.open(str(pdf_path)) as _pdf2:
+                                    items = parse_local_discharge(_pdf2.pages[0].extract_text() or "")
+                            else:
+                                items = parse_discharge_settlement_pdf(str(pdf_path))
             elif pdf_type == "voucher":
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
                                 "error": "结算凭证 (trading-center voucher) — duplicates 结算单 data, not ingested"})

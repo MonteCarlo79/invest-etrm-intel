@@ -367,3 +367,140 @@ def parse_sdtc_settlement(text: str) -> dict[str, dict[str, Any]]:
                          "price_cny_kwh": round(avg / 1000.0, 6) if avg is not None else None,
                          "amount_cny": amt, "notes": "充电结算: 交易中心购电侧合计"}
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 安徽 family: 国网安徽 发电侧上网电费账单 + 安徽电力交易中心(统推)交易结算单
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 安徽 电费账单 fee labels → category (value lines live either on the label
+# line itself or on the following 山黄储能（发电侧）现货 line)
+_AH_FEE_CAT = {
+    "两个细则费用": "frequency",
+    "调平电量": "discharge_energy",
+    "华东备用市场": "frequency",
+    "华东调峰辅助服务": "frequency",
+    "辅助服务交易": "frequency",
+    "市场平衡费用": "other",
+    "市场考核类费用": "penalty",
+    "市场补偿类费用": "other",
+    "市场调节类费用": "other",
+    "市场运营费用": "other",
+    "容量费用": "capacity_compensation",
+    "容量电费": "capacity_compensation",
+    "偏差费用": "penalty",
+    "偏差考核及返还费用": "penalty",
+    "机制电费": "other",
+    "其他费用": "other",
+    "退补及清算": "rebate",
+    "迎峰度夏（冬）发电考核": "penalty",
+    "独立储能充放电": "other",
+    "省间替代": "discharge_energy",
+    "省间现货": "discharge_energy",
+    "省间绿电交易": "discharge_energy",
+    "新能源消纳互济交易": "discharge_energy",
+    "优先发电电量/新能源保障": "discharge_energy",
+    "调试电量": "discharge_energy",
+    "中长期交易": "discharge_energy",
+    "常规中长期": "discharge_energy",
+    "省内绿电交易": "discharge_energy",
+}
+_AH_ENERGY_ROWS = {"日前交易", "实时交易"}
+
+
+def is_ah_discharge(text: str) -> bool:
+    """国网安徽 发电侧上网电费账单 (电能量交易电费 + 山黄储能（发电侧）现货 rows)."""
+    return "电能量交易电费" in text and "发电侧）现货" in text and "本期电费明细" in text
+
+
+def parse_ah_discharge(text: str) -> list[dict[str, Any]]:
+    """Parse 国网安徽 发电侧上网电费账单 (all pages).
+
+    Drops 电能量交易电费 (energy total — decomposes into 日前/实时交易) and
+    合计; keeps 日前交易/实时交易 (discharge_energy, vol+price) and the fee
+    rows. Zero hierarchy rows skipped. Verify: sum(items) == printed 合计.
+    """
+    items: list[dict[str, Any]] = []
+    lines = [l.strip() for l in text.split("\n")]
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("备注") or "供电公司" in line and "盖章" in line:
+            break
+        # energy trade rows: "(1)日前交易" then "山黄储能（发电侧）现货 VOL PRICE AMT"
+        stripped = re.sub(r"^[（(]?\d+[）)]?\s*", "", line)
+        if stripped in _AH_ENERGY_ROWS or stripped.rstrip("交易") in _AH_ENERGY_ROWS:
+            if i + 1 < len(lines) and "现货" in lines[i + 1]:
+                nums = re.findall(_NUM, lines[i + 1])
+                if len(nums) >= 3:
+                    label = "日前交易" if "日前" in stripped else "实时交易"
+                    items.append({
+                        "category": "discharge_energy",
+                        "volume_mwh": float(nums[0]) / 1000.0,
+                        "price_cny_kwh": float(nums[1]),
+                        "amount_cny": float(nums[2]),
+                        "notes": f"放电结算: {label}",
+                    })
+                    i += 2
+                    continue
+        # fee row with amount on its own line: "两个细则费用 205585.75"
+        m = re.match(rf"^([\D]+?)\s+({_NUM})\s*$", line)
+        if m:
+            label, amt_s = m.group(1).strip(), m.group(2)
+            label = re.sub(r"^[（(][一二三四五六七八九十]+[）)]\s*", "", label)
+            if label in _AH_FEE_CAT:
+                amt = float(amt_s)
+                if amt != 0:
+                    items.append({
+                        "category": _AH_FEE_CAT[label],
+                        "volume_mwh": None, "price_cny_kwh": None,
+                        "amount_cny": amt, "notes": f"放电结算: {label}",
+                    })
+        i += 1
+    return items
+
+
+def parse_ah_discharge_total(text: str) -> float | None:
+    """The bill's printed total (合计 ￥X, else 结算金额 header)."""
+    m = re.search(rf"^合计\s*￥?\s*({_NUM})\s*$", text, re.MULTILINE)
+    if m:
+        return float(m.group(1))
+    m = re.search(rf"结算金额\s*({_NUM})\s*元", text)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def is_ah_sdtc(text: str) -> bool:
+    """安徽电力交易中心 (统推) 新型经营主体交易结算单."""
+    return ("电力交易中心" in text and "交易结算单" in text
+            and "购电侧" in text and "售电侧" in text and "新型经营主体" in text)
+
+
+def parse_ah_sdtc(text: str) -> dict[str, dict[str, Any]]:
+    """Parse 安徽电力交易中心(统推)交易结算单 → {"售电侧": item, "购电侧": item}.
+
+    售电侧: volume from the 本月（售电侧）summary row; 结算电费 = the number
+    between the two summary rows (also the 大写金额 value — the doc's headline).
+    购电侧: detail-page 合计 (printed positive cost → stored negative).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    m_vol = re.search(r"本月（售电侧）\s+([\d,]+\.\d+)", text)
+    # the 结算电费 number sits between the 购电侧 row and the 售电侧 row
+    m_amt = re.search(r"本月（购电侧）[^\n]*\n([\d,]{4,}\.\d{2})\s*\n本月（售电侧）", text)
+    if m_vol and m_amt:
+        vol = float(m_vol.group(1).replace(",", ""))
+        amt = float(m_amt.group(1).replace(",", ""))
+        out["售电侧"] = {"category": "discharge_energy", "volume_mwh": vol,
+                         "price_cny_kwh": round(amt / vol / 1000.0, 6) if vol else None,
+                         "amount_cny": amt, "notes": "放电结算: 交易中心售电侧合计"}
+    m2 = re.search(r"本月（购电侧）\s+([\d,]+\.\d+)", text)
+    vol_b = float(m2.group(1).replace(",", "")) if m2 else None
+    m3 = re.search(r"^合计\s+([\d,]+\.\d+)\s*$", text, re.MULTILINE)
+    if m3:
+        amt_b = float(m3.group(1).replace(",", ""))
+        out["购电侧"] = {"category": "charge_energy", "volume_mwh": vol_b,
+                         "price_cny_kwh": round(amt_b / vol_b / 1000.0, 6) if vol_b else None,
+                         "amount_cny": -amt_b,  # printed positive cost → stored negative
+                         "notes": "充电结算: 交易中心购电侧合计"}
+    return out

@@ -324,16 +324,31 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                             if "购电侧" in sides:
                                 items.append(sides["购电侧"])
                             st.info("山东电力交易中心交易结算单 detected — parsed deterministically (no vision).")
-                        elif is_local_discharge(bill_text):
-                            with pdfplumber.open(tmp_path) as _pdf:
-                                p1_text = _pdf.pages[0].extract_text() or ""
-                            items = parse_local_discharge(p1_text)
-                            st.info("山东省地方电厂市场化结算单 detected — parsed deterministically (no vision).")
                         else:
-                            from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
-                            if is_gansu_bill(bill_text):
-                                items = parse_gansu_discharge_text(bill_text)
-                                st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
+                            from services.settlement_ingest.parser_stategrid import (
+                                is_ah_discharge, is_ah_sdtc, parse_ah_discharge, parse_ah_sdtc,
+                            )
+                            if is_ah_sdtc(bill_text):
+                                # 安徽统推: 售电侧 and 电费账单 are DIFFERENT settlements
+                                # (user decision 2026-09-14: keep both)
+                                sides = parse_ah_sdtc(bill_text)
+                                items = [s for s in (sides.get("售电侧"), sides.get("购电侧")) if s]
+                                st.info("安徽电力交易中心(统推)结算单 detected — parsed deterministically (no vision).")
+                            elif is_ah_discharge(bill_text):
+                                with pdfplumber.open(tmp_path) as _pdf:
+                                    ah_text = "".join((pg.extract_text() or "") + "\n" for pg in _pdf.pages)
+                                items = parse_ah_discharge(ah_text)
+                                st.info("国网安徽发电侧电费账单 detected — parsed deterministically (no vision).")
+                            elif is_local_discharge(bill_text):
+                                with pdfplumber.open(tmp_path) as _pdf:
+                                    p1_text = _pdf.pages[0].extract_text() or ""
+                                items = parse_local_discharge(p1_text)
+                                st.info("山东省地方电厂市场化结算单 detected — parsed deterministically (no vision).")
+                            else:
+                                from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
+                                if is_gansu_bill(bill_text):
+                                    items = parse_gansu_discharge_text(bill_text)
+                                    st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
             if items is None:
                 if is_scanned:
                     st.info("Detected scanned PDF — using AI Vision to extract data...")
