@@ -1776,6 +1776,14 @@ resource "aws_ecs_service" "gb_market" {
   desired_count   = var.desired_count_gb_market
   launch_type     = "FARGATE"
 
+  # The live GB task-def family (bess-gb-market) is hand-managed via jq-swap
+  # deploys — the gb_market task-definition resource above points at the DEAD
+  # bess-platform-gb-market family. Without this guard, every apply reverted
+  # the live service to the dead family (2026-09-14 incident: apply flipped
+  # td:29/v106 -> bess-platform-gb-market:107/v72, resurrecting nightly Modo
+  # magic-link emails and downgrading the app two months).
+  lifecycle { ignore_changes = [task_definition] }
+
   network_configuration {
     subnets          = var.private_subnet_ids
     security_groups  = [aws_security_group.ecs_tasks.id]
