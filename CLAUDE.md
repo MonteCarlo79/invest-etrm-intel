@@ -145,7 +145,7 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v45 (td:144) |
-| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v64 (td:97) |
+| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v65 (td:98) |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v22 (td:33) |
 | Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v13 (td:70) |
 | Deal Structurer (Pillar 5) | Deal Structurer | `bess-platform-deal-structurer` | `/deal-structurer/*` | 8522 | v20 (td:24). Image deploys bypass terraform (td has `ignore_changes=[container_definitions]`): jq-swap image → register-task-definition → update-service |
