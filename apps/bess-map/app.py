@@ -272,6 +272,9 @@ _T: dict[str, dict[str, str]] = {
         "pca_hour":                "Hour of day",
         "pca_loading_y":           "Normalised loading",
         "pca_cumvar":              "Cumulative",
+        # price forecast
+        "tab_price_forecast":      "Price Forecast",
+        "pf_caption":              "Merit-order stack + PCA shape hybrid — structural level, statistical shape, D-1 horizon.",
         # bess demand
         "tab_demand":              "BESS Demand",
         "demand_title":            "BESS Demand Analysis",
@@ -524,6 +527,9 @@ _T: dict[str, dict[str, str]] = {
         "pca_hour":                "小时",
         "pca_loading_y":           "归一化载荷",
         "pca_cumvar":              "累计",
+        # price forecast
+        "tab_price_forecast":      "价格预测",
+        "pf_caption":              " merit-order 燃料成本栈 + PCA 形状混合预测 — 结构定水平，统计定形状，D-1 时域。",
         # bess demand
         "tab_demand":              "储能需求",
         "demand_title":            "储能需求分析",
@@ -1488,8 +1494,8 @@ focused exclusively on China's provincial electricity spot markets.
 """
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_ranking, tab_geo, tab_pca, tab_demand, tab_sysopfee, tab_aux, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
-    _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_demand"),
+tab_ranking, tab_geo, tab_pca, tab_pf, tab_demand, tab_sysopfee, tab_aux, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
+    _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_price_forecast"), _t("tab_demand"),
     _t("tab_sysopfee"), _t("tab_aux"), _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
 ])
 
@@ -2226,6 +2232,21 @@ with tab_pca:
                 ve_rows[prov] = {f"PC{i+1}": f"{res['variance_explained'][i]:.1f}%"
                                  for i in range(n_show)}
             st.dataframe(pd.DataFrame(ve_rows).T, use_container_width=True)
+
+# ── Tab: Price Forecast ───────────────────────────────────────────────────────
+with tab_pf:
+    st.subheader(_t("tab_price_forecast"))
+    st.caption(_t("pf_caption"))
+    import price_forecast_tab as _pft  # sibling module — same mechanism as irr_helpers
+    _provs_pf = load_province_list(_ENG_KEY)
+    _sec = st.radio("Section", ["① Merit-Order", "② PCA", "③ Forecast & Backtest"],
+                    horizontal=True, key="pf_section")
+    if _sec.startswith("①"):
+        _pft.render_merit_order_explorer(st, _eng(), _provs_pf)
+    elif _sec.startswith("②"):
+        _pft.render_pca_section(st, _eng(), _provs_pf)
+    else:
+        _pft.render_forecast_section(st, _eng(), _provs_pf)
 
 # ── Tab 4: BESS Demand Analysis ───────────────────────────────────────────────
 with tab_demand:
