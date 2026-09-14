@@ -71,6 +71,7 @@ from services.hermes.daili_etl import upsert_daili_file as _upsert_daili_file, i
 from services.exchange_reports.ingestor import ingest_report as _ingest_exchange_report, is_exchange_report
 from services.hermes.daili_screener import screen_daili as _screen_daili
 from services.hermes.capcomp_screener import screen_capcomp as _screen_capcomp, get_scan_status as _get_capcomp_status
+from services.hermes.fuel_fleet_screener import screen_fuel_fleet as _screen_fuel_fleet
 from services.hermes.capcomp_etl import resolve_conflict as _resolve_conflict
 from services.hermes.capcomp_manual_etl import (
     extract_capcomp_from_text as _capcomp_from_text,
@@ -987,6 +988,19 @@ def create_app() -> FastAPI:
             _screen_capcomp,
             "cron",
             day=5, hour=11, minute=30,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
+        # 燃料+装机 screener: 5th of each month, 12:30 UTC (20:30 Beijing) — after capcomp
+        scheduler.add_job(
+            _screen_fuel_fleet,
+            "cron",
+            day=5, hour=12, minute=30,
             kwargs={
                 "pg_url":          _mengxi_pg_url,
                 "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
@@ -3830,6 +3844,43 @@ Daily — Province BESS ranking report"""
 
         import threading as _threading
         _threading.Thread(target=_run_capcomp, daemon=True).start()
+        return True
+
+    # ── /fuelfleet command — manually trigger 燃料+装机 screener ─────────────
+    if _re.match(r'^/?(?:fuelfleet|燃料扫描)$', msg.text.strip(), _re.I):
+        def _ff_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("fuelfleet reply send failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _pg:
+            _ff_reply("⚠️ 数据库未配置，无法运行燃料装机扫描。")
+            return True
+        if not _api_key:
+            _ff_reply("⚠️ API密钥未配置，无法运行燃料装机扫描。")
+            return True
+        _ff_reply("⛽ 正在扫描燃料与装机数据…")
+
+        def _run_fuelfleet():
+            try:
+                _screen_fuel_fleet(
+                    pg_url=_pg,
+                    api_key=_api_key,
+                    feishu=feishu,
+                    owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", msg.sender_id),
+                )
+            except Exception as _e:
+                logger.error("Manual fuel/fleet screener failed: %s", _e)
+                _ff_reply(f"⚠️ 燃料装机扫描失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_fuelfleet, daemon=True).start()
         return True
 
     # ── /datacheck / /巡视 command — trigger data patrol ─────────────────────

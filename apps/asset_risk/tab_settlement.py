@@ -195,37 +195,42 @@ def _process_one_upload(f, book_id, month_mode, manual_month, overwrite, engine)
 
     # Content-hash dedup: identical bytes already at this book+month → skip.
     # Catches renamed re-uploads (filename guards can't see those).
+    # Skipped when Overwrite is on — the user explicitly asked to reprocess.
     fhash = _content_sha256(f.getvalue())
-    if _already_ingested(engine, book_id, settlement_month, fhash):
+    if not overwrite and _already_ingested(engine, book_id, settlement_month, fhash):
         st.warning(f"**{f.name}**: identical content already ingested for {settlement_month} — skipped.")
         return
 
-    # Overwrite: delete existing settlement for this book+month+filename pattern
-    if overwrite:
-        with engine.begin() as conn:
-            # Delete items first (FK), then settlement record
-            conn.execute(text("""
-                DELETE FROM marketdata.rm_settlement_items
-                WHERE settlement_id IN (
-                    SELECT id FROM marketdata.rm_settlements
-                    WHERE book_id = :bid AND settlement_month = :month
-                    AND file_name = :fname
-                )
-            """), {"bid": book_id, "month": settlement_month, "fname": f.name})
-            conn.execute(text("""
-                DELETE FROM marketdata.rm_settlements
-                WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
-            """), {"bid": book_id, "month": settlement_month, "fname": f.name})
-
     file_type = f.name.split(".")[-1].lower()
     if file_type == "pdf":
-        _process_pdf(f, book_id, settlement_month, engine, fhash)
+        _process_pdf(f, book_id, settlement_month, engine, fhash, overwrite=overwrite)
     else:
-        _process_excel(f, book_id, settlement_month, engine, fhash)
+        _process_excel(f, book_id, settlement_month, engine, fhash, overwrite=overwrite)
 
 
 
-def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None):
+def _delete_book_month_file(conn, book_id: int, settlement_month, file_name: str):
+    """Delete settlement record(s) + items for book+month+file_name (overwrite path).
+
+    Only called AFTER a successful parse — a refused/failed upload must never
+    destroy existing data (observed 2026-09-14: overwrite checked + scanned
+    charge bill refused would have deleted the hand-ingested records).
+    """
+    conn.execute(text("""
+        DELETE FROM marketdata.rm_settlement_items
+        WHERE settlement_id IN (
+            SELECT id FROM marketdata.rm_settlements
+            WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
+        )
+    """), {"bid": book_id, "month": settlement_month, "fname": file_name})
+    conn.execute(text("""
+        DELETE FROM marketdata.rm_settlements
+        WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
+    """), {"bid": book_id, "month": settlement_month, "fname": file_name})
+
+
+def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None,
+                 overwrite: bool = False):
     """Process uploaded PDF settlement.
 
     Routing: filename semantics (上/下网) decide the parser — never send a
@@ -430,6 +435,8 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
         return
 
     with engine.begin() as conn:
+        if overwrite:
+            _delete_book_month_file(conn, book_id, settlement_month, uploaded.name)
         result = conn.execute(text("""
             INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
             VALUES (:bid, :month, :fname, 'pdf', 'processed', :rd)
@@ -454,7 +461,8 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
     st.success(f"Processed {len(items)} settlement items from PDF.")
 
 
-def _process_excel(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None):
+def _process_excel(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None,
+                   overwrite: bool = False):
     """Process uploaded Excel settlement file."""
     import io
     from libs.settlement.parser import detect_format, parse_trade_capture, parse_capacity_compensation
@@ -484,6 +492,8 @@ def _process_excel(uploaded, book_id: int, settlement_month, engine, file_hash: 
         return
 
     with engine.begin() as conn:
+        if overwrite:
+            _delete_book_month_file(conn, book_id, settlement_month, uploaded.name)
         result = conn.execute(text("""
             INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
             VALUES (:bid, :month, :fname, :ftype, 'processed', :rd)

@@ -68,6 +68,8 @@ for _env in [_REPO / "config" / ".env", _REPO / ".env"]:
     if _env.exists():
         load_dotenv(_env)
 
+from services.bess_map.price_lab.pca_shapes import compute_pca
+
 st.set_page_config(page_title="BESS Asset Map", layout="wide", page_icon="🔋")
 
 # ── auth ──────────────────────────────────────────────────────────────────────
@@ -270,6 +272,9 @@ _T: dict[str, dict[str, str]] = {
         "pca_hour":                "Hour of day",
         "pca_loading_y":           "Normalised loading",
         "pca_cumvar":              "Cumulative",
+        # price forecast
+        "tab_price_forecast":      "Price Forecast",
+        "pf_caption":              "Merit-order stack + PCA shape hybrid — structural level, statistical shape, D-1 horizon.",
         # bess demand
         "tab_demand":              "BESS Demand",
         "demand_title":            "BESS Demand Analysis",
@@ -522,6 +527,9 @@ _T: dict[str, dict[str, str]] = {
         "pca_hour":                "小时",
         "pca_loading_y":           "归一化载荷",
         "pca_cumvar":              "累计",
+        # price forecast
+        "tab_price_forecast":      "价格预测",
+        "pf_caption":              "merit-order 燃料成本栈 + PCA 形状混合预测 — 结构定水平，统计定形状，D-1 时域。",
         # bess demand
         "tab_demand":              "储能需求",
         "demand_title":            "储能需求分析",
@@ -1048,54 +1056,6 @@ def load_pca_fund_daily(_eng_key, province: str, start: str, end: str) -> pd.Dat
         return pd.DataFrame()
 
 
-def compute_pca(price_matrix: pd.DataFrame, n_pcs: int = 4) -> dict:
-    """
-    PCA on a (days × 24) price matrix using covariance matrix eigendecomposition.
-    Loadings are normalised to sum=24 (mean=1.0) — same convention as reference model.
-    Returns dict with keys: loadings, eigenvalues, variance_explained, mean_profile,
-                            n_days, scores (n_days × n_pcs, raw projection), dates.
-    """
-    X = price_matrix.values.astype(float)
-    mean_profile = X.mean(axis=0)          # shape (24,)
-    X_centered = X - mean_profile          # mean-centre each day
-
-    cov_mat = np.cov(X_centered.T)         # 24×24 covariance matrix
-    # eigh for symmetric real matrix — guaranteed real eigenvalues, stable
-    eig_vals, eig_vecs = np.linalg.eigh(cov_mat)
-
-    # Sort descending by eigenvalue magnitude
-    order = np.argsort(np.abs(eig_vals))[::-1]
-    eig_vals = eig_vals[order]
-    eig_vecs = eig_vecs[:, order]          # columns are eigenvectors
-
-    total_var = eig_vals.sum()
-    variance_explained = (eig_vals / total_var * 100) if total_var > 0 else eig_vals * 0
-
-    n_keep = min(n_pcs, eig_vecs.shape[1])
-    loadings = []
-    for i in range(n_keep):
-        vec = eig_vecs[:, i].copy()
-        s = vec.sum()
-        if abs(s) > 1e-10:
-            vec = vec / s * 24.0           # normalise: mean=1, sum=24
-        else:
-            vec = vec / (np.abs(vec).sum() + 1e-10) * 24.0
-        loadings.append(vec)
-
-    # Daily PC scores: project mean-centred price vectors onto raw eigenvectors
-    scores = X_centered @ eig_vecs[:, :n_keep]  # shape (n_days, n_keep)
-
-    return {
-        "loadings": loadings,              # list of n_pcs arrays, each shape (24,)
-        "eigenvalues": eig_vals,
-        "variance_explained": variance_explained,
-        "mean_profile": mean_profile,
-        "n_days": len(X),
-        "scores": scores,                  # ndarray (n_days, n_pcs)
-        "dates": list(price_matrix.index), # trading dates aligned with scores
-    }
-
-
 # ── BESS Demand: Mandatory co-location ratios (配储比例) ──────────────────────
 # Source: provincial energy bureau development plans, grid-connection rules, and
 #         operator ancillary-service documents (confirmed via policy research).
@@ -1534,8 +1494,8 @@ focused exclusively on China's provincial electricity spot markets.
 """
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_ranking, tab_geo, tab_pca, tab_demand, tab_sysopfee, tab_aux, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
-    _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_demand"),
+tab_ranking, tab_geo, tab_pca, tab_pf, tab_demand, tab_sysopfee, tab_aux, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
+    _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_price_forecast"), _t("tab_demand"),
     _t("tab_sysopfee"), _t("tab_aux"), _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
 ])
 
@@ -2272,6 +2232,21 @@ with tab_pca:
                 ve_rows[prov] = {f"PC{i+1}": f"{res['variance_explained'][i]:.1f}%"
                                  for i in range(n_show)}
             st.dataframe(pd.DataFrame(ve_rows).T, use_container_width=True)
+
+# ── Tab: Price Forecast ───────────────────────────────────────────────────────
+with tab_pf:
+    st.subheader(_t("tab_price_forecast"))
+    st.caption(_t("pf_caption"))
+    import price_forecast_tab as _pft  # sibling module — same mechanism as irr_helpers
+    _provs_pf = load_province_list(_ENG_KEY)
+    _sec = st.radio("Section", ["① Merit-Order", "② PCA", "③ Forecast & Backtest"],
+                    horizontal=True, key="pf_section")
+    if _sec.startswith("①"):
+        _pft.render_merit_order_explorer(st, _eng(), _provs_pf)
+    elif _sec.startswith("②"):
+        _pft.render_pca_section(st, _eng(), _provs_pf)
+    else:
+        _pft.render_forecast_section(st, _eng(), _provs_pf)
 
 # ── Tab 4: BESS Demand Analysis ───────────────────────────────────────────────
 with tab_demand:
@@ -3866,6 +3841,54 @@ with tab_mgmt:
                         st.success(f"{dur}h pipeline completed.")
                 load_coverage.clear()
                 st.cache_data.clear()
+
+    # ── Fuel & fleet draft review (Hermes extractions → price forecast inputs) ──
+    st.divider()
+    from price_forecast_tab import (
+        list_pending_fuel_fleet as _list_pending_ff,
+        confirm_fuel_fleet as _confirm_ff,
+        dismiss_fuel_fleet as _dismiss_ff,
+    )
+    try:
+        _ff_pending = _list_pending_ff(_eng())
+    except Exception:
+        _ff_pending = pd.DataFrame()
+
+    with st.expander(f"燃料与装机数据确认 ({len(_ff_pending)} 条待审)", expanded=False):
+        if _ff_pending.empty:
+            st.success("✅ 无待确认的燃料/装机数据。")
+        else:
+            st.caption(
+                "Hermes 自动提取的煤价/气价/装机分段草稿（draft / conflict）。"
+                "确认后供价格预测模型使用；忽略则标记为 superseded。"
+            )
+            _ff_disp = _ff_pending.copy()
+            _ff_disp["source"] = _ff_disp["source"].apply(lambda s: str(s)[:60] if s else "")
+            _ff_disp["notes"] = _ff_disp["notes"].fillna("")
+            st.dataframe(_ff_disp, use_container_width=True, hide_index=True)
+
+            for _, _ff_row in _ff_pending.iterrows():
+                _ff_id = int(_ff_row["id"])
+                _rc1, _rc2, _rc3, _rc4 = st.columns([3, 3, 1, 1])
+                with _rc1:
+                    st.write(f"**{_ff_row['province']}** — {_ff_row['effective_date']}")
+                with _rc2:
+                    st.caption(
+                        f"煤 {_ff_row['coal_price_yuan_t']} ¥/t · "
+                        f"气 {_ff_row['gas_price_yuan_m3']} ¥/m³ · {_ff_row['status']}"
+                    )
+                with _rc3:
+                    if st.button("确认", key=f"ff_confirm_{_ff_id}"):
+                        _confirm_ff(_eng(), _ff_id)
+                        st.success(f"已确认 #{_ff_id}")
+                        st.cache_data.clear()
+                        st.rerun()
+                with _rc4:
+                    if st.button("忽略", key=f"ff_dismiss_{_ff_id}"):
+                        _dismiss_ff(_eng(), _ff_id)
+                        st.success(f"已忽略 #{_ff_id}")
+                        st.cache_data.clear()
+                        st.rerun()
 
     # ── Data Operations Log ──────────────────────────────────────────────────
     st.divider()
