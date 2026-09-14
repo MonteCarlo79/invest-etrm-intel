@@ -219,3 +219,40 @@ class TestMechShare:
     def test_mech_seed_values(self):
         by = {r["province"]: r["share_pct"] for r in ingest.MECH_SHARE_SEED}
         assert by["新疆"] == 62.5 and by["甘肃"] == 8.0 and by["河北"] == 80.0
+
+
+class TestMaintenancePlan:
+    SAMPLE = """年度发输变电设备检修计划
+序号 电压等级(kV) 计划单位 停电设备 停电时间 送电时间
+#1 220 唐山 古马220kV#4母线 2025-03-26 00:00 2025-03-28 00:00
+#5 220 唐山 韩山一线 2025-03-22 00:00 2025-03-23 00:00
+#8 220 唐热、唐山 唐河一线 2025-03-22 00:00 2025-04-24 00:00
+#23 500 陡河、唐山 陡常一线 2025-04-30 00:00 2025-06-05 00:00
+#31 1000 超高压 庆东直流极Ⅰ 2026-05-10 00:00 2026-05-24 00:00
+噪声水印行 睿泰景远 日18:6:38 月13年8
+"""
+
+    def test_parse_maintenance_text_extracts_outage_windows(self):
+        rows = ingest.parse_maintenance_text(self.SAMPLE)
+        assert len(rows) == 5
+        r = rows[1]
+        assert r["voltage_kv"] == 220 and r["unit"] == "唐山" and r["equipment"] == "韩山一线"
+        assert str(r["outage_start"]) == "2025-03-22 00:00:00" and str(r["outage_end"]) == "2025-03-23 00:00:00"
+
+    def test_parse_skips_noise_and_dc_line_captured(self):
+        rows = ingest.parse_maintenance_text(self.SAMPLE)
+        equips = [r["equipment"] for r in rows]
+        assert "庆东直流极Ⅰ" in equips
+        assert not any("睿" in e or "水印" in e for e in equips)
+
+    def test_replace_maintenance_txn(self):
+        conn = _Conn()
+        rows = ingest.parse_maintenance_text(self.SAMPLE)
+        n = ingest.replace_maintenance(conn, "jibei-2025.pdf:12345", rows)
+        assert n == 5
+        sqls = [c[0] for c in conn.cur.calls]
+        assert "BEGIN" in sqls[0]
+        assert "DELETE FROM staging.interconnector_maintenance_windows" in sqls[1]
+
+    def test_ddl_has_maintenance_table(self):
+        assert any("interconnector_maintenance_windows" in stmt for stmt in ingest.DDL)

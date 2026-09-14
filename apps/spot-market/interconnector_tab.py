@@ -150,6 +150,11 @@ def _agreements(_conn) -> list[dict]:
     return rows
 
 
+@st.cache_data(ttl=300)
+def _maintenance(_conn) -> list[dict]:
+    return ic_ingest.get_maintenance(_conn)
+
+
 def _clear_ic_caches() -> None:
     # Targeted clear — st.cache_data.clear() would nuke every price cache for
     # all sessions on what is a small staging-table change.
@@ -160,6 +165,7 @@ def _clear_ic_caches() -> None:
     _contract_prices.clear()
     _spot_monthly_avg.clear()
     _agreements.clear()
+    _maintenance.clear()
 
 
 def _upload_section(conn) -> None:
@@ -188,6 +194,19 @@ def _upload_section(conn) -> None:
             n = ic_ingest.upsert_channels(conn, get_channels())
             _clear_ic_caches()
             st.success(f"通道注册表已重建：{n} 回。")
+        f3 = st.file_uploader("检修计划 (发输变电设备检修计划, PDF/xlsx)", type=["pdf", "xlsx"],
+                              key="ic_up_mw")
+        if f3 and st.button("导入检修计划", key="ic_btn_mw"):
+            fp = ic_ingest.file_fingerprint(f3.name, f3.size)
+            if st.session_state.get("ic_fp_mw") == fp:
+                st.info("同一文件已导入过（指纹一致），跳过。")
+            else:
+                rows = (ic_ingest.parse_maintenance_pdf(f3) if f3.name.lower().endswith(".pdf")
+                        else ic_ingest.parse_maintenance_xlsx(f3))
+                n = ic_ingest.replace_maintenance(conn, fp, rows)
+                st.session_state["ic_fp_mw"] = fp
+                _clear_ic_caches()
+                st.success(f"已导入 {n} 条检修窗口（全量替换）。")
 
 
 def _line_card(m: dict) -> None:
@@ -393,6 +412,44 @@ def render(conn) -> None:
             use_container_width=True, hide_index=True)
     else:
         st.info(f"快照 {_snap_label_bm} 无数据 — 基准表需 2025 跨区组织数据。")
+
+    st.subheader("检修计划与通道降额 (Maintenance Derating)")
+    mw = _maintenance(conn)
+    if not mw:
+        st.info("未导入检修计划 — 在上方数据上传区导入发输变电设备检修计划 (PDF/xlsx)。")
+    else:
+        # equipment → channel matching: channel name or converter-station name in equipment text
+        def _mw_channel(equip: str):
+            hits = [c["name"] for c in channels
+                    if c["name"] in equip or c["send"] in equip or c["recv"] in equip]
+            return "、".join(hits) if hits else None
+        year_end = date(date.today().year, 12, 31)
+        derate: dict[str, float] = {}
+        for w in mw:
+            ch = _mw_channel(w["equipment"])
+            if not ch:
+                continue
+            s = max(pd.to_datetime(w["outage_start"]).date(), date.today())
+            e = min(pd.to_datetime(w["outage_end"]).date(), year_end)
+            if e >= s:
+                for name in ch.split("、"):
+                    derate[name] = derate.get(name, 0.0) + (e - s).days * 24
+        if derate:
+            gw_by_name = {c["name"]: c["gw"] for c in channels}
+            st.caption("命中通道的检修窗口 — 剩余能力按降额修正（剩余能力 − 降额GWh = 检修重叠小时 × 容量）。")
+            st.dataframe(pd.DataFrame([{
+                "通道": n, "容量GW": gw_by_name.get(n),
+                "检修重叠h": f"{h:,.0f}", "降额GWh": f"{h * gw_by_name.get(n, 0):,.1f}"}
+                for n, h in sorted(derate.items(), key=lambda x: -x[1])]),
+                use_container_width=True, hide_index=True)
+        else:
+            st.caption("检修窗口未命中已注册通道（多为区域交流设备）。")
+        with st.expander(f"全部检修窗口 ({len(mw)} 条)", expanded=False):
+            st.dataframe(pd.DataFrame([{
+                "单位": w["unit"], "电压kV": w["voltage_kv"], "设备": w["equipment"],
+                "停电": str(w["outage_start"])[:10], "送电": str(w["outage_end"])[:10],
+                "命中通道": _mw_channel(w["equipment"]) or "—"} for w in mw]),
+                use_container_width=True, hide_index=True)
 
     st.subheader("省间现货日报趋势 (A5)")
     dr = st.date_input("日期范围", value=(date(2026, 1, 1), date.today()), key="ic_a5_range")
