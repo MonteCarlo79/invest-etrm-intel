@@ -239,17 +239,17 @@ def run_hybrid_forecast(eng, province, target_date, train_days=365):
     fund_target = fund_train[fund_train.index.date == target_date]
     if fund_target.empty:
         return pd.DataFrame()
-    renewable_mw = float(fund_target["renewable_total_d1_mw"].mean())
-    stack = build_stack(ff["fleet_segments"], coal, gas, imports, renewable_mw)
+    # residual demand below is already renewable-net, so the stack gets NO
+    # renewable block (a zero-cost block would double-count it)
+    stack = build_stack(ff["fleet_segments"], coal, gas, imports)
     total_cap = sum(s["capacity_mw"] for s in stack)
 
     hist = fund_train[fund_train.index < fund_target.index[0]].tail(90 * 24)
     if not hist.empty:
-        vc_hist = np.array([marginal_price(build_stack(ff["fleet_segments"], coal, gas, imports,
-                                                       renewable_mw=float(row["renewable_total_d1_mw"])),
-                                           row["load_d1_mw"] - row["renewable_total_d1_mw"] - row["net_export_d1_mw"])
+        vc_hist = np.array([marginal_price(build_stack(ff["fleet_segments"], coal, gas, imports),
+                                           row["load_d1_mw"] - row["renewable_total_d1_mw"] + row["net_export_d1_mw"])
                             for _, row in hist.iterrows()])
-        tight_hist = (hist["load_d1_mw"] - hist["renewable_total_d1_mw"] - hist["net_export_d1_mw"]) / total_cap
+        tight_hist = (hist["load_d1_mw"] - hist["renewable_total_d1_mw"] + hist["net_export_d1_mw"]) / total_cap
         actual_hist = prices.reindex(hist.index)["rt_price"]
         curve = fit_markup(actual_hist, pd.Series(vc_hist, index=hist.index), tight_hist)
     else:
@@ -257,7 +257,8 @@ def run_hybrid_forecast(eng, province, target_date, train_days=365):
 
     level = []
     for ts, row in fund_target.iterrows():
-        dem = row["load_d1_mw"] - row["renewable_total_d1_mw"] - row["net_export_d1_mw"]
+        # net_export enters with PLUS: positive = outflow = added demand
+        dem = row["load_d1_mw"] - row["renewable_total_d1_mw"] + row["net_export_d1_mw"]
         vc = marginal_price(stack, dem)
         level.append(apply_markup(vc, dem / total_cap, curve) if vc == vc else float("nan"))
     level = np.array(level)
