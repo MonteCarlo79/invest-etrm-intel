@@ -150,3 +150,54 @@ def render_merit_order_explorer(st, eng, provinces):
     st.plotly_chart(fig, use_container_width=True)
     st.caption(f"进口/通道块以红色显示；数据源：province_fuel_fleet "
                f"({ff['effective_date']}) + interconnector_trades 最新月落地价。")
+
+
+# ── Section ②: PCA decomposition ────────────────────────────────────────────
+
+def build_feature_frame(fund_df, net_import_share, landing_price):
+    from services.bess_map.price_lab.pca_shapes import FEATURE_COLUMNS
+    if fund_df.empty:
+        # loaders return a RangeIndex frame when empty — index.dayofweek/month
+        # below assume DatetimeIndex, so bail out first (Task-8 review note)
+        return pd.DataFrame(columns=FEATURE_COLUMNS)
+    ff = fund_df[["load_d1_mw", "renewable_total_d1_mw", "bidding_space_d1_mw",
+                  "wind_d1_mw", "solar_d1_mw"]].copy()
+    ff["net_import_share"] = net_import_share
+    ff["landing_price"] = float(landing_price) if landing_price is not None else 0.0
+    ff["dow"] = ff.index.dayofweek
+    ff["month"] = ff.index.month
+    return ff[FEATURE_COLUMNS]
+
+
+def render_pca_section(st, eng, provinces):
+    """Section ②: scree + component shapes + score-vs-driver history."""
+    from services.bess_map.price_lab.pca_shapes import (
+        build_deviation_matrix, compute_pca)
+    import plotly.graph_objects as go
+
+    prov = st.selectbox("省份 / Province", provinces, key="pf_pca_prov")
+    days = st.slider("训练窗口 (天)", 90, 365, 365, key="pf_pca_days")
+    end = pd.Timestamp.now().date()
+    start = end - pd.Timedelta(days=days)
+    prices = load_rt_prices(eng, prov, start, end)
+    if prices.empty:
+        st.info("无价格数据。")
+        return
+    mat = build_deviation_matrix(prices)
+    if len(mat) < 30:
+        st.info(f"完整日数据不足 ({len(mat)} 天 < 30)。")
+        return
+    n_pcs = st.slider("主成分个数", 2, 6, 4, key="pf_pca_k")
+    out = compute_pca(mat, n_pcs=n_pcs)
+
+    var = out["variance_explained"][:n_pcs]
+    fig_scree = go.Figure(go.Bar(x=[f"PC{i+1}" for i in range(n_pcs)], y=var))
+    fig_scree.update_layout(title="方差解释率 (%)", height=260)
+    st.plotly_chart(fig_scree, use_container_width=True)
+
+    fig_load = go.Figure()
+    for i, vec in enumerate(out["loadings"]):
+        fig_load.add_trace(go.Scatter(x=list(range(24)), y=vec, mode="lines", name=f"PC{i+1}"))
+    fig_load.update_layout(title="主成分形状 (sum=24 归一)", height=320)
+    st.plotly_chart(fig_load, use_container_width=True)
+    st.caption("得分为原始特征向量投影；形状预测模型见 ③。")
