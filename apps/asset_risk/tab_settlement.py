@@ -555,8 +555,7 @@ def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh
             row["套利价差"] = row["价差收入"] / total_discharge_vol
     if is_wind and capacity_mw and capacity_mw > 0:
         row["发电小时数"] = round(total_discharge_vol / capacity_mw, 1)
-        row["发电利用率"] = total_discharge_vol / (capacity_mw * yr_days * 24) if yr_days > 0 else 0
-        row["LF"] = row["发电利用率"]  # LF YTD ≡ 发电利用率 YTD by construction
+        row["LF"] = total_discharge_vol / (capacity_mw * yr_days * 24) if yr_days > 0 else 0
     if energy_per_cycle_mwh and energy_per_cycle_mwh > 0 and "日均充放次数" in pivot.columns:
         row["日均充放次数"] = round(total_charge_vol / energy_per_cycle_mwh / yr_days, 2) if yr_days > 0 else 0
     if total_charge_vol > 0 and not is_wind:
@@ -660,9 +659,9 @@ def _render_analytics(book_id: int, engine):
     col4, col5, col6 = st.columns(3)
     col4.metric("放电均价", f"¥{discharge_amt_total / revenue_vol:,.1f}/MWh" if revenue_vol else "N/A")
     if is_wind:
-        # 发电小时数 = full-load hours (发电量/装机容量); 发电利用率 = CF over elapsed hours
+        # 发电小时数 = full-load hours (发电量/装机容量); LF = 发电量/装机容量/elapsed hours
         col5.metric("发电小时数", f"{revenue_vol / capacity_mw:,.0f} h" if capacity_mw else "N/A")
-        col6.metric("发电利用率", f"{revenue_vol / (capacity_mw * elapsed_hours):.1%}"
+        col6.metric("LF", f"{revenue_vol / (capacity_mw * elapsed_hours):.1%}"
                     if (capacity_mw and elapsed_hours) else "N/A")
     else:
         col5.metric("充电均价", f"¥{abs(charge_amt_total / charge_vol_total):,.1f}/MWh" if charge_vol_total else "N/A")
@@ -723,18 +722,13 @@ def _render_analytics(book_id: int, engine):
         pivot["日均充放次数"] = (charge_vol_monthly.values / energy_per_cycle_mwh / pd.Series(days_in_month, index=pivot.index).values).round(2)
         pivot["日均充放次数"] = pivot["日均充放次数"].replace([float("inf"), float("-inf")], 0).fillna(0)
 
-    # Add 电能转化率 per month (BESS) — meaningless for wind; show 发电小时数/发电利用率 instead
+    # Add 电能转化率 per month (BESS) — meaningless for wind; show 发电小时数 + LF
+    # (LF = monthly generation / installed capacity / hours in month)
     import numpy as np
     if is_wind and capacity_mw and capacity_mw > 0:
         pivot["发电小时数"] = (discharge_vol.values / capacity_mw).round(1)
         month_hours = pd.Series(days_in_month, index=pivot.index).values * 24
-        pivot["发电利用率"] = (discharge_vol.values / (capacity_mw * month_hours))
-        # LF = 发电量 / 装机容量 / YTD累计小时数 — monthly contributions sum to YTD LF
-        ytd_hours_map = {}
-        for m, d in zip(pivot.index, days_in_month):
-            ytd_hours_map[m[:4]] = ytd_hours_map.get(m[:4], 0) + d * 24
-        ytd_hours = pd.Series([ytd_hours_map[m[:4]] for m in pivot.index], index=pivot.index).values
-        pivot["LF"] = (discharge_vol.values / (capacity_mw * ytd_hours))
+        pivot["LF"] = (discharge_vol.values / (capacity_mw * month_hours))
     else:
         with np.errstate(divide='ignore', invalid='ignore'):
             conversion_arr = np.where(charge_vol_monthly.values > 0, discharge_vol.values / charge_vol_monthly.values, 0)
@@ -750,7 +744,7 @@ def _render_analytics(book_id: int, engine):
     desired_order = [
         "净利润", "容量补偿/非市场化", "价差收入", "调频", "系统运行费", "上网线损费",
         "基本电费/力调", "放电收入", "充电电费", "放电量(MWh)", "充电量(MWh)",
-        "度电总价差", "容量补偿价差", "套利价差", "发电小时数", "发电利用率", "LF", "日均充放次数", "转化率",
+        "度电总价差", "容量补偿价差", "套利价差", "发电小时数", "LF", "日均充放次数", "转化率",
     ]
     ordered_cols = [c for c in desired_order if c in pivot.columns]
     remaining = [c for c in pivot.columns if c not in ordered_cols]
@@ -770,7 +764,7 @@ def _render_analytics(book_id: int, engine):
             fmt[c] = "{:.2f}"
         elif c == "发电小时数":
             fmt[c] = "{:,.0f}"
-        elif c in ("转化率", "发电利用率", "LF"):
+        elif c in ("转化率", "LF"):
             fmt[c] = "{:.1%}"
         else:
             fmt[c] = "¥{:,.0f}"
