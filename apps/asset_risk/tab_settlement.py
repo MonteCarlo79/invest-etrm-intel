@@ -797,16 +797,20 @@ def _render_analytics(book_id: int, engine):
     # Monthly bar chart (stacked by money category; YTD subtotal rows excluded).
     # 放电收入/充电电费 are excluded: 价差收入 already = 放电收入 + 充电电费 —
     # showing all three triple-counts (user note 2026-08-22).
+    # The category set must cover ALL settlement categories or the stack won't
+    # reconcile with the 净利润 line (灵山: 返还/输配电费/政府基金 are large).
     # Years render as side-by-side groups per month for YoY comparison (2026-09-17).
-    money_order = ["容量补偿/非市场化", "价差收入", "调频", "其他",
-                   "系统运行费", "上网线损费", "基本电费/力调"]
+    money_order = ["容量补偿/非市场化", "发电收入", "价差收入", "调频", "返还", "补贴",
+                   "其他", "偏差费用", "系统运行费", "上网线损费", "基本电费/力调",
+                   "输配电费", "政府基金及附加"]
     chart_pivot = pivot[[c for c in money_order if c in pivot.columns] + ["净利润"]]
     chart_pivot = chart_pivot[~chart_pivot.index.astype(str).str.contains("YTD")]
 
     CAT_COLORS = {
-        "容量补偿/非市场化": "#2e63b8", "价差收入": "#6baed6", "调频": "#d62728",
-        "其他": "#f4a7a7", "系统运行费": "#2ca02c", "上网线损费": "#7fc97f",
-        "基本电费/力调": "#e8a33d",
+        "容量补偿/非市场化": "#2e63b8", "发电收入": "#17becf", "价差收入": "#6baed6",
+        "调频": "#d62728", "返还": "#c9a227", "补贴": "#9edae5", "其他": "#f4a7a7",
+        "偏差费用": "#8c2d2d", "系统运行费": "#2ca02c", "上网线损费": "#7fc97f",
+        "基本电费/力调": "#e8a33d", "输配电费": "#9467bd", "政府基金及附加": "#bc8f8f",
     }
 
     month_seq = sorted({int(str(m)[5:7]) for m in chart_pivot.index})
