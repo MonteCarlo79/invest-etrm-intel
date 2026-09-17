@@ -1593,10 +1593,6 @@ resource "aws_ecs_service" "spot_markets" {
   desired_count   = var.desired_count_spot_markets
   launch_type     = "FARGATE"
 
-  # task_definition may be hand-deployed (jq-swap / force-new-deployment);
-  # guard against terraform applies reverting the live service (gb_market incident 2026-09-14).
-  lifecycle { ignore_changes = [task_definition] }
-
   network_configuration {
     subnets          = var.private_subnet_ids
     security_groups  = [aws_security_group.ecs_tasks.id]
@@ -1780,14 +1776,6 @@ resource "aws_ecs_service" "gb_market" {
   desired_count   = var.desired_count_gb_market
   launch_type     = "FARGATE"
 
-  # The live GB task-def family (bess-gb-market) is hand-managed via jq-swap
-  # deploys — the gb_market task-definition resource above points at the DEAD
-  # bess-platform-gb-market family. Without this guard, every apply reverted
-  # the live service to the dead family (2026-09-14 incident: apply flipped
-  # td:29/v106 -> bess-platform-gb-market:107/v72, resurrecting nightly Modo
-  # magic-link emails and downgrading the app two months).
-  lifecycle { ignore_changes = [task_definition] }
-
   network_configuration {
     subnets          = var.private_subnet_ids
     security_groups  = [aws_security_group.ecs_tasks.id]
@@ -1860,6 +1848,8 @@ resource "aws_ecs_task_definition" "au_market" {
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
       { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
       { name = "SMTP_HOST",         value = var.smtp_host },
       { name = "SMTP_PORT",         value = var.smtp_port },
       { name = "SMTP_USER",         value = var.smtp_user },
@@ -1950,6 +1940,8 @@ resource "aws_ecs_task_definition" "ercot_market" {
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
       { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
       { name = "SMTP_HOST",         value = var.smtp_host },
       { name = "SMTP_PORT",         value = var.smtp_port },
       { name = "SMTP_USER",         value = var.smtp_user },
@@ -2040,6 +2032,8 @@ resource "aws_ecs_task_definition" "pjm_market" {
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
       { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
       { name = "SMTP_HOST",         value = var.smtp_host },
       { name = "SMTP_PORT",         value = var.smtp_port },
       { name = "SMTP_USER",         value = var.smtp_user },
@@ -2130,6 +2124,8 @@ resource "aws_ecs_task_definition" "caiso_market" {
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
       { name = "BEDROCK_REGION",     value = "us-east-1" },
       { name = "MODO_API_KEY",      value = var.modo_api_key },
+      { name = "MODO_EMAIL",        value = var.modo_email },
+      { name = "MODO_PASSWORD",     value = var.modo_password },
       { name = "SMTP_HOST",         value = var.smtp_host },
       { name = "SMTP_PORT",         value = var.smtp_port },
       { name = "SMTP_USER",         value = var.smtp_user },
@@ -2336,10 +2332,6 @@ resource "aws_ecs_service" "bess_map" {
   desired_count   = var.desired_count_bess_map
   launch_type     = "FARGATE"
 
-  # task_definition may be hand-deployed (jq-swap / force-new-deployment);
-  # guard against terraform applies reverting the live service (gb_market incident 2026-09-14).
-  lifecycle { ignore_changes = [task_definition] }
-
   network_configuration {
     subnets          = var.private_subnet_ids
     security_groups  = [aws_security_group.ecs_tasks.id]
@@ -2387,10 +2379,6 @@ resource "aws_ecs_service" "portal" {
   desired_count   = var.desired_count_portal
   launch_type     = "FARGATE"
 
-  # task_definition may be hand-deployed (jq-swap / force-new-deployment);
-  # guard against terraform applies reverting the live service (gb_market incident 2026-09-14).
-  lifecycle { ignore_changes = [task_definition] }
-
   health_check_grace_period_seconds = 60
 
   network_configuration {
@@ -2418,10 +2406,6 @@ resource "aws_ecs_service" "inner_mongolia" {
   task_definition = aws_ecs_task_definition.inner_mongolia.arn
   desired_count   = var.desired_count_inner_mongolia
   launch_type     = "FARGATE"
-
-  # task_definition may be hand-deployed (jq-swap / force-new-deployment);
-  # guard against terraform applies reverting the live service (gb_market incident 2026-09-14).
-  lifecycle { ignore_changes = [task_definition] }
 
   network_configuration {
     subnets          = var.private_subnet_ids
@@ -2599,10 +2583,6 @@ resource "aws_ecs_service" "mengxi_dashboard" {
   task_definition = aws_ecs_task_definition.mengxi_dashboard.arn
   desired_count   = var.desired_count_mengxi_dashboard
   launch_type     = "FARGATE"
-
-  # task_definition may be hand-deployed (jq-swap / force-new-deployment);
-  # guard against terraform applies reverting the live service (gb_market incident 2026-09-14).
-  lifecycle { ignore_changes = [task_definition] }
 
   health_check_grace_period_seconds = 60
 

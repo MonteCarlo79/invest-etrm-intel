@@ -530,7 +530,7 @@ def _process_excel(uploaded, book_id: int, settlement_month, engine, file_hash: 
 
 
 def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh,
-                       discharge_col, charge_col, cap_col):
+                       discharge_col, charge_col, cap_col, is_wind=False, capacity_mw=None):
     """Build one year's YTD subtotal row with per-unit metrics recalculated
     from that year's own volumes. Returns a Series named "{year} YTD",
     or None if the year has no months in pivot."""
@@ -543,6 +543,7 @@ def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh
     yr_monthly = monthly[monthly["month"].str.startswith(year)]
     total_discharge_vol = yr_monthly[yr_monthly["category_cn"] == "放电收入"]["volume"].sum()
     total_charge_vol = yr_monthly[yr_monthly["category_cn"] == "充电电费"]["volume"].sum()
+    yr_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(year))
     if total_discharge_vol > 0 and "价差收入" in pivot.columns:
         # 价差收入 = 放电 + 充电 (不含容量补偿); 度电总价差 = (价差收入 + 容量补偿 + 调频) / 放电量
         cap_total = row[cap_col] if (cap_col and cap_col in pivot.columns) else 0
@@ -552,16 +553,18 @@ def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh
             row["容量补偿价差"] = cap_total / total_discharge_vol
         if "套利价差" in pivot.columns:
             row["套利价差"] = row["价差收入"] / total_discharge_vol
+    if is_wind and capacity_mw and capacity_mw > 0:
+        row["发电小时数"] = round(total_discharge_vol / capacity_mw, 1)
+        row["发电利用率"] = total_discharge_vol / (capacity_mw * yr_days * 24) if yr_days > 0 else 0
     if energy_per_cycle_mwh and energy_per_cycle_mwh > 0 and "日均充放次数" in pivot.columns:
-        yr_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(year))
         row["日均充放次数"] = round(total_charge_vol / energy_per_cycle_mwh / yr_days, 2) if yr_days > 0 else 0
-    if total_charge_vol > 0:
+    if total_charge_vol > 0 and not is_wind:
         row["转化率"] = total_discharge_vol / total_charge_vol
     return row
 
 
 def _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
-                           discharge_col, charge_col, cap_col):
+                           discharge_col, charge_col, cap_col, is_wind=False, capacity_mw=None):
     """Insert a "YYYY YTD" subtotal row after each year's last month row.
     Extends automatically: any year present in the data gets a subtotal."""
     years = sorted({m[:4] for m in pivot.index})
@@ -570,7 +573,7 @@ def _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
         months = [m for m in pivot.index if m.startswith(year)]
         parts.append(pivot.loc[months])
         row = _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh,
-                                 discharge_col, charge_col, cap_col)
+                                 discharge_col, charge_col, cap_col, is_wind, capacity_mw)
         if row is not None:
             parts.append(row.to_frame().T)
     return pd.concat(parts)
@@ -625,30 +628,44 @@ def _render_analytics(book_id: int, engine):
     charge_amt_total = items_df[items_df["category"] == "charge_energy"]["amount_cny"].sum()
     discharge_amt_total = items_df[items_df["category"].isin(["discharge_energy", "generation_revenue"])]["amount_cny"].sum()
 
+    # Asset metadata (type drives wind-vs-BESS metric display)
+    import calendar
+    with engine.connect() as conn:
+        cap_df = pd.read_sql(text("""
+            SELECT a.capacity_mw, a.bess_duration_h, a.asset_type FROM marketdata.rm_assets a
+            JOIN marketdata.rm_books b ON b.asset_id = a.id
+            WHERE b.id = :bid
+        """), conn, params={"bid": book_id})
+    capacity_mw = float(cap_df["capacity_mw"].iloc[0]) if not cap_df.empty else None
+    duration_h = float(cap_df["bess_duration_h"].iloc[0]) if (not cap_df.empty and cap_df["bess_duration_h"].iloc[0]) else 4.0
+    is_wind = (not cap_df.empty and str(cap_df["asset_type"].iloc[0]).lower() == "wind")
+    # Energy per cycle (MWh) = MW × hours (BESS only)
+    energy_per_cycle_mwh = capacity_mw * duration_h if capacity_mw else None
+
+    months_present = sorted(items_df["month"].unique())
+    elapsed_hours = sum(calendar.monthrange(int(m[:4]), int(m[5:7]))[1] * 24 for m in months_present)
+
     # Conversion efficiency
     conversion_rate = revenue_vol / charge_vol_total if charge_vol_total else None
 
     col1, col2, col3 = st.columns(3)
     col1.metric("结算总额", f"¥{items_df['amount_cny'].sum():,.0f}")
     col2.metric("放电总量", f"{revenue_vol:,.1f} MWh")
-    col3.metric("充电总量", f"{charge_vol_total:,.1f} MWh")
+    if is_wind:
+        col3.metric("装机容量", f"{capacity_mw:,.1f} MW" if capacity_mw else "N/A")
+    else:
+        col3.metric("充电总量", f"{charge_vol_total:,.1f} MWh")
 
     col4, col5, col6 = st.columns(3)
     col4.metric("放电均价", f"¥{discharge_amt_total / revenue_vol:,.1f}/MWh" if revenue_vol else "N/A")
-    col5.metric("充电均价", f"¥{abs(charge_amt_total / charge_vol_total):,.1f}/MWh" if charge_vol_total else "N/A")
-    col6.metric("电能转化率", f"{conversion_rate:.2%}" if conversion_rate else "N/A")
-
-    # Get asset capacity for cycle calculation
-    with engine.connect() as conn:
-        cap_df = pd.read_sql(text("""
-            SELECT a.capacity_mw, a.bess_duration_h FROM marketdata.rm_assets a
-            JOIN marketdata.rm_books b ON b.asset_id = a.id
-            WHERE b.id = :bid
-        """), conn, params={"bid": book_id})
-    capacity_mw = float(cap_df["capacity_mw"].iloc[0]) if not cap_df.empty else None
-    duration_h = float(cap_df["bess_duration_h"].iloc[0]) if (not cap_df.empty and cap_df["bess_duration_h"].iloc[0]) else 4.0
-    # Energy per cycle (MWh) = MW × hours
-    energy_per_cycle_mwh = capacity_mw * duration_h if capacity_mw else None
+    if is_wind:
+        # 发电小时数 = full-load hours (发电量/装机容量); 发电利用率 = CF over elapsed hours
+        col5.metric("发电小时数", f"{revenue_vol / capacity_mw:,.0f} h" if capacity_mw else "N/A")
+        col6.metric("发电利用率", f"{revenue_vol / (capacity_mw * elapsed_hours):.1%}"
+                    if (capacity_mw and elapsed_hours) else "N/A")
+    else:
+        col5.metric("充电均价", f"¥{abs(charge_amt_total / charge_vol_total):,.1f}/MWh" if charge_vol_total else "N/A")
+        col6.metric("电能转化率", f"{conversion_rate:.2%}" if conversion_rate else "N/A")
 
     # Monthly summary table (pivot: month × category_cn)
     st.subheader("月度明细")
@@ -705,23 +722,28 @@ def _render_analytics(book_id: int, engine):
         pivot["日均充放次数"] = (charge_vol_monthly.values / energy_per_cycle_mwh / pd.Series(days_in_month, index=pivot.index).values).round(2)
         pivot["日均充放次数"] = pivot["日均充放次数"].replace([float("inf"), float("-inf")], 0).fillna(0)
 
-    # Add 电能转化率 per month
+    # Add 电能转化率 per month (BESS) — meaningless for wind; show 发电小时数/发电利用率 instead
     import numpy as np
-    with np.errstate(divide='ignore', invalid='ignore'):
-        conversion_arr = np.where(charge_vol_monthly.values > 0, discharge_vol.values / charge_vol_monthly.values, 0)
-    pivot["转化率"] = conversion_arr
+    if is_wind and capacity_mw and capacity_mw > 0:
+        pivot["发电小时数"] = (discharge_vol.values / capacity_mw).round(1)
+        month_hours = pd.Series(days_in_month, index=pivot.index).values * 24
+        pivot["发电利用率"] = (discharge_vol.values / (capacity_mw * month_hours))
+    else:
+        with np.errstate(divide='ignore', invalid='ignore'):
+            conversion_arr = np.where(charge_vol_monthly.values > 0, discharge_vol.values / charge_vol_monthly.values, 0)
+        pivot["转化率"] = conversion_arr
 
     pivot = pivot.sort_index()
 
     # Per-year YTD subtotal rows ("2025 YTD", "2026 YTD", ...)
     pivot = _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
-                                   discharge_col, charge_col, cap_col)
+                                   discharge_col, charge_col, cap_col, is_wind, capacity_mw)
 
     # Reorder columns
     desired_order = [
         "净利润", "容量补偿/非市场化", "价差收入", "调频", "系统运行费", "上网线损费",
         "基本电费/力调", "放电收入", "充电电费", "放电量(MWh)", "充电量(MWh)",
-        "度电总价差", "容量补偿价差", "套利价差", "日均充放次数", "转化率",
+        "度电总价差", "容量补偿价差", "套利价差", "发电小时数", "发电利用率", "日均充放次数", "转化率",
     ]
     ordered_cols = [c for c in desired_order if c in pivot.columns]
     remaining = [c for c in pivot.columns if c not in ordered_cols]
@@ -739,7 +761,9 @@ def _render_analytics(book_id: int, engine):
             fmt[c] = "{:,.0f}"
         elif c == "日均充放次数":
             fmt[c] = "{:.2f}"
-        elif c == "转化率":
+        elif c == "发电小时数":
+            fmt[c] = "{:,.0f}"
+        elif c in ("转化率", "发电利用率"):
             fmt[c] = "{:.1%}"
         else:
             fmt[c] = "¥{:,.0f}"
