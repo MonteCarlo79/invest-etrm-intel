@@ -803,25 +803,62 @@ def _render_analytics(book_id: int, engine):
     # Monthly bar chart (stacked by money category; YTD subtotal rows excluded).
     # 放电收入/充电电费 are excluded: 价差收入 already = 放电收入 + 充电电费 —
     # showing all three triple-counts (user note 2026-08-22).
+    # Years render as side-by-side groups per month for YoY comparison (2026-09-17).
     money_order = ["容量补偿/非市场化", "价差收入", "调频", "其他",
                    "系统运行费", "上网线损费", "基本电费/力调"]
     chart_pivot = pivot[[c for c in money_order if c in pivot.columns] + ["净利润"]]
     chart_pivot = chart_pivot[~chart_pivot.index.astype(str).str.contains("YTD")]
 
+    CAT_COLORS = {
+        "容量补偿/非市场化": "#2e63b8", "价差收入": "#6baed6", "调频": "#d62728",
+        "其他": "#f4a7a7", "系统运行费": "#2ca02c", "上网线损费": "#7fc97f",
+        "基本电费/力调": "#e8a33d",
+    }
+
+    month_seq = sorted({int(str(m)[5:7]) for m in chart_pivot.index})
+    years = sorted({str(m)[:4] for m in chart_pivot.index})
+    bar_w = 0.8 / max(len(years), 1)
+    offsets = {y: (j - (len(years) - 1) / 2) * bar_w for j, y in enumerate(years)}
+
     fig = go.Figure()
     categories = [c for c in money_order if c in chart_pivot.columns]
-    for cat in categories:
-        fig.add_trace(go.Bar(
-            x=chart_pivot.index, y=chart_pivot[cat], name=cat,
-        ))
-    fig.add_trace(go.Scatter(
-        x=chart_pivot.index, y=chart_pivot["净利润"], name="净利润",
-        mode="lines+markers", line=dict(color="black", width=2),
-    ))
+    for year in years:
+        for cat in categories:
+            xs, ys = [], []
+            for mi, mon in enumerate(month_seq):
+                key = f"{year}-{mon:02d}"
+                if key in chart_pivot.index:
+                    xs.append(mi + offsets[year])
+                    ys.append(chart_pivot.loc[key, cat])
+            if xs:
+                fig.add_trace(go.Bar(
+                    x=xs, y=ys, name=cat, legendgroup=cat,
+                    legendgrouptitle_text=cat if year == years[0] else None,
+                    marker_color=CAT_COLORS.get(cat),
+                    opacity=0.55 + 0.45 * (years.index(year) / max(len(years) - 1, 1)),
+                    width=bar_w * 0.92,
+                    hovertemplate=f"{cat} {year}<br>%{{y:,.0f}} 元<extra></extra>",
+                ))
+    for year in years:
+        xs, ys = [], []
+        for mi, mon in enumerate(month_seq):
+            key = f"{year}-{mon:02d}"
+            if key in chart_pivot.index:
+                xs.append(mi + offsets[year])
+                ys.append(chart_pivot.loc[key, "净利润"])
+        if xs:
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, name=f"净利润 {year}", mode="lines+markers",
+                line=dict(color="black" if year == years[-1] else "#999999",
+                          width=2, dash="solid" if year == years[-1] else "dot"),
+            ))
     fig.update_layout(
-        barmode="relative", title="月度结算分类",
-        xaxis_title="月份", yaxis_title="元 (CNY)", height=400,
-        legend=dict(orientation="h", y=-0.2),
+        barmode="relative", title="月度结算分类 (同年月对比)",
+        xaxis=dict(tickmode="array",
+                   tickvals=list(range(len(month_seq))),
+                   ticktext=[f"{m}月" for m in month_seq], title="月份"),
+        yaxis_title="元 (CNY)", height=420,
+        legend=dict(orientation="h", y=-0.25, groupclick="toggleitem"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
