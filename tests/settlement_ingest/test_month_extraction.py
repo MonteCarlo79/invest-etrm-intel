@@ -20,6 +20,13 @@ class TestMonthExtractionBoundaries:
         assert extract_month_from_filename("乌海富景五虎山储能电站2025.01电费清单.pdf") == "2025-01-01"
         assert extract_month_from_filename("杭锦旗1月份电费清单.pdf") == "NEED_YEAR-01-01"
 
+    def test_two_digit_year(self):
+        # 零碳46 2024 uploads use 2-digit years (24年 = 2024, 25年 = 2025)
+        assert extract_month_from_filename("【W-B-2-上】悦盛药草站24年5月下网电费结算单.pdf") == "2024-05-01"
+        assert extract_month_from_filename("【W-B-2-下】悦盛药草站25年11月下网电费结算单.pdf") == "2025-11-01"
+        # 4-digit wins when both present; the (?<!\d) guard blocks the 24年 inside 2024年
+        assert extract_month_from_filename("2024年5月下网电费结算单.pdf") == "2024-05-01"
+
 
 class TestVoucherNamingVariants:
     def test_side_marker_names_are_vouchers(self):

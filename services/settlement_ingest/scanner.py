@@ -153,6 +153,12 @@ def extract_month_from_filename(filename: str) -> str | None:
         y, mo = int(m.group(1)), int(m.group(2))
         if 2015 <= y <= 2100 and 1 <= mo <= 12:
             return f"{y}-{mo:02d}-01"
+    # Pattern: YY年M月 (2-digit year → 20YY; observed 零碳46 2024 uploads named
+    # e.g. 【W-B-2-上】悦盛药草站24年5月下网电费结算单.pdf)
+    for m in re.finditer(r'(?<!\d)(2[0-9])年(\d{1,2})月', filename):
+        y, mo = 2000 + int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12:
+            return f"{y}-{mo:02d}-01"
     # Pattern: N月份 (need year from context)
     m = re.search(r'(\d{1,2})月份?', filename)
     if m:
