@@ -377,3 +377,31 @@ Whole build (pip + 57MB fonts-noto-cjk) completed in ~4 min at mirror speed. Use
 **What worked:**
 - Per-bill ground truth before each correction: extract the printed 退补/功率因数 values from the actual PDFs, set storage = −printed, then verify the month's charge-side total == −(bill 总电费/电费构成). 8 months reconciled to the cent.
 - The audit pattern that caught the systemic class: re-parse every charge bill with the fixed parser and diff per book+month vs DB; delta ≈ 2× the mis-signed component.
+
+---
+
+## Terraform apply reverted hand-managed GB service to dead task-def family (2026-09-14)
+
+**Symptom:** Nightly Modo magic-link emails (03:31 + 04:00 SGT) returned the morning after the v106 browser-free fix was deployed and verified; GB app silently downgraded to a 2-month-old build.
+
+**Root cause:** `main.tf`'s `aws_ecs_task_definition.gb_market` + `aws_ecs_service.gb_market` resources point at the DEAD `bess-platform-gb-market` family with no `lifecycle` guard, while the live service is hand-managed on the `bess-gb-market` family via jq-swap. A routine `terraform apply` (12:30 UTC, unrelated session) re-registered the dead family (`:107`, v72 image) and flipped the live service to it, undoing the same-day v106 deploy. The v72 image also carries MODO creds **baked into the image** (no env/secrets in the td, yet Playwright login works) — so the old spam path came back to life instantly.
+
+**What worked:**
+- The v72 task's own log stream convicted it: "Email filled" at 19:31:18 and 20:00:10 UTC, matching the emails to the minute. CloudTrail pinned the revert: `UpdateService ... bess-platform-gb-market:107` by terraform-admin.
+- Fix = flip service back (`update-service --task-definition bess-gb-market:29`) + add `lifecycle { ignore_changes = [task_definition] }` to `aws_ecs_service.gb_market` (commit b4e3965). A targeted `terraform plan -target=aws_ecs_service.gb_market` returning **"No changes" while the live td differs from config** is the proof the guard is active.
+
+**Rule going forward:** any ECS service whose live task def is hand-managed (jq-swap) MUST have `ignore_changes = [task_definition]` in terraform, or every apply is a revert lottery (same class as hermes td:177→173). Services with this pattern now: hermes, deal-structurer, crystal-ball(-client), gb-market.
+
+## 2026-09-18 — China→RDS TLS block: run DB scripts as one-off Fargate tasks
+
+**Problem:** psycopg2 from the Mac's China IP died at the TLS handshake for hours ("SSL SYSCALL error: EOF detected" / timeout; plain TCP `nc` connects but the handshake is killed). Local phase scripts for 零碳46 were blocked.
+
+**Failed first:** `aws ecs run-task` with base64'd script in container-override env → `InvalidParameterException: Container Overrides length must be at most 8192` once the script exceeded ~6KB (base64 inflates 4/3).
+
+**What works:**
+1. One-off Fargate task from the service's CURRENT task def (asset-risk td has `PGURL`, psycopg2, pdfplumber, repo code at `/app`): override command `sh -c "echo $S | base64 -d > /tmp/s.py && python /tmp/s.py"`, script base64 in env var `S`. Output via CloudWatch `/ecs/bess-platform`, stream `asset-risk/asset-risk/<task-id>`.
+2. Scripts > ~5.5KB: `gzip.compress(x,9)` then base64 (~3.5x smaller); decompress in-container with `python -c 'import sys,zlib;open("/tmp/s.py","wb").write(zlib.decompress(sys.stdin.buffer.read(),31))'` (stdlib only — slim image has no gzip CLI guarantee).
+3. Embedding data literals in shipped scripts: use Python `repr()`, NOT `json.dumps` — JSON `null` is a NameError in Python source.
+4. The local route DOES recover (same-day ~14:28 after a dead morning) — background retry loops (20-90 × 2-3 min) eventually land and can run the full transaction locally.
+
+**Also:** ECS Exec is NOT enabled on asset-risk (`enableExecuteCommand: false`) — `execute-command` is not an available shortcut.
