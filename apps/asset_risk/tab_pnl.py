@@ -281,6 +281,7 @@ def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
 
         cap = g["capacity_mw"].iloc[0] if "capacity_mw" in g.columns else None
         dur = g["bess_duration_h"].iloc[0] if "bess_duration_h" in g.columns else None
+        atype = g["asset_type"].iloc[0] if "asset_type" in g.columns else None
         energy = None
         if pd.notna(cap) and cap:
             energy = float(cap) * (float(dur) if (dur is not None and pd.notna(dur) and dur) else 4.0)
@@ -292,7 +293,9 @@ def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
         elif metric == "套利价差":
             val = (rev + cost) / dis_vol if dis_vol else None
         elif metric == "转化率":
-            val = dis_vol / chg_vol if chg_vol else None
+            # Wind: 发电小时数 = generation / installed capacity (RTE is meaningless)
+            val = (dis_vol / float(cap) if (atype == "wind" and pd.notna(cap) and cap)
+                   else (dis_vol / chg_vol if chg_vol else None))
         else:  # 日均充放次数
             val = chg_vol / energy / days if (energy and days) else None
         rows.append({"asset": asset, "month": month, "value": val})
@@ -301,6 +304,7 @@ def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
         acc = ytd.setdefault((asset, month[:4]), {
             "dis_vol": 0.0, "chg_vol": 0.0, "cap_amt": 0.0,
             "rev": 0.0, "cost": 0.0, "days": 0, "energy": energy,
+            "atype": atype, "cap": float(cap) if (pd.notna(cap) and cap) else None,
         })
         acc["dis_vol"] += dis_vol
         acc["chg_vol"] += chg_vol
@@ -322,7 +326,10 @@ def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
         elif metric == "套利价差":
             val = (acc["rev"] + acc["cost"]) / acc["dis_vol"] if acc["dis_vol"] else None
         elif metric == "转化率":
-            val = acc["dis_vol"] / acc["chg_vol"] if acc["chg_vol"] else None
+            if acc.get("atype") == "wind":
+                val = acc["dis_vol"] / acc["cap"] if acc.get("cap") else None
+            else:
+                val = acc["dis_vol"] / acc["chg_vol"] if acc["chg_vol"] else None
         else:  # 日均充放次数
             val = (acc["chg_vol"] / acc["energy"] / acc["days"]
                    if (acc["energy"] and acc["days"]) else None)
@@ -347,7 +354,7 @@ def _render_portfolio(engine, book_ids: list[int] | None = None):
     book_ids: restrict to a subset of books (multi-select); None = all books.
     """
     query = """
-        SELECT a.name AS asset, a.capacity_mw, a.bess_duration_h,
+        SELECT a.name AS asset, a.capacity_mw, a.bess_duration_h, a.asset_type,
                s.settlement_month, si.category, si.amount_cny, si.volume_mwh
         FROM marketdata.rm_settlement_items si
         JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
@@ -381,12 +388,25 @@ def _render_portfolio(engine, book_ids: list[int] | None = None):
     dis_vol = float(summary["discharge_mwh"].sum())
     chg_vol = float(summary["charge_mwh"].sum())
     arb_income = float(summary["arb_income"].sum())
+    atype_map = (items.groupby("asset")["asset_type"].first().to_dict()
+                 if "asset_type" in items.columns else {})
+    wind_assets = [a for a, t in atype_map.items() if t == "wind"]
+    bess_assets = [a for a, t in atype_map.items() if t != "wind"]
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("组合净利润", f"¥{net:,.0f}")
     c2.metric("总放电量", f"{dis_vol:,.0f} MWh")
     c3.metric("总充电量", f"{chg_vol:,.0f} MWh")
     c4.metric("组合套利价差", f"¥{arb_income / dis_vol:,.0f}/MWh" if dis_vol else "N/A")
-    c5.metric("组合转化率", f"{dis_vol / chg_vol:.1%}" if chg_vol else "N/A")
+    if wind_assets and not bess_assets:
+        # Wind portfolio: 发电小时数 = total generation / total installed capacity
+        cap_total = sum(float(c) for c in items.groupby("asset")["capacity_mw"].first().tolist()
+                        if pd.notna(c) and c)
+        c5.metric("组合发电小时数", f"{dis_vol / cap_total:,.1f} h" if cap_total else "N/A")
+    else:
+        # BESS (or mixed): RTE over BESS books only — wind charge is near zero
+        rte = summary[summary["asset"].isin(bess_assets)] if bess_assets else summary
+        rte_dis, rte_chg = float(rte["discharge_mwh"].sum()), float(rte["charge_mwh"].sum())
+        c5.metric("组合转化率", f"{rte_dis / rte_chg:.1%}" if rte_chg else "N/A")
 
     # --- Asset × month matrix ---
     st.markdown("#### 资产 × 月度净利润")
@@ -400,8 +420,19 @@ def _render_portfolio(engine, book_ids: list[int] | None = None):
         ("资产 × 度电容量补偿 (¥/MWh)", "容量补偿价差", "¥{:,.0f}"),
         ("资产 × 套利度电价差 (¥/MWh)", "套利价差", "¥{:,.0f}"),
     ]:
-        st.markdown(f"#### {title}")
         m = _asset_month_metric(items, metric)
+        if metric == "转化率":
+            # Split by asset type: RTE% for BESS books, 发电小时数 for wind books
+            b_cols = [c for c in m.columns if c in bess_assets]
+            w_cols = [c for c in m.columns if c in wind_assets]
+            if b_cols:
+                st.markdown("#### 资产 × 转化率 (RTE)")
+                st.dataframe(m[b_cols].style.format("{:.1%}", na_rep="—"), use_container_width=True)
+            if w_cols:
+                st.markdown("#### 资产 × 发电小时数 (h)")
+                st.dataframe(m[w_cols].style.format("{:,.1f}", na_rep="—"), use_container_width=True)
+            continue
+        st.markdown(f"#### {title}")
         st.dataframe(m.style.format(fmt, na_rep="—"), use_container_width=True)
 
     # --- Portfolio waterfall ---
