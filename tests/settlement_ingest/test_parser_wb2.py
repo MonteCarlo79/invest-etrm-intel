@@ -101,3 +101,26 @@ class TestWb2Charge:
     def test_totals_match_bills(self, march, july):
         assert parse_wb2_charge_total(_load("wb2_charge_202503.txt")) == pytest.approx(231958.45)
         assert parse_wb2_charge_total(_load("wb2_charge_202507.txt")) == pytest.approx(120741.29)
+
+
+class TestStationGate:
+    """The 成分明细/核查票 layout is shared across 蒙西 books (B-1/B-6/B-7/B-13);
+    without the station gate those books' bills would misroute into parser_wb2
+    (438-file scan 2026-09-18: 21 discharge + 1 charge + 17 voucher hits)."""
+
+    def test_foreign_charge_bill_rejected(self):
+        text = "核查票\n富景五虎山储能电站\n代购购电电费 平 100 0.5 50.0\n电费合计 1,234.56\n"
+        assert is_wb2_charge_bill(text) is False
+
+    def test_foreign_discharge_bill_rejected(self):
+        text = "成分明细\n现货 1,000.000 200.00 200,000.00\n当月机组小计 1,000.000 200.00 200,000.00\n"
+        assert is_wb2_discharge_bill(text) is False
+
+    def test_foreign_voucher_rejected(self):
+        text = "交易结算凭证\n电能电费 14,322,426.01\n发行费用合计 9,760,327.89\n"
+        assert is_wb2_voucher(text) is False
+
+    def test_wb2_station_names_accepted(self):
+        for marker in ("悦盛", "昌渠", "伊金霍洛"):
+            text = (f"{marker}\n核查票\n代购购电电费 平 100 0.5 50.0\n电费合计 1,234.56\n")
+            assert is_wb2_charge_bill(text) is True

@@ -25,18 +25,28 @@ from typing import Any
 
 _NUM = r"-?\d+(?:\.\d+)?"
 
+# The 蒙西 成分明细/核查票 layout is the grid company's COMMON format across
+# books (B-1 乌兰察布, B-6 苏右, B-7 乌拉特, B-13 五虎山 share it — 438-file
+# scan 2026-09-18). Gate every predicate on the W-B-2 station identity so only
+# 零碳46 bills route here; the other books keep their own tuned parsers.
+_STATION = ("悦盛", "昌渠", "伊金霍洛")
+
+
+def _is_wb2(text: str) -> bool:
+    return any(m in text for m in _STATION)
+
 
 def is_wb2_voucher(text: str) -> bool:
     """交易结算凭证 (trading-center voucher) — duplicates the grid 上网结算单."""
-    return "交易结算凭证" in text and "电能电费" in text and "发行费用合计" in text
+    return _is_wb2(text) and "交易结算凭证" in text and "电能电费" in text and "发行费用合计" in text
 
 
 def is_wb2_charge_bill(text: str) -> bool:
-    return "核查票" in text and "电费合计" in text and "代购购电电费" in text
+    return _is_wb2(text) and "核查票" in text and "电费合计" in text and "代购购电电费" in text
 
 
 def is_wb2_discharge_bill(text: str) -> bool:
-    return "成分明细" in text and ("当月机组小计" in text or "本月应开发票金额" in text)
+    return _is_wb2(text) and "成分明细" in text and ("当月机组小计" in text or "本月应开发票金额" in text)
 
 
 # ───────────────────────────── 核查票 (charge) ─────────────────────────────
