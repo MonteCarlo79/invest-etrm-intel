@@ -297,7 +297,18 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                     st.info(f"**{uploaded.name}**: 电网版上网结算单 — content overlaps the "
                             "交易中心结算依据; skipped to avoid double-counting. No data written.")
                     return
-                if is_guangxi_discharge_bill(bill_text):
+                from services.settlement_ingest.parser_wb2 import (
+                    is_wb2_discharge_bill, is_wb2_voucher, parse_wb2_discharge,
+                )
+                if is_wb2_voucher(bill_text):
+                    st.info(f"**{uploaded.name}**: 交易结算凭证 — its 电能电费 and every fee row "
+                            "duplicate the grid 上网结算单; skipped to avoid double-counting. "
+                            "No data written.")
+                    return
+                if is_wb2_discharge_bill(bill_text):
+                    items = parse_wb2_discharge(bill_text)
+                    st.info("蒙西上网电费结算单 (成分明细) detected — parsed deterministically (no vision).")
+                elif is_guangxi_discharge_bill(bill_text):
                     items = parse_guangxi_discharge_text(bill_text)
                     st.info("广西电力交易结算依据 detected — parsed deterministically (no vision).")
                 else:
@@ -384,7 +395,11 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                 from services.settlement_ingest.parser_guangxi import (
                     is_guangxi_charge_bill, parse_guangxi_charge_text,
                 )
-                if is_guangxi_charge_bill(bill_text):
+                from services.settlement_ingest.parser_wb2 import is_wb2_charge_bill, parse_wb2_charge
+                if is_wb2_charge_bill(bill_text):
+                    items = parse_wb2_charge(bill_text)
+                    st.info("蒙西下网电费核查票 detected — parsed deterministically (no vision).")
+                elif is_guangxi_charge_bill(bill_text):
                     items = parse_guangxi_charge_text(bill_text)
                     st.info("广西电网电费通知单 detected — parsed deterministically (no vision).")
                 else:

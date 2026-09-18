@@ -279,7 +279,10 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                     from services.settlement_ingest.parser_guangxi import (
                         is_guangxi_charge_bill, parse_guangxi_charge_text,
                     )
-                    if is_guangxi_charge_bill(_text):
+                    from services.settlement_ingest.parser_wb2 import is_wb2_charge_bill, parse_wb2_charge
+                    if is_wb2_charge_bill(_text):
+                        items = parse_wb2_charge(_text)
+                    elif is_guangxi_charge_bill(_text):
                         items = parse_guangxi_charge_text(_text)
                     else:
                         from services.settlement_ingest.parser_stategrid import (
@@ -312,7 +315,16 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                     results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
                                     "error": "电网版上网结算单 — overlaps 交易中心结算依据, not ingested"})
                     continue
-                if is_guangxi_discharge_bill(_text):
+                from services.settlement_ingest.parser_wb2 import (
+                    is_wb2_discharge_bill, is_wb2_voucher, parse_wb2_discharge,
+                )
+                if is_wb2_voucher(_text):
+                    results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                                    "error": "交易结算凭证 — duplicates the grid 上网结算单, not ingested"})
+                    continue
+                if is_wb2_discharge_bill(_text):
+                    items = parse_wb2_discharge(_text)
+                elif is_guangxi_discharge_bill(_text):
                     items = parse_guangxi_discharge_text(_text)
                 else:
                     from services.settlement_ingest.parser_stategrid import (
