@@ -54,8 +54,11 @@ def map_settlement_category(label: str, side: str = "discharge") -> str:
         # 灵山 charge bills carry ¥2-5M/month 退补 credits; in charge_energy they
         # flipped 充电电费 positive and broke the 价差收入 = 放电 − 充电成本 identity.
         return "rebate"
-    if side == "discharge" and "交易电费" in s:
-        # 电网电费结算单's market-energy revenue line (灵山 2026-03..07 scans)
+    if side == "discharge" and ("交易电费" in s or "市场化电费" in s):
+        # 电网电费结算单's market-energy revenue line (灵山 2026-03..07 scans);
+        # 南网广西 2026 template: 市场化电费（交易机构结算/电网企业结算）carries the
+        # full 抄见电量 at market price (融水 2026-04..07 — vision had bucketed
+        # it as "other", zeroing those months' discharge volume)
         return "discharge_energy"
     if "现货" in s or "上网" in s or "电能电费" in s or "电能量" in s or "购电" in s or "下网" in s:
         return energy_cat

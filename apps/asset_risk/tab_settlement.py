@@ -246,7 +246,7 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
 
     kind = classify_pdf(uploaded.name)
     if kind == "skip":
-        st.info(f"{uploaded.name}: 发票/核查 file — skipped (not settlement data).")
+        st.info(f"{uploaded.name}: 发票/核查/电量结算单 file — skipped (not settlement data).")
         return
 
     voucher_fallback = False

@@ -70,6 +70,12 @@ def classify_pdf(filename: str) -> str:
     if "核查" in filename:
         return "skip"
 
+    # Skip 电量结算单 (meter-reading statements): 抄表示数 attachment to the
+    # 电费结算单 carrying NO monetary rows — vision extracted nothing and
+    # reported a spurious failure (融水 2026-01/05).
+    if "电量结算单" in filename:
+        return "skip"
+
     # Provincial capacity-compensation table — multi-station document whose rows
     # span many books; ingested via curated per-station backfill, never auto.
     if "容量补偿" in filename and "统计表" in filename:
@@ -244,6 +250,10 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
         # Classify and extract month (filename → folder year → PDF content;
         # never stamps the current year — phantom-month rule, commit 1064925)
         pdf_type = classify_pdf(pdf_path.name)
+        if pdf_type == "skip":
+            results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                            "error": "发票/核查/电量结算单 attachment — not settlement data"})
+            continue
         month_str = resolve_settlement_month(pdf_path)
 
         if not month_str:

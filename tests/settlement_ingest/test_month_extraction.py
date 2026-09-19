@@ -41,3 +41,10 @@ class TestVoucherNamingVariants:
         # 上网/下网 bills without side markers keep their classifications
         assert classify_pdf("2025年3月 【B-8-上】富景五虎山储能电站上网电费结算单-3月结算单.pdf") == "discharge"
         assert classify_pdf("2025年3月 【B-8-下】富景五虎山储能电站下网结算3月结算.pdf") == "charge"
+
+    def test_quantity_statements_skipped(self):
+        # 电量结算单 = 抄表 meter-reading attachment, no monetary rows (融水 2026-01/05)
+        assert classify_pdf("W-19-上融水景岳2026年1月上网电量结算单.pdf") == "skip"
+        assert classify_pdf("W-19-上融水景岳2026年5月上网电量结算单（盖章版）.pdf") == "skip"
+        # the money bill keeps its discharge classification
+        assert classify_pdf("W-19-上融水景岳2026年1月上网电费结算单.pdf") == "discharge"

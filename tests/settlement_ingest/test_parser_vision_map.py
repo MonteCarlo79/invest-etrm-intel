@@ -45,6 +45,16 @@ class TestGuangxiGridBill:
         # 电网电费结算单 (scanned 灵山 2026-03..07): 交易电费 = market energy revenue
         assert map_settlement_category("交易电费", side="discharge") == "discharge_energy"
 
+    def test_market_energy_south_grid_template(self):
+        # 南网广西 2026 template (融水): 市场化电费 rows carry the full 抄见电量
+        # at market price — they ARE the energy revenue (vision bucketed them as
+        # "other", zeroing 2026-04..07 discharge volumes)
+        assert map_settlement_category("市场化电费（交易机构结算）", side="discharge") == "discharge_energy"
+        assert map_settlement_category("市场化电费（电网企业结算）", side="discharge") == "discharge_energy"
+        # the mechanism-CfD difference fee is NOT energy
+        assert map_settlement_category("机制电价差价结算费用", side="discharge") == "other"
+        assert map_settlement_category("两个细则及辅助服务费用", side="discharge") == "frequency"
+
     def test_trade_energy_stays_other_on_charge_side(self):
         assert map_settlement_category("交易电费", side="charge") == "other"
 
