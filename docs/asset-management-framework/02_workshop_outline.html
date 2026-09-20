@@ -1,0 +1,236 @@
+<title>BESS Asset Management Workshop</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#fafbfc; --surface:#ffffff; --ink:#212a33; --muted:#5b6874;
+  --accent:#0f766e; --accent-ink:#0c5f59; --tint:#e9f4f2; --rule:#dde3e8;
+  --prompt:#f4eff8; --prompt-ink:#5b3a82;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --ground:#10151a; --surface:#161d24; --ink:#e4eaef; --muted:#93a1ad;
+  --accent:#2fbfae; --accent-ink:#57d4c5; --tint:#12332f; --rule:#2a3540;
+  --prompt:#241c2e; --prompt-ink:#c0a3e8;
+}}
+:root[data-theme="dark"]{
+  --ground:#10151a; --surface:#161d24; --ink:#e4eaef; --muted:#93a1ad;
+  --accent:#2fbfae; --accent-ink:#57d4c5; --tint:#12332f; --rule:#2a3540;
+  --prompt:#241c2e; --prompt-ink:#c0a3e8;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:16px;line-height:1.65;padding:0 20px}
+.wrap{max-width:70ch;margin:0 auto;padding-block:48px 64px}
+.ser{font-family:"IBM Plex Serif",Georgia,serif}
+.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+
+.series{display:flex;gap:10px;align-items:baseline;font-size:12.5px;color:var(--muted);
+  border-bottom:1px solid var(--rule);padding-bottom:14px;margin-bottom:40px;flex-wrap:wrap}
+.series .cur{color:var(--accent-ink);font-weight:600}
+.series .sep{color:var(--rule)}
+
+.kicker{font-size:12.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink)}
+h1{font-size:32px;line-height:1.2;margin:10px 0 14px;text-wrap:balance;font-weight:600}
+.thesis{font-size:17.5px;line-height:1.6;border-left:3px solid var(--accent);padding-left:18px;margin:0 0 8px}
+.theory{color:var(--muted);font-size:14.5px;max-width:64ch}
+h2{font-size:21px;margin:46px 0 14px;text-wrap:balance;font-weight:600}
+p{margin:0 0 13px;max-width:68ch}
+ul{margin:0 0 13px;padding-left:22px}
+li{margin-bottom:7px;max-width:64ch}
+
+.anon{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:13px 18px;margin:18px 0;font-size:14px;color:var(--muted)}
+.anon b{color:var(--ink)}
+
+.block{display:grid;grid-template-columns:76px 1fr;gap:18px;padding:24px 0;border-top:1px solid var(--rule)}
+.tchip{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.tmin{background:var(--tint);color:var(--accent-ink);border-radius:6px;padding:4px 10px;
+  font-size:12px;font-weight:500;white-space:nowrap}
+.tlayer{font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.btitle{font-size:18px;font-weight:600;margin:0 0 10px;line-height:1.35}
+.exh{font-size:13.5px;color:var(--muted);border-top:1px dashed var(--rule);padding-top:9px;margin-top:11px}
+.exh b{color:var(--ink)}
+.prompt{background:var(--prompt);color:var(--prompt-ink);border-radius:8px;
+  padding:13px 18px;margin-top:14px;font-size:15px;font-style:italic;max-width:60ch}
+.prompt .plabel{display:block;font-style:normal;font-size:11px;font-weight:600;
+  letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px;opacity:.75}
+.push{font-size:13.5px;color:var(--muted);margin-top:10px;max-width:62ch}
+.push b{color:var(--ink)}
+
+.open{font-size:16.5px;line-height:1.7;background:var(--surface);border:1px solid var(--rule);
+  border-radius:8px;padding:18px 22px;margin:16px 0;max-width:64ch}
+
+.prep h2{margin-top:52px}
+.prep li{font-size:14.5px}
+.dont{background:var(--surface);border:1px solid var(--rule);border-left:3px solid #b4463c;
+  border-radius:6px;padding:12px 18px;margin-top:14px;font-size:14px;max-width:64ch}
+.dont b{color:#b4463c}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ .dont{border-left-color:#d97a70} .dont b{color:#d97a70} } }
+:root[data-theme="dark"] .dont{border-left-color:#d97a70}
+:root[data-theme="dark"] .dont b{color:#d97a70}
+
+footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--rule);font-size:13px;color:var(--muted)}
+@media (max-width:560px){
+  .block{grid-template-columns:1fr;gap:10px}
+  .tchip{flex-direction:row;align-items:baseline}
+  h1{font-size:26px}
+  .wrap{padding-block:32px 48px}
+}
+</style>
+
+<div class="wrap">
+
+<div class="series mono">
+  <span>01 · Framework</span><span class="sep">/</span>
+  <span>02 · BPTE 章节</span><span class="sep">/</span>
+  <span class="cur">03 · Workshop</span>
+  <span style="margin-left:auto">Session outline &amp; talk track</span>
+</div>
+
+<div class="kicker">Workshop</div>
+<h1 class="ser">Asset Management</h1>
+<p class="thesis">On a merchant BESS fleet, the gap between theoretical revenue — perfect-foresight
+dispatch — and what you actually realize is where asset management lives.</p>
+<p class="theory">60–90 min, modular. Each block = ~10 min story + ~10 min open discussion. Interactive;
+no China-specific focus; no dashboards without real data and credible sources; practical over
+conceptual; everything adaptable overseas.</p>
+
+<div class="anon"><b>Anonymization rules, applied throughout:</b> the operating fleet is "a fleet of
+four grid-scale BESS assets in a liberalized spot market"; no province/market names for that fleet;
+counterparties unnamed; ratios and percentages preferred over absolute currency. GB/international market
+data (Modo Energy, Elexon — named, credible) provides the international grounding.</div>
+
+<h2 class="ser">Cold open</h2>
+<div class="open">"The gap between theoretical and realized revenue on a BESS fleet is where asset
+management actually lives. We measure it per asset, per day. Today I'll walk through where it leaks, in
+four places, with real numbers — and each time I'd rather hear your version than finish mine."</div>
+<p class="theory">Frame slide: the four layers — Physical Asset / Data &amp; Settlement / Market &amp;
+Dispatch / Commercial &amp; Lifecycle. "Value is won or lost in all four. The hardware is the smallest
+part of the variance."</p>
+
+<div class="block">
+  <div class="tchip"><span class="tmin mono">~20 min</span><span class="tlayer">L2 · Data &amp; Settlement</span></div>
+  <div>
+    <div class="btitle ser">Your P&amp;L is wrong until proven otherwise</div>
+    <ul>
+      <li>~80% of asset-management work is data plumbing. Nobody believes this until they own a bill.</li>
+      <li>Real case: a mis-signed charge component — a sign-convention mismatch between counterparty
+      formats — persisted for months: 79 charge records rebuilt, plus duplicate discharge records
+      removed. Found only by re-deriving every settlement from first principles. End state: eight
+      months of books reconciled to the cent.</li>
+      <li>Settlement formats change without notice; parsers drift silently. Manual recon ⇒ month-long
+      detection latency; automated per-bill re-derivation ⇒ a day.</li>
+    </ul>
+    <div class="exh"><b>Exhibit:</b> one anonymized bill re-derivation walkthrough (printed charge →
+    stored sign → reconciled monthly total). No market names.</div>
+    <div class="prompt"><span class="plabel">Discussion</span>"Who in your organization re-derives the
+    settlement statement before it gets paid? And what is your detection latency when a counterparty
+    changes format?"</div>
+    <p class="push"><b>Expected pushback:</b> "Our market's settlement is simpler." → "Then your
+    version of this failure lives in the metering and telemetry layer — same question: who re-derives it?"</p>
+  </div>
+</div>
+
+<div class="block">
+  <div class="tchip"><span class="tmin mono">~20 min</span><span class="tlayer">L3 · Market &amp; Dispatch</span></div>
+  <div>
+    <div class="btitle ser">The capture gap is the job</div>
+    <ul>
+      <li>Metric first: capture rate = realized ÷ theoretical (perfect-foresight LP) revenue, per asset
+      per day. Everything in dispatch quality lives in that number.</li>
+      <li>Real case: a legacy forecast model used day-ahead prices published <i>after</i> real-time
+      trading closes — apparent capture inflated ~100%. Exposed only by running multiple models
+      side-by-side. Lesson: model governance — never one unchallenged model.</li>
+      <li>Second real case: AI intelligence feeds have real unit costs — one carries a weekly credit
+      quota (~36–40 calls measured vs a 140-call wish). Question cadence is now rotated to budget, with
+      runs aborted on the first quota error. AI operations are an economics problem, not a demo.</li>
+    </ul>
+    <div class="exh"><b>Exhibit:</b> capture-by-model comparison table (theoretical vs realized, per
+    model — one visibly inflated). Percentages only.</div>
+    <div class="prompt"><span class="plabel">Discussion</span>"What do you measure dispatch quality
+    against — and has anyone audited the benchmark itself?"</div>
+  </div>
+</div>
+
+<div class="block">
+  <div class="tchip"><span class="tmin mono">~20 min</span><span class="tlayer">L4 · Commercial &amp; Lifecycle</span></div>
+  <div>
+    <div class="btitle ser">Attribution is the trust layer</div>
+    <ul>
+      <li>"The market was bad" is not an explanation; it's a mood. Per-asset daily P&amp;L attribution
+      decomposes performance into price / dispatch / degradation drivers — the only thing that makes a
+      performance-linked contract verifiable.</li>
+      <li>Real practice: daily per-asset attribution; strategy-comparison workflow (actual dispatch vs
+      alternatives, P&amp;L waterfall); portfolio roll-up; IRR re-run on operating data — acquisition
+      models go stale fast.</li>
+      <li>Commercial consequence: performance contracts (capture floor + upside share) sell only on top
+      of attribution both parties trust. Contract design and measurement design are the same document.</li>
+    </ul>
+    <div class="exh"><b>Exhibit:</b> one anonymized daily P&amp;L waterfall for a single asset (price /
+    dispatch / other, decomposed). Indexed units, no currency labels.</div>
+    <div class="prompt"><span class="plabel">Discussion</span>"What would your owners accept as proof of
+    outperformance — and does your current reporting survive that standard?"</div>
+  </div>
+</div>
+
+<div class="block">
+  <div class="tchip"><span class="tmin mono">~20 min</span><span class="tlayer">Cross-cutting</span></div>
+  <div>
+    <div class="btitle ser">Small team, big stack — the AI-leverage operating model</div>
+    <ul>
+      <li>Staffing reality: a small senior team covers all four layers because four domain agents do the
+      analyst legwork — market strategist, economics quant, trading-ops analyst, investment aggregator.</li>
+      <li>What makes agents trustworthy in production: strict grounding (answers only from data returned
+      by tools — never the model's general knowledge), persistent domain memory across sessions, human
+      review loops.</li>
+      <li>And the honest limits: quotas, grounding failures — and the day a vendor silently changed
+      their login flow, and a nightly intelligence feed started spamming magic-link emails instead of
+      data. Resilience engineering is part of AI operations.</li>
+    </ul>
+    <div class="exh"><b>Exhibit:</b> architecture sketch — four agents over one data platform, with the
+    grounding/memory loop. Optional live read-only walk if the room allows (real data, no credentials).</div>
+    <div class="prompt"><span class="plabel">Discussion</span>"Where would an agent break first in your
+    data environment — and who catches it?"</div>
+  </div>
+</div>
+
+<div class="block">
+  <div class="tchip"><span class="tmin mono">10 min</span><span class="tlayer">Close</span></div>
+  <div>
+    <div class="btitle ser">The take-home checklist</div>
+    <ul>
+      <li>Do you re-derive your settlement, or accept it? <span class="mono" style="font-size:13px">(L2)</span></li>
+      <li>Do you measure dispatch against a counterfactual — and has the counterfactual been audited? <span class="mono" style="font-size:13px">(L3)</span></li>
+      <li>Does your P&amp;L decompose into drivers your owners would accept? <span class="mono" style="font-size:13px">(L4)</span></li>
+      <li>What in your stack is instrumented, attributed, <i>proven</i> — and what is still asserted?</li>
+    </ul>
+    <div class="open" style="margin-top:10px">"The hardware is the smallest part of the variance. The
+    stack is the job."</div>
+  </div>
+</div>
+
+<div class="prep">
+<h2 class="ser">Speaker prep notes</h2>
+<ul>
+  <li><b>Timing flex:</b> 60-min version — drop the Block 4 discussion (keep the story) and compress the close.</li>
+  <li><b>Evidence pack to refresh before presenting:</b>
+    <ul>
+      <li>anonymized bill re-derivation exhibit (from the settlement audit trail);</li>
+      <li>capture-by-model table (last quarter, percentages);</li>
+      <li>daily P&amp;L attribution waterfall for one asset (indexed);</li>
+      <li>agent architecture sketch (4 agents, grounding rules, memory loop);</li>
+      <li>quota/economics numbers for the AI-ops anecdote.</li>
+    </ul>
+  </li>
+  <li><b>Sources named in the room:</b> Modo Energy + Elexon for GB market context (credible, public/subscription); fleet data stays anonymized.</li>
+</ul>
+<div class="dont"><b>Do NOT:</b> name the fleet's market or provinces, name counterparties, or show any
+credential-adjacent screen. If asked "which market is the fleet in?" — "a liberalized spot market; the
+failure modes are the point, and they're market-agnostic."</div>
+</div>
+
+<footer>
+  Real operating cases from a four-asset grid-scale BESS fleet and a 29-market daily data pipeline;
+  generalized for an international room. Framework companion: <i>The BESS Asset Value Stack</i>.
+</footer>
+
+</div>

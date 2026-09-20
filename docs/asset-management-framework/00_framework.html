@@ -1,0 +1,281 @@
+<title>BESS Asset Value Stack</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#fafbfc; --surface:#ffffff; --ink:#212a33; --muted:#5b6874;
+  --accent:#0f766e; --accent-ink:#0c5f59; --tint:#e9f4f2; --rule:#dde3e8; --chip:#eef1f4;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --ground:#10151a; --surface:#161d24; --ink:#e4eaef; --muted:#93a1ad;
+  --accent:#2fbfae; --accent-ink:#57d4c5; --tint:#12332f; --rule:#2a3540; --chip:#1e2831;
+}}
+:root[data-theme="dark"]{
+  --ground:#10151a; --surface:#161d24; --ink:#e4eaef; --muted:#93a1ad;
+  --accent:#2fbfae; --accent-ink:#57d4c5; --tint:#12332f; --rule:#2a3540; --chip:#1e2831;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:16px;line-height:1.65;padding:0 20px}
+.wrap{max-width:70ch;margin:0 auto;padding-block:48px 64px}
+.ser{font-family:"IBM Plex Serif",Georgia,serif}
+.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+a{color:var(--accent-ink)}
+
+.series{display:flex;gap:10px;align-items:baseline;font-size:12.5px;color:var(--muted);
+  border-bottom:1px solid var(--rule);padding-bottom:14px;margin-bottom:40px;flex-wrap:wrap}
+.series .cur{color:var(--accent-ink);font-weight:600}
+.series .sep{color:var(--rule)}
+
+.kicker{font-size:12.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink)}
+h1{font-size:34px;line-height:1.2;margin:10px 0 18px;text-wrap:balance;font-weight:600}
+.thesis{font-size:18.5px;line-height:1.6;color:var(--ink);max-width:62ch;
+  border-left:3px solid var(--accent);padding-left:18px;margin:0 0 8px}
+.theory{color:var(--muted);font-size:15px;max-width:62ch}
+h2{font-size:22px;margin:52px 0 16px;text-wrap:balance;font-weight:600}
+h3{font-size:17px;margin:0 0 6px;font-weight:600}
+p{margin:0 0 14px;max-width:68ch}
+ul{margin:0 0 14px;padding-left:22px}
+li{margin-bottom:7px;max-width:64ch}
+.rule{height:1px;background:var(--rule);border:0;margin:44px 0}
+
+.layer{display:grid;grid-template-columns:52px 1fr;gap:18px;padding:22px 0;border-top:1px solid var(--rule)}
+.layer:first-of-type{border-top:0}
+.lchip{width:44px;height:44px;border-radius:10px;background:var(--tint);color:var(--accent-ink);
+  display:flex;align-items:center;justify-content:center;font-weight:500;font-size:14px}
+.lname{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.mech{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:12px 16px;margin:12px 0;font-size:15px}
+.mech b{color:var(--accent-ink)}
+.proof{font-size:13.5px;color:var(--muted);border-top:1px dashed var(--rule);padding-top:10px;margin-top:12px}
+.proof b{color:var(--ink)}
+
+.band{display:grid;grid-template-columns:180px 1fr;gap:18px;padding:18px 0;border-top:1px solid var(--rule)}
+.band:first-of-type{border-top:0}
+.btag{font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink);padding-top:3px}
+
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:14px 0 20px}
+th{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+  text-align:left;padding:8px 12px;border-bottom:1.5px solid var(--rule)}
+td{padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.tblwrap{overflow-x:auto}
+
+.maturity{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:20px 0}
+.mstep{flex:1;min-width:120px;background:var(--surface);border:1px solid var(--rule);
+  padding:12px 14px;position:relative}
+.mstep:first-child{border-radius:8px 0 0 8px}
+.mstep:last-child{border-radius:0 8px 8px 0}
+.mstep + .mstep{border-left:0}
+.mlv{font-size:12px;font-weight:500;color:var(--accent-ink);margin-bottom:3px}
+.mnm{font-size:13.5px;font-weight:600;line-height:1.35}
+.mnote{font-size:13.5px;color:var(--muted);margin-top:14px;max-width:66ch}
+.mnote b{color:var(--ink)}
+
+.check{counter-reset:ck;list-style:none;padding:0;margin:14px 0}
+.check li{counter-increment:ck;display:grid;grid-template-columns:34px 1fr;gap:12px;margin-bottom:12px;max-width:none}
+.check li::before{content:counter(ck,decimal-leading-zero);font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:12.5px;color:var(--accent-ink);padding-top:3px;font-weight:500}
+
+footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--rule);
+  font-size:13px;color:var(--muted);max-width:66ch}
+@media (max-width:560px){
+  .layer{grid-template-columns:1fr;gap:10px}
+  .band{grid-template-columns:1fr;gap:6px}
+  h1{font-size:27px}
+  .wrap{padding-block:32px 48px}
+}
+</style>
+
+<div class="wrap">
+
+<div class="series mono">
+  <span class="cur">01 · Framework</span><span class="sep">/</span>
+  <span>02 · BPTE 章节</span><span class="sep">/</span>
+  <span>03 · Workshop</span>
+  <span style="margin-left:auto">BESS Asset Management · Sep 2026</span>
+</div>
+
+<div class="kicker">Framework</div>
+<h1 class="ser">The BESS Asset Value Stack</h1>
+<p class="thesis">BESS asset management is won in the stack, not at the hardware. Every layer can be
+instrumented, attributed, and operated as a service — and the layers above the hardware decide most of
+the outcome variance between two identical batteries.</p>
+<p class="theory">Derived from operating a live BESS market-intelligence and trading-operations stack in
+production — not from theory.</p>
+
+<h2 class="ser">1 · The four layers</h2>
+
+<div class="layer">
+  <div class="lchip mono">L1</div>
+  <div>
+    <div class="lname">Physical Asset</div>
+    <h3>Hardware, degradation, availability, augmentation</h3>
+    <div class="mech"><b>Value mechanism.</b> Every point of availability ≈ a point of revenue. The
+    degradation curve sets augmentation timing and lifetime MWh throughput; round-trip-efficiency decay
+    is silent revenue leakage. State-of-health must feed back into dispatch windows — usable DoD is a
+    moving target, not a nameplate.</div>
+    <ul>
+      <li>Nameplate accepted as realized capability.</li>
+      <li>Augmentation treated as an engineering decision when it is an NPV decision.</li>
+      <li>SOH tracked in a maintenance system the dispatch system never reads.</li>
+    </ul>
+    <div class="proof"><b>Who is strong here:</b> the OEM — design data, digital twin, warranty leverage,
+    field-service network. This is the layer Envision-type players win by birthright — and the layer where
+    independent asset managers are weakest. Say so honestly.</div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="lchip mono">L2</div>
+  <div>
+    <div class="lname">Data &amp; Settlement</div>
+    <h3>Telemetry, metering, settlement, reconciliation</h3>
+    <div class="mech"><b>Value mechanism.</b> Settlement errors are <i>direct</i> P&amp;L leakage. Every
+    layer above this one is fiction if the data is wrong.</div>
+    <ul>
+      <li>~80% of asset-management work is data plumbing, not analysis.</li>
+      <li>Sign conventions differ per counterparty and per document format — one mis-signed charge
+      component can persist for months before anyone notices.</li>
+      <li>Real fleet case: months of mis-signed charges (79 charge records) plus duplicate discharge
+      records, caught only by a per-bill audit loop — then eight months reconciled to the cent.</li>
+      <li>PDF settlement formats change without notice; parsers drift silently.</li>
+    </ul>
+    <div class="proof"><b>Proof it can be systematized:</b> per-counterparty parsers, per-bill
+    re-derivation and audit loops, ops logs with failure isolation per data source.</div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="lchip mono">L3</div>
+  <div>
+    <div class="lname">Market &amp; Dispatch Intelligence</div>
+    <h3>Forecasting, LP dispatch, capture-rate management</h3>
+    <div class="mech"><b>Value mechanism.</b> Capture rate — realized revenue ÷ theoretical
+    perfect-foresight revenue — is the largest <i>controllable</i> performance driver of a merchant BESS
+    asset. The theoretical-vs-realized gap is <i>the</i> dispatch-quality metric.</div>
+    <ul>
+      <li>Model choice silently moves realized capture: one legacy forecast design (day-ahead prices
+      published after real-time trading closes) inflated apparent capture by ~100% — invisible until
+      models ran side-by-side. Model governance is not optional.</li>
+      <li>Forecast operations have real unit costs: one intelligence feed carries a weekly credit quota
+      (~36–40 calls measured against a 140-call wish), so question cadence is designed to budget.</li>
+      <li>No feedback loop: dispatch quality never measured against the counterfactual, so "good" is
+      asserted, not shown.</li>
+    </ul>
+    <div class="proof"><b>Proof it can be systematized:</b> LP benchmark vs forecast-dispatched realized
+    revenue computed daily per asset; multiple forecast models coexisting and scored; market ranking by
+    capture-adjusted economics.</div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="lchip mono">L4</div>
+  <div>
+    <div class="lname">Commercial &amp; Lifecycle</div>
+    <h3>P&amp;L attribution, owner reporting, contract structuring</h3>
+    <div class="mech"><b>Value mechanism.</b> Attribution converts "the market was bad" into quantified
+    price / dispatch / degradation components. It is the trust layer underneath every performance-linked
+    contract and every capital-partner relationship.</div>
+    <ul>
+      <li>Owners receive revenue totals without drivers.</li>
+      <li>Performance contracts signed with no agreed attribution methodology — unverifiable by
+      construction.</li>
+      <li>Lifecycle decisions made on stale IRR from acquisition models never re-run on operating data.</li>
+    </ul>
+    <div class="proof"><b>Proof it can be systematized:</b> per-asset daily P&amp;L attribution,
+    strategy-comparison workflows (actual vs alternative dispatch, P&amp;L waterfall), portfolio P&amp;L,
+    IRR re-ranking on live data.</div>
+  </div>
+</div>
+
+<hr class="rule">
+
+<h2 class="ser">2 · Three cross-cutting bands</h2>
+
+<div class="band">
+  <div class="btag">A · Operating cadence</div>
+  <div class="tblwrap">
+    <table>
+      <tr><th>Cycle</th><th>Discipline</th></tr>
+      <tr><td class="mono">Daily</td><td>Dispatch review, data recon, ops log</td></tr>
+      <tr><td class="mono">Weekly</td><td>Capture &amp; forecast-model review</td></tr>
+      <tr><td class="mono">Monthly</td><td>Settlement close, P&amp;L attribution, owner report</td></tr>
+      <tr><td class="mono">Quarterly</td><td>Fleet benchmarking, contract review</td></tr>
+      <tr><td class="mono">Annual</td><td>Augmentation NPV, lifecycle decisions</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="band">
+  <div class="btag">B · Organization &amp; talent</div>
+  <div>
+    <p>Roles map to layers: field service (L1), data engineering (L2), market desk (L3), commercial asset
+    manager (L4). The production staffing insight: a <b>small senior team plus agent infrastructure</b>
+    covers all four layers — four data-grounded AI agents (market strategist, economics quant,
+    trading-ops analyst, investment aggregator) with explicit grounding rules and persistent domain
+    memory act as analyst multipliers, with honest limits: quotas, contamination guards, human review
+    loops.</p>
+  </div>
+</div>
+
+<div class="band">
+  <div class="btag">C · Commercial models</div>
+  <div>
+    <div class="tblwrap">
+    <table>
+      <tr><th>Model</th><th>Requires excellence in</th></tr>
+      <tr><td>Fixed-fee O&amp;M</td><td>L1 (+ basic L2)</td></tr>
+      <tr><td>Availability-guarantee O&amp;M</td><td>L1 + L2 — trusted availability evidence</td></tr>
+      <tr><td>Performance-linked AM<br><span style="color:var(--muted);font-size:13px">capture floor + upside share</span></td><td>L3 + L4 — capture measurement and agreed attribution</td></tr>
+      <tr><td>Co-investment / JV with infrastructure funds</td><td>All four + lifecycle track record</td></tr>
+    </table>
+    </div>
+    <p>You cannot sell a performance contract on a stack you cannot prove. The commercial roadmap is
+    therefore a stack-proofing roadmap.</p>
+  </div>
+</div>
+
+<hr class="rule">
+
+<h2 class="ser">3 · Maturity narrative — the leadership slide</h2>
+
+<div class="maturity">
+  <div class="mstep"><div class="mlv mono">L1</div><div class="mnm">Reactive maintenance</div></div>
+  <div class="mstep"><div class="mlv mono">L2</div><div class="mnm">Compliant reporting</div></div>
+  <div class="mstep"><div class="mlv mono">L3</div><div class="mnm">Optimized dispatch</div></div>
+  <div class="mstep"><div class="mlv mono">L4</div><div class="mnm">Market-integrated operations</div></div>
+  <div class="mstep"><div class="mlv mono">L5</div><div class="mnm">AI-native asset management</div></div>
+</div>
+<p class="mnote">Most O&amp;M vendors sell <b>L1–L2</b>. The value migration — and the margin — is
+<b>L3→L5</b>. The differentiator is not claiming L5; it is showing a running L4 system with attributable
+numbers and a credible path to L5.</p>
+
+<h2 class="ser">4 · Wind + BESS — one stack, two asset classes</h2>
+<p>Wind turbine O&amp;M and BESS O&amp;M/asset management share layers 2–4 entirely: the same
+data/settlement machinery, the same market-intelligence machinery, the same attribution and reporting
+machinery. Only L1 differs — different hardware, different field discipline, different failure physics.</p>
+<p><b>Conclusion for organization and IT:</b> one data platform, one market desk, one attribution
+system, two field-service disciplines. The BESS side additionally carries merchant-optimization upside —
+where the AM-as-a-service economics are richest.</p>
+
+<h2 class="ser">5 · What the framework demands of a regional entry</h2>
+<p>Entering a new market — Spain for Southern Europe, Brazil for Latin America — is a checklist, not a
+title:</p>
+<ol class="check">
+  <li><b>Attractiveness scan</b> — run the ranking methodology (capture-adjusted economics) on the
+  target market's price and fundamentals data.</li>
+  <li><b>Settlement anatomy</b> — obtain real settlement documents; build the re-derivation model before
+  trusting any number.</li>
+  <li><b>Data contracts</b> — metering/telemetry access, market data feeds, counterparty formats.</li>
+  <li><b>Dispatch model + benchmark</b> — theoretical-vs-realized capture measurement from day one.</li>
+  <li><b>Reporting cadence</b> — the operating rhythm, localized.</li>
+</ol>
+<p>Region onboarding on an existing stack is connectors and parameters — <b>weeks, not quarters.</b></p>
+
+<footer>
+  <b>Source basis:</b> production operation of a four-asset grid-scale BESS fleet and a 29-market daily
+  data pipeline; per-asset daily dispatch and P&amp;L attribution; settlement remediation audits;
+  multi-model capture benchmarking; GB/international market intelligence feeds.
+</footer>
+
+</div>
