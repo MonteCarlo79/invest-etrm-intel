@@ -1009,6 +1009,21 @@ def create_app() -> FastAPI:
             },
         )
 
+        # CITIC weekly digest: daily 02:00 UTC (10:00 Beijing) — after the
+        # local 09:05 Mac ingest (Anthropic calls are geo-blocked from the Mac)
+        from services.citic_futures.digest_job import run_citic_digest as _run_citic_digest
+        scheduler.add_job(
+            _run_citic_digest,
+            "cron",
+            hour=2, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+            },
+        )
+
         # Data patrol: daily 00:35 UTC (08:35 Beijing) — after health check
         scheduler.add_job(
             _run_patrol,
@@ -1346,6 +1361,16 @@ def create_app() -> FastAPI:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         owner_open_id = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
         background_tasks.add_task(_run_patrol, pg_url, feishu, owner_open_id, api_key)
+        return {"status": "started"}
+
+    @app.post("/hermes/citic-digest")
+    async def _citic_digest_trigger(background_tasks: BackgroundTasks):
+        """Trigger the CITIC weekly digest immediately."""
+        from services.citic_futures.digest_job import run_citic_digest as _rcd
+        pg_url = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        owner_open_id = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+        background_tasks.add_task(_rcd, pg_url, feishu, owner_open_id, api_key)
         return {"status": "started"}
 
     @app.get("/hermes/patrol/status")

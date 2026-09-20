@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.pjh-etrm.citic-weekly</string>
+    <!-- /bin/bash invocation: immune to OneDrive permission quirks (no +x needed) -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/services/citic_futures/run_weekly.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform</string>
+    <!-- Daily 09:05. If asleep, launchd runs the job at next wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>9</integer>
+        <key>Minute</key><integer>5</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/logs/citic_launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/logs/citic_launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/chenzhuqi/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

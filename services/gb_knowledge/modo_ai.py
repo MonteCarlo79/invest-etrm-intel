@@ -35,8 +35,9 @@ logger = logging.getLogger(__name__)
 _SESSION_PATH = os.environ.get("MODO_SESSION_PATH", "/tmp/modo_session.json")
 
 # ---------------------------------------------------------------------------
-# Standard questions — time-sensitive market intelligence.
-# Asked in nightly rotation (see _nightly_questions) to fit the weekly credit quota.
+# Standard questions sent to Modo AI each night
+# ---------------------------------------------------------------------------
+# Asked every night — time-sensitive market intelligence.
 STANDARD_QUESTIONS: list[str] = [
     "What are the most important GB BESS market developments from the last 24 hours?",
     "Which revenue streams are performing best for GB BESS assets right now — "
@@ -139,7 +140,6 @@ def _api_ask(http: requests.Session, token: str, question: str) -> str | None:
 
     SSE stream: `set_chat_id` / `tool_call` events are progress noise; the
     answer arrives as `message_chunk` events whose `content` deltas concatenate.
-    Raises _QuotaExceeded on HTTP 402 (credit quota exhausted).
     """
     resp = http.post(
         f"{_ASK_MODO}/chats/completion",
@@ -147,8 +147,6 @@ def _api_ask(http: requests.Session, token: str, question: str) -> str | None:
         headers={"Authorization": f"Bearer {token}", "Accept": "text/event-stream"},
         timeout=180, stream=True,
     )
-    if resp.status_code == 402:
-        raise _QuotaExceeded("chats/completion HTTP 402 (credit quota exhausted)")
     if resp.status_code != 200:
         raise RuntimeError(f"chats/completion HTTP {resp.status_code}")
     parts: list[str] = []
@@ -164,81 +162,6 @@ def _api_ask(http: requests.Session, token: str, question: str) -> str | None:
             except json.JSONDecodeError:
                 pass
     return "".join(parts).strip() or None
-
-
-class _QuotaExceeded(Exception):
-    """ask-modo returned HTTP 402 — daily/weekly credit quota exhausted."""
-
-
-# ---------------------------------------------------------------------------
-# Nightly question selection — rotation + foundational skip
-#
-# The ask-modo WEEKLY credit quota (~35-40 questions, observed 2026-09-14→19:
-# ~36 questions passed before hard-402) cannot sustain 20 questions/night
-# (~140/week).  The 14 date-keyed questions (standard + research) therefore
-# rotate in slices of _SLICE_SIZE per night on a deterministic day-of-year
-# cycle — full coverage every 3 nights at ~33 questions/week.  Foundational
-# questions are asked only when their fixed URL is missing from the KB
-# (they are insert-once; re-asking every night was pure credit waste).
-# ---------------------------------------------------------------------------
-_SLICE_SIZE = 5
-
-
-def _missing_foundational_urls() -> set[str]:
-    """Foundational URLs not yet present in the KB (safe fallback: ask all)."""
-    urls = {f"modo_ai://foundational/q{i:02d}" for i in range(len(FOUNDATIONAL_QUESTIONS))}
-    try:
-        from services.gb_knowledge.base import get_db_conn
-        conn = get_db_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT url FROM intl_market.gb_knowledge_docs WHERE url = ANY(%s)",
-                    (sorted(urls),),
-                )
-                have = {r[0] for r in cur.fetchall()}
-        finally:
-            conn.close()
-        return urls - have
-    except Exception as exc:
-        logger.warning("[modo_ai] foundational existence check failed (%s) — asking all", exc)
-        return urls
-
-
-def _nightly_questions(today: date) -> list[tuple[str, str, bool]]:
-    """Tonight's slice as (question, url, is_last) tuples.
-
-    Date-keyed questions rotate deterministically by day-of-year; missing
-    foundational questions are appended (they land once, then stop appearing).
-    """
-    rotating = [
-        (q, f"modo_ai://{today.isoformat()}/q{i:02d}")
-        for i, q in enumerate(STANDARD_QUESTIONS)
-    ] + [
-        (q, f"modo_ai://{today.isoformat()}/research{i:02d}")
-        for i, q in enumerate(MODO_RESEARCH_QUESTIONS)
-    ]
-    n_slices = -(-len(rotating) // _SLICE_SIZE)   # ceil
-    k = today.toordinal() % n_slices
-    picked = rotating[k * _SLICE_SIZE:(k + 1) * _SLICE_SIZE]
-    logger.info(
-        "[modo_ai] rotation slice %d/%d — date-keyed questions %d-%d of %d",
-        k + 1, n_slices, k * _SLICE_SIZE + 1, k * _SLICE_SIZE + len(picked), len(rotating),
-    )
-
-    missing = _missing_foundational_urls()
-    if missing:
-        logger.info("[modo_ai] %d foundational question(s) missing from KB — included tonight", len(missing))
-    picked += [
-        (q, f"modo_ai://foundational/q{i:02d}")
-        for i, q in enumerate(FOUNDATIONAL_QUESTIONS)
-        if f"modo_ai://foundational/q{i:02d}" in missing
-    ]
-
-    out = [(q, u, False) for q, u in picked]
-    if out:
-        out[-1] = (out[-1][0], out[-1][1], True)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +201,23 @@ class ModoAIConnector(BaseConnector):
         token_at = time.time()
         logger.info("[modo_ai] API login OK (browser-free)")
 
-        all_questions = _nightly_questions(today)
+        all_questions = [
+            # (question_text, url, is_last)
+            # Daily market intelligence — date-keyed, refreshed every night
+            (q, f"modo_ai://{today.isoformat()}/q{i:02d}", False)
+            for i, q in enumerate(STANDARD_QUESTIONS)
+        ] + [
+            # Modo proprietary research — date-keyed, refreshed every night
+            (q, f"modo_ai://{today.isoformat()}/research{i:02d}", False)
+            for i, q in enumerate(MODO_RESEARCH_QUESTIONS)
+        ] + [
+            # Foundational knowledge — fixed URL, inserted once only
+            (q, f"modo_ai://foundational/q{i:02d}", False)
+            for i, q in enumerate(FOUNDATIONAL_QUESTIONS)
+        ]
+        # Mark last question
+        if all_questions:
+            all_questions[-1] = (all_questions[-1][0], all_questions[-1][1], True)
 
         total_q = len(all_questions)
         for idx, (question, url, is_last) in enumerate(all_questions):
@@ -296,12 +235,6 @@ class ModoAIConnector(BaseConnector):
                     return
             try:
                 answer = _api_ask(http, token, question)
-            except _QuotaExceeded:
-                logger.error(
-                    "[modo_ai] credit quota exhausted (HTTP 402) at question %d/%d — ending run early",
-                    idx + 1, total_q,
-                )
-                return
             except Exception as exc:
                 logger.warning("[modo_ai] Question %d error: %s", idx + 1, exc)
                 continue
@@ -810,12 +743,6 @@ class ModoAIConnector(BaseConnector):
                     return
             try:
                 answer = _api_ask(http, token, question)
-            except _QuotaExceeded:
-                logger.error(
-                    "[modo_ai] credit quota exhausted (HTTP 402) at custom Q%d/%d — ending run early",
-                    i + 1, len(questions),
-                )
-                return
             except Exception as exc:
                 logger.warning("[modo_ai] Custom Q%d error: %s", i, exc)
                 continue

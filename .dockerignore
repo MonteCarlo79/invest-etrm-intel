@@ -120,6 +120,7 @@ apps/bess-inner-mongolia/
 # lingfeng-ingest image exceptions
 !services/lingfeng/
 !services/hermes/
+!services/citic_futures/
 # hermes image also needs this: nodal_scraper imports services.fengxing.nodal_price
 !services/fengxing/
 # inner_agent image (EnOS daily ingestion) is built from this dir (Dockerfile.agent)

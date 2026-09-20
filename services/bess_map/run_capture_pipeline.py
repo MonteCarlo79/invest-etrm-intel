@@ -503,8 +503,6 @@ def main():
     ap.add_argument("--max-cycles-per-day", type=float, default=None, help="Daily cycle cap (EFC/day)")
     ap.add_argument("--province-list", default=None,
                     help="Comma separated list of provinces to run")
-    ap.add_argument("--with-quantiles", action=argparse.BooleanOptionalAction, default=True,
-                    help="Also compute residual-quantile bands (ols_rt_time_v1 only)")
 
 
 
@@ -618,23 +616,6 @@ def main():
         rt_pred = build_forecast(hourly, model=args.model, min_train_days=args.min_train_days, lookback_days=args.lookback_days)
         rt_pred = rt_pred.dropna().sort_index()
         upsert_rt_forecast(engine, args.schema, p, args.model, rt_pred)
-
-        # ---------------- QUANTILE BANDS (probabilistic layer) ----------------
-        # Residual-quantile bands on the default backbone; reuses the same
-        # walk-forward model, so residuals are honest out-of-sample errors.
-        if args.with_quantiles and args.model == "ols_rt_time_v1":
-            from services.bess_map.quantile_forecast import (
-                QUANTILE_MODEL, compute_bands,
-                ensure_table as qf_ensure_table, upsert_bands,
-            )
-            qf_ensure_table(engine, args.schema)
-            bands = compute_bands(
-                hourly_full, model=args.model,
-                min_train_days=args.min_train_days,
-                lookback_days=args.lookback_days,
-            )
-            n_q = upsert_bands(engine, args.schema, p, QUANTILE_MODEL, bands)
-            print(f"[OK] {p} | quantile bands rows={n_q}")
 
         # ---------------- CAPTURED DISPATCH (on forecast) ----------------
         cap_dispatch, _cap_profit_forecast = compute_dispatch_from_hourly_prices(
