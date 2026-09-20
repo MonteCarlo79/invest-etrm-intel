@@ -10,7 +10,7 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 **Why:** `git commit` commits the whole index, not just what you `git add`ed. On a shared OneDrive working tree with parallel sessions, pre-staged foreign content is routine.
 
-**The rule (from now on):** before ANY commit on this tree, run `git status` and look for content that is staged but not yours. Unstage foreign work first: `git restore --staged <their files>` — never `git checkout`/`reset` it away (that destroys their WIP), just move it out of the index. Then commit. Review `git show <new-commit> --stat` before pushing; if a sweep already shipped and the swept content is coherent/complete (as here), leave it and flag it — do NOT revert intentional work or rewrite pushed history on a shared tree.
+**The rule (from now on):** before ANY commit on this tree, run `git status` and look for content that is staged but not yours — **any status letter in column 1, including D (staged deletions are just as sweepable)**. Unstage foreign work first: `git restore --staged <their files>` — never `git checkout`/`reset` it away (that destroys their WIP), just move it out of the index. Then commit. Review `git show <new-commit> --stat` before pushing; if a sweep already shipped and the swept content is coherent/complete (as here), leave it and flag it — do NOT revert intentional work or rewrite pushed history on a shared tree.
 
 **See also:** the 2026-09-14 shared-branch reset incident below — same root cause (shared working tree, multiple sessions).
 
