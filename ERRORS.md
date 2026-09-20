@@ -4,6 +4,18 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## `git commit` sweeps the whole index — parallel session's staged work shipped under my message (2026-09-20)
+
+**What happened:** A parallel session had staged (but not committed) a coherent feature REMOVAL (`strategy_experiments`/`quantile_forecast`/leaderboard — code, tests, DDL, UI strings). I ran `git add <my explicit paths> && git commit` — the commit included everything ALREADY in the index, and the push shipped their work to main under my unrelated commit message (2cf7492).
+
+**Why:** `git commit` commits the whole index, not just what you `git add`ed. On a shared OneDrive working tree with parallel sessions, pre-staged foreign content is routine.
+
+**The rule (from now on):** before ANY commit on this tree, run `git status` and look for content that is staged but not yours. Unstage foreign work first: `git restore --staged <their files>` — never `git checkout`/`reset` it away (that destroys their WIP), just move it out of the index. Then commit. Review `git show <new-commit> --stat` before pushing; if a sweep already shipped and the swept content is coherent/complete (as here), leave it and flag it — do NOT revert intentional work or rewrite pushed history on a shared tree.
+
+**See also:** the 2026-09-14 shared-branch reset incident below — same root cause (shared working tree, multiple sessions).
+
+---
+
 ## Parallel session reset a shared feature branch (twice) mid-merge — recovery via reflog (2026-09-14)
 
 **What happened:** Three+ Claude sessions share this repo's working tree. While `feat/price-forecasting` was checked out for merge, a parallel session ran `git reset --mixed 6edc6cd` TWICE (each time after another session had committed on top). Branch tip jumped back 6 commits; ~7 commits of finished, reviewed work appeared "lost", with their content sitting as staged residue in the index. The reflog also showed another session's commit (T18) committed twice, then reset away twice.
