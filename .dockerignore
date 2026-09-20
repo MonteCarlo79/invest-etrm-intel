@@ -121,6 +121,7 @@ apps/bess-inner-mongolia/
 !services/lingfeng/
 !services/hermes/
 !services/citic_futures/
+!services/coal_index/
 # hermes image also needs this: nodal_scraper imports services.fengxing.nodal_price
 !services/fengxing/
 # inner_agent image (EnOS daily ingestion) is built from this dir (Dockerfile.agent)

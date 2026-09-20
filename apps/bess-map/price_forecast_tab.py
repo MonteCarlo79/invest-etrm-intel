@@ -151,7 +151,17 @@ def render_merit_order_explorer(st, eng, provinces):
         st.info("该省份暂无已确认的燃料/装机数据（Hermes 扫描结果为 draft，待确认）。")
         return
     c1, c2 = st.columns(2)
-    coal = c1.number_input("煤价 (¥/t)", value=float(ff["coal_price_yuan_t"] or 850.0), key="pf_coal")
+    _coal_default = ff["coal_price_yuan_t"]
+    try:
+        from services.coal_index.cec_scraper import latest_coal_price
+        _idx = latest_coal_price(eng, "ceci_synth_5500")
+        if _idx is not None:
+            _coal_default = _idx
+    except Exception:
+        pass
+    coal = c1.number_input("煤价 (¥/t)", value=float(_coal_default or 850.0), key="pf_coal")
+    if _coal_default and _coal_default != ff["coal_price_yuan_t"]:
+        c1.caption("默认取自 CEC 沿海5500综合价（日更）")
     gas = c2.number_input("气价 (¥/m³)", value=float(ff["gas_price_yuan_m3"] or 3.0), key="pf_gas")
     day = st.date_input("日期", key="pf_mo_day")
 
@@ -260,7 +270,14 @@ def run_hybrid_forecast(eng, province, target_date, train_days=365):
         return pd.DataFrame()
 
     # --- level: merit order on target day, markup fit on last 90d
-    coal = ff["coal_price_yuan_t"] or 850.0
+    coal = ff["coal_price_yuan_t"]
+    if coal is None:
+        try:
+            from services.coal_index.cec_scraper import latest_coal_price
+            coal = latest_coal_price(eng, "ceci_synth_5500")
+        except Exception:
+            coal = None
+    coal = coal or 850.0
     gas = ff["gas_price_yuan_m3"] or 3.0
     imports = load_import_blocks(eng, province)
     fund_target = fund_train[fund_train.index.date == target_date]

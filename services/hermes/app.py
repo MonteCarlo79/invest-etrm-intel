@@ -1024,6 +1024,19 @@ def create_app() -> FastAPI:
             },
         )
 
+        # CEC coal index scrape: daily 01:00 UTC (09:00 Beijing)
+        from services.coal_index.cec_scraper import run_daily as _run_coal_daily
+        scheduler.add_job(
+            _run_coal_daily,
+            "cron",
+            hour=1, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
         # Data patrol: daily 00:35 UTC (08:35 Beijing) — after health check
         scheduler.add_job(
             _run_patrol,
