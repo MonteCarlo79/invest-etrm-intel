@@ -19,6 +19,7 @@ Entry points:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date
 
 import requests
@@ -65,9 +66,28 @@ def _ensure_table(cur) -> None:
     cur.execute(_DDL)
 
 
+def _proxy_dict() -> dict | None:
+    """China-egress proxy for cec.org.cn, which blocks overseas IPs (ECS is in
+    Singapore). Falls back to the WeChat egress proxy (Tencent Lighthouse)."""
+    proxy = os.environ.get("COAL_INDEX_PROXY_URL") or os.environ.get("WECHAT_PROXY_URL", "")
+    return {"http": proxy, "https": proxy} if proxy else None
+
+
 def fetch_index(url: str = SOURCE_URL, timeout: int = 30) -> dict:
-    """Fetch the raw zdlzs JSON. Raises on HTTP/shape errors."""
-    resp = requests.get(url, headers={"User-Agent": _UA, "Referer": _REFERER}, timeout=timeout)
+    """Fetch the raw zdlzs JSON. Raises on HTTP/shape errors.
+
+    Direct fetch first; on connection failure retry once via the China proxy
+    when one is configured (no-op locally where cec.org.cn is reachable).
+    """
+    headers = {"User-Agent": _UA, "Referer": _REFERER}
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+    except requests.RequestException:
+        proxies = _proxy_dict()
+        if proxies is None:
+            raise
+        logger.info("coal_index: direct fetch failed, retrying via proxy")
+        resp = requests.get(url, headers=headers, timeout=timeout, proxies=proxies)
     resp.raise_for_status()
     payload = resp.json()
     if not payload.get("success"):

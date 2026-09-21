@@ -5,7 +5,11 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from services.coal_index.cec_scraper import parse_rows, upsert_rows, latest_coal_price, run_daily
+import requests
+
+from services.coal_index.cec_scraper import (
+    fetch_index, parse_rows, upsert_rows, latest_coal_price, run_daily,
+)
 
 _SAMPLE = Path("/tmp/cec_zdlzs_real.json")
 
@@ -68,3 +72,49 @@ def test_run_daily_failure_alerts_feishu():
     assert out["ok"] is False and "boom" in out["error"]
     feishu.send_text.assert_called_once()
     assert "抓取失败" in feishu.send_text.call_args.kwargs["text"]
+
+
+def _ok_resp():
+    resp = MagicMock()
+    resp.json.return_value = {"success": True, "data": []}
+    return resp
+
+
+def test_fetch_index_proxy_fallback(monkeypatch):
+    """Direct fetch raising → retry via proxy env; success payload returned."""
+    monkeypatch.setenv("WECHAT_PROXY_URL", "http://proxy:8888")
+    monkeypatch.delenv("COAL_INDEX_PROXY_URL", raising=False)
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None, proxies=None):
+        calls.append(proxies)
+        if proxies is None:
+            raise requests.ConnectionError("direct blocked")
+        return _ok_resp()
+
+    with patch("services.coal_index.cec_scraper.requests.get", side_effect=fake_get):
+        payload = fetch_index("http://x")
+    assert payload["success"] is True
+    assert calls == [None, {"http": "http://proxy:8888", "https": "http://proxy:8888"}]
+
+
+def test_fetch_index_no_proxy_reraises(monkeypatch):
+    """Direct fetch raising with no proxy configured → original error propagates."""
+    monkeypatch.delenv("WECHAT_PROXY_URL", raising=False)
+    monkeypatch.delenv("COAL_INDEX_PROXY_URL", raising=False)
+    with patch("services.coal_index.cec_scraper.requests.get",
+               side_effect=requests.ConnectionError("blocked")):
+        try:
+            fetch_index("http://x")
+            assert False, "should have raised"
+        except requests.ConnectionError:
+            pass
+
+
+def test_fetch_index_direct_success_skips_proxy(monkeypatch):
+    """Direct fetch succeeding → proxy never consulted."""
+    monkeypatch.setenv("WECHAT_PROXY_URL", "http://proxy:8888")
+    with patch("services.coal_index.cec_scraper.requests.get", return_value=_ok_resp()) as g:
+        payload = fetch_index("http://x")
+    assert payload["success"] is True
+    assert g.call_args.kwargs.get("proxies") is None

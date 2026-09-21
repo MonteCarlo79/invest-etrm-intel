@@ -417,3 +417,13 @@ Whole build (pip + 57MB fonts-noto-cjk) completed in ~4 min at mirror speed. Use
 4. The local route DOES recover (same-day ~14:28 after a dead morning) — background retry loops (20-90 × 2-3 min) eventually land and can run the full transaction locally.
 
 **Also:** ECS Exec is NOT enabled on asset-risk (`enableExecuteCommand: false`) — `execute-command` is not an available shortcut.
+
+## 2026-09-21 — cec.org.cn blocks overseas IPs: China-proxy fallback for scrapers on ECS
+
+**Problem:** CEC coal index backfill task on ECS (Singapore) failed with `ConnectTimeoutError` to `cec.org.cn:443`. The endpoint answers in 0.8s from the Mac (China network) — the block is geo/IP-based, not rate limiting.
+
+**Probe (decisive, run as one-off Fargate task):** direct from ECS → baidu 200, cec.org.cn timeout; via `WECHAT_PROXY_URL` (tinyproxy on Tencent Lighthouse, China egress) → cec.org.cn AND the zdlzs JSON both 200. From the Mac the same proxy times out — Tencent Lighthouse firewall whitelists the hermes NAT EIP only, so "proxy unreachable from Mac" says nothing about its health from ECS. Always probe from ECS itself.
+
+**Fix:** `services/coal_index/cec_scraper.py` `fetch_index` tries direct, on `RequestException` retries via `COAL_INDEX_PROXY_URL` falling back to `WECHAT_PROXY_URL` (already in hermes td env). No-op locally where direct works.
+
+**Rule going forward:** any scraper targeting a China-hosted site that will run on ECS (Singapore) must assume the site may block overseas IPs. Build in the proxy fallback from the start and probe reachability from ECS (one-off run-task), never infer from the Mac.
