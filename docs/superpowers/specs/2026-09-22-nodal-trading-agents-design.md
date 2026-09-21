@@ -32,7 +32,9 @@ L3  ASSET AGENTS (this project: services/nodal_agents/ + mengxi-dashboard "Nodal
     → comparison vs asset-risk trader strategies (side-by-side P&L attribution)
 ```
 
-**BESS feedback loop:** L3's aggregate BESS dispatch prediction (same-zone + grid-wide totals) is written back to L1's input layer as a bidding-space adjustment for the following day's forecast (grid bidding space now includes BESS as significant supply/demand).
+**BESS feedback loop (recursive):** L3's aggregate BESS dispatch prediction (same-zone + grid-wide totals) is written back to L1's input layer as a bidding-space adjustment. The adjusted price forecast re-forms the nodal curve and the strategy re-optimizes — iterated until the dispatch change between iterations falls below tolerance (default: <2% of asset MWh) or max 3 iterations. **The converged strategy is the "recursive optimal dispatch".** All downstream evaluation uses the converged strategy, never the first-pass one.
+
+**Comparison (after convergence):** the recursive-optimal strategy is benchmarked against the traders' **realized** asset-risk strategies (actual dispatch with their green/red/orange zone constraints) — side-by-side P&L attribution on actual RT prices via the existing strategy_comparison workflow: what would the recursive equilibrium have earned vs what traders actually did, and how much of the gap is zone-restriction cost vs forecast error vs strategy shape.
 
 ## 3. Data
 
@@ -68,9 +70,10 @@ Per asset, daily (target: run after L1 publishes, before 17:00 for D+1 nominatio
 2. **Constraints:** capacity_mw / duration_h / RTE / SOC window; **substation_cap_mw** (from registry) applied as a shared constraint across same-substation assets (coordinated allocation, proportional by capacity); traffic-light restricted intervals (from asset-risk's restriction history per asset, learned as recurring windows)
 3. **Behavior forecast:** same-zone BESS aggregate dispatch (from md_id_cleared_energy patterns, day-type matched) + coal fleet response (aggregate stack: merit-order coal segments from fuel_fleet at forecast coal price, response ≈ historical stack utilization by residual-load level)
 4. **Strategy:** deterministic LP dispatch maximizing spread capture against the forecast curve (existing `libs/decision_models/bess_dispatch_optimization.py` engine reused with nodal curve + substation cap + zone restrictions)
-5. **Persist:** `nodal_strategy_daily` (curve + assumptions + model_version)
-6. **Evaluate:** promote loop — windowed capture-rate vs actual RT per asset; champion/candidate status per asset; agents self-retire losing variants
-7. **Comparison:** read asset-risk trader strategies → side-by-side realized P&L vs optimal (uses existing strategy_comparison workflow)
+5. **Persist:** `nodal_strategy_daily` (curve + assumptions + model_version + **iteration count + convergence delta**)
+6. **Recursive loop:** aggregate all agents' strategies + other-asset predicted dispatch → bidding-space adjustment → L1/L2 price re-form → re-optimize until convergence (<2% MWh change or 3 iterations)
+7. **Evaluate:** promote loop — windowed capture-rate vs actual RT per asset (on the **converged** strategy); champion/candidate status per asset; agents self-retire losing variants
+8. **Comparison (post-convergence):** recursive-optimal vs traders' **realized** asset-risk strategies → side-by-side realized P&L attribution (strategy_comparison workflow): total gap split into zone-restriction cost / forecast error / strategy shape
 
 ## 6. Node map & asset registry (largest data task)
 
