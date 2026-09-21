@@ -146,6 +146,7 @@ def run_daily(pg_url: str, feishu=None, owner_open_id: str = "") -> dict:
     conn = psycopg2.connect(pg_url)
     try:
         with conn.cursor() as cur:
+            _ensure_table(cur)  # before _prev_two — fresh DBs have no table yet
             before = _prev_two(cur, "caofeidian_5500")
             n = upsert_rows(cur, rows)
             after = _prev_two(cur, "caofeidian_5500")

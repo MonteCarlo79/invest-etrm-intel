@@ -118,3 +118,19 @@ def test_fetch_index_direct_success_skips_proxy(monkeypatch):
         payload = fetch_index("http://x")
     assert payload["success"] is True
     assert g.call_args.kwargs.get("proxies") is None
+
+
+def test_run_daily_ensures_table_before_read():
+    """Fresh DB: _ensure_table must run before _prev_two (was UndefinedTable)."""
+    cur = MagicMock()
+    cur.fetchall.return_value = []
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    rows = [("caofeidian_5500", date(2026, 9, 18), 977.0)]
+    with patch("services.coal_index.cec_scraper.fetch_index", return_value={"ok": True}), \
+         patch("services.coal_index.cec_scraper.parse_rows", return_value=rows), \
+         patch("psycopg2.connect", return_value=conn):
+        out = run_daily("postgresql://x")
+    assert out["ok"] is True
+    first_sql = cur.execute.call_args_list[0].args[0]
+    assert "CREATE TABLE IF NOT EXISTS marketdata.coal_index_daily" in first_sql
