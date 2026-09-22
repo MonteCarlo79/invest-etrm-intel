@@ -344,3 +344,20 @@ def test_register_strategies_skips_when_no_actuals():
     assert all("INSERT" not in sql for sql, _ in conn.cur.calls)
     # PF / prev-experiment SELECTs are never reached without actuals
     assert len(conn.cur.calls) == 3
+
+
+def test_register_strategies_does_not_double_prefix_version():
+    # prod MODEL_VERSION is already namespaced ("nodal_agent_v1") — the
+    # experiment model key must stay "nodal_agent_v1", never double up.
+    rows = [(p, d, cj, aj, "nodal_agent_v1")
+            for (p, d, cj, aj, _mv) in _reg_strategy_rows()]
+    conn = _RowsConn(row_sets=[
+        rows, _reg_registry_rows(),
+        _reg_price_rows("N1", 200.0, 400.0) + _reg_price_rows("N2", 100.0, 300.0),
+        _reg_pf_rows(), [],
+    ])
+    n = writer.register_strategies(conn, date(2026, 9, 22), window_days=3)
+    assert n == 2
+    models = {p["model"] for sql, p in conn.cur.calls
+              if "INSERT INTO marketdata.strategy_experiments" in sql}
+    assert models == {"nodal_agent_v1"}

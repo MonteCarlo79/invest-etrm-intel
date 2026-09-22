@@ -377,7 +377,10 @@ def register_strategies(conn, target_date: date, window_days: int = 30) -> int:
         theoretical = theoretical_cfg * (power / _PF_POWER_MW)
         basis = power * duration_h
         rte = rte_pct / 100.0
-        model = f"{_EXPERIMENT_SCOPE}_{mv}"
+        # model_version is already namespaced in prod (MODEL_VERSION =
+        # "nodal_agent_v1") — prefix only bare versions ("v1") so the
+        # persisted key never doubles up (nodal_agent_nodal_agent_v1).
+        model = mv if mv.startswith(_EXPERIMENT_SCOPE) else f"{_EXPERIMENT_SCOPE}_{mv}"
         capture_rows.append({
             "model": model,
             "province": plant,
