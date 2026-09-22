@@ -29,8 +29,9 @@ headroom < 0 (binding substation proxy).
 Usage:
     python scripts/nodal_l2_backtest.py /path/to/extract.csv [--holdout 21]
 
-Gate (printed, and exit 1 on any FAIL): for every zone with >= MIN_TRAIN
-train rows, nodal MAE <= grid-only baseline MAE.
+Gate (printed, and exit 1 on any FAIL): for every zone with >= MIN_TRAIN_DAYS
+distinct train days, nodal MAE <= grid-only baseline MAE. Fail-closed:
+empty/NaN-only extracts exit 1.
 """
 from __future__ import annotations
 
@@ -46,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.mengxi_nodal.zones import CURRENT_ASSETS, ZONES
 from services.nodal_forecast import backtest, price_formation as pf
 
-MIN_TRAIN = 30  # rows per zone before the gate applies (brief: ≥30 days)
+MIN_TRAIN_DAYS = 30  # distinct train days per zone before the gate applies (plan: ≥30 days)
 
 
 def _zone_map() -> dict[str, str]:
@@ -80,7 +81,9 @@ def build_hist(df: pd.DataFrame) -> pd.DataFrame:
 def run_gate(df: pd.DataFrame, holdout_days: int) -> tuple[pd.DataFrame, bool]:
     df = df.dropna(subset=["nodal_price", "grid_price", "headroom", "renewable"])
     if df.empty:
-        return pd.DataFrame(), True
+        # fail-closed: a gate that blocks merge on a bad model must not print
+        # PASS on empty evidence (e.g. an all-NaN probe extract column).
+        return pd.DataFrame(), False
     df["d"] = pd.to_datetime(df["d"]).dt.date
     all_days = sorted(df["d"].unique())
     if len(all_days) <= holdout_days + 10:
@@ -92,11 +95,13 @@ def run_gate(df: pd.DataFrame, holdout_days: int) -> tuple[pd.DataFrame, bool]:
     for zone, zdf in df.groupby("zone"):
         train = zdf[zdf["d"] < cutoff]
         holdout = sorted(d for d in zdf["d"].unique() if d >= cutoff)
-        if len(train) < MIN_TRAIN or not holdout:
+        train_days = train["d"].nunique()
+        if train_days < MIN_TRAIN_DAYS or not holdout:
             results.append({"zone": zone, "train_rows": len(train),
+                            "train_days": train_days,
                             "holdout_days": len(holdout),
                             "nodal_mae": None, "baseline_mae": None,
-                            "gate": "SKIP (<30 train rows)"})
+                            "gate": "SKIP (<30 train days)"})
             continue
         hist = train.rename(columns={"d": "d"})[["d", "node_name", "grid_price",
                                                  "headroom", "renewable",
@@ -132,6 +137,7 @@ def run_gate(df: pd.DataFrame, holdout_days: int) -> tuple[pd.DataFrame, bool]:
         ok = nodal is not None and base is not None and nodal <= base
         ok_all = ok_all and ok
         results.append({"zone": zone, "train_rows": len(train),
+                        "train_days": train_days,
                         "holdout_days": len(holdout),
                         "nodal_mae": None if nodal is None else round(nodal, 2),
                         "baseline_mae": None if base is None else round(base, 2),

@@ -163,6 +163,7 @@ def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
     if not assets:
         return {"target_date": target_date.isoformat(), "plants": 0,
                 "upserted": 0, "iterations": 0, "convergence_delta_mwh": 0.0,
+                "shape_misses": 0,
                 "model_version": model_version}
     if data is None:
         src = {**src,
