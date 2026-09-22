@@ -56,6 +56,9 @@ def forecast_zone_bess(zone: str, target_date: date, hist: pd.DataFrame) -> np.n
     missing = [c for c in ("d", "interval", "dispatch_mw") if c not in df.columns]
     if missing:
         raise ValueError(f"hist missing required columns: {missing}")
+    iv = pd.to_numeric(df["interval"], errors="coerce")
+    if iv.isna().any() or bool(((iv < 0) | (iv > 95)).any()):
+        raise ValueError("hist interval codes must be within 0..95")
 
     mat = (df.pivot_table(index="d", columns="interval", values="dispatch_mw",
                           aggfunc="mean")
@@ -93,6 +96,8 @@ def coal_stack_response(residual: np.ndarray, fuel: dict) -> np.ndarray:
         must_run += mr
         flex += cap - mr
     r = np.asarray(residual, dtype=float)
+    if r.shape != (96,):
+        raise ValueError(f"residual must be (96,), got {r.shape}")
     if not np.isfinite(r).all():
         finite = r[np.isfinite(r)]
         fill = float(finite.mean()) if finite.size else 0.0

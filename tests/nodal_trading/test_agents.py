@@ -108,9 +108,12 @@ def test_converge_multi_asset_dict_curves_and_substation_others():
     ]
     out = recursion.converge(assets, curves_fn, max_iter=3, tol_mwh_pct=2.0)
     assert set(out["strategies"]) == {"甲", "乙"}
-    # shared 120 MW substation cap: 乙 (80 MW) leaves 甲 at most 40 MW headroom
-    # in 乙's discharge window; 甲's peak must respect it once 乙 is counted.
-    for name, strat in out["strategies"].items():
+    # shared 120 MW substation cap: 甲 solves first in list order and takes
+    # up to 100 MW, so 乙 (80 MW) is the one squeezed — it sees only the
+    # headroom 甲 leaves in 甲's discharge window.
+    s = out["strategies"]
+    assert (s["甲"]["curve"] + s["乙"]["curve"]).max() <= 120 + 1e-6
+    for name, strat in s.items():
         assert strat["curve"].shape == (96,)
         assert "assumptions" in strat
     assert 2 <= out["iterations"] <= 3
@@ -177,3 +180,77 @@ def test_writer_run_day_synthetic():
     assert by_plant["谷山梁"]["model_version"] == out["model_version"]
     asm = json.loads(by_plant["谷山梁"]["assumptions_json"])
     assert asm["grid_price_hat"] == pytest.approx(320.0)
+
+
+# --- review round 1: raise paths + version-filtered grid price --------------
+
+def test_converge_rejects_non_finite_curve():
+    def curves_fn(iter_no, dispatch):
+        return np.array([200.0]*48 + [np.nan]*48)
+    asset = dict(plant_name="谷山梁", capacity_mw=100.0, duration_h=2.0, rte_pct=85.0)
+    with pytest.raises(ValueError):
+        recursion.converge([asset], curves_fn, max_iter=2)
+
+
+def test_coal_stack_response_rejects_bad_residual_shape():
+    fuel = {"segments": [{"capacity_mw": 100.0, "must_run_mw": 40.0}]}
+    with pytest.raises(ValueError):
+        behavior.coal_stack_response(np.zeros(48), fuel)
+
+
+def test_forecast_zone_bess_rejects_out_of_range_interval():
+    rows = [dict(d=date(2026, 9, 21), interval=100, dispatch_mw=-10.0)]
+    with pytest.raises(ValueError):
+        behavior.forecast_zone_bess("乌兰察布", date(2026, 9, 22), pd.DataFrame(rows))
+
+
+class _RowsCur:
+    """Cursor serving queued row-sets (one per execute's fetchall); records SQL."""
+    def __init__(self, row_sets):
+        self._row_sets = list(row_sets)
+        self.calls = []
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+    def executemany(self, sql, seq):
+        self.calls.append((sql, list(seq)))
+    def fetchall(self):
+        return self._row_sets.pop(0) if self._row_sets else []
+
+
+class _RowsConn:
+    def __init__(self, row_sets):
+        self.cur = _RowsCur(row_sets)
+    def cursor(self):
+        return self.cur
+    def commit(self):
+        pass
+
+
+def test_load_grid_price_hat_filters_model_version():
+    conn = _RowsConn(row_sets=[[(300.0, "v1", date(2026, 9, 22)),
+                                (340.0, "v2", date(2026, 9, 22))]])
+    out = writer._load_grid_price_hat(conn, date(2026, 9, 23), model_version="v2")
+    assert out == pytest.approx(340.0)
+
+
+def test_load_grid_price_hat_falls_back_to_latest_fc_date():
+    conn = _RowsConn(row_sets=[[(300.0, "v1", date(2026, 9, 21)),
+                                (320.0, "v1", date(2026, 9, 22))]])
+    out = writer._load_grid_price_hat(conn, date(2026, 9, 23), model_version="v9")
+    assert out == pytest.approx(320.0)
+
+
+def test_load_grid_price_hat_lingfeng_fallback_when_table_empty(monkeypatch):
+    conn = _RowsConn(row_sets=[[]])
+    monkeypatch.setattr(writer.fc_db, "get_grid_forecast",
+                        lambda c, d: pd.DataFrame({"price_hat": [310.0]}))
+    out = writer._load_grid_price_hat(conn, date(2026, 9, 23), model_version="v2")
+    assert out == pytest.approx(310.0)
+
+
+def test_run_day_db_mode_zero_assets_skips_forecast():
+    conn = _RowsConn(row_sets=[[]])  # _load_assets -> []
+    out = writer.run_day(conn, date(2026, 9, 23), model_version="v2")
+    assert out["plants"] == 0 and out["upserted"] == 0
+    assert len(conn.cur.calls) == 1
+    assert "nodal_asset_registry" in conn.cur.calls[0][0]

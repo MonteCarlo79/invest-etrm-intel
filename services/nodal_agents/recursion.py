@@ -38,9 +38,12 @@ def _curve_for(curves, plant: str) -> np.ndarray:
     c = curves.get(plant) if isinstance(curves, dict) else curves
     if c is None:
         raise ValueError(f"curves_fn returned no curve for {plant!r}")
-    c = np.nan_to_num(np.asarray(c, dtype=float), nan=0.0)
+    c = np.asarray(c, dtype=float)
     if c.shape != (96,):
         raise ValueError(f"curve for {plant!r} must be (96,), got {c.shape}")
+    if not np.isfinite(c).all():
+        raise ValueError(f"curve for {plant!r} contains NaN/inf — "
+                         "curves_fn must return a complete forecast")
     return c
 
 
@@ -56,15 +59,17 @@ def converge(assets, curves_fn, max_iter: int = 3, tol_mwh_pct: float = 2.0) -> 
     if not assets:
         return {"strategies": {}, "iterations": 0, "convergence_delta_mwh": 0.0}
 
+    # Loop-invariant: substation peer groups never change across iterations.
+    substation_peers = {}
+    for a in assets:
+        substation_peers.setdefault(a.get("substation"), []).append(a["plant_name"])
+
     prev = None
     strategies = {}
     delta_mwh = 0.0
     iterations = 0
     for it in range(max_iter):
         curves = curves_fn(it, prev)
-        substation_peers = {}
-        for a in assets:
-            substation_peers.setdefault(a.get("substation"), []).append(a["plant_name"])
 
         dispatch = {}
         for a in assets:

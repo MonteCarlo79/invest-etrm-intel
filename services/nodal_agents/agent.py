@@ -26,6 +26,15 @@ dominated whenever any later positive-price opportunity exists and gives no
 churn incentive. +BIG is churn-proof (recharging costs BIG/eta > BIG earned)
 so the discharge-only side keeps the spec's big finite stand-in (1e6; PuLP/
 CBC cannot take true infinities, and 1e6 dominates any realistic spread).
+
+CAVEAT (reviewer probe, 2026-09-22): the price-0 no-discharge mask is
+violable when the battery is PAID to charge (negative prices) and
+positive-price room is too small to empty SOC — disposal at 0 becomes
+the profit-enabling valve (probe: −50 charge window, 4 positive
+intervals, mask on 52:96 → 100 MW discharge inside the forbidden
+window, solver Optimal). Per-interval discharge upper bounds in the
+engine are a PREREQUISITE for wiring zone learning. Zones are
+all-green in v1 — no production impact today.
 """
 from __future__ import annotations
 

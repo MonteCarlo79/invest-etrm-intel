@@ -74,7 +74,28 @@ def _load_assets(conn) -> list[dict]:
     return out
 
 
-def _load_grid_price_hat(conn, target_date: date) -> float:
+_GRID_PROVINCE = "蒙西"  # matches fc_db.get_grid_forecast's default
+
+
+def _load_grid_price_hat(conn, target_date: date,
+                         model_version: str = MODEL_VERSION) -> float:
+    # Version-filtered: L1 may write several model_version rows for one
+    # target_date — never average across versions. Take the run's version;
+    # if absent, the version with the latest fc_date for this target_date.
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT price_hat, model_version, fc_date
+           FROM marketdata.nodal_fc_grid_daily
+           WHERE province = %s AND target_date = %s AND price_hat IS NOT NULL""",
+        (_GRID_PROVINCE, target_date))
+    rows = [(float(p), mv, fc) for p, mv, fc in cur.fetchall()]
+    if rows:
+        mine = [p for p, mv, _ in rows if mv == model_version]
+        if mine:
+            return float(np.mean(mine))
+        latest_fc = max(fc for _, _, fc in rows)
+        return float(np.mean([p for p, _, fc in rows if fc == latest_fc]))
+    # Table entirely empty for the date -> existing LingFeng RT fallback.
     df = fc_db.get_grid_forecast(conn, target_date)
     vals = df["price_hat"] if not df.empty else pd.Series(dtype=float)
     vals = vals[pd.notna(vals)]
@@ -121,29 +142,31 @@ def _load_caps(conn) -> dict:
     return caps
 
 
-def _load_from_db(conn, target_date: date) -> dict:
-    return {
-        "assets": _load_assets(conn),
-        "grid_price_hat": _load_grid_price_hat(conn, target_date),
-        "shapes": _load_shapes(conn, target_date),
-        "caps": _load_caps(conn),
-        "zone_hist": {},
-        "zones_map": {},
-    }
-
-
 # ------------------------------------------------------------------ run_day
 
 def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
             data: dict | None = None, max_iter: int = 3,
             tol_mwh_pct: float = 2.0,
             bess_sensitivity: float = BESS_SENSITIVITY) -> dict:
-    src = data if data is not None else _load_from_db(conn, target_date)
+    # Asset list first: a day with zero active assets is a clean no-op and
+    # must not die on an empty forecast table (DB mode).
+    if data is not None:
+        src = data
+    else:
+        src = {"assets": _load_assets(conn)}
     assets = list(src.get("assets") or [])
     if not assets:
         return {"target_date": target_date.isoformat(), "plants": 0,
                 "upserted": 0, "iterations": 0, "convergence_delta_mwh": 0.0,
                 "model_version": model_version}
+    if data is None:
+        src = {**src,
+               "grid_price_hat": _load_grid_price_hat(conn, target_date,
+                                                      model_version),
+               "shapes": _load_shapes(conn, target_date),
+               "caps": _load_caps(conn),
+               "zone_hist": {},
+               "zones_map": {}}
     grid_price_hat = float(src["grid_price_hat"])
     shapes = src.get("shapes") or {}
     caps = src.get("caps") or {}
