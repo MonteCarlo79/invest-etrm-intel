@@ -361,3 +361,12 @@ def test_register_strategies_does_not_double_prefix_version():
     models = {p["model"] for sql, p in conn.cur.calls
               if "INSERT INTO marketdata.strategy_experiments" in sql}
     assert models == {"nodal_agent_v1"}
+
+def test_load_shapes_slot_alignment_1_based():
+    # time_order_96 is 1-based: slot 1 -> index 0, slot 96 -> index 95.
+    # Regression (2026-09-22): reindex(range(96)) dropped slot 96 and shifted
+    # every node's shape one interval.
+    conn = _RowsConn(row_sets=[[("N1", 1, 100.0), ("N1", 96, 500.0)]])
+    shapes = writer._load_shapes(conn, date(2026, 9, 23))
+    assert shapes["N1"][0] == pytest.approx(100.0 / 300.0)   # slot 1 at index 0
+    assert shapes["N1"][95] == pytest.approx(500.0 / 300.0)  # slot 96 at index 95

@@ -121,8 +121,11 @@ def _load_shapes(conn, target_date: date) -> dict:
     df = df[pd.notna(df["price"])]
     if df.empty:
         return {}
+    # time_order_96 is 1-based (slots 1..96) — reindex to exactly those
+    # columns so index i of the shape vector holds slot i+1 (review 2026-09-22:
+    # range(96) dropped slot 96 and shifted every node's shape one interval).
     mat = df.pivot_table(index="node", columns="interval", values="price",
-                         aggfunc="mean").reindex(columns=range(96))
+                         aggfunc="mean").reindex(columns=range(1, 97))
     shapes = {}
     for node, row in mat.iterrows():
         v = row.to_numpy(dtype=float)
