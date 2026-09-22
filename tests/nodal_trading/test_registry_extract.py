@@ -61,7 +61,7 @@ class TestUpdateAssetRegistry:
         out = rx.update_asset_registry(conn, [])
         assert out["retired"] == 1 and out["upserted"] == 0
         sql, params = conn.cur.calls[1]   # calls[0] is the SELECT of existing plants
-        assert "ACTIVE = FALSE" in sql.upper() and params == [("老场站",)]
+        assert "ACTIVE = FALSE" in sql.upper() and params == ("老场站",)
 
     def test_never_hard_deletes(self):
         conn = self._conn()
