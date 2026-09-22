@@ -249,7 +249,7 @@ _REGISTER_STRATEGIES_SQL = """SELECT DISTINCT ON (plant_name, target_date)
        plant_name, target_date, curve_json, assumptions_json, model_version
     FROM marketdata.nodal_strategy_daily
     WHERE target_date >= %s AND target_date <= %s
-    ORDER BY plant_name, target_date, created_at DESC"""
+    ORDER BY plant_name, target_date, created_at DESC, model_version DESC"""
 
 # fengxing_node_name lives on nodal_node_registry (keyed by node), not on the
 # asset registry — resolve it via LEFT JOIN on the plant's node.
@@ -266,7 +266,8 @@ _REGISTER_PRICES_SQL = """SELECT node_name, metric_time::date, time_order_96,
 
 _REGISTER_PF_SQL = """SELECT data_date, node_name, revenue_cny
     FROM reports.nodal_pf_node_daily
-    WHERE power_mw = 100.0 AND duration_h = 2.0 AND rte_pct = 85.0
+    WHERE province = '蒙西'
+      AND power_mw = 100.0 AND duration_h = 2.0 AND rte_pct = 85.0
       AND data_date >= %s AND data_date <= %s"""
 
 _REGISTER_PREV_SQL = """SELECT model, province, window_end, mean_capture_rate,
