@@ -49,3 +49,30 @@ def write_registry_md(plants: list[dict], path) -> None:
                      f"| {p['zone_guess'] or '—'} |  |  |  |")
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+_ASSET_UPSERT = """INSERT INTO marketdata.nodal_asset_registry (
+    plant_name, capacity_mw, duration_h, zone, updated_at
+) VALUES (%(plant_name)s, %(capacity_mw_est)s, %(duration_h_est)s, %(zone_guess)s, NOW())
+ON CONFLICT (plant_name) DO UPDATE SET
+    capacity_mw = EXCLUDED.capacity_mw,
+    duration_h = EXCLUDED.duration_h,
+    zone = EXCLUDED.zone,
+    updated_at = NOW()"""
+
+def update_asset_registry(conn, plants: list[dict], source: str = "md_extract") -> dict:
+    """Refresh the asset registry from a new extraction (user requirement 2026-09-22:
+    the registry is living data). Upsert new/changed plants; soft-retire
+    (active=FALSE) plants absent from the list. NEVER hard-deletes — strategy
+    history in nodal_strategy_daily must survive. node/substation/capacity caps
+    from the reviewed registry are NOT touched by the refresh."""
+    cur = conn.cursor()
+    if plants:
+        cur.executemany(_ASSET_UPSERT, plants)
+    cur.execute("SELECT plant_name FROM marketdata.nodal_asset_registry WHERE active")
+    existing = {r[0] for r in cur.fetchall()}
+    stale = existing - {p["plant_name"] for p in plants}
+    for name in stale:
+        cur.execute("UPDATE marketdata.nodal_asset_registry SET active = FALSE, updated_at = NOW() WHERE plant_name = %s", (name,))
+    conn.commit()
+    return {"upserted": len(plants), "retired": len(stale), "source": source}
