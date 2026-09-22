@@ -132,59 +132,90 @@ def seed_node_registry(conn, nodes: list[dict]) -> int:
 # ---------------------------------------------------------------------------
 # 3. link registry substations to Fengxing node names
 # ---------------------------------------------------------------------------
-_SUB_SQL = """SELECT substation FROM marketdata.nodal_node_registry
+_REG_SQL = """SELECT name, substation, voltage_kv FROM marketdata.nodal_node_registry
               WHERE substation IS NOT NULL AND substation <> ''"""
 _FX_SQL = """SELECT DISTINCT node_name FROM marketdata.md_mengxi_nodal_price_96
              WHERE node_name IS NOT NULL"""
+# Per-row write-back keyed on the PK (name); never overwrites a non-empty link.
 _LINK_SQL = """UPDATE marketdata.nodal_node_registry
                SET fengxing_node_name = %s, updated_at = NOW()
-               WHERE substation = %s
+               WHERE name = %s
                  AND (fengxing_node_name IS NULL OR fengxing_node_name = '')"""
 
 
-def _best_match(sub_norm: str, fx_by_norm: dict[str, list[str]]):
-    """Exact normalized hit first; else unique-ish substring containment
-    (either direction). Multiple Fengxing buses of one substation collapse to
-    a deterministic pick (shortest, then alphabetical)."""
-    if sub_norm in fx_by_norm:
-        return sorted(fx_by_norm[sub_norm])[0]
-    cands = [orig for fnorm, origs in fx_by_norm.items()
-             if sub_norm in fnorm or fnorm in sub_norm for orig in origs]
-    return sorted(cands, key=lambda s: (len(s), s))[0] if cands else None
+def _fx_voltage(fx_name) -> int | None:
+    """Parse the kV number from a Fengxing bus name ('xxx/500kV.1M' → 500)."""
+    m = re.search(r"/(\d+)\s*kV", str(fx_name))
+    return int(m.group(1)) if m else None
 
 
-def link_fengxing_names(conn) -> dict[str, str]:
-    """Map registry substations to Fengxing node_name values from
-    marketdata.md_mengxi_nodal_price_96 (exact + normalized-substring match).
+def _pick_exact(originals: list[str], voltage_kv) -> str:
+    """Multi-bus exact hit: prefer the bus whose kV matches the registry row's
+    voltage_kv; deterministic (shortest, then alphabetical) fallback when no
+    bus voltage matches (or the row's voltage is unknown)."""
+    names = sorted(originals, key=lambda s: (len(s), s))
+    if voltage_kv is not None:
+        for n in names:
+            if _fx_voltage(n) == voltage_kv:
+                return n
+    return names[0]
 
-    Returns {normalized_substation: matched Fengxing node_name, or the
-    original substation string when unresolved}. Matched links are written
-    back to nodal_node_registry.fengxing_node_name only where that column is
-    still empty — manually reviewed links are never overwritten.
 
-    Matching is at substation granularity: a Fengxing name like
-    '内蒙.汗海站/500kV.1M' normalizes to '汗海'. Voltage-level linking (500kV
-    vs 220kV buses of the same substation) is out of scope for this contract.
+def link_fengxing_names(conn) -> dict:
+    """Map registry rows to Fengxing node_name values from
+    marketdata.md_mengxi_nodal_price_96.
+
+    Returns {"links": {norm_substation: fengxing_name_or_None},
+             "candidates": {norm_substation: [possible_fengxing_names, ...]}}.
+
+    - links: EXACT-normalized matches only (after stripping region prefixes,
+      变电站/变/站 suffixes, and the '/500kV.1M' bus suffix). None = no exact
+      match. For substations with several registry rows (different voltage
+      levels), links reflects the highest-voltage row's pick; the authoritative
+      per-row matches are what get written to the DB.
+    - candidates: substring-only matches (either-direction containment),
+      exposed for human review. They are NEVER written back — auto-persisting
+      a containment guess would make a sticky false positive that the
+      empty-guard then protects as if human-curated.
+    - Multi-bus exact hits are resolved PER REGISTRY ROW: the bus whose kV
+      (parsed from '.../500kV.1M') matches the row's voltage_kv wins; falls
+      back to the deterministic pick only when no kV matches.
+    - Write-back: one UPDATE per registry row (PK name), exact matches only,
+      and only where fengxing_node_name is still empty (human overrides kept).
     """
     cur = conn.cursor()
-    cur.execute(_SUB_SQL)
-    substations = [r[0] for r in cur.fetchall()]
+    cur.execute(_REG_SQL)
+    reg_rows = [(r[0], r[1], r[2]) for r in cur.fetchall()]
     cur.execute(_FX_SQL)
     fx_by_norm: dict[str, list[str]] = {}
     for (node_name,) in cur.fetchall():
         fx_by_norm.setdefault(_norm(node_name), []).append(node_name)
 
-    links: dict[str, str] = {}
-    updates = []
-    for sub in substations:
+    links: dict[str, str | None] = {}
+    candidates: dict[str, list[str]] = {}
+    updates: list[tuple] = []
+    seen: set[str] = set()
+    # highest-voltage row of each substation first (None voltage last)
+    reg_rows.sort(key=lambda t: (_norm(t[1]), 0 if t[2] is None else -t[2], str(t[0])))
+    for name, sub, kv in reg_rows:
         key = _norm(sub)
         if not key:
             continue
-        matched = _best_match(key, fx_by_norm)
-        links[key] = matched if matched else sub
-        if matched:
-            updates.append((matched, sub))
+        exact = fx_by_norm.get(key)
+        if exact:
+            pick = _pick_exact(exact, kv)
+            links.setdefault(key, pick)
+            updates.append((pick, name))                 # per-row write-back
+        else:
+            links.setdefault(key, None)
+            if key not in seen:
+                seen.add(key)
+                cands = sorted({o for fn, origs in fx_by_norm.items()
+                                if key in fn or fn in key for o in origs},
+                               key=lambda s: (len(s), s))
+                if cands:
+                    candidates[key] = cands
     if updates:
         cur.executemany(_LINK_SQL, updates)
     conn.commit()
-    return links
+    return {"links": links, "candidates": candidates}
