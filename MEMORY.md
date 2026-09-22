@@ -127,3 +127,17 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **Decisions made:** See entries above.
 
 **Next session:** The 5-pillar system is Pillar 1 (Market Map / spot-market) now largely complete. Pillar 2 (Asset Map) is the logical next focus — similar framework to spot-market but modelling asset value by type and region. Pillar 3 (Asset Operations) has a foundation in Inner Mongolia ops (`services/ops_ingestion/`). Consider which pillar to prioritise based on immediate business need.
+
+---
+
+## Session Summary, 2026-09-22 (Nodal Trading Agents — shipped to main)
+
+**Worked on:** Nodal Trading Agents plan (8 tasks, SDD): L1 grid forecast contract, asset registry extraction, grid node map (vision), L2 nodal price formation, L3 per-asset agent engine, promote loop, Nodal Trading tab, final review + merge.
+
+**Completed:** All 7 build tasks + final review; 19 commits merged to main (merge 327a49d, pushed); 172/172 tests green. Final review caught a real Critical (UTC metric_time::date bucketing priced overnight charge slots from the FOLLOWING CST day in the evaluation path — fixed f07f22b). L2 backtest gate on real data: FAIL all 5 zones — day-level nodal−grid delta is non-stationary (train −67..−10 vs holdout −19..+14 CNY/MWh) → **L2 (price_formation) ships UNWIRED per user decision; writer uses grid level × per-slot shape**.
+
+**Key lessons:** (1) literal −∞ zone masks churn under RTE<1 — no-discharge = price 0.0; (2) simultaneous best-response oscillates under binding shared caps — Gauss-Seidel; (3) _load_shapes 1-based slot reindex bug (ffb96c0); (4) run-task probes: NAT subnets (hermes config) + sqlalchemy (no psycopg in images); public service subnets fail ECR pull without public IP.
+
+**Decisions made:** merge with L2 unwired; 蒙西 renewable_d1_mw empty → proxy = load−bidding_space.
+
+**Next session:** (a) user reviews substation_capacity.md + bess_asset_registry_draft.md → seed registries; (b) prod DDL apply + dry-run writer (needs confirmation); (c) deploy mengxi-dashboard v23 (needs confirmation); (d) 蒙西 fundamentals ingest gap 09-14→09-16 (load ~25GW vs 43GW normal, grid price 0.0 on 09-16) — data patrol; (e) L2 model iteration (rolling window/substation-local features) before any wiring.
