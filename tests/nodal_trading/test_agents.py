@@ -254,3 +254,93 @@ def test_run_day_db_mode_zero_assets_skips_forecast():
     assert out["plants"] == 0 and out["upserted"] == 0
     assert len(conn.cur.calls) == 1
     assert "nodal_asset_registry" in conn.cur.calls[0][0]
+
+
+# --- Task 6: promote loop registration ----------------------------------------
+
+_REG_DAYS = [date(2026, 9, 21), date(2026, 9, 22)]
+_REG_CURVE_JSON = json.dumps([-100.0] * 48 + [100.0] * 48)
+
+
+def _reg_strategy_rows():
+    asm_a = json.dumps({"plant_name": "甲站", "node": "甲node",
+                        "settle_node": "甲settle", "capacity_mw": 100.0,
+                        "duration_h": 2.0, "rte_pct": 85.0})
+    asm_b = json.dumps({"plant_name": "乙站", "node": "乙node",
+                        "settle_node": "N2", "capacity_mw": 50.0,
+                        "duration_h": 2.0, "rte_pct": 85.0})
+    return ([("甲站", d, _REG_CURVE_JSON, asm_a, "v1") for d in _REG_DAYS]
+            + [("乙站", d, _REG_CURVE_JSON, asm_b, "v1") for d in _REG_DAYS])
+
+
+def _reg_registry_rows():
+    # 甲站 prices via Fengxing mapping; 乙站 falls back to settle_node (N2)
+    return [("甲站", "甲node", "甲settle", "N1"),
+            ("乙站", "乙node", "N2", None)]
+
+
+def _reg_price_rows(node, p_lo, p_hi):
+    return [(node, d, slot, p_lo if slot <= 48 else p_hi)
+            for d in _REG_DAYS for slot in range(1, 97)]
+
+
+def _reg_pf_rows():
+    return [(d, "N1", 300000.0) for d in _REG_DAYS] + \
+           [(d, "N2", 1200000.0) for d in _REG_DAYS]
+
+
+def test_register_strategies_upserts_per_plant():
+    # Hand-computed expectations (per day, identical on both days):
+    #   甲站: curve -100/+100 vs N1 price 200/400
+    #         realized = (48*-100*200 + 48*100*400) * 0.25 = 240,000 CNY
+    #         basis = 100MW*2h = 200 MWh -> 1,200 CNY/MWh
+    #         PF N1 300,000 @100MW, scale 1.0 -> theo 1,500 CNY/MWh, capture 0.8
+    #   乙站: same curve vs N2 price 100/300 -> realized 240,000 CNY
+    #         basis = 50MW*2h = 100 MWh -> 2,400 CNY/MWh
+    #         PF N2 1,200,000 @100MW, scale 0.5 -> theo 6,000 CNY/MWh, capture 0.4
+    conn = _RowsConn(row_sets=[
+        _reg_strategy_rows(), _reg_registry_rows(),
+        _reg_price_rows("N1", 200.0, 400.0) + _reg_price_rows("N2", 100.0, 300.0),
+        _reg_pf_rows(),
+        [],  # no previous experiment windows
+    ])
+    n = writer.register_strategies(conn, date(2026, 9, 22), window_days=3)
+    assert n == 2
+    inserts = [(sql, p) for sql, p in conn.cur.calls
+               if "INSERT INTO marketdata.strategy_experiments" in sql]
+    assert len(inserts) == 2
+    assert "'nodal_agent'" in inserts[0][0]  # scope literal in the SQL
+    by_plant = {p["province"]: p for _, p in inserts}
+    assert set(by_plant) == {"甲站", "乙站"}   # province column carries plant name
+    a = by_plant["甲站"]
+    assert a["model"] == "nodal_agent_v1"
+    assert a["power_mw"] == pytest.approx(100.0)
+    assert a["duration_h"] == pytest.approx(2.0)
+    assert a["roundtrip_eff"] == pytest.approx(0.85)
+    assert a["window_days"] == 3 and a["window_end"] == date(2026, 9, 22)
+    assert a["days"] == 2
+    assert a["mean_capture_rate"] == pytest.approx(0.8)
+    assert a["mean_realized_per_mwh"] == pytest.approx(1200.0)
+    assert a["mean_theoretical_per_mwh"] == pytest.approx(1500.0)
+    assert a["status"] == "champion"           # higher-capture plant
+    b = by_plant["乙站"]
+    assert b["model"] == "nodal_agent_v1"
+    assert b["mean_capture_rate"] == pytest.approx(0.4)
+    assert b["mean_realized_per_mwh"] == pytest.approx(2400.0)
+    assert b["mean_theoretical_per_mwh"] == pytest.approx(6000.0)
+    # assign_status champions per province (= per plant here), so each plant
+    # leads its own leaderboard; delta_vs_champion is 0 for both.
+    assert b["status"] == "champion"
+    assert b["delta_vs_champion"] == pytest.approx(0.0)
+
+
+def test_register_strategies_skips_when_no_actuals():
+    conn = _RowsConn(row_sets=[
+        _reg_strategy_rows(), _reg_registry_rows(),
+        [],  # no actual RT prices in window
+    ])
+    n = writer.register_strategies(conn, date(2026, 9, 22), window_days=3)
+    assert n == 0
+    assert all("INSERT" not in sql for sql, _ in conn.cur.calls)
+    # PF / prev-experiment SELECTs are never reached without actuals
+    assert len(conn.cur.calls) == 3
