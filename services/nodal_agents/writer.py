@@ -107,13 +107,28 @@ def _load_grid_price_hat(conn, target_date: date,
     return float(vals.astype(float).mean())
 
 
-def _load_shapes(conn, target_date: date) -> dict:
+def _load_shapes(conn, target_date: date, nodes: list | None = None) -> dict:
+    """Per-node mean-normalized RT price shapes over SHAPE_LOOKBACK_DAYS.
+
+    nodes: restrict the query to these Fengxing node_names — ALWAYS pass the
+    asset node set in production: unfiltered this reads ~30d × all ~1600
+    nodes × 96 slots (~4.6M rows) and OOM-killed the first dry-run task
+    (exit 137, 2026-09-22)."""
     cur = conn.cursor()
-    cur.execute(
-        """SELECT node_name, time_order_96, avg_node_price
-           FROM marketdata.md_mengxi_nodal_price_96
-           WHERE metric_time::date >= %s AND metric_time::date < %s""",
-        (target_date - timedelta(days=SHAPE_LOOKBACK_DAYS), target_date))
+    if nodes:
+        cur.execute(
+            """SELECT node_name, time_order_96, avg_node_price
+               FROM marketdata.md_mengxi_nodal_price_96
+               WHERE metric_time::date >= %s AND metric_time::date < %s
+                 AND node_name = ANY(%s)""",
+            (target_date - timedelta(days=SHAPE_LOOKBACK_DAYS), target_date,
+             list(nodes)))
+    else:
+        cur.execute(
+            """SELECT node_name, time_order_96, avg_node_price
+               FROM marketdata.md_mengxi_nodal_price_96
+               WHERE metric_time::date >= %s AND metric_time::date < %s""",
+            (target_date - timedelta(days=SHAPE_LOOKBACK_DAYS), target_date))
     rows = cur.fetchall()
     if not rows:
         return {}
@@ -166,10 +181,15 @@ def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
                 "shape_misses": 0,
                 "model_version": model_version}
     if data is None:
+        # Shape query restricted to the asset node set (both hops of the
+        # fallback chain) — unfiltered it OOMs on the full node table.
+        shape_nodes = sorted({n for a in assets
+                              for n in (a.get("node"), a.get("settle_node"))
+                              if n})
         src = {**src,
                "grid_price_hat": _load_grid_price_hat(conn, target_date,
                                                       model_version),
-               "shapes": _load_shapes(conn, target_date),
+               "shapes": _load_shapes(conn, target_date, nodes=shape_nodes),
                "caps": _load_caps(conn),
                "zone_hist": {},
                "zones_map": {}}
