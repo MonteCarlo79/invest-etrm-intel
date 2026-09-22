@@ -436,7 +436,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_trading, tab_data_mgmt, tab_nodal_maps, tab_pypsa, tab_trader, tab_nodal_analysis = st.tabs([
+tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_trading, tab_data_mgmt, tab_nodal_maps, tab_pypsa, tab_trader, tab_nodal_analysis, tab_nodal_trading = st.tabs([
     "Market Fundamentals",
     "BESS Market Ranking",
     "Our BESS Portfolio",
@@ -448,6 +448,7 @@ tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_t
     "PyPSA Mengxi",
     "Trader",
     "Nodal Analysis",
+    "Nodal Trading",
 ])
 
 # ---------------------------------------------------------------------------
@@ -1835,3 +1836,11 @@ with tab_trader:
 with tab_nodal_analysis:
     from nodal_analysis_tab import render as _render_nodal_analysis
     _render_nodal_analysis(_get_sqlalchemy_engine)
+
+
+# ---------------------------------------------------------------------------
+# Tab 12: Nodal Trading — L1/L2 forecasts, L3 asset agents, trader comparison
+# ---------------------------------------------------------------------------
+with tab_nodal_trading:
+    from nodal_trading_tab import render as _render_nodal_trading
+    _render_nodal_trading(_get_sqlalchemy_engine)
