@@ -12,8 +12,9 @@ Rendered inside apps/mengxi-dashboard/app.py as the "Nodal Trading" tab
 
 Timezone note (mirrors services/mengxi_nodal/data.py): md_mengxi_nodal_price_96
 .metric_time is timestamptz (CST) — single-day display queries use explicit
-+08 bounds. S3 P&L bucketing mirrors services/nodal_agents/writer.py
-(metric_time::date in session TZ) so tab numbers match the promote loop.
++08 bounds. S3 P&L day-bucketing is (metric_time AT TIME ZONE 'Asia/Shanghai')
+::date, matching services/nodal_agents/writer.py's register_strategies, so tab
+numbers match the promote loop on the CST trading day.
 """
 from __future__ import annotations
 
@@ -332,13 +333,16 @@ def load_price_node_map(_engine) -> pd.DataFrame:
 def load_actual_price_vectors(_engine, nodes: tuple, start: date, end: date) -> dict:
     """{(node, 'YYYY-MM-DD'): [96 floats]} for days with all 96 slots finite
     (partial days misalign revenue — skipped, same as the writer). Day
-    bucketing mirrors writer.register_strategies (metric_time::date)."""
+    bucketing is Asia/Shanghai, matching writer.register_strategies (final
+    review 2026-09-22, C-1: UTC session-TZ ::date would source slots 1-32 —
+    the overnight charge window — from the FOLLOWING CST day)."""
     if not nodes:
         return {}
     s = f"{start} 00:00:00+08"
     e = f"{end + timedelta(days=1)} 00:00:00+08"
     q = _text("""
-        SELECT node_name, metric_time::date AS d, time_order_96, avg_node_price
+        SELECT node_name, (metric_time AT TIME ZONE 'Asia/Shanghai')::date AS d,
+               time_order_96, avg_node_price
         FROM marketdata.md_mengxi_nodal_price_96
         WHERE node_name = ANY(:nodes) AND metric_time >= :s AND metric_time < :e
     """)
@@ -407,6 +411,12 @@ def refresh_registry_from_md(_engine, lookback_days: int = 90) -> dict:
         )
         cols = ["plant_name", "data_date", "datetime", "cleared_energy_mwh"]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        # BESS-only: the registry is a BESS asset map. "储能" in the name is
+        # the probe rule (knowledge/mengxi/bess_asset_registry_draft.md) —
+        # 风储/光储 hybrid names don't contain 储能 and are excluded, along
+        # with the ~600 coal/wind/solar plants in md_id_cleared_energy
+        # (final review 2026-09-22, I-A).
+        rows = [r for r in rows if "储能" in str(r["plant_name"])]
         plants = _reg_extract.extract_bess_plants(rows)
         result = _reg_extract.update_asset_registry(conn, plants,
                                                     source="md_extract_ui")

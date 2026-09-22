@@ -370,3 +370,36 @@ def test_load_shapes_slot_alignment_1_based():
     shapes = writer._load_shapes(conn, date(2026, 9, 23))
     assert shapes["N1"][0] == pytest.approx(100.0 / 300.0)   # slot 1 at index 0
     assert shapes["N1"][95] == pytest.approx(500.0 / 300.0)  # slot 96 at index 95
+
+
+def test_register_prices_sql_buckets_cst_not_utc():
+    # Final review 2026-09-22 (C-1): plain metric_time::date in the UTC
+    # session sources slots 1-32 (overnight charge window) from the FOLLOWING
+    # CST day. Mocks bypass the SQL, so pin the bucketing at the string level.
+    assert "AT TIME ZONE 'Asia/Shanghai'" in writer._REGISTER_PRICES_SQL
+    assert "metric_time::date" not in writer._REGISTER_PRICES_SQL
+
+
+def test_run_day_shape_fallback_chain_and_miss_counter():
+    # shapes keyed by Fengxing node_name: asset.node misses, settle_node hits
+    data = {
+        "assets": [
+            dict(plant_name="甲站", capacity_mw=100.0, duration_h=2.0, rte_pct=85.0,
+                 node="母线名甲", substation="S1", zone="Z1", settle_node="FN_甲"),
+            dict(plant_name="乙站", capacity_mw=100.0, duration_h=2.0, rte_pct=85.0,
+                 node="母线名乙", substation="S2", zone="Z2", settle_node="母线名乙"),
+        ],
+        "grid_price_hat": 320.0,
+        "shapes": {"FN_甲": np.array([0.5]*48 + [1.5]*48)},
+        "caps": {},
+    }
+    conn = _Conn()
+    out = writer.run_day(conn, date(2026, 9, 23), data=data)
+    assert out["plants"] == 2
+    # 甲站 resolved via settle_node FN_甲; 乙站 missed both -> flat shape
+    assert out["shape_misses"] == 1
+    sql, rows = conn.cur.upserts[0]
+    by_plant = {r["plant_name"]: r for r in rows}
+    curve_a = np.array(json.loads(by_plant["甲站"]["curve_json"]))
+    # with the 0.5/1.5 shape the discharge half dominates the charge half
+    assert curve_a[48:].sum() > 0

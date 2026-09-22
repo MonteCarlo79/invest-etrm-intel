@@ -19,6 +19,12 @@ for _p in (str(REPO), str(APPDIR)):
 
 import nodal_trading_tab as ntt  # noqa: E402
 
+# Capture the real implementations at import time: the AppTest harness below
+# runs in-process and clobbers module attributes (ntt.load_* etc.) — later
+# unit tests must restore what they exercise.
+_REAL_REFRESH = ntt.refresh_registry_from_md
+_REAL_LOAD_REGISTRY = ntt.load_asset_registry
+
 HARNESS = """
 import json
 import sys
@@ -170,3 +176,58 @@ def test_realized_pnl_rejects_non_finite():
     assert ntt._realized_pnl(nan_curve, [1.0] * 96) is None
     inf_prices = [float("inf")] + [1.0] * 95
     assert ntt._realized_pnl([1.0] * 96, inf_prices) is None
+
+
+# ------------------------------------------------------- refresh BESS filter
+
+class _FakeCur:
+    def __init__(self, rows):
+        self._rows = rows
+    def execute(self, sql, params=None):
+        pass
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.cur = _FakeCur(rows)
+    def cursor(self):
+        return self.cur
+    def commit(self):
+        pass
+    def close(self):
+        pass
+
+
+class _FakeEngine:
+    def __init__(self, rows):
+        self._conn = _FakeConn(rows)
+    def raw_connection(self):
+        return self._conn
+
+
+def test_refresh_registry_filters_to_bess_named_plants(monkeypatch):
+    # Final review 2026-09-22 (I-A): md_id_cleared_energy holds ~670 plants;
+    # only 储能-named ones belong in the BESS asset registry (风储/光储
+    # hybrids don't contain 储能 and are excluded too).
+    md_rows = [
+        ("景蓝乌尔图储能电站", "2026-09-01", "2026-09-01 01:00", 25.0),
+        ("华电包头火电厂", "2026-09-01", "2026-09-01 01:00", 500.0),
+        ("某风储一体化电站", "2026-09-01", "2026-09-01 01:00", 100.0),
+        ("某光储电站", "2026-09-01", "2026-09-01 01:00", 100.0),
+        ("悦杭独贵储能电站", "2026-09-01", "2026-09-01 01:00", 30.0),
+    ]
+    captured = {}
+    monkeypatch.setattr(ntt, "refresh_registry_from_md", _REAL_REFRESH)
+    monkeypatch.setattr(ntt, "load_asset_registry", _REAL_LOAD_REGISTRY)
+    monkeypatch.setattr(
+        ntt._reg_extract, "extract_bess_plants",
+        lambda rows: captured.setdefault("plants", [r["plant_name"] for r in rows]))
+    monkeypatch.setattr(
+        ntt._reg_extract, "update_asset_registry",
+        lambda conn, plants, source: {"upserted": len(plants), "retired": 0,
+                                      "source": source})
+    res = ntt.refresh_registry_from_md(_FakeEngine(md_rows))
+    assert sorted(captured["plants"]) == ["悦杭独贵储能电站", "景蓝乌尔图储能电站"]
+    assert res["upserted"] == 2

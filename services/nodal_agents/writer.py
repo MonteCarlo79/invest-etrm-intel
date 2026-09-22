@@ -185,13 +185,28 @@ def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
     for fc in zone_fc.values():
         fleet_baseline = fleet_baseline + fc
 
+    # Shapes are keyed by Fengxing node_name; resolve through the same
+    # fallback chain as _price_node (node → settle_node) before accepting a
+    # silent flat curve, and count every miss (once per asset, not per
+    # iteration — shapes don't change across the recursion).
+    asset_shapes = {}
+    shape_misses = 0
+    for a in assets:
+        shape = shapes.get(a.get("node"))
+        if shape is None:
+            shape = shapes.get(a.get("settle_node"))
+        if shape is None:
+            shape = _ONES
+            shape_misses += 1
+        asset_shapes[a["plant_name"]] = shape
+
     def curves_fn(iter_no, dispatch):
         agg = fleet_baseline.copy()
         if dispatch:
             for c in dispatch.values():
                 agg = agg + np.nan_to_num(c, nan=0.0)
         level = grid_price_hat - bess_sensitivity * agg
-        return {a["plant_name"]: level * shapes.get(a.get("node"), _ONES)
+        return {a["plant_name"]: level * asset_shapes[a["plant_name"]]
                 for a in assets}
 
     enriched = []
@@ -230,6 +245,7 @@ def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
     return {"target_date": target_date.isoformat(), "plants": len(assets),
             "upserted": len(rows), "iterations": conv["iterations"],
             "convergence_delta_mwh": float(conv["convergence_delta_mwh"]),
+            "shape_misses": shape_misses,
             "model_version": model_version}
 
 
@@ -262,10 +278,18 @@ _REGISTER_REGISTRY_SQL = """SELECT a.plant_name, a.node, a.settle_node,
     LEFT JOIN marketdata.nodal_node_registry n ON n.name = a.node
     WHERE a.active IS TRUE"""
 
-_REGISTER_PRICES_SQL = """SELECT node_name, metric_time::date, time_order_96,
+# CST day-bucketing is load-bearing: metric_time is timestamptz and the RDS
+# session is UTC, so plain metric_time::date buckets D as CST [D 08:00,
+# D+1 08:00) — that window still holds all 96 slots and passes the
+# completeness check, but slots 1-32 (00:00-08:00 CST, the overnight charge
+# window) would come from the FOLLOWING day, silently mispricing the
+# realized leg (final review 2026-09-22, C-1). Bucket by Asia/Shanghai and
+# bound the window with explicit +08 edges to match.
+_REGISTER_PRICES_SQL = """SELECT node_name,
+       (metric_time AT TIME ZONE 'Asia/Shanghai')::date, time_order_96,
        avg_node_price
     FROM marketdata.md_mengxi_nodal_price_96
-    WHERE metric_time::date >= %s AND metric_time::date <= %s"""
+    WHERE metric_time >= %s::timestamptz AND metric_time < %s::timestamptz"""
 
 _REGISTER_PF_SQL = """SELECT data_date, node_name, revenue_cny
     FROM reports.nodal_pf_node_daily
@@ -335,7 +359,8 @@ def register_strategies(conn, target_date: date, window_days: int = 30) -> int:
     registry = {r[0]: {"node": r[1], "settle_node": r[2],
                        "fengxing_node_name": r[3]} for r in cur.fetchall()}
 
-    cur.execute(_REGISTER_PRICES_SQL, (start, target_date))
+    cur.execute(_REGISTER_PRICES_SQL,
+                (f"{start} 00:00:00+08", f"{target_date + timedelta(days=1)} 00:00:00+08"))
     slots: dict = {}
     for node, d, slot, px in cur.fetchall():
         if px is not None:
