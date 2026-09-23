@@ -141,6 +141,9 @@ def seed_if_empty(engine: Engine, schema: str = "marketdata") -> int:
             logger.info("asset_registry already has %d rows — seed skipped", n)
             return 0
         for row in _SEED:
+            # Upcoming assets lack ops_data_since / cod_date — bind params must
+            # be present (as NULL) in every row.
+            params = {"ops_data_since": None, "cod_date": None, **row}
             conn.execute(sql_text(f"""
                 INSERT INTO {schema}.asset_registry
                     (asset_code, plant_name, status, zone, capacity_mw, duration_h,
@@ -150,7 +153,7 @@ def seed_if_empty(engine: Engine, schema: str = "marketdata") -> int:
                         :duration_h, :capacity_source, :substation, :conn_kv,
                         :price_node_own, :price_node_parents, :zone_price_node,
                         :ops_data_since, :notes)
-            """), row)
+            """), params)
     logger.info("asset_registry seeded with %d rows", len(_SEED))
     return len(_SEED)
 
