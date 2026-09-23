@@ -141,3 +141,8 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **Decisions made:** merge with L2 unwired; 蒙西 renewable_d1_mw empty → proxy = load−bidding_space.
 
 **Next session:** (a) user reviews substation_capacity.md + bess_asset_registry_draft.md → seed registries; (b) prod DDL apply + dry-run writer (needs confirmation); (c) deploy mengxi-dashboard v23 (needs confirmation); (d) 蒙西 fundamentals ingest gap 09-14→09-16 (load ~25GW vs 43GW normal, grid price 0.0 on 09-16) — data patrol; (e) L2 model iteration (rolling window/substation-local features) before any wiring.
+
+## 2026-09-23 — v23 deployed + LingFeng recovery
+**Deployed:** mengxi-dashboard **v23 (td:37)** live with Nodal Trading tab. Built from `git archive main` (parallel session's dirty app.py kept out), targeted terraform apply (their uncommitted lifecycle-guard edits kept out), update-service --force-new-deployment (their new `ignore_changes=[task_definition]` guard on mengxi service makes the force step mandatory now). Stable, clean startup. tfvars edited but git-ignored (never committed).
+**LingFeng:** password rotated → td:8 (jq-swap; family NOT in terraform). Backfill 09-16→09-22 done （冀北/广州 follow-up needed). 蒙西 verified real prices; dry-run re-run OK (real economics). ols_fundamentals_v1 capture runs ~15h in background.
+**Open:** (a) Mac launchd LingFeng fallback dead since Aug 20 (OneDrive permission) — not a fallback; (b) 0.0-junk-row writer guard + '运行数据披露' phantom province parser bug; (c) 冀北/广州 backfill pass; (d) recursion non-convergence at fleet scale (iterations=3, delta ~10GWh) — model-owner decision; (e) two data reviews (substation_capacity.md, bess_asset_registry_draft.md) → full registry seed; (f) L2 model iteration before wiring.
