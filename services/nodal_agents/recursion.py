@@ -23,6 +23,14 @@ previous-iteration curves of the rest — simultaneous updates can oscillate
 when a shared cap binds. Fixed-point priority follows list order (v1;
 spec SS5.2's proportional split is future work). Per-asset LP enforces the
 cap via agent.optimize_asset's headroom scaling.
+
+Damping (2026-09-23, fleet-scale non-convergence): each asset's LP result is
+blended with its previous-iteration dispatch — dispatch = damping·LP +
+(1−damping)·prev. Fixed points are preserved (at a fixed point the blend is
+the fixed point itself) and feasibility is preserved (the dispatch polytope
+is convex). damping=1.0 reproduces the undamped Gauss-Seidel loop; 0.5 is
+the default because the undamped loop did NOT settle within max_iter on the
+first 6-asset prod dry-runs (~2 GW fleet, convergence_delta ~10 GWh).
 """
 from __future__ import annotations
 
@@ -51,10 +59,13 @@ def _energy_mwh(curves: dict) -> float:
     return float(sum(np.abs(c).sum() * DT_H for c in curves.values()))
 
 
-def converge(assets, curves_fn, max_iter: int = 3, tol_mwh_pct: float = 2.0) -> dict:
+def converge(assets, curves_fn, max_iter: int = 3, tol_mwh_pct: float = 2.0,
+             damping: float = 0.5) -> dict:
     if max_iter < 2:
         raise ValueError("max_iter must be >= 2 — convergence needs an initial "
                          "pass plus at least one regenerated pass")
+    if not (0.0 < damping <= 1.0):
+        raise ValueError(f"damping must be in (0, 1], got {damping}")
     assets = list(assets)
     if not assets:
         return {"strategies": {}, "iterations": 0, "convergence_delta_mwh": 0.0}
@@ -87,7 +98,11 @@ def converge(assets, curves_fn, max_iter: int = 3, tol_mwh_pct: float = 2.0) -> 
             res = _agent.optimize_asset(a, _curve_for(curves, plant), others,
                                         cap_mw=a.get("cap_mw"), zones=zones)
             strategies[plant] = res
-            dispatch[plant] = res["curve"]
+            if prev is not None and damping < 1.0:
+                # damped best-response: blend LP result with previous dispatch
+                dispatch[plant] = damping * res["curve"] + (1.0 - damping) * prev[plant]
+            else:
+                dispatch[plant] = res["curve"]
 
         iterations = it + 1
         if prev is not None:

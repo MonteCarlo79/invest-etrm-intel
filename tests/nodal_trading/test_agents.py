@@ -403,3 +403,26 @@ def test_run_day_shape_fallback_chain_and_miss_counter():
     curve_a = np.array(json.loads(by_plant["甲站"]["curve_json"]))
     # with the 0.5/1.5 shape the discharge half dominates the charge half
     assert curve_a[48:].sum() > 0
+
+
+def test_converge_damping_blends_with_previous_dispatch():
+    # damping=0.5: second-iteration dispatch = midpoint of LP curve and prev
+    seq = {"n": 0}
+    def curves_fn(iter_no, dispatch):
+        seq["n"] += 1
+        # price level flips hard between iterations -> LP curves differ
+        return np.array([100.0]*48 + [900.0]*48) if iter_no == 0 else np.array([900.0]*48 + [100.0]*48)
+    asset = dict(plant_name="谷山梁", capacity_mw=100.0, duration_h=2.0, rte_pct=85.0)
+    out1 = recursion.converge([asset], curves_fn, max_iter=2, damping=1.0)
+    out2 = recursion.converge([asset], curves_fn, max_iter=2, damping=0.5)
+    # both complete; damped run's measured delta is smaller (blend pulls halves apart less)
+    assert out1["iterations"] == 2 and out2["iterations"] == 2
+    assert out2["convergence_delta_mwh"] < out1["convergence_delta_mwh"]
+
+
+def test_converge_rejects_bad_damping():
+    asset = dict(plant_name="谷山梁", capacity_mw=100.0, duration_h=2.0, rte_pct=85.0)
+    with pytest.raises(ValueError):
+        recursion.converge([asset], lambda i, d: np.full(96, 300.0), damping=0.0)
+    with pytest.raises(ValueError):
+        recursion.converge([asset], lambda i, d: np.full(96, 300.0), damping=1.5)

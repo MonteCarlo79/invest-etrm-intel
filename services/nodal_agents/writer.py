@@ -167,7 +167,8 @@ def _load_caps(conn) -> dict:
 def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
             data: dict | None = None, max_iter: int = 3,
             tol_mwh_pct: float = 2.0,
-            bess_sensitivity: float = BESS_SENSITIVITY) -> dict:
+            bess_sensitivity: float = BESS_SENSITIVITY,
+            damping: float = 0.5) -> dict:
     # Asset list first: a day with zero active assets is a clean no-op and
     # must not die on an empty forecast table (DB mode).
     if data is not None:
@@ -240,7 +241,7 @@ def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
                                                         np.zeros(96))})
 
     conv = recursion.converge(enriched, curves_fn, max_iter=max_iter,
-                              tol_mwh_pct=tol_mwh_pct)
+                              tol_mwh_pct=tol_mwh_pct, damping=damping)
 
     rows = []
     for a in assets:
