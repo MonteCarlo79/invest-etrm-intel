@@ -146,7 +146,7 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v46 (td:145) |
 | Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v65 (td:98) |
-| Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v22 (td:33) |
+| Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v23 (td:37) |
 | Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v13 (td:70) |
 | Deal Structurer (Pillar 5) | Deal Structurer | `bess-platform-deal-structurer` | `/deal-structurer/*` | 8522 | v20 (td:24). Image deploys bypass terraform (td has `ignore_changes=[container_definitions]`): jq-swap image → register-task-definition → update-service |
 | GB Market | Strategist + Quant | `bess-gb-market` | `/gb-market/*` | 8508 | v107 (td:30). Task-def family is `bess-gb-market` — `bess-platform-gb-market` is a DEAD family; never register against it. Live family not in terraform → deploys bypass terraform: jq-swap from the service's current tdArn |
