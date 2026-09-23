@@ -574,10 +574,11 @@ with tab_bess_rank:
 # Tab 3: Our BESS Portfolio — P&L Waterfall · Daily Ops · Strategy Comparison
 # ---------------------------------------------------------------------------
 with tab_portfolio:
-    sub_pnl, sub_daily, sub_strategy = st.tabs([
+    sub_pnl, sub_daily, sub_strategy, sub_avail = st.tabs([
         "P&L Waterfall",
         "Daily Ops",
         "Strategy Comparison",
+        "Availability",
     ])
 
     with sub_pnl:
@@ -591,6 +592,10 @@ with tab_portfolio:
     with sub_strategy:
         from libs.decision_models.adapters.app.strategy_comparison_page import render_strategy_comparison_page
         render_strategy_comparison_page()
+
+    with sub_avail:
+        from libs.decision_models.adapters.app.availability_page import render_availability_page
+        render_availability_page()
 
 # ---------------------------------------------------------------------------
 # Tab 4: Options Pricing
