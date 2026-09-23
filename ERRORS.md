@@ -427,3 +427,16 @@ Whole build (pip + 57MB fonts-noto-cjk) completed in ~4 min at mirror speed. Use
 **Fix:** `services/coal_index/cec_scraper.py` `fetch_index` tries direct, on `RequestException` retries via `COAL_INDEX_PROXY_URL` falling back to `WECHAT_PROXY_URL` (already in hermes td env). No-op locally where direct works.
 
 **Rule going forward:** any scraper targeting a China-hosted site that will run on ECS (Singapore) must assume the site may block overseas IPs. Build in the proxy fallback from the start and probe reachability from ECS (one-off run-task), never infer from the Mac.
+
+## 2026-09-23 — Parallel-session index contamination (47e6abf)
+**What happened:** `git add <path> && git commit` committed the WHOLE INDEX, sweeping the parallel session's staged (uncommitted) reversal of their own b55e62b merchant-share feature into my writer commit, and it got pushed.
+**Why:** two Claude sessions share one index. My earlier "explicit paths in git add" hygiene only controls what I ADD, not what's already STAGED by the sibling session.
+**Fix:** plumbing restoration (temp GIT_INDEX_FILE + read-tree + update-index --add --cacheinfo + commit-tree + update-ref) — restored both files to the deliberately-committed b55e62b state without touching their worktree/index. d337dae.
+**Rule from now on:** in this shared repo, NEVER bare `git commit` — commit with explicit pathspecs on the commit itself (`git commit -o -- <paths>`), or verify `git status --porcelain` shows only my files staged before committing. First misread made it worse: I restored to f910e07 before noticing their feature commit b55e62b was the correct source — always check `git log --graph` for sibling commits before picking a restore base.
+**Cost:** ~20 min + one flip-flop in history; their session's state fully preserved.
+
+## 2026-09-16→23 — LingFeng login outage (7-day ingest gap, all 29 markets)
+**What happened:** Every daily LingFeng run since 2026-09-16 20:00 UTC failed login on ALL markets ("Login did not redirect away from login page within 15 s"). Data gap 09-16→09-22 for fundamentals + prices; junk 0.0 price rows written for 09-16/17/18 (poisoned the RT fallback — flattened the nodal dry-run's strategies). User had rotated the SaaS password; task def env was stale.
+**Detection gap (the real lesson):** Mac launchd fallback was silently DEAD since Aug 20 ("Operation not permitted" on OneDrive path, exit 126 — macOS permission on CloudStorage). Failures were logged to data_ops_log daily but nobody read them for 7 days. Found only because the nodal dry-run hit a 0.0 price level.
+**Fix:** td:8 registered with new password (jq-swap from service's current tdArn — the lingfeng-ingest family is NOT in terraform; the LINGFENG vars in main.tf belong to bess_map), service redeployed, login verified, backfill 09-16→09-22 launched. config/.env updated for the Mac side.
+**Follow-ups:** (1) Mac launchd fallback needs the OneDrive permission fixed (move run_daily.sh off CloudStorage or grant FDA) — it is currently NOT a fallback at all. (2) The 0.0-junk-row writer path needs a guard: ingestion should refuse to write all-zero price days. (3) Check why Hermes Data Patrol didn't surface 7 consecutive failed days. (4) terraform.tfvars:128 has an orphan uppercase LINGFENG_PASSWORD (unreferenced, stale value) — user aware.
