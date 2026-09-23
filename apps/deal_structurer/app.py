@@ -43,7 +43,7 @@ with st.sidebar:
         "Navigate",
         ["0 · Deal Intake", "1 · Price Simulation", "2 · Dispatch Revenue",
          "3 · Project Cash Flow", "4 · Monte Carlo", "5 · Deal Pricing",
-         "6 · 投委会", "💬 Structurer"],
+         "6 · 投委会", "7 · 新资产筛选", "💬 Structurer"],
         label_visibility="collapsed",
         key="nav",
     )
@@ -71,5 +71,7 @@ elif tab_choice == "5 · Deal Pricing":
     from apps.deal_structurer import deal_tab; deal_tab.render()
 elif tab_choice == "6 · 投委会":
     from apps.deal_structurer import committee_tab; committee_tab.render()
+elif tab_choice == "7 · 新资产筛选":
+    from apps.deal_structurer import screening_tab; screening_tab.render()
 else:
     from apps.deal_structurer import strategist; strategist.render()
