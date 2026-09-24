@@ -146,3 +146,9 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **Deployed:** mengxi-dashboard **v23 (td:37)** live with Nodal Trading tab. Built from `git archive main` (parallel session's dirty app.py kept out), targeted terraform apply (their uncommitted lifecycle-guard edits kept out), update-service --force-new-deployment (their new `ignore_changes=[task_definition]` guard on mengxi service makes the force step mandatory now). Stable, clean startup. tfvars edited but git-ignored (never committed).
 **LingFeng:** password rotated → td:8 (jq-swap; family NOT in terraform). Backfill 09-16→09-22 done （冀北/广州 follow-up needed). 蒙西 verified real prices; dry-run re-run OK (real economics). ols_fundamentals_v1 capture runs ~15h in background.
 **Open:** (a) Mac launchd LingFeng fallback dead since Aug 20 (OneDrive permission) — not a fallback; (b) 0.0-junk-row writer guard + '运行数据披露' phantom province parser bug; (c) 冀北/广州 backfill pass; (d) recursion non-convergence at fleet scale (iterations=3, delta ~10GWh) — model-owner decision; (e) two data reviews (substation_capacity.md, bess_asset_registry_draft.md) → full registry seed; (f) L2 model iteration before wiring.
+
+
+## 2026-09-24 — v24 deployed (damping live)
+**Deployed:** mengxi-dashboard **v24 (td:38)** — damped best-response recursion (damping=0.5) + lazy strategy_experiments import. Built from git archive main; targeted apply; force-new-deployment; stable, clean startup.
+**State:** Nodal Trading tab live with 23-plant fleet (6 reviewed + 17 provisional flat-but-honest); registry 23 active / 21 parked; Mac LingFeng fallback restored (~/bess-platform-lingfeng, 29/29 logins); ECS primary td:8 (new password); full backfill 09-16→09-22 done.
+**Open:** user data reviews (substation_capacity.md, bess_asset_registry_draft.md) → mapped fleet; L2 model iteration before wiring; recursion tightening optional (damping 0.3 / max_iter 4).
