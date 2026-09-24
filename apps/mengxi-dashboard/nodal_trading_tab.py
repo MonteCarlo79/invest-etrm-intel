@@ -29,6 +29,7 @@ from sqlalchemy import text as _text
 
 from services.nodal_forecast import db as _fc_db
 from services.nodal_forecast import registry_extract as _reg_extract
+from services.mengxi_nodal.zones import CURRENT_ASSETS as _ZONE_ASSETS
 
 _GRID_PROVINCE = "蒙西"  # matches services.nodal_agents.writer._GRID_PROVINCE
 _EXPERIMENT_SCOPE = "nodal_agent"
@@ -460,12 +461,19 @@ def render(get_engine) -> None:
         _m2.metric("forecast source", _fc.get("source") or "—")
         _m3.metric("model version", _fc.get("model_version") or "—")
 
-        _actual = load_node_actual_curve(engine, _s1_node, _s1_day)
+        # Registry names (德岭山) are NOT the price table's node_name values —
+        # resolve via the registry's fengxing_node_name before querying
+        # (2026-09-24: S1 actual/shape queries silently missed on every node).
+        _fx_map = (node_df.dropna(subset=["fengxing_node_name"])
+                   .set_index("name")["fengxing_node_name"].to_dict())
+        _s1_fx = _fx_map.get(_s1_node, _s1_node)
+
+        _actual = load_node_actual_curve(engine, _s1_fx, _s1_day)
         _implied = None
         for _r in load_strategies(engine, _s1_day, _s1_day).itertuples():
             _asm = _parse_json(_r.assumptions_json) or {}
-            if _asm.get("node") == _s1_node and _asm.get("grid_price_hat") is not None:
-                _shape = load_node_shape(engine, _s1_node, _s1_day)
+            if _asm.get("node") == _s1_fx and _asm.get("grid_price_hat") is not None:
+                _shape = load_node_shape(engine, _s1_fx, _s1_day)
                 if _shape is not None:
                     _implied = [float(_asm["grid_price_hat"]) * s for s in _shape]
                 break
@@ -484,10 +492,11 @@ def render(get_engine) -> None:
                     x=_xs, y=_implied, name="strategy forecast (L1 level × 30d shape)",
                     mode="lines", line=dict(color="#1f77b4", width=1.4, dash="dash")))
             if _fc.get("price_hat") is not None:
-                _fig.add_hline(y=_fc["price_hat"],
-                               line=dict(color="#2ca02c", width=1.2, dash="dot"),
-                               annotation_text="L1 grid level",
-                               annotation_position="top left")
+                # draw as a real trace (not only hline) so the level stays
+                # visible when it is the chart's only content
+                _fig.add_trace(go.Scatter(
+                    x=_xs, y=[float(_fc["price_hat"])] * 96, name="L1 grid level",
+                    mode="lines", line=dict(color="#2ca02c", width=1.2, dash="dot")))
             _fig.update_layout(height=380, margin=dict(l=40, r=20, t=30, b=40),
                                xaxis_title="15-min interval", yaxis_title="CNY/MWh",
                                legend=dict(orientation="h", y=1.12))
@@ -605,15 +614,23 @@ def render(get_engine) -> None:
         else:
             _plants = sorted(str(p) for p in _s3_strat["plant_name"].unique())
             _codes = sorted(str(c) for c in _attr["asset_code"].unique())
+            # Attribution uses trader asset_code (suyou, hangjinqi…), strategies
+            # use plant_name (景蓝乌尔图储能电站) — bridge via the reviewed
+            # zones.py mapping BEFORE name matching (2026-09-24: name-only
+            # matching could never overlap).
+            _bridge = {a["asset_code"]: a["plant_name"] for a in _ZONE_ASSETS
+                       if a.get("asset_code") and a.get("plant_name")}
             _exact = sorted(set(_plants) & set(_codes))
             _lower: dict = {}
             for _p in _plants:
                 _lower.setdefault(_p.lower(), _p)
             _ci = {}  # attr asset_code -> strategy plant_name (case-insensitive)
             for _a in _codes:
-                if _a not in _exact and _a.lower() in _lower:
+                if _a not in _exact and _a not in _bridge and _a.lower() in _lower:
                     _ci[_a] = _lower[_a.lower()]
-            _overlap = sorted(set(_exact) | set(_ci.values()))
+            _overlap = sorted(set(_exact) | set(_ci.values())
+                              | {p for c, p in _bridge.items()
+                                 if c in _codes and p in _plants})
             if not _overlap:
                 st.info(
                     f"No overlap between strategy plants ({len(_plants)}) and attribution assets "
@@ -622,10 +639,15 @@ def render(get_engine) -> None:
             else:
                 _code2plant = {a: a for a in _exact}
                 _code2plant.update(_ci)
+                _code2plant.update({c: p for c, p in _bridge.items()
+                                    if c in _codes and p in _plants})
                 _pairs = [f"{a} ↔ {p}" for a, p in sorted(_ci.items())]
+                _bridged = [f"{c} ↔ {p}" for c, p in sorted(_bridge.items())
+                            if c in _codes and p in _plants]
                 st.caption(
-                    f"Overlap: {len(_overlap)} asset(s) (exact match)"
-                    + (f"; case-insensitive mapping: {', '.join(_pairs)}" if _pairs else "")
+                    f"Overlap: {len(_overlap)} asset(s)"
+                    + (f"; registry mapping: {', '.join(_bridged)}" if _bridged else "")
+                    + (f"; case-insensitive: {', '.join(_pairs)}" if _pairs else "")
                 )
                 _pmap_df = load_price_node_map(engine)
                 _pmap = ({r["plant_name"]: r for r in _pmap_df.to_dict("records")}

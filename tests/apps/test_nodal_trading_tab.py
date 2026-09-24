@@ -46,14 +46,18 @@ _ASM = {
     "solver_status": "Optimal", "grid_price_hat": 350.0,
     "bess_sensitivity": 0.02, "model_version": "nodal_agent_v1",
 }
+# Bridged-asset fixture: zones.py maps asset_code "suyou" -> 景蓝乌尔图储能电站.
+_ASM2 = dict(_ASM, plant_name="景蓝乌尔图储能电站", node="FX_URTU",
+             settle_node="FX_URTU")
 
 def _strat(e, s, en):
     return pd.DataFrame({
-        "plant_name": ["甲站"], "target_date": [_D],
-        "curve_json": [json.dumps(_CURVE)],
-        "assumptions_json": [json.dumps(_ASM, ensure_ascii=False)],
-        "iterations": [2], "convergence_delta_mwh": [0.5],
-        "model_version": ["nodal_agent_v1"],
+        "plant_name": ["甲站", "景蓝乌尔图储能电站"], "target_date": [_D, _D],
+        "curve_json": [json.dumps(_CURVE), json.dumps(_CURVE)],
+        "assumptions_json": [json.dumps(_ASM, ensure_ascii=False),
+                             json.dumps(_ASM2, ensure_ascii=False)],
+        "iterations": [2, 2], "convergence_delta_mwh": [0.5, 0.5],
+        "model_version": ["nodal_agent_v1", "nodal_agent_v1"],
     })
 
 ntt.load_node_registry = lambda e: pd.DataFrame({
@@ -78,19 +82,35 @@ ntt.load_promote_status = lambda e: pd.DataFrame({
     "status": ["champion"], "mean_capture_rate": [0.9],
     "delta_vs_champion": [0.0], "window_end": [_D],
 })
-ntt.load_node_actual_curve = lambda e, n, d: [300.0 + float(i) for i in range(96)]
-ntt.load_node_shape = lambda e, n, d: [1.0] * 96
+
+def _rec_actual(e, n, d):
+    ntt._s1_actual_calls.append(n)
+    return [300.0 + float(i) for i in range(96)]
+
+def _rec_shape(e, n, d):
+    ntt._s1_shape_calls.append(n)
+    return [1.0] * 96
+
+ntt._s1_actual_calls = []
+ntt._s1_shape_calls = []
+ntt.load_node_actual_curve = _rec_actual
+ntt.load_node_shape = _rec_shape
 ntt.load_trader_attribution = lambda e, s, en: pd.DataFrame({
-    "trade_date": [_D], "asset_code": ["甲站"],
-    "cleared_actual_pnl": [10000.0], "grid_restriction_loss": [100.0],
-    "forecast_error_loss": [200.0], "strategy_error_loss": [50.0],
+    "trade_date": [_D, _D], "asset_code": ["甲站", "suyou"],
+    "cleared_actual_pnl": [10000.0, 20000.0],
+    "grid_restriction_loss": [100.0, 200.0],
+    "forecast_error_loss": [200.0, 400.0],
+    "strategy_error_loss": [50.0, 100.0],
 })
 ntt.load_price_node_map = lambda e: pd.DataFrame({
-    "plant_name": ["甲站"], "node": ["N1"], "settle_node": ["SN1"],
-    "fengxing_node_name": ["FN1"],
+    "plant_name": ["甲站", "景蓝乌尔图储能电站"],
+    "node": ["N1", "FX_URTU"],
+    "settle_node": ["SN1", "FX_URTU"],
+    "fengxing_node_name": ["FN1", "FX_URTU"],
 })
 ntt.load_actual_price_vectors = lambda e, nodes, s, en: {
     ("FN1", "2026-09-21"): [400.0] * 96,
+    ("FX_URTU", "2026-09-21"): [380.0] * 96,
 }
 ntt.save_asset_registry_rows = lambda e, rows: len(rows)
 ntt.refresh_registry_from_md = lambda e: {
@@ -134,6 +154,31 @@ def test_refresh_button_runs_extraction():
     assert not at.exception, f"exception after refresh: {at.exception}"
     assert any("upserted 1" in s.value for s in at.success), \
         [s.value for s in at.success]
+
+
+def test_s1_queries_with_fengxing_node_name():
+    # 2026-09-24: registry names (德岭山) are not price-table node_names —
+    # S1 must resolve via the registry's fengxing_node_name (N1 -> FN1).
+    at = _at()
+    assert not at.exception, f"render exception: {at.exception}"
+    assert ntt._s1_actual_calls, "S1 actual loader never called"
+    assert set(ntt._s1_actual_calls) == {"FN1"}, ntt._s1_actual_calls
+
+
+def test_s3_bridges_asset_code_via_zones_registry():
+    # 2026-09-24: attribution asset_code "suyou" must bridge to strategy plant
+    # 景蓝乌尔图储能电站 via the reviewed zones.py mapping.
+    at = _at()
+    assert not at.exception, f"render exception: {at.exception}"
+    s3 = None
+    for df in at.dataframe:
+        txt = df.value.to_string()
+        if "cleared_actual_pnl" in txt and "recursive_optimal_pnl" in txt:
+            s3 = txt
+            break
+    assert s3 is not None, f"S3 table not found in {len(at.dataframe)} dataframes"
+    assert "景蓝乌尔图储能电站" in s3, s3
+    assert "甲站" in s3, s3
 
 
 def test_save_button_no_changes_is_clean():
