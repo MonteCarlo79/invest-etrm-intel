@@ -35,8 +35,11 @@ import pandas as pd
 
 from services.nodal_forecast import db as fc_db
 from services.nodal_agents import behavior, recursion
-from services.bess_map.strategy_experiments import (assign_status,
-                                                    compute_window_metrics)
+
+# services.bess_map.strategy_experiments is imported LAZILY inside
+# register_strategies: it is owned by the parallel price-forecasting workstream
+# and must not break run_day's import when absent/restructured (2026-09-24:
+# module-level import crashed the probe image, where the file isn't yet on main).
 
 MODEL_VERSION = "nodal_agent_v1"
 BESS_SENSITIVITY = 0.02  # CNY/MWh price drop per MW of aggregate BESS discharge
@@ -449,6 +452,8 @@ def register_strategies(conn, target_date: date, window_days: int = 30) -> int:
     if not capture_rows:
         return 0
 
+    from services.bess_map.strategy_experiments import (
+        assign_status, compute_window_metrics)
     metrics = compute_window_metrics(pd.DataFrame(capture_rows), window_days,
                                      target_date)
     if metrics.empty:
