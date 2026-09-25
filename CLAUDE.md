@@ -176,7 +176,7 @@ Automated daily data collection from LingFeng SaaS (`https://lingfeng-saas.tradi
 **29 markets:** 河南, 新疆, 吉林, 海南, 湖北, 四川, 黑龙江, 福建, 浙江, 江苏, 广西, 安徽, 陕西, 贵州, 云南, 广东, 蒙东, 湖南, 宁夏, 辽宁, 河北南网, 甘肃, 蒙西, 山东, 山西, 冀北, 广州, 青海, 江西
 
 **Scheduled runs:**
-- **Primary — ECS** `bess-platform-lingfeng-ingest-svc`: daily 20:00 UTC (04:00 CST); trigger check every 15 min (Feishu/Telegram backfills)
+- **Primary — ECS** `bess-platform-lingfeng-ingest-svc`: daily 20:00 UTC (04:00 CST); trigger check every 15 min (Feishu/Telegram backfills). Image **v7 / td:9** (2026-09-26): includes the placeholder-zero-day guard in services/bess_map/db.py (active-market all-zero price days are dropped, never written)
 - **Fallback — MacBook launchd** agent `ai.pjh-etrm.lingfeng-daily`: daily 04:00 local, all 29 markets + 3 models. Register with `bash services/lingfeng/setup_schedule_launchd.sh`. Prereq: venv at `~/.venvs/bess-platform` + `python -m playwright install chromium`
 - Windows Task Scheduler version (`setup_schedule.ps1`) retired 2026-08-06 with the workstation move
 
