@@ -157,3 +157,7 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 ## 2026-09-25 — v25 deployed (tab S1/S3 fixes)
 **Deployed:** mengxi-dashboard **v25 (td:39)** — Nodal Trading tab: S1 resolves registry name → fengxing_node_name before price queries (was silently empty on every node); S3 bridges attribution asset_code → plant_name via zones.py (could never overlap by name). Stable, clean startup.
 **Remaining big item:** no scheduled daily run_day writer — S2/S3 live only on days a probe/manual run has produced strategies (09-12, 09-21 currently). EventBridge Fargate schedule ~17:00 CST proposed, user decision pending.
+
+
+## 2026-09-25 — Daily nodal writer scheduled (v27)
+**Deployed:** mengxi-dashboard **v27 (td:41)** + **EventBridge rule bess-platform-nodal-writer-daily (16:00 CST)** running services/nodal_agents/daily_job.py on the bess-platform-nodal-writer family (1vCPU/4GB, image tracks app image). Smoke run exit 0: RUN_DAY 23 plants D+1, damped loop CONVERGED (iterations=2, delta 0.0); REGISTER skips cleanly until parallel workstream commits strategy_experiments.py. First real cron run: today 16:00 CST. Terraform: infra/terraform/nodal_writer.tf.
