@@ -161,3 +161,6 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 
 ## 2026-09-25 — Daily nodal writer scheduled (v27)
 **Deployed:** mengxi-dashboard **v27 (td:41)** + **EventBridge rule bess-platform-nodal-writer-daily (16:00 CST)** running services/nodal_agents/daily_job.py on the bess-platform-nodal-writer family (1vCPU/4GB, image tracks app image). Smoke run exit 0: RUN_DAY 23 plants D+1, damped loop CONVERGED (iterations=2, delta 0.0); REGISTER skips cleanly until parallel workstream commits strategy_experiments.py. First real cron run: today 16:00 CST. Terraform: infra/terraform/nodal_writer.tf.
+
+## 2026-09-26 — Ingest image v7 with zero-day guard (td:9)
+**Deployed:** lingfeng-ingest **v7 / td:9** — placeholder-zero-day guard live in prod ingestion (all-zero rt_price days dropped for active markets; kept for no-disclosure provinces). Incremental build FROM v6 (full playwright base rebuild stalls from this network). Smoke: 蒙西 09-25 collected + ingested clean on v7. Guard committed afc2c4c; 09-24 蒙西 zeros overwrite by tonight run.
