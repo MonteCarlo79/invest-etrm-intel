@@ -98,25 +98,37 @@ def fetch_zone_daily_prices(engine: Engine, nodes: list[str],
     """
     if not nodes:
         return pd.DataFrame()
+    # Dynamic predicates: only constrain dates when params are set — passing
+    # None into COALESCE(:start, ...) types the expression as text and breaks
+    # `date >= text` (psycopg2 untyped NULL, observed in prod 2026-09-25).
     sql = """
         SELECT datetime::date AS d, node_name, AVG(node_price) AS p
         FROM marketdata.md_rt_nodal_price
         WHERE node_name = ANY(:nodes)
-          AND datetime::date >= COALESCE(:start, '1900-01-01')
-          AND datetime::date <= COALESCE(:end, CURRENT_DATE)
-        GROUP BY 1, 2
-        ORDER BY 1
     """
+    params: dict = {"nodes": nodes}
     end = end_date
-    start = None
     if end is not None:
         start = pd.Timestamp(end) - pd.Timedelta(days=window_days - 1)
-    df = pd.read_sql(sql_text(sql), engine,
-                     params={"nodes": nodes, "start": start, "end": end})
+        sql += " AND datetime::date >= :start AND datetime::date <= :end"
+        params["start"] = start
+        params["end"] = end
+    sql += " GROUP BY 1, 2 ORDER BY 1"
+    df = pd.read_sql(sql_text(sql), engine, params=params)
     if df.empty:
         return pd.DataFrame()
     df["d"] = pd.to_datetime(df["d"])
     return df.pivot(index="d", columns="node_name", values="p").sort_index()
+
+
+def resolve_candidate_node(candidate: dict, proxy_node: Optional[str]) -> tuple:
+    """(node, used_proxy) — pandas NaN is truthy, so `x or proxy` silently
+    keeps NaN and poisons downstream set sorting (prod error 2026-09-25).
+    pd.isna covers float NaN / pd.NA / NaT; strings pass through."""
+    raw = candidate.get("zone_price_node")
+    if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
+        return proxy_node, proxy_node is not None
+    return raw, False
 
 
 def compute_contribution(engine: Engine, candidate: dict, fleet: pd.DataFrame,
@@ -127,8 +139,7 @@ def compute_contribution(engine: Engine, candidate: dict, fleet: pd.DataFrame,
     proxy_node: fallback price node when the candidate has no zone_price_node
     (e.g. alashan → 德岭山 proxy, flagged in the result).
     """
-    node = candidate.get("zone_price_node") or proxy_node
-    used_proxy = candidate.get("zone_price_node") is None and proxy_node is not None
+    node, used_proxy = resolve_candidate_node(candidate, proxy_node)
     result = {"asset_code": candidate.get("asset_code"),
               "candidate_node": node, "used_proxy_node": used_proxy,
               "metrics": None, "fleet_weights": {}, "warnings": []}
