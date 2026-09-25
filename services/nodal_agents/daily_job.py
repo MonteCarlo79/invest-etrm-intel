@@ -34,8 +34,16 @@ def main() -> int:
         print(f"RUN_DAY {out}", flush=True)
 
         yesterday = date.today() - timedelta(days=1)
-        n = writer.register_strategies(conn, yesterday)
-        print(f"REGISTER {n}", flush=True)
+        try:
+            n = writer.register_strategies(conn, yesterday)
+            print(f"REGISTER {n}", flush=True)
+        except ImportError:
+            # services.bess_map.strategy_experiments is owned by the parallel
+            # price-forecasting workstream and is not yet committed to main —
+            # the promote loop starts working the day their module lands in
+            # an image. Strategy production (RUN_DAY above) is unaffected.
+            print("REGISTER skipped: strategy_experiments module not in image "
+                  "(parallel workstream, not yet on main)", flush=True)
     finally:
         conn.close()
 
