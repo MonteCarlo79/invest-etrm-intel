@@ -146,7 +146,7 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v46 (td:145) |
 | Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v65 (td:98) |
-| Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v25 (td:39) |
+| Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v27 (td:41) |
 | Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v13 (td:70) |
 | Deal Structurer (Pillar 5) | Deal Structurer | `bess-platform-deal-structurer` | `/deal-structurer/*` | 8522 | v20 (td:24). Image deploys bypass terraform (td has `ignore_changes=[container_definitions]`): jq-swap image → register-task-definition → update-service |
 | GB Market | Strategist + Quant | `bess-gb-market` | `/gb-market/*` | 8508 | v107 (td:30). Task-def family is `bess-gb-market` — `bess-platform-gb-market` is a DEAD family; never register against it. Live family not in terraform → deploys bypass terraform: jq-swap from the service's current tdArn |
@@ -188,6 +188,10 @@ python services/lingfeng/run_daily.py --markets 山东,山西 --start-date 2026-
 **Ops log table:** `marketdata.data_ops_log` — visible in Portal (Data Operations Status) and bess-map Data Management tab (Data Operations Log section).
 
 ---
+
+## Nodal Trading Daily Writer
+
+**Schedule:** EventBridge rule `bess-platform-nodal-writer-daily` — cron(0 8 * * ? *) = 16:00 CST daily (before the 17:00 D+1 nomination cutoff). One-shot Fargate task `bess-platform-nodal-writer` (1 vCPU / 4 GB — LP fleet solve OOM'd at 0.5/2), image tracks `image_mengxi_dashboard`. Runs `services/nodal_agents/daily_job.py`: `run_day(D+1)` → nodal_strategy_daily, then `register_strategies(D-1)` → strategy_experiments (scope='nodal_agent'; **skipped with a log line until the parallel workstream's strategy_experiments.py lands on main**). Exit 1 on zero plants (loud failure). Manual run: `aws ecs run-task --cluster bess-platform-cluster --task-definition bess-platform-nodal-writer --launch-type FARGATE --network-configuration ...` (same NAT network config as other one-off probes). Terraform: `infra/terraform/nodal_writer.tf`.
 
 ## Data Operations Status
 
