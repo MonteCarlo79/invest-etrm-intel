@@ -240,8 +240,43 @@ def ensure_hourly_price_table(engine, schema: str):
     with engine.begin() as conn:
         conn.execute(text(sql))
 
+def drop_placeholder_zero_days(df: pd.DataFrame, active_market: bool) -> pd.DataFrame:
+    """Drop days whose every rt_price is zero (LingFeng publishes zero-filled
+    frames for the current unpublished day — 2026-09-16/17/18 and 2026-09-24
+    蒙西 incidents; placeholder zeros poisoned the RT fallback).
+
+    active_market=False keeps the rows: for provinces that have never had a
+    non-zero price (no spot disclosure), all-zero IS the data.
+    Pure function — the DB lookup for `active_market` lives in the caller."""
+    if not active_market or df.empty or "rt_price" not in df.columns:
+        return df
+    rt = pd.to_numeric(df["rt_price"], errors="coerce")
+    day = pd.to_datetime(df["datetime"]).dt.date
+    is_zero_day = (rt.fillna(0) == 0).groupby(day).transform("all")
+    out = df[~is_zero_day]
+    dropped = int(is_zero_day.sum())
+    if dropped:
+        days = sorted({str(d) for d in day[is_zero_day]})
+        print(f"[GUARD] dropped {dropped} placeholder-zero price rows "
+              f"({', '.join(days)}) — all-zero day in an active market")
+    return out
+
+
+def _province_has_nonzero_price(engine, schema: str, province: str) -> bool:
+    """Has this province had any non-zero rt_price in the last 30 days?
+    Distinguishes placeholder zeros (active market) from no-market zeros."""
+    with engine.connect() as conn:
+        n = conn.execute(text(f"""
+            SELECT COUNT(*) FROM "{schema}"."spot_prices_hourly"
+            WHERE province = :p AND rt_price IS NOT NULL AND rt_price <> 0
+              AND datetime >= CURRENT_DATE - 30"""), {"p": province}).scalar()
+    return bool(n)
+
+
 def upsert_hourly_prices(engine, schema: str, province: str, hourly_prices_df, source_file: str):
     df = hourly_prices_df.reset_index().rename(columns={"datetime": "datetime"})
+    df = drop_placeholder_zero_days(
+        df, active_market=_province_has_nonzero_price(engine, schema, province))
     df["province"] = province
     df["source_file"] = source_file
 
