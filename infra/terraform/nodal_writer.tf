@@ -87,7 +87,11 @@ resource "aws_cloudwatch_event_target" "nodal_writer_daily" {
   role_arn = aws_iam_role.nodal_writer_scheduler.arn
 
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.nodal_writer.arn
+    # Family ARN (no revision): resolves to the latest ACTIVE revision at run
+    # time. Pinning a revision breaks the schedule on every image update —
+    # terraform deregisters the old revision and RunTask fails with
+    # "TaskDefinition is inactive" (2026-09-26/27 both days failed this way).
+    task_definition_arn = aws_ecs_task_definition.nodal_writer.arn_without_revision
     launch_type         = "FARGATE"
     network_configuration {
       subnets          = var.private_subnet_ids
