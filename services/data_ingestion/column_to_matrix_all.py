@@ -667,9 +667,7 @@ def Column_to_Matrix(pricefile: str, market: str):
         df = _normalize(resp)
         # print("[DEBUG] forecast-like cols:", [c for c in df.columns if "Forecast" in c or "forecast" in c])
 
-        if df.empty or "time" not in df.columns or df["time"].isna().all():
-            # Schema-variant responses (e.g. Jiangsu_SheYang) normalize to a
-            # frame without a 'time' column — log cleanly instead of KeyError.
+        if df.empty or df["time"].isna().all():
             print(f"[WARN] {market_key}: API returned no parsable rows in {start_day}→{end_day}.")
             return
 

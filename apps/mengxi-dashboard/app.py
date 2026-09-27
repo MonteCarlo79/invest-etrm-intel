@@ -617,14 +617,11 @@ with tab_wind_rank:
     _render_wind_rank(_get_sqlalchemy_engine())
 
 # ---------------------------------------------------------------------------
-# Tab 6: Wind Farm Trading (placeholder)
+# Tab 6: Wind Farm Trading — 零碳46 dispatch diagnostics + 收益瀑布
 # ---------------------------------------------------------------------------
 with tab_wind_trading:
-    st.subheader("Wind Farm Trading Management")
-    st.info(
-        "Coming soon — active wind farm trading management, dispatch optimisation, "
-        "and curtailment analysis for Mengxi wind assets."
-    )
+    from wind_trading_tab import render as _render_wind_trading
+    _render_wind_trading(_get_sqlalchemy_engine())
 
 # ---------------------------------------------------------------------------
 # Tab 7: Data Management
