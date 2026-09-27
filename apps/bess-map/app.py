@@ -115,6 +115,7 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_4h":          "4h Rev (¥/MWh_cap/yr)",
         "rank_col_capture":     "Capture Rate (%)",
         "rank_col_days":        "Days",
+        "rank_days_unit":       "d",
         "rank_spread_title":    "Intraday RT Spread by Province (¥/kWh)",
         "rank_spread_caption":  "Max − Min of hourly avg RT prices. Direct measure of intraday arbitrage opportunity.",
         # dispatch
@@ -374,6 +375,7 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_4h":          "4h年收益（元/MWh/年）",
         "rank_col_capture":     "捕获率（%）",
         "rank_col_days":        "天数",
+        "rank_days_unit":       "天",
         "rank_spread_title":    "各省日内实时价差（元/千瓦时）",
         "rank_spread_caption":  "小时均价最大值减最小值。日内套利机会的直接衡量指标。",
         "disp_province":        "省份",
@@ -673,6 +675,10 @@ def _eng():
     return engine
 
 # ── data loaders ──────────────────────────────────────────────────────────────
+# Sub-provincial regions without a regular data-update mechanism — excluded from
+# the Province Ranking tab: stale coverage makes their bars non-comparable.
+_RANKING_EXCLUDE = {"海南礼记", "海南那悦", "豫南", "豫中东", "豫北", "豫西"}
+
 @st.cache_data(ttl=3600)
 def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_time_v1"):
     # Theoretical LP profit is model-agnostic; fetch it without model filter so the
@@ -1716,6 +1722,7 @@ with tab_ranking:
     st.caption(_t("rank_caption"))
 
     rank_df = load_province_ranking(_ENG_KEY, sel_start, sel_end, sel_model)
+    rank_df = rank_df[~rank_df["province"].isin(_RANKING_EXCLUDE)]
 
     if rank_df.empty:
         st.warning("No data in bess_capture_daily for this period.")
@@ -1759,14 +1766,17 @@ with tab_ranking:
         if dur_filter != _t("all_durations"):
             plot_df = plot_df[plot_df["Duration"] == dur_filter]
         plot_df = plot_df.sort_values("annual_theo", ascending=True)
+        plot_df["days_label"] = plot_df["days"].fillna(0).astype(int).map(
+            lambda n: f"{n}{_t('rank_days_unit')}")
 
         fig_rank = px.bar(
             plot_df, x=rank_annual_col, y="province", color="Duration",
-            orientation="h", barmode="group",
+            orientation="h", barmode="group", text="days_label",
             color_discrete_map={"2h": "#4CAF50", "4h": "#1565C0"},
             labels={rank_annual_col: "Annual Rev (¥/MWh/yr)", "province": ""},
             title=_t("rank_chart_title"),
         )
+        fig_rank.update_traces(textposition="outside")
         fig_rank.update_layout(height=max(400, len(wide) * 26), margin=dict(t=40, b=20),
                                 legend_title_text="Duration")
         st.plotly_chart(fig_rank, use_container_width=True)
@@ -1804,6 +1814,7 @@ with tab_ranking:
         st.subheader(_t("rank_spread_title"))
         st.caption(_t("rank_spread_caption"))
         spread_df = load_intraday_spread(_ENG_KEY, sel_start, sel_end)
+        spread_df = spread_df[~spread_df["province"].isin(_RANKING_EXCLUDE)]
         if not spread_df.empty:
             fig_sp = px.bar(
                 spread_df, x="spread", y="province", orientation="h",
