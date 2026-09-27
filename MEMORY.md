@@ -164,3 +164,8 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 
 ## 2026-09-26 — Ingest image v7 with zero-day guard (td:9)
 **Deployed:** lingfeng-ingest **v7 / td:9** — placeholder-zero-day guard live in prod ingestion (all-zero rt_price days dropped for active markets; kept for no-disclosure provinces). Incremental build FROM v6 (full playwright base rebuild stalls from this network). Smoke: 蒙西 09-25 collected + ingested clean on v7. Guard committed afc2c4c; 09-24 蒙西 zeros overwrite by tonight run.
+
+
+## 2026-09-27 — Writer schedule fixed (family-ARN pin) + first green cron-path run
+**Incident:** first two scheduled firings (09-26, 09-27 08:00 UTC) FAILED — EventBridge target pinned nodal-writer:1, deregistered by the v27 terraform apply → RunTask 'TaskDefinition is inactive' (FailedInvocations=1 both days, found via CloudTrail). **Fix:** target now uses the td FAMILY arn (arn_without_revision), resolves latest-active at run time (7c82c67). Manual run on the fixed path: exit 0, RUN_DAY 2026-09-28 23 plants (iterations=3, delta 2414 MWh; shape_misses=17). Tomorrow 08:00 UTC is the first true cron run on the fixed target.
+**Flagged sibling breakage:** rule bess-platform-nodal-pf-daily pins bess-platform-mengxi-dashboard:33 — same 'inactive' failure mode since the v23 deploy (09-23); its owner needs the same family-ARN repoint (feeds reports.nodal_pf_node_daily → T6 theoretical + Nodal Maps tab).
