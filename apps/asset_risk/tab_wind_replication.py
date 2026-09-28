@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Wind Farm Trading tab — 零碳46 (悦盛昌渠) dispatch diagnostics + 收益瀑布.
+"""零碳46 (悦盛昌渠) wind asset views for Tab 7 (Dispatch Diagnostics) and
+Tab 8 (收益瀑布 P&L Waterfall).
 
-Sub-tabs:
-1. Dispatch Diagnostics — 15-min dispatch vs RT nodal price from
-   marketdata.wind_dispatch_15min (backfilled extract; md_id_cleared_energy
-   MW ×0.25 → MWh).
-2. 收益瀑布 P&L Waterfall — monthly settlement cascade from
-   marketdata.wind_settlement_monthly (replicated) + rm_settlement_items
-   (book 6 bill fees), reconciled to the bill total.
+Wind has no BESS-style 申报→出清 dispatch chain — its diagnostics are the
+ID-cleared schedule × RT nodal price, and its waterfall is the monthly
+settlement cascade replicated from market data + trades vs book 6 bills:
+
+    现货电能价值 (Σ gen×RT, bottom-up) + 合约差价 (bill-implied)
+    + 绿电溢价 (trades) − 储能分摊/调频/其他费用 (bill) = 账单净额
+
+Data: marketdata.wind_dispatch_15min, marketdata.wind_settlement_monthly,
+marketdata.rm_settlement_items — built by services/wind_settlement/.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ from sqlalchemy import text
 PLANT = "悦盛昌渠风光储电站"
 ASSET = "新_悦盛昌渠#1期"
 BOOK_ID = 6
+WIND_LABEL = "零碳46风电(悦盛昌渠)"
 
 _GREEN = "#2ecc71"
 _RED = "#e74c3c"
@@ -68,10 +72,10 @@ def _load_bill_items(_engine, month: str) -> pd.DataFrame:
     return pd.read_sql(q, _engine, params={"book": BOOK_ID, "month": f"{month}-01"})
 
 
-# ── sub-tab 1: Dispatch Diagnostics ─────────────────────────────────────────
+# ── Tab 7 wind mode: Dispatch Diagnostics ────────────────────────────────────
 
-def _render_diagnostics(engine) -> None:
-    st.subheader("Dispatch Diagnostics — 悦盛昌渠 (ID cleared × RT nodal)")
+def render_wind_diagnostics(engine) -> None:
+    st.markdown("### 零碳46风电（悦盛昌渠）— 日内出清 × 实时节点价")
 
     try:
         dmin, dmax = _load_dispatch_range(engine)
@@ -84,9 +88,9 @@ def _render_diagnostics(engine) -> None:
 
     c1, c2 = st.columns(2)
     start = c1.date_input("From", value=max(dmin.date(), pd.Timestamp("2026-06-01").date()),
-                          min_value=dmin.date(), max_value=dmax.date(), key="wt_diag_start")
+                          min_value=dmin.date(), max_value=dmax.date(), key="wd_diag_start")
     end = c2.date_input("To", value=dmax.date(), min_value=dmin.date(), max_value=dmax.date(),
-                        key="wt_diag_end")
+                        key="wd_diag_end")
     if start > end:
         st.error("From must be ≤ To")
         return
@@ -109,7 +113,6 @@ def _render_diagnostics(engine) -> None:
     k4.metric("捕获率", f"{cap / rt_avg:.1%}" if cap and rt_avg else "—")
     k5.metric("负电价时段", f"{neg_h:,.1f} h")
 
-    # daily generation + capture price
     daily = df.assign(date=df["datetime"].dt.date).groupby("date").apply(
         lambda g: pd.Series({
             "gen_mwh": g["gen_mwh"].sum(),
@@ -134,9 +137,8 @@ def _render_diagnostics(engine) -> None:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # 15-min detail for a selected day
     sel_day = st.date_input("日内明细 (15-min)", value=end, min_value=dmin.date(),
-                            max_value=dmax.date(), key="wt_diag_day")
+                            max_value=dmax.date(), key="wd_diag_day")
     day = df[df["datetime"].dt.date == sel_day]
     if day.empty:
         st.caption("所选日期无数据")
@@ -155,7 +157,6 @@ def _render_diagnostics(engine) -> None:
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-    # average day profile
     prof = df.assign(hour=df["datetime"].dt.hour).groupby("hour").agg(
         gen_mwh=("gen_mwh", "mean"), rt=("rt_price", "mean")).reset_index()
     fig3 = go.Figure()
@@ -174,12 +175,12 @@ def _render_diagnostics(engine) -> None:
     st.plotly_chart(fig3, use_container_width=True)
 
 
-# ── sub-tab 2: 收益瀑布 ──────────────────────────────────────────────────────
+# ── Tab 8 wind mode: 收益瀑布 ────────────────────────────────────────────────
 
-def _render_waterfall(engine) -> None:
+def render_wind_waterfall(engine) -> None:
     from services.wind_settlement.waterfall import settle_price, waterfall_components
 
-    st.subheader("收益瀑布 P&L Waterfall — 结算复制 vs 账单")
+    st.markdown("### 零碳46风电（悦盛昌渠）— 结算复制 vs 账单")
 
     monthly = _load_monthly(engine)
     if monthly.empty:
@@ -187,7 +188,7 @@ def _render_waterfall(engine) -> None:
         return
 
     months = [pd.Timestamp(m).strftime("%Y-%m") for m in monthly["settle_month"]]
-    sel = st.selectbox("结算月", months, index=len(months) - 1, key="wt_wf_month")
+    sel = st.selectbox("结算月", months, index=len(months) - 1, key="ww_month")
     row = monthly[monthly["settle_month"].apply(lambda m: pd.Timestamp(m).strftime("%Y-%m")) == sel].iloc[0]
     bill = _load_bill_items(engine, sel)
 
@@ -216,16 +217,15 @@ def _render_waterfall(engine) -> None:
     k4.metric("账单结算价", f"{settle_price(spot_rows):,.1f} 元/MWh" if not spot_rows.empty else "—")
     k5.metric("复制捕获价", f"{row['capture_price']:,.1f} 元/MWh" if pd.notna(row["capture_price"]) else "—")
 
-    st.caption(
-        f"校验：电量proxy/账单 = **{vol_ratio:.1%}** · 绿电复制准确率 = **{green_acc:.1%}** · "
-        f"差价模型/隐含 = **{cfd_acc:.0%}**（账单隐含 ¥{cfd_implied:,.0f} vs 系统参考价模型 ¥{cfd_model:,.0f}）"
-        if green_acc and cfd_acc and vol_ratio else ""
-    )
+    if green_acc and cfd_acc and vol_ratio:
+        st.caption(
+            f"校验：电量proxy/账单 = **{vol_ratio:.1%}** · 绿电复制准确率 = **{green_acc:.1%}** · "
+            f"差价模型/隐含 = **{cfd_acc:.0%}**（账单隐含 ¥{cfd_implied:,.0f} vs 系统参考价模型 ¥{cfd_model:,.0f}）"
+        )
 
     labels = [lbl for lbl, _ in comp] + ["复制净额", "账单净额"]
     values = [v for _, v in comp] + [replicated_total, bill_total]
     measures = ["relative"] * len(comp) + ["total", "total"]
-    colors = [_GREEN, _GREEN, _GREEN, _RED, _RED, _RED, _BLUE, _GREY]
 
     fig = go.Figure(go.Waterfall(
         orientation="v", measure=measures, x=labels, y=values,
@@ -240,11 +240,10 @@ def _render_waterfall(engine) -> None:
         height=420, margin=dict(l=10, r=10, t=40, b=10),
         yaxis=dict(title="¥", tickformat=",.0f", showgrid=True, gridcolor="#f0f0f0"),
         plot_bgcolor="white", paper_bgcolor="white",
-        title=f"{sel} 结算瀑布（现货+差价按复制值，费用项取账单）",
+        title=f"{sel} 结算瀑布（现货+绿电按复制值，差价=账单隐含，费用项取账单）",
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # replication vs bill detail
     with st.expander("复制明细 vs 账单行", expanded=False):
         c1, c2 = st.columns(2)
         c1.markdown("**复制值**")
@@ -269,7 +268,6 @@ def _render_waterfall(engine) -> None:
         show["volume_mwh"] = show["volume_mwh"].map(lambda v: f"{v:,.1f}" if pd.notna(v) else "—")
         c2.dataframe(show, hide_index=True, use_container_width=True, height=300)
 
-    # multi-month component trend
     st.markdown("**逐月组件趋势**")
     trend = monthly.copy()
     trend["month"] = trend["settle_month"].apply(lambda m: pd.Timestamp(m).strftime("%Y-%m"))
@@ -287,14 +285,3 @@ def _render_waterfall(engine) -> None:
         plot_bgcolor="white", paper_bgcolor="white",
     )
     st.plotly_chart(fig2, use_container_width=True)
-
-
-# ── entry point ──────────────────────────────────────────────────────────────
-
-def render(engine) -> None:
-    st.title("Wind Farm Trading — 零碳46 悦盛昌渠")
-    sub_diag, sub_wf = st.tabs(["Dispatch Diagnostics", "收益瀑布 P&L Waterfall"])
-    with sub_diag:
-        _render_diagnostics(engine)
-    with sub_wf:
-        _render_waterfall(engine)

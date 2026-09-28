@@ -426,6 +426,13 @@ def render_waterfall(engine):
     """Render 收益瀑布 P&L Waterfall tab."""
     st.subheader("收益瀑布 P&L Waterfall")
 
+    from apps.asset_risk.tab_wind_replication import WIND_LABEL
+    mode = st.radio("资产类型", ["储能", WIND_LABEL], horizontal=True, key="wf_mode")
+    if mode != "储能":
+        from apps.asset_risk.tab_wind_replication import render_wind_waterfall
+        render_wind_waterfall(engine)
+        return
+
     assets = _load_assets(engine)
     if assets.empty:
         st.warning("No BESS assets found.")

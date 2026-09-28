@@ -361,6 +361,12 @@ def render_diagnostics(engine):
     """Render Dispatch Diagnostics tab."""
     st.subheader("Dispatch Diagnostics 调度执行诊断")
 
+    mode = st.radio("资产类型", ["储能", "零碳46风电(悦盛昌渠)"], horizontal=True, key="dx_mode")
+    if mode != "储能":
+        from apps.asset_risk.tab_wind_replication import render_wind_diagnostics
+        render_wind_diagnostics(engine)
+        return
+
     assets = _load_assets(engine)
     assets = assets[assets["name"].isin(PLANT_MAP.keys())]
     if assets.empty:
