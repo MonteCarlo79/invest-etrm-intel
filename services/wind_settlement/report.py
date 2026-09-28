@@ -67,12 +67,14 @@ def replicate_month(engine, month: str) -> dict:
         cfd_exchange = float(cl["energy_fee"].sum()) - spot_value
         curve_min_mwh = float(cl["curve_min"].sum())
         cap = spot_value / gen_mwh if gen_mwh else None
+        contract_vol_clearing = float(cl["contract_mwh"].sum())
     else:
         gen_mwh = float(iv["gen_mwh"].sum())
         cap = capture_price(iv.dropna(subset=["rt_price"]))
         spot_value = float((iv["gen_mwh"] * iv["rt_price"]).sum())
         cfd_exchange = None
         curve_min_mwh = None
+        contract_vol_clearing = None
     proxy_mwh = float(iv["gen_mwh"].sum())
 
     ref_west = load_ref_price_avg(engine, month, "呼包以西加权平均价格_元_mwh")
@@ -118,6 +120,7 @@ def replicate_month(engine, month: str) -> dict:
         "curve_min_mwh": curve_min_mwh,
         "implied_cfd_cny": implied_cfd,
         "contract_vol_mwh": contract_vol,
+        "contract_vol_clearing_mwh": contract_vol_clearing,
         "ref_west": ref_west,
         "ref_east": ref_east,
         "ref_sys": ref_sys,
@@ -142,14 +145,14 @@ def persist(engine, rows: list[dict]) -> None:
             asset_name, settle_month, gen_proxy_mwh, metered_mwh, bill_vol_mwh,
             capture_price, spot_value_cny, bill_spot_cny, cfd_exchange_cny,
             curve_min_mwh, implied_cfd_cny,
-            contract_vol_mwh, ref_price_west, ref_price_east, ref_price_sys,
+            contract_vol_mwh, contract_vol_clearing_mwh, ref_price_west, ref_price_east, ref_price_sys,
             cfd_west_cny, cfd_sys_cny, cfd_zone_cny, green_cny, green_min_cny, bill_green_cny,
             bill_fees_cny, bill_total_cny
         ) VALUES (
             :asset, :month, :gen_proxy_mwh, :metered_mwh, :bill_vol_mwh,
             :capture_price, :spot_value_cny, :bill_spot_cny, :cfd_exchange_cny,
             :curve_min_mwh, :implied_cfd_cny,
-            :contract_vol_mwh, :ref_west, :ref_east, :ref_sys,
+            :contract_vol_mwh, :contract_vol_clearing_mwh, :ref_west, :ref_east, :ref_sys,
             :cfd_west_cny, :cfd_sys_cny, :cfd_zone_cny, :green_cny, :green_min_cny, :bill_green_cny,
             :bill_fees_cny, :bill_total_cny
         )
@@ -164,6 +167,7 @@ def persist(engine, rows: list[dict]) -> None:
             curve_min_mwh = EXCLUDED.curve_min_mwh,
             implied_cfd_cny = EXCLUDED.implied_cfd_cny,
             contract_vol_mwh = EXCLUDED.contract_vol_mwh,
+            contract_vol_clearing_mwh = EXCLUDED.contract_vol_clearing_mwh,
             ref_price_west = EXCLUDED.ref_price_west,
             ref_price_east = EXCLUDED.ref_price_east,
             ref_price_sys = EXCLUDED.ref_price_sys,
@@ -183,7 +187,8 @@ def persist(engine, rows: list[dict]) -> None:
                 conn.execute(text(stmt))
         # additive column migration for existing tables
         for col in ("ref_price_east NUMERIC", "cfd_zone_cny NUMERIC", "green_min_cny NUMERIC",
-                    "metered_mwh NUMERIC", "cfd_exchange_cny NUMERIC", "curve_min_mwh NUMERIC"):
+                    "metered_mwh NUMERIC", "cfd_exchange_cny NUMERIC", "curve_min_mwh NUMERIC",
+                    "contract_vol_clearing_mwh NUMERIC"):
             conn.execute(text(f"ALTER TABLE marketdata.wind_settlement_monthly ADD COLUMN IF NOT EXISTS {col}"))
         for r in rows:
             conn.execute(upsert, {

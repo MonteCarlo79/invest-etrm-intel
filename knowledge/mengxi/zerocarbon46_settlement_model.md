@@ -101,7 +101,14 @@ at 171% position). Green: bill inside [Σmin, aggregate] all months.
 
 ## Open discrepancies
 
-- Feb +1.09M bill premium vs exchange clearing (退补? — needs 核查票 detail)
+- ~~Feb +1.09M bill premium~~ **RESOLVED 2026-09-28**: the 日清算 file carries a
+  PARTIAL contract basis for Feb (48,280 MWh of the 62,445 in the trades
+  confirmations — 月度挂牌+月度撮合 ≈ 14.2 GWh registered at month-end close).
+  The bill settles on the full basis; the zone model on trades replicates the
+  Feb bill CfD to **0.7%** (8,952,803 vs 8,893,745). May shows the same
+  provisional-basis effect at 1.8%. Rule: clearing = ground truth for
+  volumes/spot/curve; **when its contract basis diverges >5% from the trades
+  confirmations, trust trades+zone for the CfD** (flagged in the waterfall).
 - 送出 (跨省) CfD reference rule for mixed-source products (锡泰直流) —
   effective ref in Mar/May sits east of the west-rule expectation
 

@@ -211,6 +211,11 @@ def render_wind_waterfall(engine) -> None:
     green_acc = (row["green_cny"] / row["bill_green_cny"]) if row["bill_green_cny"] else None
     vol_ratio = (row["metered_mwh"] / row["bill_vol_mwh"]) if row["bill_vol_mwh"] and pd.notna(row.get("metered_mwh")) else None
     adjust = float(row["bill_spot_cny"] - row["spot_value_cny"] - cfd_used) if pd.notna(row.get("bill_spot_cny")) else None
+    cl_vol = row.get("contract_vol_clearing_mwh")
+    basis_diverge = (
+        pd.notna(cl_vol) and row["contract_vol_mwh"]
+        and abs(cl_vol - row["contract_vol_mwh"]) / row["contract_vol_mwh"] > 0.05
+    )
 
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("账单总额", f"¥{bill_total:,.0f}")
@@ -230,6 +235,11 @@ def render_wind_waterfall(engine) -> None:
         ]
         if cfd_zone is not None and pd.notna(cfd_zone):
             cap_parts.append(f"分区模型 ¥{cfd_zone:,.0f}")
+        if basis_diverge:
+            cap_parts.append(
+                f"⚠️ 清算合约电量 {cl_vol:,.0f} vs 成交单 {row['contract_vol_mwh']:,.0f} MWh"
+                "（月结补登记，清算口径偏窄 — 分区模型更准）"
+            )
         st.caption(" · ".join(p for p in cap_parts if p))
 
     labels = [lbl for lbl, _ in comp] + ["复制净额", "账单净额"]
@@ -259,7 +269,8 @@ def render_wind_waterfall(engine) -> None:
         c1.dataframe(pd.DataFrame({
             "项目": ["计量电量 (MWh)", "账单电量 (MWh)", "捕获价 (元/MWh)",
                      "现货价值 (¥)", f"合约差价-{cfd_label} (¥)", "合约差价-分区模型 (¥)",
-                     "绿电溢价-合计 (¥)", "绿电溢价-Σmin下限 (¥)", "账单绿电 (¥)", "合约电量 (MWh)",
+                     "绿电溢价-合计 (¥)", "绿电溢价-Σmin下限 (¥)", "账单绿电 (¥)",
+                     "合约电量-成交单 (MWh)", "合约电量-日清算 (MWh)",
                      "退补/调整 (¥)", "参考价-东/西/系统 (元/MWh)"],
             "值": [f"{row['metered_mwh']:,.1f}" if pd.notna(row.get("metered_mwh")) else "—",
                    f"{row['bill_vol_mwh']:,.1f}",
@@ -270,6 +281,7 @@ def render_wind_waterfall(engine) -> None:
                    f"{green_min:,.0f}" if green_min is not None and pd.notna(green_min) else "—",
                    f"{row['bill_green_cny']:,.0f}" if pd.notna(row["bill_green_cny"]) else "—",
                    f"{row['contract_vol_mwh']:,.1f}",
+                   f"{cl_vol:,.1f}" if pd.notna(cl_vol) else "—",
                    f"{adjust:,.0f}" if adjust is not None else "—",
                    " / ".join(f"{v:,.1f}" if pd.notna(v) else "—"
                               for v in (row.get("ref_price_east"), row.get("ref_price_west"), row.get("ref_price_sys")))],
