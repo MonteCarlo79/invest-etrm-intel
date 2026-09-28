@@ -182,3 +182,19 @@ def load_bill_items(engine, book_id: int, month: str) -> pd.DataFrame:
         ORDER BY i.category, i.peak_period
     """)
     return pd.read_sql(q, engine, params={"book": book_id, "month": f"{month}-01"})
+
+
+def load_clearing(engine, month: str) -> pd.DataFrame:
+    """Exchange daily-clearing rows for one month (empty if not loaded)."""
+    from sqlalchemy import text
+
+    start = f"{month}-01"
+    end = pd.Timestamp(start) + pd.offsets.MonthBegin(1)
+    q = text("""
+        SELECT datetime, metered_mwh, energy_fee, rt_nodal_price,
+               contract_mwh, contract_price, curve_min
+        FROM marketdata.wind_daily_clearing
+        WHERE datetime >= :start AND datetime < :end
+        ORDER BY datetime
+    """)
+    return pd.read_sql(q, engine, params={"start": start, "end": end})

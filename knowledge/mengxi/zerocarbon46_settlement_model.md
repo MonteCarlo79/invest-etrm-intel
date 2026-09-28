@@ -71,19 +71,48 @@ shortfall; 月度/分时 bands — slides 94-97). Take from bills, flagged alloc
 **置换**: energy price + env follow the ORIGINAL contract; 置换价格 =
 撮合价 − 电能量 − 环境价值 (cash-settled, see 置换费 files).
 
+## Exchange daily clearing (日清算) — the ground truth (2026-09-28)
+
+`日清算202601~202608.xlsx` → `marketdata.wind_daily_clearing` (25,632 rows,
+2026-01-01→09-24, parser `clearing.py`, loader `load_clearing.py`).
+Per-15-min: 计量电量, 电能电费, 省内实时节点电价, 中长期合约电量/电价
+(aggregate contract curve), 曲线合理度取小值 = min(合约,计量), 取均值.
+
+**This replaces all proxies.** Validations:
+- Metered = bill volume to the MWh, all 7 months (vol_ratio 1.000)
+- Mar/Apr 电能电费 = bill 现货电费 to the CENT; Jul gap = exactly the bill's
+  second 现货 row (78,504.03, 退补); Jan 0.6%, May 1.8%, Jun 1.8%,
+  Feb 8.5% (1.09M unexplained premium — largest residual)
+- CfD now exchange-exact: cfd_exchange = Σ电能电费 − Σ计量×RT
+- Backed-out effective ref (per-interval identity): Jan 347 vs 东 341.8,
+  May 278 vs 281.5, Jul 305 vs sys 302.8 (合区 confirmed), Jun 368 (73% east mix)
+- Exchange contract curve ≈ trades-derived position (Mar/Jun/Jul exact match)
+  except Feb (48,280 vs 62,445) and May (91,749 vs 93,577)
+
+**Zone model vs exchange CfD**: validated Jan/Feb/Apr/Jun/Jul (83–115%);
+Mar/May fail (+7.6M/+7.0M vs +1.7M/+0.8M) — over-hedged months (171%/112%)
+where 送出-heavy positions (Mar 57% 跨省) don't follow the west-ref rule;
+needs per-product 送出 reference detail. Zone model = forward attribution
+tool; exchange clearing = ground truth for the covered period.
+
+**Replication residuals (waterfall)**: 5 of 7 months within 1.7%;
+Feb 7.6% (退补-like premium), Mar 6.2% (green aggregate model overshoot
+at 171% position). Green: bill inside [Σmin, aggregate] all months.
+
 ## Open discrepancies
 
-- **Jul volume**: proxy 110% of bill (52,860 vs 47,805) — curtailment hypothesis
-  (deck notes 大风日); ID schedule > metered actual
-- **Jan volume**: proxy 80% of bill — ID-cleared data gaps early Jan
-- **March**: green 167% of bill; contract position 170% of bill volume —
-  possible oversold month with buybacks
+- Feb +1.09M bill premium vs exchange clearing (退补? — needs 核查票 detail)
+- 送出 (跨省) CfD reference rule for mixed-source products (锡泰直流) —
+  effective ref in Mar/May sits east of the west-rule expectation
 
 ## Data pipeline
 
 - `trades.py` — parse 省内/跨省 全月成交单 (41,253 rows → wind_trades);
   汇总 rows are platform-netted positions; only (source_file, row_no) is a
   safe natural key (置换 fragments repeat identical values)
+- `clearing.py` / `load_clearing.py` — 日清算 → wind_daily_clearing (COPY);
+  时刻 cells are mixed time/datetime/1900-epoch types; 00:00 = 24:00 convention
 - `backfill_dispatch.py` — md_id × md_rt_nodal → wind_dispatch_15min (COPY via
   staging; plain executemany = hours over cross-Pacific link)
 - `report.py --persist` — monthly replication → wind_settlement_monthly
+  (exchange clearing preferred; ID-cleared proxy fallback)

@@ -192,13 +192,16 @@ def render_wind_waterfall(engine) -> None:
     row = monthly[monthly["settle_month"].apply(lambda m: pd.Timestamp(m).strftime("%Y-%m")) == sel].iloc[0]
     bill = _load_bill_items(engine, sel)
 
-    cfd_implied = float(row["implied_cfd_cny"]) if pd.notna(row["implied_cfd_cny"]) else 0.0
+    cfd_exchange = row["cfd_exchange_cny"] if pd.notna(row.get("cfd_exchange_cny")) else None
+    cfd_used = float(cfd_exchange) if cfd_exchange is not None else (
+        float(row["implied_cfd_cny"]) if pd.notna(row["implied_cfd_cny"]) else 0.0)
+    cfd_label = "交易所清算" if cfd_exchange is not None else "账单隐含"
     cfd_zone = row["cfd_zone_cny"] if pd.notna(row.get("cfd_zone_cny")) else None
     green_min = row["green_min_cny"] if pd.notna(row.get("green_min_cny")) else None
     comp = waterfall_components(
         bill,
         spot_value=row["spot_value_cny"] or 0.0,
-        cfd=cfd_implied,
+        cfd=cfd_used,
         green=row["green_cny"] or 0.0,
     )
     replicated_total = sum(v for _, v in comp)
@@ -206,8 +209,8 @@ def render_wind_waterfall(engine) -> None:
     residual = bill_total - replicated_total
 
     green_acc = (row["green_cny"] / row["bill_green_cny"]) if row["bill_green_cny"] else None
-    cfd_acc = (cfd_zone / cfd_implied) if (cfd_implied and cfd_zone is not None and pd.notna(cfd_zone)) else None
-    vol_ratio = (row["gen_proxy_mwh"] / row["bill_vol_mwh"]) if row["bill_vol_mwh"] else None
+    vol_ratio = (row["metered_mwh"] / row["bill_vol_mwh"]) if row["bill_vol_mwh"] and pd.notna(row.get("metered_mwh")) else None
+    adjust = float(row["bill_spot_cny"] - row["spot_value_cny"] - cfd_used) if pd.notna(row.get("bill_spot_cny")) else None
 
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("账单总额", f"¥{bill_total:,.0f}")
@@ -216,18 +219,17 @@ def render_wind_waterfall(engine) -> None:
               delta_color="inverse")
     spot_rows = bill[(bill["category"] == "discharge_energy") & bill["notes"].fillna("").str.contains("现货")]
     k4.metric("账单结算价", f"{settle_price(spot_rows):,.1f} 元/MWh" if not spot_rows.empty else "—")
-    k5.metric("复制捕获价", f"{row['capture_price']:,.1f} 元/MWh" if pd.notna(row["capture_price"]) else "—")
+    k5.metric("清算捕获价", f"{row['capture_price']:,.1f} 元/MWh" if pd.notna(row["capture_price"]) else "—")
 
     if green_acc and vol_ratio:
         cap_parts = [
-            f"校验：电量proxy/账单 = **{vol_ratio:.1%}**",
+            f"计量/账单电量 = **{vol_ratio:.1%}**",
             f"绿电模型/账单 = **{green_acc:.1%}**（Σmin下限 ¥{green_min:,.0f}）" if green_min is not None else "",
+            f"差价（{cfd_label}）¥{cfd_used:,.0f}",
+            f"退补/调整 = ¥{adjust:,.0f}" if adjust is not None else "",
         ]
         if cfd_zone is not None and pd.notna(cfd_zone):
-            cap_parts.append(
-                f"差价分区模型 ¥{cfd_zone:,.0f} vs 账单隐含 ¥{cfd_implied:,.0f}"
-                + (f"（{cfd_acc:.0%}）" if cfd_acc else "")
-            )
+            cap_parts.append(f"分区模型 ¥{cfd_zone:,.0f}")
         st.caption(" · ".join(p for p in cap_parts if p))
 
     labels = [lbl for lbl, _ in comp] + ["复制净额", "账单净额"]
@@ -255,18 +257,20 @@ def render_wind_waterfall(engine) -> None:
         c1, c2 = st.columns(2)
         c1.markdown("**复制值**")
         c1.dataframe(pd.DataFrame({
-            "项目": ["上网电量 proxy (MWh)", "账单电量 (MWh)", "捕获价 (元/MWh)",
-                     "现货价值 (¥)", "合约差价-隐含 (¥)", "合约差价-分区模型 (¥)",
+            "项目": ["计量电量 (MWh)", "账单电量 (MWh)", "捕获价 (元/MWh)",
+                     "现货价值 (¥)", f"合约差价-{cfd_label} (¥)", "合约差价-分区模型 (¥)",
                      "绿电溢价-合计 (¥)", "绿电溢价-Σmin下限 (¥)", "账单绿电 (¥)", "合约电量 (MWh)",
-                     "参考价-东/西/系统 (元/MWh)"],
-            "值": [f"{row['gen_proxy_mwh']:,.1f}", f"{row['bill_vol_mwh']:,.1f}",
+                     "退补/调整 (¥)", "参考价-东/西/系统 (元/MWh)"],
+            "值": [f"{row['metered_mwh']:,.1f}" if pd.notna(row.get("metered_mwh")) else "—",
+                   f"{row['bill_vol_mwh']:,.1f}",
                    f"{row['capture_price']:,.2f}" if pd.notna(row["capture_price"]) else "—",
-                   f"{row['spot_value_cny']:,.0f}", f"{cfd_implied:,.0f}",
+                   f"{row['spot_value_cny']:,.0f}", f"{cfd_used:,.0f}",
                    f"{cfd_zone:,.0f}" if cfd_zone is not None and pd.notna(cfd_zone) else "—",
                    f"{row['green_cny']:,.0f}" if pd.notna(row["green_cny"]) else "—",
                    f"{green_min:,.0f}" if green_min is not None and pd.notna(green_min) else "—",
                    f"{row['bill_green_cny']:,.0f}" if pd.notna(row["bill_green_cny"]) else "—",
                    f"{row['contract_vol_mwh']:,.1f}",
+                   f"{adjust:,.0f}" if adjust is not None else "—",
                    " / ".join(f"{v:,.1f}" if pd.notna(v) else "—"
                               for v in (row.get("ref_price_east"), row.get("ref_price_west"), row.get("ref_price_sys")))],
         }), hide_index=True, use_container_width=True)
@@ -281,7 +285,8 @@ def render_wind_waterfall(engine) -> None:
     trend["month"] = trend["settle_month"].apply(lambda m: pd.Timestamp(m).strftime("%Y-%m"))
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(x=trend["month"], y=trend["spot_value_cny"], name="现货价值", marker_color=_BLUE))
-    fig2.add_trace(go.Bar(x=trend["month"], y=trend["implied_cfd_cny"], name="合约差价(隐含)", marker_color=_GREEN))
+    cfd_col = trend["cfd_exchange_cny"].fillna(trend["implied_cfd_cny"]) if "cfd_exchange_cny" in trend else trend["implied_cfd_cny"]
+    fig2.add_trace(go.Bar(x=trend["month"], y=cfd_col, name="合约差价", marker_color=_GREEN))
     fig2.add_trace(go.Bar(x=trend["month"], y=trend["green_cny"], name="绿电溢价", marker_color="#27ae60"))
     fig2.add_trace(go.Bar(x=trend["month"], y=trend["bill_fees_cny"], name="费用(账单)", marker_color=_RED))
     fig2.add_trace(go.Scatter(x=trend["month"], y=trend["bill_total_cny"], name="账单净额",

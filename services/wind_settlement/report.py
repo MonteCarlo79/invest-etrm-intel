@@ -19,6 +19,7 @@ from services.wind_settlement.replicate import (
     green_premium,
     green_value,
     load_bill_items,
+    load_clearing,
     load_intervals,
     load_ref_price_avg,
 )
@@ -56,11 +57,23 @@ def replicate_month(engine, month: str) -> dict:
     pos = monthly_position(intra, cross)
 
     iv = load_intervals(engine, PLANT, NODE, month)
+    cl = load_clearing(engine, month)
     bill = load_bill_items(engine, BOOK_ID, month)
 
-    gen_mwh = float(iv["gen_mwh"].sum())
-    cap = capture_price(iv.dropna(subset=["rt_price"]))
-    spot_value = float((iv["gen_mwh"] * iv["rt_price"]).sum())
+    # exchange clearing is authoritative when present; ID-cleared proxy is fallback
+    if not cl.empty:
+        gen_mwh = float(cl["metered_mwh"].sum())
+        spot_value = float((cl["metered_mwh"] * cl["rt_nodal_price"]).sum())
+        cfd_exchange = float(cl["energy_fee"].sum()) - spot_value
+        curve_min_mwh = float(cl["curve_min"].sum())
+        cap = spot_value / gen_mwh if gen_mwh else None
+    else:
+        gen_mwh = float(iv["gen_mwh"].sum())
+        cap = capture_price(iv.dropna(subset=["rt_price"]))
+        spot_value = float((iv["gen_mwh"] * iv["rt_price"]).sum())
+        cfd_exchange = None
+        curve_min_mwh = None
+    proxy_mwh = float(iv["gen_mwh"].sum())
 
     ref_west = load_ref_price_avg(engine, month, "呼包以西加权平均价格_元_mwh")
     ref_east = load_ref_price_avg(engine, month, "呼包以东加权平均价格_元_mwh")
@@ -93,13 +106,16 @@ def replicate_month(engine, month: str) -> dict:
 
     return {
         "month": month,
-        "gen_proxy_mwh": gen_mwh,
+        "gen_proxy_mwh": proxy_mwh,
+        "metered_mwh": gen_mwh,
         "bill_vol_mwh": bill_vol,
         "vol_ratio": gen_mwh / bill_vol if bill_vol else None,
         "data_days": int(iv["datetime"].dt.date.nunique()) if not iv.empty else 0,
         "capture_price": cap,
         "spot_value_cny": spot_value,
         "bill_spot_cny": bill_amt,
+        "cfd_exchange_cny": cfd_exchange,
+        "curve_min_mwh": curve_min_mwh,
         "implied_cfd_cny": implied_cfd,
         "contract_vol_mwh": contract_vol,
         "ref_west": ref_west,
@@ -123,24 +139,29 @@ def persist(engine, rows: list[dict]) -> None:
     ddl = Path("db/ddl/marketdata/wind_settlement_monthly.sql")
     upsert = text("""
         INSERT INTO marketdata.wind_settlement_monthly (
-            asset_name, settle_month, gen_proxy_mwh, bill_vol_mwh,
-            capture_price, spot_value_cny, bill_spot_cny, implied_cfd_cny,
+            asset_name, settle_month, gen_proxy_mwh, metered_mwh, bill_vol_mwh,
+            capture_price, spot_value_cny, bill_spot_cny, cfd_exchange_cny,
+            curve_min_mwh, implied_cfd_cny,
             contract_vol_mwh, ref_price_west, ref_price_east, ref_price_sys,
             cfd_west_cny, cfd_sys_cny, cfd_zone_cny, green_cny, green_min_cny, bill_green_cny,
             bill_fees_cny, bill_total_cny
         ) VALUES (
-            :asset, :month, :gen_proxy_mwh, :bill_vol_mwh,
-            :capture_price, :spot_value_cny, :bill_spot_cny, :implied_cfd_cny,
+            :asset, :month, :gen_proxy_mwh, :metered_mwh, :bill_vol_mwh,
+            :capture_price, :spot_value_cny, :bill_spot_cny, :cfd_exchange_cny,
+            :curve_min_mwh, :implied_cfd_cny,
             :contract_vol_mwh, :ref_west, :ref_east, :ref_sys,
             :cfd_west_cny, :cfd_sys_cny, :cfd_zone_cny, :green_cny, :green_min_cny, :bill_green_cny,
             :bill_fees_cny, :bill_total_cny
         )
         ON CONFLICT (asset_name, settle_month) DO UPDATE SET
             gen_proxy_mwh = EXCLUDED.gen_proxy_mwh,
+            metered_mwh = EXCLUDED.metered_mwh,
             bill_vol_mwh = EXCLUDED.bill_vol_mwh,
             capture_price = EXCLUDED.capture_price,
             spot_value_cny = EXCLUDED.spot_value_cny,
             bill_spot_cny = EXCLUDED.bill_spot_cny,
+            cfd_exchange_cny = EXCLUDED.cfd_exchange_cny,
+            curve_min_mwh = EXCLUDED.curve_min_mwh,
             implied_cfd_cny = EXCLUDED.implied_cfd_cny,
             contract_vol_mwh = EXCLUDED.contract_vol_mwh,
             ref_price_west = EXCLUDED.ref_price_west,
@@ -161,7 +182,8 @@ def persist(engine, rows: list[dict]) -> None:
             if stmt.strip():
                 conn.execute(text(stmt))
         # additive column migration for existing tables
-        for col in ("ref_price_east NUMERIC", "cfd_zone_cny NUMERIC", "green_min_cny NUMERIC"):
+        for col in ("ref_price_east NUMERIC", "cfd_zone_cny NUMERIC", "green_min_cny NUMERIC",
+                    "metered_mwh NUMERIC", "cfd_exchange_cny NUMERIC", "curve_min_mwh NUMERIC"):
             conn.execute(text(f"ALTER TABLE marketdata.wind_settlement_monthly ADD COLUMN IF NOT EXISTS {col}"))
         for r in rows:
             conn.execute(upsert, {
