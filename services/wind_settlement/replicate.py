@@ -56,29 +56,100 @@ def id_cleared_to_energy(raw: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ── green premium: Σ_t min(合约曲线_t, 实际计量_t) ───────────────────────────
+
+_WINDOW_RE = __import__("re").compile(r"\((\d{8})-(\d{8})\)")
+
+
+def _contract_windows(position: pd.DataFrame, month: str) -> pd.DataFrame:
+    """Per-contract delivery window (clamped to the month) from 品种 name.
+
+    Falls back to the whole month when no (YYYYMMDD-YYYYMMDD) range is present.
+    Returns position + [start, end] (Timestamps, end exclusive).
+    """
+    mstart = pd.Timestamp(f"{month}-01")
+    mend = mstart + pd.offsets.MonthBegin(1)
+    out = position.copy()
+    starts, ends = [], []
+    for tt in out["trade_type"]:
+        m = _WINDOW_RE.search(str(tt))
+        if m:
+            s = pd.Timestamp(m.group(1))
+            e = pd.Timestamp(m.group(2)) + pd.Timedelta(days=1)
+        else:
+            s, e = mstart, mend
+        starts.append(max(s, mstart))
+        ends.append(min(e, mend))
+    out["start"], out["end"] = starts, ends
+    return out
+
+
+def green_covered(position: pd.DataFrame, intervals: pd.DataFrame, month: str) -> pd.DataFrame:
+    """Per-contract covered volume: Σ_t min(合约曲线_t, 实际_t) allocated by rate share.
+
+    Contract curves are flat within their delivery window (直线). Each 15-min
+    interval's covered volume min(total contract rate, actual) is split across
+    contracts pro-rata to their rate. Returns position + [covered_mwh].
+    """
+    if position.empty or intervals.empty:
+        out = position.copy()
+        out["covered_mwh"] = 0.0
+        return out
+
+    cons = _contract_windows(position, month)
+    idx = intervals["datetime"].to_numpy()
+    gen = intervals["gen_mwh"].to_numpy(dtype=float)
+
+    # rate matrix: one column per contract, MWh per 15-min inside its window
+    rates = []
+    for _, c in cons.iterrows():
+        in_win = (idx >= c["start"].to_datetime64()) & (idx < c["end"].to_datetime64())
+        n = int(in_win.sum())
+        rates.append(in_win.astype(float) * (float(c["volume_mwh"]) / n if n else 0.0))
+    rate_mat = pd.DataFrame(rates).T  # intervals × contracts
+
+    import numpy as np
+    total_rate = rate_mat.sum(axis=1).to_numpy()
+    covered_total = np.minimum(total_rate, gen)
+    share = rate_mat.div(pd.Series(np.where(total_rate == 0, np.nan, total_rate)), axis=0).fillna(0.0)
+    covered = share.mul(pd.Series(covered_total), axis=0).sum(axis=0).to_numpy()
+
+    out = cons.copy()
+    out["covered_mwh"] = covered
+    return out
+
+
+def green_premium(position: pd.DataFrame, intervals: pd.DataFrame, month: str) -> float:
+    """绿电溢价 = Σ_c covered_c × env_c (per-interval min, 曲线合理度 basis)."""
+    if position.empty:
+        return 0.0
+    cov = green_covered(position, intervals, month)
+    env = cov["env_value"].fillna(0.0)
+    return float((cov["covered_mwh"] * env).sum())
+
+
 # ── DB access ────────────────────────────────────────────────────────────────
 
 def load_intervals(engine, plant: str, node: str, month: str) -> pd.DataFrame:
     """Per-interval generation proxy (MWh) + RT nodal price for one month.
 
     month = 'YYYY-MM'. Returns columns: datetime, gen_mwh, rt_price.
+    Reads the wind_dispatch_15min extract (indexed PK) — a direct
+    md_id_cleared_energy × md_rt_nodal_price JOIN takes minutes per month
+    over the cross-Pacific link.
     """
     from sqlalchemy import text
 
     start = f"{month}-01"
     end = pd.Timestamp(start) + pd.offsets.MonthBegin(1)
     q = text("""
-        SELECT e.datetime,
-               GREATEST(e.cleared_energy_mwh, 0) * 0.25 AS gen_mwh,
-               p.node_price AS rt_price
-        FROM marketdata.md_id_cleared_energy e
-        LEFT JOIN marketdata.md_rt_nodal_price p
-               ON p.datetime = e.datetime AND p.node_name = :node
-        WHERE e.plant_name = :plant
-          AND e.datetime >= :start AND e.datetime < :end
-        ORDER BY e.datetime
+        SELECT datetime, gen_mwh, rt_price
+        FROM marketdata.wind_dispatch_15min
+        WHERE plant_name = :plant
+          AND datetime >= :start AND datetime < :end
+        ORDER BY datetime
     """)
-    return pd.read_sql(q, engine, params={"plant": plant, "node": node, "start": start, "end": end})
+    return pd.read_sql(q, engine, params={"plant": plant, "start": start, "end": end})
 
 
 def load_ref_price_avg(engine, month: str, column: str = "呼包以西加权平均价格_元_mwh") -> float | None:

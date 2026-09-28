@@ -15,10 +15,13 @@ CREATE TABLE IF NOT EXISTS marketdata.wind_settlement_monthly (
     -- contracts
     contract_vol_mwh    NUMERIC,
     ref_price_west      NUMERIC,
+    ref_price_east      NUMERIC,
     ref_price_sys       NUMERIC,
-    cfd_west_cny        NUMERIC,              -- Σ vol×(price−ref_west)
-    cfd_sys_cny         NUMERIC,              -- Σ vol×(price−ref_sys)
-    green_cny           NUMERIC,              -- Σ vol×env
+    cfd_west_cny        NUMERIC,              -- Σ vol×(price−ref_west) single-ref
+    cfd_sys_cny         NUMERIC,              -- Σ vol×(price−ref_sys) single-ref
+    cfd_zone_cny        NUMERIC,              -- Σ vol×(price−ref_zone(c)) per-counterparty zone
+    green_cny           NUMERIC,              -- Σ vol×env (aggregate)
+    green_min_cny       NUMERIC,              -- Σ_t min(合约曲线_t,实际_t)×env (曲线合理度 basis)
     bill_green_cny      NUMERIC,
     -- fees + totals (bill values)
     bill_fees_cny       NUMERIC,

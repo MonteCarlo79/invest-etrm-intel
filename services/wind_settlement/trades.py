@@ -20,18 +20,18 @@ import pandas as pd
 
 COLUMNS = [
     "row_no", "trade_type", "mode", "period", "energy_kind",
-    "consumer_unit", "generator_unit", "volume_mwh",
+    "consumer_unit", "generator_unit", "region", "bureau", "volume_mwh",
     "energy_price", "energy_fee", "env_value", "all_in_price",
 ]
 
 _INTRA_IDX = {  # 省内 15-col layout
     "row_no": 0, "trade_type": 1, "mode": 2, "period": 3, "energy_kind": 4,
-    "consumer_unit": 5, "generator_unit": 6, "volume_mwh": 10,
+    "consumer_unit": 5, "generator_unit": 6, "region": 8, "bureau": 9, "volume_mwh": 10,
     "energy_price": 11, "energy_fee": 12, "env_value": 13, "all_in_price": 14,
 }
 _CROSS_IDX = {  # 跨省 18-col layout
     "row_no": 0, "trade_type": 1, "mode": 2, "period": 3, "energy_kind": 4,
-    "consumer_unit": 6, "generator_unit": 8, "volume_mwh": 13,
+    "consumer_unit": 6, "generator_unit": 8, "region": 11, "bureau": 12, "volume_mwh": 13,
     "energy_price": 14, "energy_fee": 17, "env_value": 15, "all_in_price": 16,
 }
 

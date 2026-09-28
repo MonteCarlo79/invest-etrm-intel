@@ -443,3 +443,15 @@ Whole build (pip + 57MB fonts-noto-cjk) completed in ~4 min at mirror speed. Use
 
 ### Mac launchd LingFeng fallback — FIXED 2026-09-24
 Root cause of the Aug 20→Sep 23 silent death: launchd-spawned /bin/bash gets "Operation not permitted" on OneDrive (CloudStorage) paths — macOS privacy permission, not fixable from inside the job. Fix: local clone at `~/bess-platform-lingfeng` (off OneDrive; origin=GitHub, `git pull --ff-only` at run start), plist repointed there (script, WorkingDirectory, logs), reloaded. Verified via kickstart: clean start, env loaded, collecting. The fallback is real again; it is a SECOND collector — upserts are idempotent against the ECS primary.
+
+## 2026-09-28 — executemany INSERTs over the China→Singapore link: ~40k rows ≈ hours
+
+**What happened:** wind_trades loader (41,253 rows) and wind_dispatch_15min backfill (18,528 rows) used SQLAlchemy `conn.execute(insert, list_of_dicts)` (psycopg2 executemany). Over the ~250ms-RTT cross-Pacific link each row is a round trip — both jobs sat silent for 10+ minutes with 0 rows committed (single transaction made it look frozen).
+
+**Fix that worked:** COPY via a temp staging table (`CREATE TEMP TABLE _stage (LIKE target) ON COMMIT DROP` → `cur.copy_expert("COPY _stage (...) FROM STDIN WITH (FORMAT csv)", buf)` → `INSERT INTO target SELECT ... ON CONFLICT DO NOTHING/UPDATE`). One round trip; 41k rows in seconds. Pattern now in `services/wind_settlement/load_trades.py::_copy_rows` and `backfill_dispatch.py`. Use COPY for ANY bulk write from the Mac/China side; reserve executemany for ≤ a few hundred rows.
+
+## 2026-09-28 — "natural key" on content columns collapses real rows (置换 fragments)
+
+**What happened:** First wind_trades DDL used UNIQUE(source_file, trade_type, energy_kind, consumer_unit, volume_mwh, energy_price). Thousands of 置换 (swap) fragments share IDENTICAL values on all those columns (0.17 MWh @338, same file) — ON CONFLICT DO NOTHING silently dropped 26,291 of 41,253 distinct trade lines (41,253 → 14,962).
+
+**The rule:** for trade-confirmations/transaction extracts, content columns are NOT a natural key — duplicates are legal rows. The only safe key is (source_file, row_no) with row_no from the file's own 序号. When a table is fully reproducible from source files, prefer delete+reload over clever keys. (Required a user-confirmed DROP TABLE to fix — schema choices on shared RDS deserve a pause.)

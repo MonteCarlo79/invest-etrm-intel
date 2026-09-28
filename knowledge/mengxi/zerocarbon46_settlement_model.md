@@ -27,16 +27,49 @@ Built in `services/wind_settlement/`; views in asset_risk Tab 7/8 (wind mode).
 1. **md_id_cleared_energy stores MW, not MWh** (column name lies).
    Energy = Σ cleared × 0.25. Feb +0.08%, Jun +0.25% vs bill volume.
 2. **Capture price** = Σ(gen×RT_nodal)/Σgen: Jul 219.5 vs deck 219 ✓
-3. **Green premium** = Σ contract vol × 环境价值: 98.5–99.5% of bill 绿电 rows
-   (March outlier 167% — unresolved)
-4. **Contract position** = 省内 汇总 rows (net of 置换) + 跨省 rows:
+3. **Contract position** = 省内 汇总 rows (net of 置换) + 跨省 rows:
    Jul 50,724 MWh = 106% of bill volume — matches deck 仓位106% exactly
-5. **CfD model**: contract vol × (contract price − 系统参考价) — right variant,
-   but monthly-avg reference misses delivery-window effects (月内融合 trades
-   settle at their window's prices). July (合区后) nails it; Feb/Jun off 30–40%.
-   Waterfall uses **bill-implied CfD** (bill_spot − spot_value) for exactness.
-6. **Deck vs bill bases**: 复盘 decks are wind-only (Jul 上网电量 31,450 MWh);
-   bill is station total (47,805 MWh = wind + solar + storage net).
+
+## Rules-derived settlement model (2026 rules, absorbed 2026-09-28)
+
+Sources: `政策规则/2026中长期交易方案宣贯.pptx` (106 slides) +
+`20251230 通知（蒙西）.pdf` (内能源电力字〔2025〕783号, scanned — read via vision) +
+`202412 规则体系.pdf` (271pp, text layer).
+
+**发电侧电能量电费 (规则体系 第十四条):**
+- 现货全电量电费 = Σ_t 上网电量_t × 节点电价_t
+- 中长期差价合约电费 = Σ_t Σ_c 合约电量_c,t × (合约价_c − **用户侧区域结算参考点电价_t**)
+- 省间售电中标合约 → 中标价 − **送出节点所在区域**结算参考点 (= 呼包以西 for 悦盛)
+
+**Zone map (counterparty 所属地区):**
+- east (呼包以东): 呼和浩特, 乌兰察布, 锡林郭勒
+- west (呼包以西): 包头, 鄂尔多斯, 巴彦淖尔, 乌海, 薛家湾, 阿拉善, 跨省送出
+- sys (全网统一): 电网代理工商业 (代购)
+- **2026-07 起合约东西合区**: all contracts settle at system ref (deck + data agree)
+
+**绿电溢价 = Σ_t min(合约曲线_t, 实际计量_t) × env** (曲线合理度 basis,
+slide 88): settles per-interval on the LESSER of contract curve vs metered.
+Bill sits inside [flat-curve Σmin, aggregate Σvol×env] in ALL 7 months;
+≈ aggregate in 5 (near-full coverage), Mar 89.9% of aggregate (171% position,
+real uncovered volume). Flat-curve Σmin is a conservative floor (60–90%)
+because real 96-point/四小时 curves concentrate in high-wind hours.
+
+**CfD zone model validation (vs bill-implied, 2026-01..07):**
+- Jun **97.6%** (−5.57M vs −5.71M), Feb 112%, Apr 111% — model correct in structure
+- Jul: unified (合区) sys ref ✓ (implied proxy-contaminated by +10% volume)
+- Jan/Mar/May off — implied contaminated by dispatch data gaps (25/27/29 days)
+  and 置换 daily-granularity effects
+- **CRITICAL data trap**: 省内 总表 所属地区 changes semantics across file
+  versions (Jan–Mar = user region; Jun–Jul = generator region, constant
+  鄂尔多斯). Zone mapping MUST use 供电局 (bureau), region as fallback only.
+
+**Fees are rule-defined but allocated**: 市场平衡类 (阻塞盈余/结构平衡/计量平衡,
+by 上网量), 市场调节类 (风险防范补偿/回收 vs 自身中长期合约均价 band,
+新能源平衡补偿), 签约比例考核 (年度 20% of 同类型新能源年度平均交易电价 ×
+shortfall; 月度/分时 bands — slides 94-97). Take from bills, flagged allocated.
+
+**置换**: energy price + env follow the ORIGINAL contract; 置换价格 =
+撮合价 − 电能量 − 环境价值 (cash-settled, see 置换费 files).
 
 ## Open discrepancies
 

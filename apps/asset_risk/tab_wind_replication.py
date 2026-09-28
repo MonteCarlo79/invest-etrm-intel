@@ -193,7 +193,8 @@ def render_wind_waterfall(engine) -> None:
     bill = _load_bill_items(engine, sel)
 
     cfd_implied = float(row["implied_cfd_cny"]) if pd.notna(row["implied_cfd_cny"]) else 0.0
-    cfd_model = row["cfd_sys_cny"] if pd.notna(row.get("cfd_sys_cny")) else row.get("cfd_west_cny")
+    cfd_zone = row["cfd_zone_cny"] if pd.notna(row.get("cfd_zone_cny")) else None
+    green_min = row["green_min_cny"] if pd.notna(row.get("green_min_cny")) else None
     comp = waterfall_components(
         bill,
         spot_value=row["spot_value_cny"] or 0.0,
@@ -205,7 +206,7 @@ def render_wind_waterfall(engine) -> None:
     residual = bill_total - replicated_total
 
     green_acc = (row["green_cny"] / row["bill_green_cny"]) if row["bill_green_cny"] else None
-    cfd_acc = (cfd_model / cfd_implied) if (cfd_implied and cfd_model is not None and pd.notna(cfd_model)) else None
+    cfd_acc = (cfd_zone / cfd_implied) if (cfd_implied and cfd_zone is not None and pd.notna(cfd_zone)) else None
     vol_ratio = (row["gen_proxy_mwh"] / row["bill_vol_mwh"]) if row["bill_vol_mwh"] else None
 
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -217,11 +218,17 @@ def render_wind_waterfall(engine) -> None:
     k4.metric("账单结算价", f"{settle_price(spot_rows):,.1f} 元/MWh" if not spot_rows.empty else "—")
     k5.metric("复制捕获价", f"{row['capture_price']:,.1f} 元/MWh" if pd.notna(row["capture_price"]) else "—")
 
-    if green_acc and cfd_acc and vol_ratio:
-        st.caption(
-            f"校验：电量proxy/账单 = **{vol_ratio:.1%}** · 绿电复制准确率 = **{green_acc:.1%}** · "
-            f"差价模型/隐含 = **{cfd_acc:.0%}**（账单隐含 ¥{cfd_implied:,.0f} vs 系统参考价模型 ¥{cfd_model:,.0f}）"
-        )
+    if green_acc and vol_ratio:
+        cap_parts = [
+            f"校验：电量proxy/账单 = **{vol_ratio:.1%}**",
+            f"绿电模型/账单 = **{green_acc:.1%}**（Σmin下限 ¥{green_min:,.0f}）" if green_min is not None else "",
+        ]
+        if cfd_zone is not None and pd.notna(cfd_zone):
+            cap_parts.append(
+                f"差价分区模型 ¥{cfd_zone:,.0f} vs 账单隐含 ¥{cfd_implied:,.0f}"
+                + (f"（{cfd_acc:.0%}）" if cfd_acc else "")
+            )
+        st.caption(" · ".join(p for p in cap_parts if p))
 
     labels = [lbl for lbl, _ in comp] + ["复制净额", "账单净额"]
     values = [v for _, v in comp] + [replicated_total, bill_total]
@@ -249,18 +256,19 @@ def render_wind_waterfall(engine) -> None:
         c1.markdown("**复制值**")
         c1.dataframe(pd.DataFrame({
             "项目": ["上网电量 proxy (MWh)", "账单电量 (MWh)", "捕获价 (元/MWh)",
-                     "现货价值 (¥)", "合约差价-隐含 (¥)", "合约差价-模型(系统) (¥)",
-                     "绿电溢价 (¥)", "账单绿电 (¥)", "合约电量 (MWh)",
-                     "参考价-西 (元/MWh)", "参考价-系统 (元/MWh)"],
+                     "现货价值 (¥)", "合约差价-隐含 (¥)", "合约差价-分区模型 (¥)",
+                     "绿电溢价-合计 (¥)", "绿电溢价-Σmin下限 (¥)", "账单绿电 (¥)", "合约电量 (MWh)",
+                     "参考价-东/西/系统 (元/MWh)"],
             "值": [f"{row['gen_proxy_mwh']:,.1f}", f"{row['bill_vol_mwh']:,.1f}",
                    f"{row['capture_price']:,.2f}" if pd.notna(row["capture_price"]) else "—",
                    f"{row['spot_value_cny']:,.0f}", f"{cfd_implied:,.0f}",
-                   f"{cfd_model:,.0f}" if cfd_model is not None and pd.notna(cfd_model) else "—",
+                   f"{cfd_zone:,.0f}" if cfd_zone is not None and pd.notna(cfd_zone) else "—",
                    f"{row['green_cny']:,.0f}" if pd.notna(row["green_cny"]) else "—",
+                   f"{green_min:,.0f}" if green_min is not None and pd.notna(green_min) else "—",
                    f"{row['bill_green_cny']:,.0f}" if pd.notna(row["bill_green_cny"]) else "—",
                    f"{row['contract_vol_mwh']:,.1f}",
-                   f"{row['ref_price_west']:,.2f}" if pd.notna(row["ref_price_west"]) else "—",
-                   f"{row['ref_price_sys']:,.2f}" if pd.notna(row["ref_price_sys"]) else "—"],
+                   " / ".join(f"{v:,.1f}" if pd.notna(v) else "—"
+                              for v in (row.get("ref_price_east"), row.get("ref_price_west"), row.get("ref_price_sys")))],
         }), hide_index=True, use_container_width=True)
         c2.markdown("**账单行**")
         show = bill.copy()

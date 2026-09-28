@@ -65,6 +65,12 @@ class TestParseIntra:
     def test_energy_kinds_present(self, july_intra):
         assert {"正常", "发电置换", "用电置换", "汇总"} <= set(july_intra["energy_kind"])
 
+    def test_region_bureau_extracted(self, jan_intra):
+        """省内 col 8/9 = 所属地区/供电局 (needed for zone-aware CfD)."""
+        row = jan_intra[jan_intra["trade_type"].str.startswith("多年期绿电")].iloc[0]
+        assert row["region"] == "锡林郭勒"
+        assert row["bureau"] == "乌兰察布电业局"
+
 
 class TestParseCross:
     def test_july_single_row(self, july_cross):

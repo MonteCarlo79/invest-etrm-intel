@@ -16,11 +16,13 @@ from sqlalchemy import create_engine
 from services.wind_settlement.replicate import (
     capture_price,
     cfd_value,
+    green_premium,
     green_value,
     load_bill_items,
     load_intervals,
     load_ref_price_avg,
 )
+from services.wind_settlement.rules import UNIFIED_FROM, cfd_zones
 from services.wind_settlement.trades import monthly_position, parse_trades_file
 
 PLANT = "悦盛昌渠风光储电站"
@@ -61,12 +63,21 @@ def replicate_month(engine, month: str) -> dict:
     spot_value = float((iv["gen_mwh"] * iv["rt_price"]).sum())
 
     ref_west = load_ref_price_avg(engine, month, "呼包以西加权平均价格_元_mwh")
+    ref_east = load_ref_price_avg(engine, month, "呼包以东加权平均价格_元_mwh")
     ref_sys = load_ref_price_avg(engine, month, "system_settlement_price")
 
     contract_vol = float(pos["volume_mwh"].sum()) if not pos.empty else 0.0
     cfd_west = cfd_value(pos, ref_west) if ref_west and not pos.empty else None
     cfd_sys = cfd_value(pos, ref_sys) if ref_sys and not pos.empty else None
+    cfd_zone = None
+    if ref_east and ref_west and ref_sys and not (intra.empty and cross.empty):
+        cfd_zone = cfd_zones(intra, cross, ref_east, ref_west, ref_sys,
+                             unified=(month >= UNIFIED_FROM))
     green = green_value(pos) if not pos.empty else None
+    green_min = None
+    if not pos.empty and not iv.empty:
+        iv_e = iv.dropna(subset=["gen_mwh"])
+        green_min = green_premium(pos, iv_e[["datetime", "gen_mwh"]], month)
 
     # bill targets
     spot_rows = bill[(bill["category"] == "discharge_energy") & (bill["notes"].str.contains("现货", na=False))]
@@ -85,16 +96,20 @@ def replicate_month(engine, month: str) -> dict:
         "gen_proxy_mwh": gen_mwh,
         "bill_vol_mwh": bill_vol,
         "vol_ratio": gen_mwh / bill_vol if bill_vol else None,
+        "data_days": int(iv["datetime"].dt.date.nunique()) if not iv.empty else 0,
         "capture_price": cap,
         "spot_value_cny": spot_value,
         "bill_spot_cny": bill_amt,
         "implied_cfd_cny": implied_cfd,
         "contract_vol_mwh": contract_vol,
         "ref_west": ref_west,
+        "ref_east": ref_east,
         "ref_sys": ref_sys,
         "cfd_west_cny": cfd_west,
         "cfd_sys_cny": cfd_sys,
+        "cfd_zone_cny": cfd_zone,
         "green_cny": green,
+        "green_min_cny": green_min,
         "bill_green_cny": bill_green,
         "bill_fees_cny": bill_fees,
         "bill_total_cny": bill_total,
@@ -110,14 +125,14 @@ def persist(engine, rows: list[dict]) -> None:
         INSERT INTO marketdata.wind_settlement_monthly (
             asset_name, settle_month, gen_proxy_mwh, bill_vol_mwh,
             capture_price, spot_value_cny, bill_spot_cny, implied_cfd_cny,
-            contract_vol_mwh, ref_price_west, ref_price_sys,
-            cfd_west_cny, cfd_sys_cny, green_cny, bill_green_cny,
+            contract_vol_mwh, ref_price_west, ref_price_east, ref_price_sys,
+            cfd_west_cny, cfd_sys_cny, cfd_zone_cny, green_cny, green_min_cny, bill_green_cny,
             bill_fees_cny, bill_total_cny
         ) VALUES (
             :asset, :month, :gen_proxy_mwh, :bill_vol_mwh,
             :capture_price, :spot_value_cny, :bill_spot_cny, :implied_cfd_cny,
-            :contract_vol_mwh, :ref_west, :ref_sys,
-            :cfd_west_cny, :cfd_sys_cny, :green_cny, :bill_green_cny,
+            :contract_vol_mwh, :ref_west, :ref_east, :ref_sys,
+            :cfd_west_cny, :cfd_sys_cny, :cfd_zone_cny, :green_cny, :green_min_cny, :bill_green_cny,
             :bill_fees_cny, :bill_total_cny
         )
         ON CONFLICT (asset_name, settle_month) DO UPDATE SET
@@ -129,10 +144,13 @@ def persist(engine, rows: list[dict]) -> None:
             implied_cfd_cny = EXCLUDED.implied_cfd_cny,
             contract_vol_mwh = EXCLUDED.contract_vol_mwh,
             ref_price_west = EXCLUDED.ref_price_west,
+            ref_price_east = EXCLUDED.ref_price_east,
             ref_price_sys = EXCLUDED.ref_price_sys,
             cfd_west_cny = EXCLUDED.cfd_west_cny,
             cfd_sys_cny = EXCLUDED.cfd_sys_cny,
+            cfd_zone_cny = EXCLUDED.cfd_zone_cny,
             green_cny = EXCLUDED.green_cny,
+            green_min_cny = EXCLUDED.green_min_cny,
             bill_green_cny = EXCLUDED.bill_green_cny,
             bill_fees_cny = EXCLUDED.bill_fees_cny,
             bill_total_cny = EXCLUDED.bill_total_cny,
@@ -142,11 +160,14 @@ def persist(engine, rows: list[dict]) -> None:
         for stmt in ddl.read_text().split(";"):
             if stmt.strip():
                 conn.execute(text(stmt))
+        # additive column migration for existing tables
+        for col in ("ref_price_east NUMERIC", "cfd_zone_cny NUMERIC", "green_min_cny NUMERIC"):
+            conn.execute(text(f"ALTER TABLE marketdata.wind_settlement_monthly ADD COLUMN IF NOT EXISTS {col}"))
         for r in rows:
             conn.execute(upsert, {
                 "asset": "新_悦盛昌渠#1期",
                 "month": f"{r['month']}-01",
-                **{k: v for k, v in r.items() if k not in ("month", "vol_ratio")},
+                **{k: v for k, v in r.items() if k not in ("month", "vol_ratio", "data_days")},
             })
 
 
