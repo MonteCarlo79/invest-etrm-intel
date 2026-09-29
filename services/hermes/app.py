@@ -1009,6 +1009,20 @@ def create_app() -> FastAPI:
             },
         )
 
+        # 调频收入 screener: 5th of each month, 13:00 UTC (21:00 Beijing) — after fuel fleet
+        from services.hermes.ancillary_screener import screen_ancillary_revenue as _screen_ancillary
+        scheduler.add_job(
+            _screen_ancillary,
+            "cron",
+            day=5, hour=13, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
         # CITIC weekly digest: daily 02:00 UTC (10:00 Beijing) — after the
         # local 09:05 Mac ingest (Anthropic calls are geo-blocked from the Mac)
         from services.citic_futures.digest_job import run_citic_digest as _run_citic_digest
@@ -3919,6 +3933,41 @@ Daily — Province BESS ranking report"""
 
         import threading as _threading
         _threading.Thread(target=_run_fuelfleet, daemon=True).start()
+        return True
+
+    # ── /frrev command — manually trigger 调频收入 screener ───────────────────
+    if _re.match(r'^/?(?:frrev|调频扫描)$', msg.text.strip(), _re.I):
+        def _fr_reply(text: str) -> None:
+            try:
+                if msg.source == "feishu" and feishu:
+                    feishu.send_text(open_id=msg.sender_id, text=text)
+                elif msg.source == "telegram" and telegram:
+                    telegram.send_text(chat_id=msg.sender_id, text=text)
+            except Exception as _e:
+                logger.error("frrev reply send failed: %s", _e)
+
+        _pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _pg or not _api_key:
+            _fr_reply("⚠️ 数据库或API密钥未配置，无法运行调频收入扫描。")
+            return True
+        _fr_reply("🔋 正在扫描储能调频收入…")
+
+        def _run_frrev():
+            try:
+                from services.hermes.ancillary_screener import screen_ancillary_revenue
+                screen_ancillary_revenue(
+                    pg_url=_pg,
+                    api_key=_api_key,
+                    feishu=feishu,
+                    owner_open_id=os.environ.get("FEISHU_OWNER_OPEN_ID", msg.sender_id),
+                )
+            except Exception as _e:
+                logger.error("Manual ancillary screener failed: %s", _e)
+                _fr_reply(f"⚠️ 调频收入扫描失败：{_e}")
+
+        import threading as _threading
+        _threading.Thread(target=_run_frrev, daemon=True).start()
         return True
 
     # ── /datacheck / /巡视 command — trigger data patrol ─────────────────────

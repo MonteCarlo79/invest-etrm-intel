@@ -119,6 +119,19 @@ _T: dict[str, dict[str, str]] = {
 "rank_stack_arb":       "Arbitrage",
         "rank_stack_cap":       "Capacity",
         "rank_stack_anc":       "Freq. reg.",
+"fr_mgmt_title":        "FR Revenue Entry & Review",
+        "fr_pending_count":     "pending",
+        "fr_form_prov":         "Province",
+        "fr_form_month":        "Month (YYYY-MM)",
+        "fr_form_amount":       "Amount (万元)",
+        "fr_form_metric":       "Metric",
+        "fr_form_src":          "Source (report / note)",
+        "fr_form_submit":       "Save (confirmed)",
+        "fr_month_bad":         "Month must be YYYY-MM",
+        "fr_amount_bad":        "Amount must be > 0",
+        "fr_saved":             "Saved as confirmed.",
+        "fr_none":              "No Hermes draft extractions pending.",
+        "fr_pending_caption":   "Hermes-extracted 调频 revenue drafts — confirm to stack on the ranking chart; dismiss marks superseded.",
         "rank_spread_title":    "Intraday RT Spread by Province (¥/kWh)",
         "rank_spread_caption":  "Max − Min of hourly avg RT prices. Bar label σ = annualised volatility (std of daily avg-price changes ÷ mean price × √365).",
         # dispatch
@@ -382,6 +395,19 @@ _T: dict[str, dict[str, str]] = {
 "rank_stack_arb":       "套利",
         "rank_stack_cap":       "容量电价",
         "rank_stack_anc":       "调频",
+"fr_mgmt_title":        "调频收入录入与确认",
+        "fr_pending_count":     "条待审",
+        "fr_form_prov":         "省份",
+        "fr_form_month":        "月份 (YYYY-MM)",
+        "fr_form_amount":       "金额 (万元)",
+        "fr_form_metric":       "指标",
+        "fr_form_src":          "来源（报告/备注）",
+        "fr_form_submit":       "保存（直接确认）",
+        "fr_month_bad":         "月份格式须为 YYYY-MM",
+        "fr_amount_bad":        "金额必须大于 0",
+        "fr_saved":             "已保存（confirmed）。",
+        "fr_none":              "暂无 Hermes 提取的待审草稿。",
+        "fr_pending_caption":   "Hermes 提取的调频收入草稿——确认后堆叠到排名图；忽略则标记 superseded。",
         "rank_spread_title":    "各省日内实时价差（元/千瓦时）",
         "rank_spread_caption":  "小时均价最大值减最小值。条上 σ = 年化波动率（日均价格变动标准差 ÷ 均价 × √365）。",
         "disp_province":        "省份",
@@ -3996,6 +4022,80 @@ with tab_mgmt:
                     if st.button("忽略", key=f"ff_dismiss_{_ff_id}"):
                         _dismiss_ff(_eng(), _ff_id)
                         st.success(f"已忽略 #{_ff_id}")
+                        st.cache_data.clear()
+                        st.rerun()
+
+    # ── 调频收入 (FR revenue) — manual entry + Hermes draft review ─────────────
+    st.divider()
+    from services.ancillary_revenue.extract_ancillary import (
+        list_pending_ancillary as _list_pending_fr,
+        confirm_ancillary as _confirm_fr,
+        dismiss_ancillary as _dismiss_fr,
+        insert_manual_ancillary as _insert_fr,
+    )
+    try:
+        _fr_pending = _list_pending_fr(_eng())
+    except Exception:
+        _fr_pending = pd.DataFrame()
+
+    with st.expander(f"{_t('fr_mgmt_title')} ({len(_fr_pending)} {_t('fr_pending_count')})", expanded=False):
+        # Manual entry — user input lands directly as confirmed
+        with st.form("fr_manual_form", clear_on_submit=True):
+            _fc1, _fc2, _fc3 = st.columns(3)
+            with _fc1:
+                _fr_prov = st.selectbox(_t("fr_form_prov"),
+                                        sorted(_load_installed_bess(_ENG_KEY).keys()))
+            with _fc2:
+                _fr_month = st.text_input(_t("fr_form_month"), placeholder="2026-08")
+            with _fc3:
+                _fr_amount = st.number_input(_t("fr_form_amount"), min_value=0.0,
+                                             value=0.0, step=10.0)
+            _fc4, _fc5 = st.columns(2)
+            with _fc4:
+                _fr_metric = st.text_input(_t("fr_form_metric"),
+                                           value="调频补偿费用_独立储能")
+            with _fc5:
+                _fr_src = st.text_input(_t("fr_form_src"))
+            if st.form_submit_button(_t("fr_form_submit")):
+                import re as _re_fr
+                if not _re_fr.match(r"^\d{4}-\d{2}$", _fr_month.strip()):
+                    st.error(_t("fr_month_bad"))
+                elif _fr_amount <= 0:
+                    st.error(_t("fr_amount_bad"))
+                else:
+                    _insert_fr(_eng(), _fr_prov, f"{_fr_month.strip()}-01",
+                               _fr_metric.strip() or "调频补偿费用_独立储能",
+                               float(_fr_amount) * 1e4, _fr_src.strip())
+                    st.success(_t("fr_saved"))
+                    st.cache_data.clear()
+
+        # Hermes draft review
+        if _fr_pending.empty:
+            st.caption(_t("fr_none"))
+        else:
+            st.caption(_t("fr_pending_caption"))
+            _fr_disp = _fr_pending.copy()
+            _fr_disp["amount_yuan"] = _fr_disp["amount_yuan"].map(
+                lambda v: f"{float(v)/1e4:,.2f} 万元")
+            _fr_disp["source_file"] = _fr_disp["source_file"].apply(
+                lambda s: str(s)[:60] if s else "")
+            st.dataframe(_fr_disp[["id", "province", "month", "metric",
+                                   "amount_yuan", "source_file", "status"]],
+                         use_container_width=True, hide_index=True)
+            for _, _fr_row in _fr_pending.iterrows():
+                _fr_id = int(_fr_row["id"])
+                _rc1, _rc2, _rc3 = st.columns([5, 1, 1])
+                with _rc1:
+                    st.write(f"**{_fr_row['province']}** — {_fr_row['month']} · "
+                             f"{float(_fr_row['amount_yuan'])/1e4:,.2f} 万元")
+                with _rc2:
+                    if st.button("确认", key=f"fr_confirm_{_fr_id}"):
+                        _confirm_fr(_eng(), _fr_id)
+                        st.cache_data.clear()
+                        st.rerun()
+                with _rc3:
+                    if st.button("忽略", key=f"fr_dismiss_{_fr_id}"):
+                        _dismiss_fr(_eng(), _fr_id)
                         st.cache_data.clear()
                         st.rerun()
 

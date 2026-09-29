@@ -106,3 +106,58 @@ def upsert_rows(rows: list[AncillaryRow], pg_url: str) -> int:
     finally:
         conn.close()
     return n
+
+
+# ── Review workflow + manual entry (bess-map Data Management) ─────────────────
+
+def list_pending_ancillary(eng):
+    """Draft rows awaiting human confirmation."""
+    import pandas as pd
+    from sqlalchemy import text as _t
+    with eng.connect() as conn:
+        return pd.read_sql(_t("""
+            SELECT id, province, month, metric, amount_yuan, source_file, status,
+                   notes, extracted_at
+            FROM marketdata.province_ancillary_revenue
+            WHERE status = 'draft'
+            ORDER BY month DESC, province
+        """), conn)
+
+
+def confirm_ancillary(eng, row_id: int) -> None:
+    from sqlalchemy import text as _t
+    with eng.begin() as conn:
+        conn.execute(_t(
+            "UPDATE marketdata.province_ancillary_revenue SET status='confirmed' "
+            "WHERE id=:i"), {"i": row_id})
+
+
+def dismiss_ancillary(eng, row_id: int) -> None:
+    from sqlalchemy import text as _t
+    with eng.begin() as conn:
+        conn.execute(_t(
+            "UPDATE marketdata.province_ancillary_revenue SET status='superseded' "
+            "WHERE id=:i"), {"i": row_id})
+
+
+def insert_manual_ancillary(eng, province: str, month: str, metric: str,
+                            amount_yuan: float, source_note: str) -> None:
+    """Manual entry from the Data Management form — user input is authoritative,
+    lands directly as confirmed."""
+    from sqlalchemy import text as _t
+    with eng.begin() as conn:
+        conn.execute(_t("CREATE TABLE IF NOT EXISTS marketdata.province_ancillary_revenue ("
+                        "id SERIAL PRIMARY KEY, province TEXT NOT NULL, month DATE NOT NULL,"
+                        " metric TEXT NOT NULL, amount_yuan NUMERIC NOT NULL,"
+                        " source_file TEXT, status TEXT NOT NULL DEFAULT 'draft',"
+                        " notes TEXT, extracted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"))
+        conn.execute(_t("""
+            INSERT INTO marketdata.province_ancillary_revenue
+                (province, month, metric, amount_yuan, source_file, status, notes)
+            VALUES (:p, :m, :met, :amt, :src, 'confirmed', 'manual entry (Data Management)')
+            ON CONFLICT (province, month, metric, COALESCE(source_file,'')) DO UPDATE SET
+                amount_yuan = EXCLUDED.amount_yuan,
+                status = 'confirmed',
+                notes = EXCLUDED.notes
+        """), {"p": province, "m": month, "met": metric, "amt": amount_yuan,
+               "src": source_note[:200]})
