@@ -27,10 +27,10 @@ CAPACITY_PRICE_SEED: dict[str, tuple[float, float, float, str, str]] = {
     "宁夏":   (165.0, 6.0, 1.0,  "draft",  "征求意见稿 2025-09, not effective"),
     "天津":   (231.0, 6.0, 1.0,  "none",   "行业讨论, no formal doc"),
     "山西":   (165.0, 6.0, 1.0,  "none",   "行业讨论, no formal doc"),
-    "内蒙古": (0.0,   6.0, 1.0,  "legacy", "旧政策: 按调度放电电量补偿"),
+    "蒙西":   (0.0,   6.0, 1.0,  "legacy", "旧政策: 按调度放电电量补偿 (user 2026-09-29: keep old scheme, do not stack)"),
     "浙江":   (0.0,   6.0, 1.0,  "legacy", "旧政策: 容量补偿资金分配方案"),
-    "山东":   (0.0,   6.0, 1.0,  "legacy", "旧政策: 现货容量补偿资金池 2×权重"),
-    "河北":   (0.0,   6.0, 1.0,  "legacy", "旧政策: 容量补偿政策"),
+    "山东":   (0.0,   6.0, 1.0,  "legacy", "旧政策: 现货容量补偿资金池 2×权重 (user 2026-09-29: keep old scheme, do not stack)"),
+    "河北南网": (0.0, 6.0, 1.0,  "legacy", "旧政策: 容量补偿政策"),
 }
 _STATUSES = {"formal", "default", "draft", "none", "legacy"}
 STACKABLE_STATUSES = {"formal", "default"}

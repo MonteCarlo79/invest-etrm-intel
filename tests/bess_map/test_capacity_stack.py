@@ -52,10 +52,19 @@ def test_stack_map_excludes_non_stackable():
         ("宁夏", 165, 6, 1.0, "draft"),     # excluded
         ("山西", 165, 6, 1.0, "none"),      # excluded
         ("山东", 0, 6, 1.0, "legacy"),      # excluded
+        ("蒙西", 0, 6, 1.0, "legacy"),      # excluded (user: keep old scheme)
     ]
     m = capacity_stack_map(rows, 4.0)
     assert set(m) == {"甘肃"}
     assert m["甘肃"] == pytest.approx(f(330, 6, 0.89, 4.0))
+
+
+def test_seed_uses_db_province_names():
+    """Seed keys must match spot_prices_hourly province names, or excluded
+    provinces silently fall through to the DEFAULT stack (蒙西/河北南网 bug)."""
+    provs = {r[0] for r in seed_rows()}
+    assert "蒙西" in provs and "内蒙古" not in provs
+    assert "河北南网" in provs and "河北" not in provs
 
 
 def test_stack_map_duration_sensitivity():
