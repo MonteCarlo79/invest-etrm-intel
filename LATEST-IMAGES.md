@@ -27,7 +27,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 |---|---|---|---|---|---|
 | mengxi-dashboard | `bess-mengxi-dashboard` | **v28** (cc144bacdbcb) | **43** | 2026-09-27 | this session: add-candidate form in Asset Registry; built from current td:41 (parallel session's v27/nodal-trading), superset |
 | deal-structurer | `bess-platform-deal-structurer` | **v29** (27e9f57385f6) | **33** | 2026-09-25 | this session: screening NaN-node + SQL date-type fixes |
-| bess-map (Quant) | `bess-map` | v68 (per memory) | 102 | ~2026-09-24 | parallel session: coal default + stale-entity exclusion in ranking |
+| bess-map (Quant) | `bess-map` | **v69** (1957fa4ad2fd) | **104** | 2026-09-29 | this session: 甘肃河西 exclusion + σ vol labels + capacity/调频 revenue stack; built from working tree (preserves parallel session's uncommitted leaderboard UI) |
 | hermes | `bess-platform-hermes` | (latest hand-injected) | **183** | ~2026-09-24 | parallel session: coal cron + /fuelfleet; 31 env vars incl. FEISHU + WECHAT_PROXY_URL |
 | asset_risk | `bess-asset-risk` | v84 | 86 | 2026-09-23 | this session: merchant-exposure tile |
 | data-ingestion (tt-api/enos) | `bess-data-ingestion` | v20260927 (575657c91df8) | :latest-driven | 2026-09-27 | this session: schema-variant frame guard (SheYang KeyError) |
@@ -50,6 +50,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-09-27 — `mengxi-dashboard:43` ← `bess-mengxi-dashboard:v28` (cc144bacdbcb); add-candidate form (this session). Note: td:42 (from td:36) was registered but NOT deployed — parallel session's v27/td:41 was live; new td built from td:41 instead. Also: first push hit wrong local image (tmp context reaped) and was rebuilt + repushed over the bad tag.
 - 2026-09-27 — `bess-data-ingestion:v20260927` + `:latest` (575657c91df8); schema-variant frame guard (this session).
 - 2026-09-29 — `bess-platform-lingfeng-ingest:10` ← `lingfeng-ingest:v8` (968335748051); auto-cols 电量-exclusion fix — 2026-09 LingFeng layout's `…-实时出清电量` volume columns were picked as rt_price (河北南网 volume-as-price contamination; rebuild of 河北南网 series in progress same day). Built from td:9 (this session).
+- 2026-09-29 — `bess-map:104` ← `bess-map:v69` (1957fa4ad2fd); ranking revenue stack (capacity payment from new `province_capacity_price` + 新疆 调频 from new `province_ancillary_revenue`), 甘肃河西 exclusion, σ annualised-vol labels on spread chart; 河北南网 series fully rebuilt + capture re-run same day. ECR push needed token re-login (this session).
 
 ## Known parallel-session coordination points
 
