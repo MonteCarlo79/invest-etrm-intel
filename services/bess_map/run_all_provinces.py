@@ -64,9 +64,12 @@ def _guess_cols_from_header(xlsx_path: Path, province: str) -> Tuple[str, str]:
     cols = [str(c).strip() for c in df0.columns]
 
     def pick(keyword: str) -> str:
-        cands = [c for c in cols if (keyword in c and "价" in c)]
+        # Exclude volume/quantity columns whose names carry the '价格' prefix
+        # (e.g. 'XX现货价格（元/MWh）-实时出清电量' — 2026-09 河北南网 layout trap:
+        # the longest-name tiebreak picked cleared VOLUME as rt_price).
+        cands = [c for c in cols if (keyword in c and "价" in c and "电量" not in c)]
         if not cands:
-            cands = [c for c in cols if keyword in c]
+            cands = [c for c in cols if keyword in c and "电量" not in c]
         if not cands:
             raise KeyError(f"Cannot find any column containing '{keyword}' in {xlsx_path.name}. Columns={cols[:10]}...")
 
@@ -91,14 +94,14 @@ def _guess_cols_from_header(xlsx_path: Path, province: str) -> Tuple[str, str]:
     # contains all zeros, while the actual clearing prices live in a non-temporary
     # province+price column (e.g. "中长期结算点电价").  Fall back to that column.
     if "临时" in rt_col:
-        non_temp = [c for c in cols if province in c and "价" in c and "临时" not in c]
+        non_temp = [c for c in cols if province in c and "价" in c and "临时" not in c and "电量" not in c]
         if non_temp:
             rt_col = sorted(non_temp, key=lambda x: (-len(x), x))[0]
             print(f"[auto-cols] RT col is 临时数据; falling back to '{rt_col}'", flush=True)
 
     # DA: prefer the other province+price column that is not RT (handles newer file formats
     # where DA column uses 结算价 or similar instead of the expected 日前 keyword)
-    prov_price_cols = [c for c in cols if province in c and "价" in c and c != rt_col]
+    prov_price_cols = [c for c in cols if province in c and "价" in c and "电量" not in c and c != rt_col]
     if prov_price_cols:
         da_col = sorted(prov_price_cols, key=lambda x: (-len(x), x))[0]
     else:

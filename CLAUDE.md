@@ -233,8 +233,6 @@ python services/bess_map/run_capture_pipeline.py --province shandong --model ols
 
 ## Deployment Protocol
 
-**Before tagging any image: read `LATEST-IMAGES.md` (repo root) — the multi-session deploy manifest. Pick next tag = its max + 1, verify the live td image, tag by image ID (both names), register the new td from the service's CURRENT tdArn, then append your deploy to its history and update the service's row.**
-
 **Standard deploy sequence:**
 ```bash
 docker build --platform linux/amd64 -f <app>/Dockerfile -t <repo>:<vN> .
