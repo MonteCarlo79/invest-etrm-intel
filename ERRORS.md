@@ -455,3 +455,12 @@ Root cause of the Aug 20→Sep 23 silent death: launchd-spawned /bin/bash gets "
 **What happened:** First wind_trades DDL used UNIQUE(source_file, trade_type, energy_kind, consumer_unit, volume_mwh, energy_price). Thousands of 置换 (swap) fragments share IDENTICAL values on all those columns (0.17 MWh @338, same file) — ON CONFLICT DO NOTHING silently dropped 26,291 of 41,253 distinct trade lines (41,253 → 14,962).
 
 **The rule:** for trade-confirmations/transaction extracts, content columns are NOT a natural key — duplicates are legal rows. The only safe key is (source_file, row_no) with row_no from the file's own 序号. When a table is fully reproducible from source files, prefer delete+reload over clever keys. (Required a user-confirmed DROP TABLE to fix — schema choices on shared RDS deserve a pause.)
+
+## 2026-09-29 — Index-sweep recurred: staged deletion rode into b5a6f72 despite the rule
+
+**What happened:** commit b5a6f72 (auto-cols fix) swept a foreign staged deletion (`LATEST-IMAGES.md`) + foreign CLAUDE.md edit. The pre-commit `git status` DID show `D  LATEST-IMAGES.md` — I misread the grep output as unstaged-only and ran `git add` + commit anyway. Repaired with a restore commit (9bd8088) after verifying the working tree still carried the manifest (deletion contradicted live state).
+
+**Rule hardening (was: check status before committing):** the check is a HARD GATE, not a glance. Procedure before ANY commit on the shared tree:
+1. `git status --porcelain` — if ANY line's index column (first letter) is non-space for a path that isn't mine, STOP: `git reset -q`, re-stage only my paths, re-check.
+2. Never run `git add <paths>` while foreign staged content exists — `git add` does not replace the index, it accumulates.
+3. After commit, `git show --stat HEAD` and confirm the file list = exactly my paths.
