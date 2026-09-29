@@ -117,7 +117,7 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_days":        "Days",
         "rank_days_unit":       "d",
         "rank_spread_title":    "Intraday RT Spread by Province (¥/kWh)",
-        "rank_spread_caption":  "Max − Min of hourly avg RT prices. Direct measure of intraday arbitrage opportunity.",
+        "rank_spread_caption":  "Max − Min of hourly avg RT prices. Bar label σ = annualised volatility (std of daily avg-price changes ÷ mean price × √365).",
         # dispatch
         "disp_province":        "Province",
         "disp_duration":        "Duration",
@@ -377,7 +377,7 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_days":        "天数",
         "rank_days_unit":       "天",
         "rank_spread_title":    "各省日内实时价差（元/千瓦时）",
-        "rank_spread_caption":  "小时均价最大值减最小值。日内套利机会的直接衡量指标。",
+        "rank_spread_caption":  "小时均价最大值减最小值。条上 σ = 年化波动率（日均价格变动标准差 ÷ 均价 × √365）。",
         "disp_province":        "省份",
         "disp_duration":        "时长",
         "disp_date_range":      "日期范围",
@@ -710,14 +710,36 @@ def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_t
 @st.cache_data(ttl=3600)
 def load_intraday_spread(_eng_key, start: str, end: str):
     sql = sql_text("""
-        SELECT province, MAX(avg_price) - MIN(avg_price) AS spread
+        SELECT p.province, p.spread, v.ann_vol
         FROM (
-            SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
-                   AVG(rt_price) AS avg_price
-            FROM marketdata.spot_prices_hourly
-            WHERE datetime BETWEEN :start AND :end
-            GROUP BY province, hour
-        ) t GROUP BY province ORDER BY spread DESC
+            SELECT province, MAX(avg_price) - MIN(avg_price) AS spread
+            FROM (
+                SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
+                       AVG(rt_price) AS avg_price
+                FROM marketdata.spot_prices_hourly
+                WHERE datetime BETWEEN :start AND :end
+                GROUP BY province, hour
+            ) t GROUP BY province
+        ) p
+        LEFT JOIN (
+            SELECT province,
+                   -- mean-price floor: below ~50 ¥/MWh the market isn't really
+                   -- clearing (福建/浙江/湖南 mostly-zero series) and σ/price explodes
+                   CASE WHEN AVG(p) >= 50
+                        THEN STDDEV_SAMP(dp) / NULLIF(AVG(p), 0) * SQRT(365)
+                   END AS ann_vol
+            FROM (
+                SELECT province, p,
+                       p - LAG(p) OVER (PARTITION BY province ORDER BY d) AS dp
+                FROM (
+                    SELECT province, datetime::date AS d, AVG(rt_price) AS p
+                    FROM marketdata.spot_prices_hourly
+                    WHERE datetime BETWEEN :start AND :end
+                    GROUP BY province, datetime::date
+                ) dm
+            ) c GROUP BY province
+        ) v USING (province)
+        ORDER BY p.spread DESC
     """)
     return pd.read_sql(sql, _eng(), params={"start": start, "end": end})
 
@@ -1816,11 +1838,14 @@ with tab_ranking:
         spread_df = load_intraday_spread(_ENG_KEY, sel_start, sel_end)
         spread_df = spread_df[~spread_df["province"].isin(_RANKING_EXCLUDE)]
         if not spread_df.empty:
+            spread_df["vol_label"] = spread_df["ann_vol"].map(
+                lambda v: f"σ {v*100:.0f}%" if pd.notna(v) else "")
             fig_sp = px.bar(
                 spread_df, x="spread", y="province", orientation="h",
-                color="spread", color_continuous_scale="Blues",
+                color="spread", color_continuous_scale="Blues", text="vol_label",
                 labels={"spread": "RT Intraday Spread (¥/kWh)", "province": ""},
             )
+            fig_sp.update_traces(textposition="outside")
             fig_sp.update_layout(
                 height=max(300, len(spread_df) * 22),
                 margin=dict(t=10, b=10),
