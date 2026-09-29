@@ -35,6 +35,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 | spot-market | `bess-spot-markets` | v46 | 145 | ~2026-09-26 | per CLAUDE.md snapshot |
 | portal | `bess-platform-portal` | v13 | 70 | ~2026-09-26 | per CLAUDE.md snapshot |
 | gb-market | `bess-gb-market` | v107 | 30 | 2026-09-20 | parallel session: modo question rotation |
+| lingfeng-ingest | `lingfeng-ingest` | **v8** (968335748051) | **10** | 2026-09-29 | this session: auto-cols volume-trap fix (出清电量 was picked as rt_price for 河北南网) |
 
 ## Deploy history (append-only, newest at bottom)
 
@@ -48,6 +49,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-09-25 — `deal-structurer:33` ← `bess-platform-deal-structurer:v29`; screening NaN-node + SQL date-type fixes (this session).
 - 2026-09-27 — `mengxi-dashboard:43` ← `bess-mengxi-dashboard:v28` (cc144bacdbcb); add-candidate form (this session). Note: td:42 (from td:36) was registered but NOT deployed — parallel session's v27/td:41 was live; new td built from td:41 instead. Also: first push hit wrong local image (tmp context reaped) and was rebuilt + repushed over the bad tag.
 - 2026-09-27 — `bess-data-ingestion:v20260927` + `:latest` (575657c91df8); schema-variant frame guard (this session).
+- 2026-09-29 — `bess-platform-lingfeng-ingest:10` ← `lingfeng-ingest:v8` (968335748051); auto-cols 电量-exclusion fix — 2026-09 LingFeng layout's `…-实时出清电量` volume columns were picked as rt_price (河北南网 volume-as-price contamination; rebuild of 河北南网 series in progress same day). Built from td:9 (this session).
 
 ## Known parallel-session coordination points
 
