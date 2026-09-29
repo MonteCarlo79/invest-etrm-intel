@@ -116,6 +116,9 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_capture":     "Capture Rate (%)",
         "rank_col_days":        "Days",
         "rank_days_unit":       "d",
+"rank_stack_arb":       "Arbitrage",
+        "rank_stack_cap":       "Capacity",
+        "rank_stack_anc":       "Freq. reg.",
         "rank_spread_title":    "Intraday RT Spread by Province (¥/kWh)",
         "rank_spread_caption":  "Max − Min of hourly avg RT prices. Bar label σ = annualised volatility (std of daily avg-price changes ÷ mean price × √365).",
         # dispatch
@@ -376,6 +379,9 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_capture":     "捕获率（%）",
         "rank_col_days":        "天数",
         "rank_days_unit":       "天",
+"rank_stack_arb":       "套利",
+        "rank_stack_cap":       "容量电价",
+        "rank_stack_anc":       "调频",
         "rank_spread_title":    "各省日内实时价差（元/千瓦时）",
         "rank_spread_caption":  "小时均价最大值减最小值。条上 σ = 年化波动率（日均价格变动标准差 ÷ 均价 × √365）。",
         "disp_province":        "省份",
@@ -707,6 +713,20 @@ def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_t
     """)
     return pd.read_sql(sql, _eng(), params={"start": start, "end": end, "model": model})
 
+@st.cache_data(ttl=3600)
+def _load_installed_bess(_eng_key):
+    """province → latest non-null bess_mw (installed BESS power)."""
+    sql = sql_text("""
+        SELECT DISTINCT ON (province) province, bess_mw
+        FROM marketdata.province_installed_monthly
+        WHERE bess_mw IS NOT NULL
+        ORDER BY province, year_month DESC
+    """)
+    df = pd.read_sql(sql, _eng())
+    return dict(zip(df["province"], df["bess_mw"].astype(float)))
+
+
+@st.cache_data(ttl=3600)
 @st.cache_data(ttl=3600)
 def load_intraday_spread(_eng_key, start: str, end: str):
     sql = sql_text("""
@@ -1782,25 +1802,69 @@ with tab_ranking:
             k4.metric(_t("rank_kpi_cycles"),
                       f"{avg_cycles_4h:.2f}/day" if avg_cycles_4h is not None else "—")
 
-        # Bar chart: always sort by annual_theo so ordering is stable regardless of model coverage
+        # Stacked bar chart: arbitrage + capacity payment + 调频 ancillary revenue
+        from services.bess_map.capacity_stack import (
+            capacity_payment_per_mwh_yr, capacity_stack_map,
+            ancillary_per_mwh_yr, load_capacity_rows, load_ancillary_annual,
+            DEFAULT_RATE, DEFAULT_BASE_HOURS,
+        )
+
         plot_df = rank_df.copy()
         plot_df["Duration"] = plot_df["duration_h"].map({2.0: "2h", 4.0: "4h"})
         if dur_filter != _t("all_durations"):
             plot_df = plot_df[plot_df["Duration"] == dur_filter]
-        plot_df = plot_df.sort_values("annual_theo", ascending=True)
-        plot_df["days_label"] = plot_df["days"].fillna(0).astype(int).map(
-            lambda n: f"{n}{_t('rank_days_unit')}")
 
+        # stack inputs (cached loaders)
+        _cap_rows = load_capacity_rows(_eng())
+        _status_by_prov = {r[0]: r[4] for r in _cap_rows}
+        _anc_annual = load_ancillary_annual(_eng())          # confirmed only
+        _installed = _load_installed_bess(_ENG_KEY)          # province → bess_mw
+
+        def _cap_for(prov: str, d: float) -> float:
+            if prov in _status_by_prov:
+                return capacity_stack_map(_cap_rows, d).get(prov, 0.0)
+            return capacity_payment_per_mwh_yr(DEFAULT_RATE, DEFAULT_BASE_HOURS, 1.0, d)
+
+        def _anc_for(prov: str, d: float) -> float:
+            return ancillary_per_mwh_yr(_anc_annual.get(prov, 0.0),
+                                        _installed.get(prov) or 0.0, d)
+
+        # long frame: one row per province × duration × component
+        _arb_col = rank_annual_col
+        _rows = []
+        for _, r in plot_df.iterrows():
+            d, prov = r["duration_h"], r["province"]
+            arb = float(r[_arb_col]) if pd.notna(r[_arb_col]) else 0.0
+            cap = _cap_for(prov, d)
+            anc = _anc_for(prov, d)
+            _days_txt = f"{int(r['days'])}{_t('rank_days_unit')}" if pd.notna(r["days"]) else ""
+            for val, ck, lbl in ((arb, "rank_stack_arb", ""),
+                                 (cap, "rank_stack_cap", ""),
+                                 (anc, "rank_stack_anc", _days_txt)):
+                _rows.append({"province": prov, "Duration": r["Duration"],
+                              "component": _t(ck), "value": val,
+                              "total": arb + cap + anc,
+                              "label": lbl})
+        stack_df = pd.DataFrame(_rows)
+        _order = (stack_df.drop_duplicates("province")
+                  .sort_values("total", ascending=True)["province"])
+        stack_df["province"] = pd.Categorical(stack_df["province"],
+                                              categories=_order, ordered=True)
+
+        _comp_colors = {_t("rank_stack_arb"): "#1565C0",
+                        _t("rank_stack_cap"): "#43A047",
+                        _t("rank_stack_anc"): "#FB8C00"}
         fig_rank = px.bar(
-            plot_df, x=rank_annual_col, y="province", color="Duration",
-            orientation="h", barmode="group", text="days_label",
-            color_discrete_map={"2h": "#4CAF50", "4h": "#1565C0"},
-            labels={rank_annual_col: "Annual Rev (¥/MWh/yr)", "province": ""},
+            stack_df, x="value", y="province", color="component",
+            orientation="h", barmode="stack", text="label",
+            facet_row="Duration" if dur_filter == _t("all_durations") else None,
+            color_discrete_map=_comp_colors,
+            labels={"value": "Annual Rev (¥/MWh/yr)", "province": "", "component": ""},
             title=_t("rank_chart_title"),
         )
         fig_rank.update_traces(textposition="outside")
-        fig_rank.update_layout(height=max(400, len(wide) * 26), margin=dict(t=40, b=20),
-                                legend_title_text="Duration")
+        fig_rank.update_layout(height=max(400, len(_order) * 26), margin=dict(t=40, b=20),
+                                legend_title_text="")
         st.plotly_chart(fig_rank, use_container_width=True)
 
         # Ranking table with cycles
@@ -1822,7 +1886,16 @@ with tab_ranking:
             "2h Rev", "2h Cap%", "2h Cycles",
             "4h Rev", "4h Cap%", "4h Cycles",
         ]
-        for col in ["2h Rev", "4h Rev"]:
+        # stack components + totals per duration
+        for d, rev_s in ((2.0, disp_wide[sort_2h]), (4.0, disp_wide[sort_4h])):
+            tag = "2h" if d == 2.0 else "4h"
+            cap_s = disp_wide["province"].map(lambda p: _cap_for(p, d))
+            anc_s = disp_wide["province"].map(lambda p: _anc_for(p, d))
+            out[f"{tag} CapPmt"] = cap_s.values
+            out[f"{tag} AncRev"] = anc_s.values
+            out[f"{tag} Total"] = rev_s.fillna(0.0).values + cap_s.values + anc_s.values
+        for col in ["2h Rev", "4h Rev", "2h CapPmt", "4h CapPmt",
+                    "2h AncRev", "4h AncRev", "2h Total", "4h Total"]:
             out[col] = out[col].apply(lambda v: f"¥{v:,.0f}" if pd.notna(v) else "—")
         for col in ["2h Cap%", "4h Cap%"]:
             out[col] = out[col].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—")
