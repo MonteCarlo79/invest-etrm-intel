@@ -41,3 +41,18 @@ def test_contract_batches(tmp_path):
     assert set(b.channel) == {"monthly_auction"}
     assert b.iloc[0].volume_mwh == 9.0 and b.iloc[0].price_cny_mwh == 175.0
     assert b.iloc[0].hour == 8      # 段9 = 08:00-09:00 -> hour 8 (0-indexed)
+
+
+def test_contract_batch_multi_day_range_expands(tmp_path):
+    """I5: a range row 2026-09-01-2026-09-03 must expand to one row per day,
+    not collapse four months/days of volume onto the first day."""
+    rows = [[1, None, "景融绿色能源科技有限公司", "2026-09-01-2026-09-03",
+             "段9:08:00-09:00", 9.0, 175.0, "景融绿色能源科技有限公司"]]
+    f = tmp_path / "安徽" / "交易记录" / "安徽中长期合同2026-月度多月度.xlsx"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(f, engine="openpyxl") as w:
+        pd.DataFrame(rows).to_excel(w, sheet_name="9-12 批次1", index=False, header=False)
+    out = parse_anhui_trades(tmp_path)
+    assert len(out) == 3
+    assert sorted(str(d) for d in out.delivery_date) == \
+        ["2026-09-01", "2026-09-02", "2026-09-03"]

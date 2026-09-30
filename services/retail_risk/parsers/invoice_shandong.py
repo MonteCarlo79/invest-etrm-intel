@@ -45,4 +45,5 @@ def parse_shandong_invoice(path: str | Path) -> schemas.InvoiceDoc:
                 price_cny_mwh=float(da_px) if pd.notna(da_px) else None,
                 amount_cny=float(da_amt), delivery_date=delivery, notes="DA"))
     return schemas.InvoiceDoc(settlement_month=pd.to_datetime(month).date(),
-                              items=items, total_amount_cny=total)
+                              items=items, total_amount_cny=total,
+                              total_kind="spot_subtotal")

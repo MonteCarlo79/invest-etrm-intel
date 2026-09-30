@@ -47,10 +47,13 @@ def _parse_contracts(path: Path) -> pd.DataFrame:
                 m = _HOUR_RE.search(seg.replace(" ", ""))
                 if not m:
                     continue
-                delivery = pd.to_datetime("-".join(date_range.split("-")[:3])).date()
-                rows.append([delivery, int(m.group(1)), "monthly_auction", "forward", "buy",
-                             float(r[5]), float(r[6]) if pd.notna(r[6]) else None,
-                             None, f"批次:{sheet}", path.name])
+                parts = date_range.split("-")
+                start = pd.to_datetime("-".join(parts[:3])).date()
+                end = pd.to_datetime("-".join(parts[3:6])) .date() if len(parts) >= 6 else start
+                for d in pd.date_range(start, end, freq="D"):
+                    rows.append([d.date(), int(m.group(1)), "monthly_auction", "forward", "buy",
+                                 float(r[5]), float(r[6]) if pd.notna(r[6]) else None,
+                                 None, f"批次:{sheet}", path.name])
             except (ValueError, TypeError, IndexError):
                 continue
     return pd.DataFrame(rows, columns=schemas.TRADES_COLS)

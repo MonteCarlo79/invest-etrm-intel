@@ -104,18 +104,25 @@ def _invoice_by_category(conn, book_id: int, month: datetime.date) -> dict[str, 
 def _invoice_totals(conn, book_id: int, month: datetime.date) -> dict:
     """Invoice total + settled volume.
 
+    The total comes from rm_settlements ALONE — joining items repeats
+    total_amount_cny once per item row (fan-out: total x N items).
     Settled volume must NOT be Σ all item volumes — hierarchical subject lines
     (01 > 0101 > 010102…) double/triple count. Rule: the volume of the item with
     the SHORTEST subject code (top line '01 电量清分' = total settled); fallback
     Σ spot_energy volumes (山东 7021 daily RT rows carry actual load)."""
-    df = pd.read_sql(text("""
-        SELECT s.total_amount_cny, si.volume_mwh, si.category, si.notes
-        FROM marketdata.rm_settlements s
-        LEFT JOIN marketdata.rm_settlement_items si ON si.settlement_id = s.id
+    total = pd.read_sql(text("""
+        SELECT SUM(total_amount_cny) AS total FROM marketdata.rm_settlements
+        WHERE book_id = :b AND settlement_month = :m
+          AND COALESCE(raw_data->>'total_kind', 'margin') = 'margin'
+    """), conn, params={"b": book_id, "m": month}).iloc[0]["total"]
+    items = pd.read_sql(text("""
+        SELECT si.volume_mwh, si.category, si.notes
+        FROM marketdata.rm_settlement_items si
+        JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
         WHERE s.book_id = :b AND s.settlement_month = :m
     """), conn, params={"b": book_id, "m": month})
-    total = df["total_amount_cny"].dropna().sum() or None
-    return {"total": total, "settled_vol": settle_volume(df)}
+    return {"total": float(total) if pd.notna(total) else None,
+            "settled_vol": settle_volume(items)}
 
 
 def settle_volume(items: pd.DataFrame) -> float | None:
@@ -131,8 +138,11 @@ def settle_volume(items: pd.DataFrame) -> float | None:
 
 
 def _positions_cost(conn, book_id: int, month: datetime.date) -> tuple[float, float]:
+    """Direction-signed: sell-backs （日滚动卖出, 合同转让） NET against buys —
+    the invoice's midlong top line is net of them (review I1)."""
     row = pd.read_sql(text("""
-        SELECT SUM(volume_mwh * price_cny_mwh) AS cost, SUM(volume_mwh) AS vol
+        SELECT SUM(CASE WHEN direction = 'sell' THEN -1 ELSE 1 END * volume_mwh * price_cny_mwh) AS cost,
+               SUM(CASE WHEN direction = 'sell' THEN -1 ELSE 1 END * volume_mwh) AS vol
         FROM marketdata.rm_positions
         WHERE book_id = :b AND start_date >= :m
           AND start_date < (:m::date + INTERVAL '1 month')::date

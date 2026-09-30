@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -16,12 +17,14 @@ MIDLONG_CHANNELS = ["annual", "monthly_auction", "monthly_listed", "intramonth_m
 
 @dataclass
 class BridgeResult:
-    retail_revenue: float = 0.0
+    retail_revenue: float | None = 0.0
     channel_costs: dict[str, float] = field(default_factory=dict)
     spot_cost: float = 0.0
     deviation: float = 0.0
     other: float = 0.0
-    net: float = 0.0                       # == printed 售电公司收益 (identity, cross-check)
+    net: float | None = 0.0                 # == printed 售电公司收益; None when the
+                                            # month has no margin-kind invoice (山东 7021
+                                            # is a spot subtotal, not a margin)
     retail_avg_price: float | None = None
     wholesale_avg_cost: float | None = None
     spread: float | None = None
@@ -62,13 +65,28 @@ def sales_alpha(retail_revenue_cny: float, channel_fee_cny: float,
     return retail_revenue_cny - channel_fee_cny - blended_benchmark * retail_vol_mwh
 
 
-def channel_fee(contracts: pd.DataFrame) -> float:
-    """渠道费用 = Σ contract revenue x (1 - 渠道分成比例); share missing -> 0 (D10)."""
+def channel_fee(contracts: pd.DataFrame, month: int | None = None) -> float:
+    """渠道费用 = Σ contract retail revenue x (1 - 渠道分成比例), MONTHLY.
+
+    Volume per contract: monthly_forecast[month] when available; fallback
+    annual_mwh / 12. Share missing -> 0 (D10). Pass month for monthly attribution;
+    month=None keeps the legacy annual figure (callers that need annual)."""
     fee = 0.0
     for r in contracts.itertuples(index=False):
-        if pd.notna(getattr(r, "share_ratio", None)) and pd.notna(getattr(r, "price_cny_mwh", None)) \
-                and pd.notna(getattr(r, "annual_mwh", None)):
-            fee += r.annual_mwh * r.price_cny_mwh * (1.0 - r.share_ratio)
+        share = getattr(r, "share_ratio", None)
+        price = getattr(r, "price_cny_mwh", None)
+        if pd.isna(share) or pd.isna(price):
+            continue
+        vol = None
+        mf = getattr(r, "monthly_forecast", None)
+        if month is not None and isinstance(mf, str) and mf and mf != "{}":
+            vol = json.loads(mf).get(str(month))
+        if vol is None:
+            annual = getattr(r, "annual_mwh", None)
+            if pd.isna(annual):
+                continue
+            vol = annual if month is None else annual / 12.0
+        fee += vol * price * (1.0 - share)
     return fee
 
 
@@ -91,7 +109,14 @@ def bridge_month(conn, book_id: int, month: datetime.date) -> BridgeResult:
     res.channel_costs = {"midlong": midlong, "green_premium": by_cat.get("green_premium", 0.0)}
     total_costs = midlong + res.spot_cost + res.deviation + res.other \
         + res.channel_costs["green_premium"]
-    margin = float(totals["total"]) if totals["total"] is not None else 0.0
+    margin = float(totals["total"]) if totals["total"] is not None else None
+    if margin is None:
+        # no margin-kind invoice this month （山东 7021 = spot subtotal): costs shown,
+        # revenue/net/spread honestly N/A — never double-count spot as revenue.
+        res.retail_revenue = None
+        res.net = None
+        res.settled_vol_mwh = totals["settled_vol"]
+        return res
     res.retail_revenue = total_costs + margin
     res.net = margin
     vols = totals["settled_vol"]
@@ -135,10 +160,13 @@ def attribution_month(conn, book_id: int, month: datetime.date) -> dict:
     """
     alpha = channel_alpha(conn, book_id, month)
     bridge = bridge_month(conn, book_id, month)
+    province = conn.execute(text(
+        "SELECT name FROM marketdata.rm_books WHERE id = :b"
+    ), {"b": book_id}).scalar().split("-", 1)[1]
     bench = pd.read_sql(text("""
         SELECT channel, avg_price_cny_mwh FROM marketdata.rm_market_benchmarks
-        WHERE month = :m AND source = 'infohub'
-    """), conn, params={"m": month})
+        WHERE month = :m AND source = 'infohub' AND province = :p
+    """), conn, params={"m": month, "p": province})
     our = alpha.dropna(subset=["vwap"]) if not alpha.empty else alpha
     t = trader_alpha(our, bench) if not our.empty else pd.DataFrame(
         columns=["channel", "volume_mwh", "vwap", "mkt_avg", "trader_alpha_cny"])
@@ -146,19 +174,16 @@ def attribution_month(conn, book_id: int, month: datetime.date) -> dict:
     if not t.empty and t["mkt_avg"].notna().any():
         tt = t.dropna(subset=["mkt_avg"])
         blended = float((tt["mkt_avg"] * tt["volume_mwh"]).sum() / tt["volume_mwh"].sum())
-    province = conn.execute(text(
-        "SELECT name FROM marketdata.rm_books WHERE id = :b"
-    ), {"b": book_id}).scalar().split("-", 1)[1]
     contracts = pd.read_sql(text("""
         SELECT cc.annual_forecast_mwh AS annual_mwh, cc.price_cny_mwh,
-               c.revenue_share_ratio AS share_ratio
+               cc.monthly_forecast, c.revenue_share_ratio AS share_ratio
         FROM marketdata.rm_customer_contracts cc
         JOIN marketdata.rm_customers c ON c.id = cc.customer_id
         WHERE c.province = :p AND cc.contract_status = 'active'
     """), conn, params={"p": province})
-    fee = channel_fee(contracts) if not contracts.empty else 0.0
+    fee = channel_fee(contracts, month=month.month) if not contracts.empty else 0.0
     sales = None
-    if blended is not None and bridge.settled_vol_mwh:
+    if blended is not None and bridge.settled_vol_mwh and bridge.retail_revenue is not None:
         sales = sales_alpha(bridge.retail_revenue, fee, blended, bridge.settled_vol_mwh)
     trader_total = float(t["trader_alpha_cny"].dropna().sum()) if not t.empty else None
     identity_residual = None

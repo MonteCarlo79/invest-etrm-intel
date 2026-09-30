@@ -79,6 +79,7 @@ class InvoiceDoc:
     settlement_month: datetime.date          # 1st of month
     items: list[InvoiceItem] = field(default_factory=list)
     total_amount_cny: float | None = None    # printed 售电公司收益/合计, for cross-check
+    total_kind: str = "margin"               # 'margin' (本月=收益) | 'spot_subtotal' (合计=spot bill)
 
 
 # --- Settlement subject-code -> rm_settlement_items.category -----------------

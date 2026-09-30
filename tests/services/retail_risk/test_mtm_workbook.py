@@ -53,6 +53,7 @@ def test_contracts_parsed(tmp_path):
     out = m.parse_mtm_workbook(f)
     c = out["contracts"].iloc[0]
     assert c.customer_name == "测试用户A" and c.contract_type == "indexed"
+    assert c.contract_ref == "山东-1"      # I3: province-prefixed, no cross-province collision
     assert c.price_cny_mwh == 6.0 and c.share_ratio == 0.9
     assert c.annual_mwh == 6000.0          # 万度 -> MWh ×10
     assert '"1": 1000.0' in c.monthly_mwh  # JSON string, 万度 -> MWh

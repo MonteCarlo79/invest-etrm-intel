@@ -70,3 +70,42 @@ def test_invoice_by_category_hierarchy_aware():
     assert by_cat["market_redistribution"] == 176.41
     assert by_cat["imbalance"] == 10383.71
     assert "other" not in by_cat                         # 2-digit header excluded
+
+
+def test_invoice_by_category_db_notes_format():
+    """C3 regression: notes stored by the loader are '<code> | <label>' — code
+    extraction must work on that format (label-first would defeat it)."""
+    items = pd.DataFrame([
+        {"category": "other", "amount_cny": 7263741.37, "volume_mwh": 21906.46,
+         "notes": "01 | 电量清分"},
+        {"category": "midlong_energy", "amount_cny": 6000657.47, "volume_mwh": 17770.0,
+         "notes": "0101 | 中长期交易"},
+        {"category": "midlong_energy", "amount_cny": 6086813.27, "volume_mwh": 16351.05,
+         "notes": "010102 | 电力直接交易"},
+        {"category": "spot_energy", "amount_cny": 1263083.90, "volume_mwh": 4136.46,
+         "notes": "0102 | 现货交易"},
+    ])
+    by_cat = rc.invoice_by_category_frame(items)
+    assert by_cat["midlong_energy"] == 6000657.47       # NOT the double count
+    assert rc.settle_volume(items) == 21906.46
+
+
+def test_invoice_totals_no_join_fanout():
+    """C2 regression: settlement total must come from rm_settlements alone —
+    joining items multiplies the printed total by the item count."""
+    from unittest.mock import patch, MagicMock
+    settlements_df = pd.DataFrame([{"total": 175251.68}])
+    items_df = pd.DataFrame([
+        {"volume_mwh": 21906.46, "category": "other", "notes": "01 | 电量清分"},
+        {"volume_mwh": 17770.0, "category": "midlong_energy", "notes": "0101 | 中长期交易"},
+    ])
+    queries = []
+    def fake_read_sql(q, conn, params=None):
+        queries.append(str(q))
+        return settlements_df if len(queries) == 1 else items_df
+    conn = MagicMock()
+    with patch("services.retail_risk.reconcile.pd.read_sql", side_effect=fake_read_sql):
+        out = rc._invoice_totals(conn, 42, datetime.date(2026, 3, 1))
+    assert out["total"] == 175251.68                    # not x2 (2 items)
+    assert out["settled_vol"] == 21906.46
+    assert "JOIN" not in queries[0].upper()             # total query must not join

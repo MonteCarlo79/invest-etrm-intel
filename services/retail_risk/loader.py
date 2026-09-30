@@ -65,9 +65,10 @@ def rollup_trades_day(df: pd.DataFrame) -> pd.DataFrame:
 def write_trades(conn, book_id: int, df: pd.DataFrame, batch_id: str, province: str) -> int:
     rolled = rollup_trades_day(df)
     rolled = rolled[rolled["volume_mwh"] > 0]          # drop zero/NaN-price artefacts
+    # full per-book reload: re-runs replace the book's positions, never duplicate
     conn.execute(text(
-        "DELETE FROM marketdata.rm_positions WHERE book_id = :b AND upload_batch_id = :bid"
-    ), {"b": book_id, "bid": batch_id})
+        "DELETE FROM marketdata.rm_positions WHERE book_id = :b"
+    ), {"b": book_id})
     n = 0
     for r in rolled.itertuples(index=False):
         px = None if pd.isna(r.price_cny_mwh) else r.price_cny_mwh
@@ -84,6 +85,10 @@ def write_trades(conn, book_id: int, df: pd.DataFrame, batch_id: str, province: 
 
 
 def write_volumes(conn, book_id: int, df: pd.DataFrame, batch_id: str) -> int:
+    # full per-book reload: clears channels that disappear from later files
+    conn.execute(text(
+        "DELETE FROM marketdata.rm_position_volumes WHERE book_id = :b"
+    ), {"b": book_id})
     n = 0
     for r in df.itertuples(index=False):
         conn.execute(text("""
@@ -192,9 +197,25 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
     ), {"h": file_hash}).scalar()
     if dup is not None:
         return None
+    # corrected re-upload for the same book+month: supersede the old settlement
+    existing = conn.execute(text(
+        "SELECT id FROM marketdata.rm_settlements WHERE book_id = :b AND settlement_month = :m"
+    ), {"b": book_id, "m": doc.settlement_month}).scalar()
+    if existing is not None:
+        conn.execute(text(
+            "DELETE FROM marketdata.rm_settlement_items WHERE settlement_id = :sid"
+        ), {"sid": existing})
+        conn.execute(text(
+            "DELETE FROM marketdata.rm_settlements WHERE id = :sid"
+        ), {"sid": existing})
     status = "processed"
     if not doc.items:
         status = "flagged"
+    elif doc.total_kind == "spot_subtotal" and doc.total_amount_cny is not None:
+        # 山东 7021 (no subject hierarchy): Σ items must tie the printed 合计
+        items_sum = sum(i["amount_cny"] for i in doc.items)
+        if abs(items_sum - doc.total_amount_cny) > max(0.01 * abs(doc.total_amount_cny), 1.0):
+            status = "flagged"
     else:
         top01 = next((i for i in doc.items
                       if (i.get("notes") or "").startswith("01")
@@ -205,6 +226,12 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
             tie = by_cat.get("midlong_energy", 0.0) + by_cat.get("spot_energy", 0.0)
             if abs(tie - top01["amount_cny"]) > max(0.01 * abs(top01["amount_cny"]), 1.0):
                 status = "flagged"
+        else:
+            # no usable top line (安徽统推): presence check — a real wholesale
+            # invoice always has midlong AND spot lines
+            cats = {i["category"] for i in doc.items}
+            if "midlong_energy" not in cats or "spot_energy" not in cats:
+                status = "flagged"
     sid = conn.execute(text("""
         INSERT INTO marketdata.rm_settlements
           (book_id, settlement_month, file_name, file_type, status, total_amount_cny, raw_data)
@@ -212,8 +239,13 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
     """), {"b": book_id, "m": doc.settlement_month, "f": file_name,
            "ft": "pdf" if file_name.lower().endswith(".pdf") else "excel",
            "st": status, "tot": doc.total_amount_cny,
-           "raw": '{"file_hash": "' + file_hash + '"}'}).scalar()
+           "raw": '{"file_hash": "' + file_hash + '", "total_kind": "' + doc.total_kind + '"}'}).scalar()
     for i in doc.items:
+        # notes = '<code> | <label>' — code FIRST: reconcile's ^(\d+) extraction
+        # (hierarchy-aware aggregation, settle_volume) depends on a leading code.
+        code = (i.get("notes") or "").strip()
+        label = (i.get("label_cn") or "").strip()
+        notes = f"{code} | {label}" if code else label
         conn.execute(text("""
             INSERT INTO marketdata.rm_settlement_items
               (settlement_id, category, delivery_date, volume_mwh, price_cny_kwh, amount_cny, notes)
@@ -221,8 +253,7 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
         """), {"sid": sid, "cat": i["category"], "dd": i.get("delivery_date"),
                "vol": i.get("volume_mwh"),
                "px": (i["price_cny_mwh"] / 1000.0) if i.get("price_cny_mwh") is not None else None,
-               "amt": i["amount_cny"],
-               "notes": (i.get("label_cn") or "") + ((" | " + i["notes"]) if i.get("notes") else "")})
+               "amt": i["amount_cny"], "notes": notes})
     return sid
 
 

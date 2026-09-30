@@ -232,7 +232,7 @@ def parse_mtm_workbook(path: str | Path) -> dict:
                     monthly[mnum] = v * 10.0              # 万度 -> MWh
             annual_v = _f(cdf.iloc[pos][annual_col]) if annual_col else None
             rows.append([
-                str(r.零售用户名称), str(r.序号), str(getattr(r, "套餐名称", "")),
+                str(r.零售用户名称), f"{province}-{r.序号}", str(getattr(r, "套餐名称", "")),
                 str(getattr(r, "套餐类别", "")),
                 schemas.contract_type_for(str(getattr(r, "套餐类别", ""))),
                 _f(getattr(r, "套餐价格", None)),

@@ -44,8 +44,47 @@ def test_write_trades_deletes_batch_first():
                         1.0, 400.0, None, "月度竞价", "f"]], columns=schemas.TRADES_COLS)
     loader.write_trades(conn, 42, df, "jinan_202603_trades", province="冀南")
     statements = [str(c.args[0]) for c in conn.execute.call_args_list]
-    assert any("DELETE FROM marketdata.rm_positions" in s and "upload_batch_id" in s for s in statements)
+    assert any("DELETE FROM marketdata.rm_positions" in s for s in statements)
     assert any("INSERT INTO marketdata.rm_positions" in s for s in statements)
+
+
+def test_write_trades_full_book_reload_idempotent():
+    """I7: re-runs must not duplicate — positions AND volumes delete per-BOOK
+    (full reload), not per run-dated batch."""
+    conn = _mock_conn()
+    df = pd.DataFrame([["2026-03-01", 8, "monthly_auction", "forward", "buy",
+                        1.0, 400.0, None, "月度竞价", "f"]], columns=schemas.TRADES_COLS)
+    loader.write_trades(conn, 42, df, "冀南_trades", province="冀南")
+    deletes = [c for c in conn.execute.call_args_list
+               if "DELETE FROM marketdata.rm_positions" in str(c.args[0])]
+    assert deletes and deletes[0].args[1] == {"b": 42}          # whole book, not a batch
+
+    conn2 = _mock_conn()
+    vol = pd.DataFrame([{"delivery_date": datetime.date(2026, 3, 1), "hour": 8,
+                         "channel": "annual", "volume_mwh": 1.0, "vwap_cny_mwh": 350.0,
+                         "nominated_mwh": None, "settled_mwh": None, "estimated": False}])
+    loader.write_volumes(conn2, 42, vol, "冀南_volumes")
+    vdeletes = [c for c in conn2.execute.call_args_list
+                if "DELETE FROM marketdata.rm_position_volumes" in str(c.args[0])]
+    assert vdeletes and vdeletes[0].args[1] == {"b": 42}
+
+
+def test_write_invoice_replace_on_corrected_file():
+    """I8: same book+month, different hash -> old settlement + items deleted,
+    new one inserted (corrected invoices supersede)."""
+    conn = MagicMock()
+    # hash-dup check -> None; existing-month check -> id 7; insert -> sid 99
+    conn.execute.return_value.scalar.side_effect = [None, 7, 99] + [99] * 50
+    doc = schemas.InvoiceDoc(
+        settlement_month=datetime.date(2026, 3, 1),
+        items=[{"category": "spot_energy", "label_cn": "现货交易",
+                "amount_cny": 1.0, "volume_mwh": 1.0, "notes": "0102"}],
+        total_amount_cny=1.0)
+    sid = loader.write_invoice(conn, 42, doc, "f.pdf", "newhash")
+    assert sid == 99
+    stmts = [str(c.args[0]) for c in conn.execute.call_args_list]
+    assert any("DELETE FROM marketdata.rm_settlement_items" in s for s in stmts)
+    assert any("DELETE FROM marketdata.rm_settlements" in s for s in stmts)
 
 
 def test_write_invoice_dedup_by_hash():
@@ -103,3 +142,55 @@ def test_invoice_processed_when_toplines_tie():
         total_amount_cny=175251.68)
     loader.write_invoice(conn, 42, doc, "f.pdf", "h2")
     assert _settlement_status(conn) == "processed"
+
+
+def test_invoice_notes_written_code_first():
+    """C3: notes must be '<code> | <label>' — reconcile's ^(\\d+) extraction
+    depends on the leading code."""
+    conn = _invoice_conn()
+    doc = schemas.InvoiceDoc(
+        settlement_month=datetime.date(2026, 3, 1),
+        items=[{"category": "midlong_energy", "label_cn": "中长期交易",
+                "amount_cny": 6000657.47, "volume_mwh": 17770.0, "notes": "0101"}],
+        total_amount_cny=None)
+    loader.write_invoice(conn, 42, doc, "f.pdf", "h3")
+    item_inserts = [c for c in conn.execute.call_args_list
+                    if "INSERT INTO marketdata.rm_settlement_items" in str(c.args[0])]
+    assert item_inserts and item_inserts[0].args[1]["notes"] == "0101 | 中长期交易"
+
+
+def test_excel_invoice_flagged_when_items_sum_off():
+    """I6: 山东 7021 (excel) has no subject hierarchy — the cross-check is
+    Σ items vs the printed 合计 within 1%."""
+    conn = _invoice_conn()
+    doc = schemas.InvoiceDoc(
+        settlement_month=datetime.date(2026, 3, 1),
+        items=[{"category": "spot_energy", "label_cn": "实时电能量电费",
+                "amount_cny": 100.0, "volume_mwh": 1.0, "notes": "RT"}],
+        total_amount_cny=6176047.51, total_kind="spot_subtotal")
+    loader.write_invoice(conn, 42, doc, "7021-f.xlsx", "h4")
+    assert _settlement_status(conn) == "flagged"
+
+
+def test_excel_invoice_processed_when_items_sum_ties():
+    conn = _invoice_conn()
+    doc = schemas.InvoiceDoc(
+        settlement_month=datetime.date(2026, 3, 1),
+        items=[{"category": "spot_energy", "label_cn": "实时电能量电费",
+                "amount_cny": 6176047.51, "volume_mwh": 15209.1, "notes": "RT"}],
+        total_amount_cny=6176047.51, total_kind="spot_subtotal")
+    loader.write_invoice(conn, 42, doc, "7021-f.xlsx", "h5")
+    assert _settlement_status(conn) == "processed"
+
+
+def test_pdf_invoice_flagged_when_midlong_or_spot_missing():
+    """I6: 安徽统推 (01 line carries no amount) — presence check: at least one
+    midlong AND one spot item, else flagged."""
+    conn = _invoice_conn()
+    doc = schemas.InvoiceDoc(
+        settlement_month=datetime.date(2026, 3, 1),
+        items=[{"category": "midlong_energy", "label_cn": "中长期交易",
+                "amount_cny": 13255508.85, "volume_mwh": 38101.3, "notes": "01010201"}],
+        total_amount_cny=462471.22)
+    loader.write_invoice(conn, 42, doc, "f.pdf", "h6")
+    assert _settlement_status(conn) == "flagged"

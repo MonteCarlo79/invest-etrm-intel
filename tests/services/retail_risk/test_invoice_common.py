@@ -64,3 +64,4 @@ def test_shandong_7021_excel(tmp_path):
     assert all(i["category"] == "spot_energy" for i in doc.items)
     assert doc.items[0]["delivery_date"].isoformat() == "2026-03-01"
     assert doc.total_amount_cny == pytest.approx(6176047.51)
+    assert doc.total_kind == "spot_subtotal"    # 合计 = Σ spot energy, NOT a margin

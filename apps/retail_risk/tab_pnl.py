@@ -48,17 +48,22 @@ def render_pnl(engine):
     c1.metric("零售结算均价", _fmt(bridge.retail_avg_price, " ¥/MWh"))
     c2.metric("批发结算均价", _fmt(bridge.wholesale_avg_cost, " ¥/MWh"))
     c3.metric("批零价差", _fmt(bridge.spread, " ¥/MWh"))
-    c4.metric("净毛利", f"¥{bridge.net:,.0f}")
+    c4.metric("净毛利", _fmt(bridge.net, " ¥"))
 
     # --- bridge waterfall
-    items = [("零售收入", bridge.retail_revenue)]
-    items += [("中长期采购", -bridge.channel_costs.get("midlong", 0.0))]
-    if bridge.channel_costs.get("green_premium"):
-        items.append(("绿电溢价", -bridge.channel_costs["green_premium"]))
-    items += [("现货结算", -bridge.spot_cost), ("偏差/考核", -bridge.deviation),
-              ("附加/分摊", -bridge.other)]
-    _render_waterfall(pd.DataFrame(items, columns=["category", "total"]),
-                      title=f"P&L Bridge — {month}")
+    if bridge.retail_revenue is not None:
+        items = [("零售收入", bridge.retail_revenue)]
+        items += [("中长期采购", -bridge.channel_costs.get("midlong", 0.0))]
+        if bridge.channel_costs.get("green_premium"):
+            items.append(("绿电溢价", -bridge.channel_costs["green_premium"]))
+        items += [("现货结算", -bridge.spot_cost), ("偏差/考核", -bridge.deviation),
+                  ("附加/分摊", -bridge.other)]
+        _render_waterfall(pd.DataFrame(items, columns=["category", "total"]),
+                          title=f"P&L Bridge — {month}")
+    else:
+        st.info("Margin N/A for this month — invoice carries no 收益 margin "
+                "(山东 7021 is a spot-side bill; the monthly margin PDF is P2). "
+                "Cost lines shown below.")
 
     # --- channel alpha
     st.subheader("Channel Alpha vs Spot (降本/增支)")
