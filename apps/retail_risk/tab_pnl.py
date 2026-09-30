@@ -1,4 +1,6 @@
-"""Tab 3 — Realised P&L: retail waterfall, per-customer margins, province/contract-type analysis."""
+# apps/retail_risk/tab_pnl.py
+"""Realised P&L (Goal 2): 批零价差 cards, bridge waterfall, channel alpha vs spot,
+trader/sales attribution, YTD trend. 复盘-aligned."""
 from __future__ import annotations
 
 import pandas as pd
@@ -6,147 +8,119 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
+from services.retail_risk import pnl_bridge as pb
+
 
 def render_pnl(engine):
-    """Render Realised P&L tab."""
-    st.subheader("Realised P&L")
+    st.subheader("Realised P&L — 批零价差 & Source Breakdown")
 
-    col1, col2 = st.columns([2, 1])
+    with engine.connect() as conn:
+        books = pd.read_sql(text(
+            "SELECT id, name FROM marketdata.rm_books WHERE book_type = 'load' ORDER BY name"
+        ), conn)
+    if books.empty:
+        st.info("No load books yet.")
+        return
+
+    col1, col2 = st.columns(2)
     with col1:
-        with engine.connect() as conn:
-            customers = pd.read_sql(text("""
-                SELECT id, name, province FROM marketdata.rm_customers
-                WHERE status = 'active' ORDER BY name
-            """), conn)
-        if customers.empty:
-            st.info("No active customers found.")
-            return
-        customer_id = st.selectbox(
-            "Customer (for waterfall)",
-            customers["id"].tolist(),
-            format_func=lambda x: customers[customers["id"] == x]["name"].iloc[0],
-            key="pnl_customer",
-        )
+        book_id = st.selectbox("Book", books["id"].tolist(),
+                               format_func=lambda x: books[books["id"] == x]["name"].iloc[0],
+                               key="pnl_book")
+    with engine.connect() as conn:
+        months = pd.read_sql(text("""
+            SELECT DISTINCT settlement_month FROM marketdata.rm_settlements
+            WHERE book_id = :b ORDER BY settlement_month DESC
+        """), conn, params={"b": book_id})
+    if months.empty:
+        st.info("No settlement data for this book yet.")
+        return
     with col2:
-        st.date_input("Date Range", value=[], key="pnl_dates")
+        month = st.selectbox("Month", [m for m in months["settlement_month"]], key="pnl_month")
 
-    # Waterfall chart for selected customer
     with engine.connect() as conn:
-        items_df = pd.read_sql(text("""
-            SELECT si.category, SUM(si.amount_cny) AS total
-            FROM marketdata.rm_retail_settlement_items si
-            JOIN marketdata.rm_retail_settlements s ON s.id = si.settlement_id
-            WHERE s.customer_id = :cid
-            GROUP BY si.category
-            ORDER BY total DESC
-        """), conn, params={"cid": customer_id})
+        bridge = pb.bridge_month(conn, book_id, month)
+        alpha = pb.channel_alpha(conn, book_id, month)
+        attrib = pb.attribution_month(conn, book_id, month)
 
-    if not items_df.empty:
-        _render_waterfall(items_df, title="Retail P&L Waterfall")
+    # --- 批零价差 cards
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("零售结算均价", _fmt(bridge.retail_avg_price, " ¥/MWh"))
+    c2.metric("批发结算均价", _fmt(bridge.wholesale_avg_cost, " ¥/MWh"))
+    c3.metric("批零价差", _fmt(bridge.spread, " ¥/MWh"))
+    c4.metric("净毛利", f"¥{bridge.net:,.0f}")
+
+    # --- bridge waterfall
+    items = [("零售收入", bridge.retail_revenue)]
+    items += [("中长期采购", -bridge.channel_costs.get("midlong", 0.0))]
+    if bridge.channel_costs.get("green_premium"):
+        items.append(("绿电溢价", -bridge.channel_costs["green_premium"]))
+    items += [("现货结算", -bridge.spot_cost), ("偏差/考核", -bridge.deviation),
+              ("附加/分摊", -bridge.other)]
+    _render_waterfall(pd.DataFrame(items, columns=["category", "total"]),
+                      title=f"P&L Bridge — {month}")
+
+    # --- channel alpha
+    st.subheader("Channel Alpha vs Spot (降本/增支)")
+    if alpha.empty:
+        st.info("No positions or spot data for this month.")
     else:
-        st.info("No P&L data yet for this customer. Upload settlements in Tab 2.")
+        st.dataframe(alpha.style.format({
+            "volume_mwh": "{:,.1f}", "vwap": "{:,.1f}", "spot_vwap": "{:,.1f}",
+            "alpha_cny_mwh": "{:+,.1f}", "alpha_cny": "{:+,.0f}"}),
+            use_container_width=True, hide_index=True)
 
-    st.divider()
-
-    # Per-customer margin breakdown
-    st.subheader("Per-Customer Margin Breakdown")
-    with engine.connect() as conn:
-        margin_df = pd.read_sql(text("""
-            SELECT
-                c.name AS customer,
-                c.province,
-                cc.contract_type,
-                SUM(si.amount_cny) FILTER (WHERE si.category = 'retail_revenue') AS revenue_cny,
-                SUM(si.amount_cny) FILTER (WHERE si.category = 'energy_procurement') AS procurement_cny,
-                SUM(si.amount_cny) FILTER (WHERE si.category = 'transmission_distribution') AS tnd_cny,
-                SUM(si.amount_cny) FILTER (WHERE si.category = 'imbalance_penalty') AS penalty_cny,
-                SUM(si.amount_cny) AS net_cny,
-                SUM(si.volume_mwh) AS volume_mwh
-            FROM marketdata.rm_customers c
-            JOIN marketdata.rm_retail_settlements s ON s.customer_id = c.id
-            JOIN marketdata.rm_retail_settlement_items si ON si.settlement_id = s.id
-            LEFT JOIN marketdata.rm_customer_contracts cc
-                ON cc.customer_id = c.id AND cc.contract_status = 'active'
-            GROUP BY c.id, c.name, c.province, cc.contract_type
-            ORDER BY net_cny DESC
-        """), conn)
-
-    if not margin_df.empty:
-        margin_df["margin_cny_mwh"] = (
-            margin_df["net_cny"] / margin_df["volume_mwh"].replace(0, float("nan"))
-        ).round(2)
-        st.dataframe(margin_df, use_container_width=True, hide_index=True)
-        st.download_button("Export CSV", margin_df.to_csv(index=False), "retail_pnl.csv", "text/csv")
+    # --- trader / sales attribution
+    st.subheader("Trader / Sales Attribution")
+    t = attrib["trader_by_channel"]
+    if t.empty or t["mkt_avg"].isna().all():
+        st.info("No market benchmark for this month (信息汇总 not ingested or stale).")
     else:
-        st.info("No margin data available yet.")
+        st.dataframe(t.style.format({"volume_mwh": "{:,.1f}", "vwap": "{:,.1f}",
+                                     "mkt_avg": "{:,.1f}", "trader_alpha_cny": "{:+,.0f}"}),
+                     use_container_width=True, hide_index=True)
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("Trader alpha", _fmt(attrib["trader_alpha_total"], " ¥", signed=True))
+        a2.metric("渠道费用", _fmt(attrib["channel_fee_cny"], " ¥"))
+        a3.metric("Sales alpha", _fmt(attrib["sales_alpha_cny"], " ¥", signed=True))
+        a4.metric("Identity residual", _fmt(attrib["identity_residual_cny"], " ¥", signed=True))
+        st.caption(f"Blended wholesale benchmark: {attrib['blended_benchmark']:.1f} ¥/MWh. "
+                   "Trader + Sales = 批零价差 net of 渠道费; residual = spot/deviation not in the pivot."
+                   if attrib["blended_benchmark"] else "Blended benchmark N/A")
 
-    st.divider()
-
-    # Per-province analysis
-    st.subheader("P&L by Province")
+    # --- YTD trend
+    st.subheader("月度盈亏 YTD")
     with engine.connect() as conn:
-        province_df = pd.read_sql(text("""
-            SELECT c.province,
-                   SUM(si.amount_cny) FILTER (WHERE si.category = 'retail_revenue') AS revenue_cny,
-                   SUM(si.amount_cny) FILTER (WHERE si.category = 'energy_procurement') AS procurement_cny,
-                   SUM(si.amount_cny) AS net_cny,
-                   COUNT(DISTINCT c.id) AS customer_count
-            FROM marketdata.rm_customers c
-            JOIN marketdata.rm_retail_settlements s ON s.customer_id = c.id
-            JOIN marketdata.rm_retail_settlement_items si ON si.settlement_id = s.id
-            GROUP BY c.province
-            ORDER BY net_cny DESC
-        """), conn)
+        snap = pd.read_sql(text("""
+            SELECT snapshot_date, realized_cny, bilateral_pnl_cny, spot_pnl_cny,
+                   deviation_pnl_cny, other_pnl_cny, unrealized_mtm_cny
+            FROM marketdata.rm_pnl_snapshots
+            WHERE book_id = :b ORDER BY snapshot_date
+        """), conn, params={"b": book_id})
+    if not snap.empty:
+        st.line_chart(snap.set_index("snapshot_date")[["realized_cny", "unrealized_mtm_cny"]])
+    else:
+        st.info("No snapshots yet — run the engines (run_backfill or in-app compute).")
 
-    if not province_df.empty:
-        st.dataframe(province_df, use_container_width=True, hide_index=True)
 
-    # Per-contract-type analysis
-    st.subheader("P&L by Contract Type")
-    with engine.connect() as conn:
-        ctype_df = pd.read_sql(text("""
-            SELECT cc.contract_type,
-                   SUM(si.amount_cny) FILTER (WHERE si.category = 'retail_revenue') AS revenue_cny,
-                   SUM(si.amount_cny) AS net_cny,
-                   COUNT(DISTINCT c.id) AS customer_count
-            FROM marketdata.rm_customers c
-            JOIN marketdata.rm_retail_settlements s ON s.customer_id = c.id
-            JOIN marketdata.rm_retail_settlement_items si ON si.settlement_id = s.id
-            LEFT JOIN marketdata.rm_customer_contracts cc
-                ON cc.customer_id = c.id AND cc.contract_status = 'active'
-            WHERE cc.contract_type IS NOT NULL
-            GROUP BY cc.contract_type
-            ORDER BY net_cny DESC
-        """), conn)
-
-    if not ctype_df.empty:
-        st.dataframe(ctype_df, use_container_width=True, hide_index=True)
-    elif margin_df.empty:
-        st.info("No contract-type data available yet.")
+def _fmt(v, suffix: str, signed: bool = False) -> str:
+    if v is None or pd.isna(v):
+        return "N/A"
+    return f"{'+' if signed and v >= 0 else ''}{v:,.1f}{suffix}"
 
 
 def _render_waterfall(items_df: pd.DataFrame, title: str):
-    """Render a Plotly waterfall chart from category/total dataframe."""
     categories = items_df["category"].tolist()
     values = items_df["total"].tolist()
     categories.append("Net Margin")
     values.append(sum(values))
     measures = ["relative"] * (len(categories) - 1) + ["total"]
-
     fig = go.Figure(go.Waterfall(
-        orientation="v",
-        measure=measures,
-        x=categories,
-        y=values,
+        orientation="v", measure=measures, x=categories, y=values,
         connector={"line": {"color": "rgb(63, 63, 63)"}},
         increasing={"marker": {"color": "#2ecc71"}},
         decreasing={"marker": {"color": "#e74c3c"}},
         totals={"marker": {"color": "#3498db"}},
     ))
-    fig.update_layout(
-        title=title,
-        yaxis_title="CNY",
-        showlegend=False,
-        height=450,
-    )
+    fig.update_layout(title=title, yaxis_title="CNY", showlegend=False, height=450)
     st.plotly_chart(fig, use_container_width=True)
