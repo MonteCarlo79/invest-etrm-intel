@@ -27,7 +27,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 |---|---|---|---|---|---|
 | mengxi-dashboard | `bess-mengxi-dashboard` | **v28** (cc144bacdbcb) | **43** | 2026-09-27 | this session: add-candidate form in Asset Registry; built from current td:41 (parallel session's v27/nodal-trading), superset |
 | deal-structurer | `bess-platform-deal-structurer` | **v29** (27e9f57385f6) | **33** | 2026-09-25 | this session: screening NaN-node + SQL date-type fixes |
-| bess-map (Quant) | `bess-map` | **v71** (e5c062e1deeb) | **106** | 2026-10-01 | this session: 甘肃西河 spelling fix in ranking exclusion |
+| bess-map (Quant) | `bess-map` | **v72** (d44283c1ee8c) | **108** | 2026-10-01 | this session: net-total sort, 系统运行费 deduction, unified cap_comp/fr_pool sources, ancillary_revenue COPY fix |
 | hermes | `bess-platform-hermes` | (latest hand-injected) | **185** | 2026-09-30 | this session: ancillary dedup patch (skip confirmed/superseded); 31 env vars |
 | asset_risk | `bess-asset-risk` | v84 | 86 | 2026-09-23 | this session: merchant-exposure tile |
 | data-ingestion (tt-api/enos) | `bess-data-ingestion` | v20260927 (575657c91df8) | :latest-driven | 2026-09-27 | this session: schema-variant frame guard (SheYang KeyError) |
@@ -56,6 +56,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-09-30 — `bess-platform-hermes:185` ← `bess-platform-hermes:v20260930b` (d34cb6596ac4); ancillary upsert dedup — skip confirmed/superseded (province, month, metric) so scans can't resurrect dismissed rows (this session).
 - 2026-10-01 — `bess-platform-lingfeng-ingest:11` ← `lingfeng-ingest:v9` (3686f1452375); folder-scan guard — `_resolve_province` (exact + longest-prefix) refuses non-province stems like 运行数据披露-_<dates>.xlsx; 8,880 re-created junk rows deleted same day (this session).
 - 2026-10-01 — `bess-map:106` ← `bess-map:v71` (e5c062e1deeb); ranking exclusion 甘肃河西→both spellings (DB carries 甘肃西河) (this session).
+- 2026-10-01 — `bess-map:108` ← `bess-map:v72` (d44283c1ee8c); ranking sorts by NET total (arb+cap+调频−系统运行费); sysopfee deduction (¥/kWh × charge energy at measured cycles); capacity re-sourced to curated province_cap_comp + fr pool-share fallback (30% / 20% Southern Grid); Dockerfile ancillary_revenue COPY fix (v70/v71 crashed on missing module); committed via temp-index pattern after OneDrive index.lock hang (this session).
 
 ## Known parallel-session coordination points
 
