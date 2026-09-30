@@ -121,6 +121,50 @@ def ancillary_per_mwh_yr(annual_total_yuan: float, bess_mw: float, duration_h: f
     return annual_total_yuan / (bess_mw * 1000.0) * (1000.0 / duration_h)
 
 
+# ── 调频 fallback: pool-share model (user spec 2026-10-01) ───────────────────
+# When mileage-based compensation isn't disclosed, allocate a share of the
+# provincial FR fund pool to BESS and divide by the province's BESS capacity.
+SOUTH_GRID_PROVINCES = frozenset({"广东", "广西", "云南", "贵州", "海南"})
+FR_POOL_SHARE_DEFAULT = 0.30   # 30% of the pool to BESS
+FR_POOL_SHARE_SOUTH = 0.20     # 20% for Southern Grid provinces
+
+
+def fr_pool_share(province: str) -> float:
+    return FR_POOL_SHARE_SOUTH if province in SOUTH_GRID_PROVINCES else FR_POOL_SHARE_DEFAULT
+
+
+def fr_pool_per_mwh_yr(fr_pool_yuan: float, bess_mw: float, duration_h: float,
+                       province: str) -> float:
+    """调频 income per MWh_installed/yr from the pool-share model:
+    pool × share ÷ (bess_mw × 1000 kW)  → ¥/kW/yr, then × (1000/D)."""
+    return ancillary_per_mwh_yr(fr_pool_yuan * fr_pool_share(province),
+                                bess_mw, duration_h)
+
+
+def fr_component(province: str, duration_h: float,
+                 confirmed_actual_yuan: float | None,
+                 fr_pool_yuan: float | None,
+                 bess_mw: float) -> float:
+    """Precedence (user spec): mileage-settled actuals > pool-share > 0."""
+    if confirmed_actual_yuan:
+        return ancillary_per_mwh_yr(confirmed_actual_yuan, bess_mw, duration_h)
+    if fr_pool_yuan:
+        return fr_pool_per_mwh_yr(fr_pool_yuan, bess_mw, duration_h, province)
+    return 0.0
+
+
+# ── 系统运行费: per-kWh adder on charging energy ─────────────────────────────
+
+def sysopfee_annual_cost_per_mwh(fee_yuan_kwh: float, cycles_per_day: float,
+                                 roundtrip_eff: float = 0.85) -> float:
+    """¥/MWh_installed/yr deduction: the fee is charged per kWh of charging
+    energy (charge = discharge ÷ RTE), at the province's measured cycles.
+    Duration-independent per MWh of installed energy."""
+    if fee_yuan_kwh <= 0 or cycles_per_day <= 0 or roundtrip_eff <= 0:
+        return 0.0
+    return fee_yuan_kwh * 1000.0 * cycles_per_day * 365.0 / roundtrip_eff
+
+
 def load_capacity_rows(eng) -> list[tuple]:
     """All province_capacity_price rows for capacity_stack_map."""
     from sqlalchemy import text as _t
@@ -129,6 +173,50 @@ def load_capacity_rows(eng) -> list[tuple]:
             "SELECT province, rate_yuan_kw_yr, base_hours, coefficient, status "
             "FROM marketdata.province_capacity_price"
         )).fetchall()
+
+
+def load_cap_comp_latest(eng) -> dict[str, tuple[float, float]]:
+    """province → (cap_comp_yuan_kw, peak_duration_hours) from the curated
+    容量补偿 tab (province_cap_comp, confirmed rows, latest effective_date).
+    This is the PRIMARY capacity-rate source; province_capacity_price only
+    supplies coefficients and legacy exclusions."""
+    from sqlalchemy import text as _t
+    with eng.connect() as conn:
+        rows = conn.execute(_t("""
+            SELECT DISTINCT ON (province)
+                   province, cap_comp_yuan_kw, peak_duration_hours
+            FROM marketdata.province_cap_comp
+            WHERE status = 'confirmed' AND cap_comp_yuan_kw IS NOT NULL
+            ORDER BY province, effective_date DESC, ingested_at DESC
+        """)).fetchall()
+    return {p: (float(r), float(h) if h else DEFAULT_BASE_HOURS)
+            for p, r, h in rows}
+
+
+def load_fr_pool(eng) -> dict[str, float]:
+    """province → latest FR fund pool (¥/yr) from province_fr_market
+    (fr_pool_billion_yuan 亿元 → 元), confirmed rows."""
+    from sqlalchemy import text as _t
+    with eng.connect() as conn:
+        rows = conn.execute(_t("""
+            SELECT DISTINCT ON (province) province, fr_pool_billion_yuan
+            FROM marketdata.province_fr_market
+            WHERE status = 'confirmed' AND fr_pool_billion_yuan IS NOT NULL
+            ORDER BY province, effective_date DESC
+        """)).fetchall()
+    return {p: float(v) * 1e8 for p, v in rows}
+
+
+def load_sysopfee_latest(eng) -> dict[str, float]:
+    """province → latest monthly 系统运行费 rate (¥/kWh)."""
+    from sqlalchemy import text as _t
+    with eng.connect() as conn:
+        rows = conn.execute(_t("""
+            SELECT DISTINCT ON (province) province, fee_yuan_kwh
+            FROM province_sysopfee_monthly
+            ORDER BY province, year_month DESC
+        """)).fetchall()
+    return {p: float(v) for p, v in rows}
 
 
 def load_ancillary_annual(eng) -> dict[str, float]:

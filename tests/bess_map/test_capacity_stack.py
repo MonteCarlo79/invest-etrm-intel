@@ -83,3 +83,42 @@ def test_ancillary_per_mwh_yr_power_rated():
     assert v2 == pytest.approx(2 * v4)
     assert v4 == pytest.approx(total / (mw * 1000) * 250)
     assert ancillary_per_mwh_yr(total, 0.0, 4.0) == 0.0
+
+
+def test_fr_pool_share_regions():
+    from capacity_stack import fr_pool_share, SOUTH_GRID_PROVINCES
+    assert fr_pool_share("甘肃") == pytest.approx(0.30)
+    assert fr_pool_share("广西") == pytest.approx(0.20)
+    assert SOUTH_GRID_PROVINCES == frozenset({"广东", "广西", "云南", "贵州", "海南"})
+
+
+def test_fr_pool_per_mwh_yr():
+    """甘肃: 0.4亿 pool × 30% ÷ 2000 MW → ¥6/kW/yr → ×250 = ¥1,500/MWh(4h)."""
+    from capacity_stack import fr_pool_per_mwh_yr
+    v = fr_pool_per_mwh_yr(0.4e8, 2000.0, 4.0, "甘肃")
+    assert v == pytest.approx(1500.0)
+    # 广西 same pool at 20%
+    v_gx = fr_pool_per_mwh_yr(0.4e8, 2000.0, 4.0, "广西")
+    assert v_gx == pytest.approx(1000.0)
+
+
+def test_fr_component_precedence():
+    from capacity_stack import fr_component
+    # actuals beat pool
+    v = fr_component("新疆", 4.0, 6.42e7, 1e8, 500.0)
+    assert v == pytest.approx(6.42e7 / 500e3 * 250)
+    # pool used when no actuals
+    v2 = fr_component("甘肃", 4.0, None, 0.4e8, 2000.0)
+    assert v2 == pytest.approx(1500.0)
+    # zero when neither
+    assert fr_component("西藏", 4.0, None, None, 100.0) == 0.0
+
+
+def test_sysopfee_annual_cost():
+    from capacity_stack import sysopfee_annual_cost_per_mwh
+    # 0.03 ¥/kWh × 1000 kWh × 0.7 cycles × 365 / 0.85 ≈ ¥9,018/MWh/yr
+    v = sysopfee_annual_cost_per_mwh(0.03, 0.7)
+    assert v == pytest.approx(0.03 * 1000 * 0.7 * 365 / 0.85)
+    assert v == pytest.approx(9017.65, rel=1e-3)
+    assert sysopfee_annual_cost_per_mwh(0.0, 0.7) == 0.0
+    assert sysopfee_annual_cost_per_mwh(0.03, 0.0) == 0.0

@@ -119,6 +119,7 @@ _T: dict[str, dict[str, str]] = {
 "rank_stack_arb":       "Arbitrage",
         "rank_stack_cap":       "Capacity",
         "rank_stack_anc":       "Freq. reg.",
+"rank_stack_sys":       "Sys. op. fee",
 "fr_mgmt_title":        "FR Revenue Entry & Review",
         "fr_pending_count":     "pending",
         "fr_form_prov":         "Province",
@@ -395,6 +396,7 @@ _T: dict[str, dict[str, str]] = {
 "rank_stack_arb":       "套利",
         "rank_stack_cap":       "容量电价",
         "rank_stack_anc":       "调频",
+"rank_stack_sys":       "系统运行费",
 "fr_mgmt_title":        "调频收入录入与确认",
         "fr_pending_count":     "条待审",
         "fr_form_prov":         "省份",
@@ -1813,18 +1815,64 @@ with tab_ranking:
         cy4 = cycles_df[abs(cycles_df["duration_h"] - 4.0) < 0.01].set_index("province")["avg_cycles"]
         avg_cycles_4h = cy4.mean() if not cy4.empty else None
 
-        # KPI strip
+        # stack inputs (cached loaders) — used by KPI strip, chart, and table
+        from services.bess_map.capacity_stack import (
+            capacity_payment_per_mwh_yr, capacity_stack_map,
+            ancillary_per_mwh_yr, load_capacity_rows, load_ancillary_annual,
+            load_cap_comp_latest, load_fr_pool, load_sysopfee_latest,
+            fr_component, sysopfee_annual_cost_per_mwh,
+            DEFAULT_RATE, DEFAULT_BASE_HOURS, STACKABLE_STATUSES,
+        )
+        _cap_comp = load_cap_comp_latest(_eng())       # curated 容量补偿 tab (primary)
+        _cap_rows = load_capacity_rows(_eng())          # coefficient + status layer
+        _status_by_prov = {r[0]: r[4] for r in _cap_rows}
+        _coef_by_prov = {r[0]: float(r[3]) for r in _cap_rows}
+        _anc_annual = load_ancillary_annual(_eng())     # confirmed mileage actuals
+        _fr_pool = load_fr_pool(_eng())                 # pool-share fallback
+        _sysop = load_sysopfee_latest(_eng())           # ¥/kWh charging adder
+        _installed = _load_installed_bess(_ENG_KEY)     # province → bess_mw
+
+        def _cap_for(prov: str, d: float) -> float:
+            if _status_by_prov.get(prov) and _status_by_prov[prov] not in STACKABLE_STATUSES:
+                return 0.0                                # legacy/draft/none — never stacked
+            if prov in _cap_comp:
+                rate, base_h = _cap_comp[prov]
+                return capacity_payment_per_mwh_yr(rate, base_h,
+                                                   _coef_by_prov.get(prov, 1.0), d)
+            if prov in _status_by_prov:
+                return capacity_stack_map(_cap_rows, d).get(prov, 0.0)
+            return capacity_payment_per_mwh_yr(DEFAULT_RATE, DEFAULT_BASE_HOURS, 1.0, d)
+
+        def _anc_for(prov: str, d: float) -> float:
+            return fr_component(prov, d, _anc_annual.get(prov),
+                                _fr_pool.get(prov), _installed.get(prov) or 0.0)
+
+        def _sys_for(prov: str, d: float) -> float:
+            if cycles_df.empty:
+                return 0.0
+            cy = cycles_df[abs(cycles_df["duration_h"] - d) < 0.01].set_index("province")["avg_cycles"]
+            if cy.empty or prov not in cy.index:
+                # fall back to the other duration's measured cycles
+                cy = cycles_df[abs(cycles_df["duration_h"] - (4.0 if d == 2.0 else 2.0)) < 0.01].set_index("province")["avg_cycles"]
+            cyc = float(cy.get(prov, 0.0)) if not cy.empty else 0.0
+            return sysopfee_annual_cost_per_mwh(_sysop.get(prov, 0.0), cyc)
+
+        # KPI strip (best province by NET: arbitrage + capacity + 调频 − 系统运行费)
         k1, k2, k3, k4 = st.columns(4)
         if not wide.empty:
-            _w2 = wide.dropna(subset=[sort_2h])
-            _w4 = wide.dropna(subset=[sort_4h])
-            best2 = _w2.iloc[0] if not _w2.empty else None
-            best4 = _w4.iloc[0] if not _w4.empty else None
+            _net2 = (wide[sort_2h].fillna(0.0) +
+                     wide["province"].map(lambda p: _cap_for(p, 2.0) + _anc_for(p, 2.0) - _sys_for(p, 2.0)))
+            _net4 = (wide[sort_4h].fillna(0.0) +
+                     wide["province"].map(lambda p: _cap_for(p, 4.0) + _anc_for(p, 4.0) - _sys_for(p, 4.0)))
+            _w2 = wide.dropna(subset=[sort_2h]).assign(net=_net2)
+            _w4 = wide.dropna(subset=[sort_4h]).assign(net=_net4)
+            best2 = _w2.sort_values("net", ascending=False).iloc[0] if not _w2.empty else None
+            best4 = _w4.sort_values("net", ascending=False).iloc[0] if not _w4.empty else None
             avg_cap = rank_df["capture_pct"].dropna()
             k1.metric(_t("rank_kpi_2h"),
-                      f"{best2['province']}  ¥{best2[sort_2h]:,.0f}" if best2 is not None else "—")
+                      f"{best2['province']}  ¥{best2['net']:,.0f}" if best2 is not None else "—")
             k2.metric(_t("rank_kpi_4h"),
-                      f"{best4['province']}  ¥{best4[sort_4h]:,.0f}" if best4 is not None else "—")
+                      f"{best4['province']}  ¥{best4['net']:,.0f}" if best4 is not None else "—")
             k3.metric(_t("rank_kpi_capture"), f"{avg_cap.mean():.1f}%" if not avg_cap.empty else "—")
             k4.metric(_t("rank_kpi_cycles"),
                       f"{avg_cycles_4h:.2f}/day" if avg_cycles_4h is not None else "—")
@@ -1864,23 +1912,33 @@ with tab_ranking:
             arb = float(r[_arb_col]) if pd.notna(r[_arb_col]) else 0.0
             cap = _cap_for(prov, d)
             anc = _anc_for(prov, d)
+            sys_fee = _sys_for(prov, d)
             _days_txt = f"{int(r['days'])}{_t('rank_days_unit')}" if pd.notna(r["days"]) else ""
             for val, ck, lbl in ((arb, "rank_stack_arb", ""),
                                  (cap, "rank_stack_cap", ""),
-                                 (anc, "rank_stack_anc", _days_txt)):
+                                 (anc, "rank_stack_anc", ""),
+                                 (-sys_fee, "rank_stack_sys", _days_txt)):
                 _rows.append({"province": prov, "Duration": r["Duration"],
                               "component": _t(ck), "value": val,
-                              "total": arb + cap + anc,
+                              "total": arb + cap + anc - sys_fee,
                               "label": lbl})
         stack_df = pd.DataFrame(_rows)
-        _order = (stack_df.drop_duplicates("province")
-                  .sort_values("total", ascending=True)["province"])
+        # Deterministic order by TOTAL: when a duration is filtered, use that
+        # duration's total; with both facets, use the 4h total (2h fallback) —
+        # never a mix (drop_duplicates kept whichever duration appeared first).
+        _tot = stack_df.groupby(["province", "Duration"])["total"].first().unstack()
+        if dur_filter != _t("all_durations"):
+            _key = _tot[dur_filter]
+        else:
+            _key = _tot["4h"].fillna(_tot["2h"])
+        _order = _key.sort_values(ascending=True).index
         stack_df["province"] = pd.Categorical(stack_df["province"],
                                               categories=_order, ordered=True)
 
         _comp_colors = {_t("rank_stack_arb"): "#1565C0",
                         _t("rank_stack_cap"): "#43A047",
-                        _t("rank_stack_anc"): "#FB8C00"}
+                        _t("rank_stack_anc"): "#FB8C00",
+                        _t("rank_stack_sys"): "#E53935"}
         fig_rank = px.bar(
             stack_df, x="value", y="province", color="component",
             orientation="h", barmode="stack", text="label",
@@ -1913,16 +1971,20 @@ with tab_ranking:
             "2h Rev", "2h Cap%", "2h Cycles",
             "4h Rev", "4h Cap%", "4h Cycles",
         ]
-        # stack components + totals per duration
+        # stack components + totals per duration (Total = arb + cap + anc − sysopfee)
         for d, rev_s in ((2.0, disp_wide[sort_2h]), (4.0, disp_wide[sort_4h])):
             tag = "2h" if d == 2.0 else "4h"
             cap_s = disp_wide["province"].map(lambda p: _cap_for(p, d))
             anc_s = disp_wide["province"].map(lambda p: _anc_for(p, d))
+            sys_s = disp_wide["province"].map(lambda p: _sys_for(p, d))
             out[f"{tag} CapPmt"] = cap_s.values
             out[f"{tag} AncRev"] = anc_s.values
-            out[f"{tag} Total"] = rev_s.fillna(0.0).values + cap_s.values + anc_s.values
+            out[f"{tag} SysOp"] = sys_s.values
+            out[f"{tag} Total"] = (rev_s.fillna(0.0).values + cap_s.values
+                                   + anc_s.values - sys_s.values)
         for col in ["2h Rev", "4h Rev", "2h CapPmt", "4h CapPmt",
-                    "2h AncRev", "4h AncRev", "2h Total", "4h Total"]:
+                    "2h AncRev", "4h AncRev", "2h SysOp", "4h SysOp",
+                    "2h Total", "4h Total"]:
             out[col] = out[col].apply(lambda v: f"¥{v:,.0f}" if pd.notna(v) else "—")
         for col in ["2h Cap%", "4h Cap%"]:
             out[col] = out[col].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—")

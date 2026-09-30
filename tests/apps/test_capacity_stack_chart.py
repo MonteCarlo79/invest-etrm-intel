@@ -37,3 +37,21 @@ def test_table_stack_columns():
     src = _APP.read_text(encoding="utf-8")
     for col in ("CapPmt", "AncRev", "Total"):
         assert f'{{tag}} {col}' in src, f"table missing {col} column"
+
+
+def test_unified_model_wired():
+    src = _APP.read_text(encoding="utf-8")
+    # curated sources
+    for fn in ("load_cap_comp_latest", "load_fr_pool", "load_sysopfee_latest",
+               "fr_component", "sysopfee_annual_cost_per_mwh", "STACKABLE_STATUSES"):
+        assert fn in src, f"{fn} not wired"
+    # sysopfee as a NEGATIVE 4th stack component
+    assert '(-sys_fee, "rank_stack_sys", _days_txt)' in src
+    assert "arb + cap + anc - sys_fee" in src
+    # net totals in table + KPI
+    assert "+ anc_s.values - sys_s.values" in src
+    assert 'assign(net=_net2)' in src and 'assign(net=_net4)' in src
+    # legacy exclusions still enforced
+    assert "not in STACKABLE_STATUSES" in src
+    # i18n key both locales
+    assert src.count('"rank_stack_sys"') >= 3
