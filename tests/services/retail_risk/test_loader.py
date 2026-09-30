@@ -87,6 +87,22 @@ def test_write_invoice_replace_on_corrected_file():
     assert any("DELETE FROM marketdata.rm_settlements" in s for s in stmts)
 
 
+def test_write_curves_batches_params():
+    """Curves write in chunked executemany batches (list of dicts per call),
+    not 8,760 single-row round trips — home-network RDS drops long transactions."""
+    conn = _mock_conn()
+    df = pd.DataFrame([
+        ["山东", "spot_base", "2026-01-01", 0, 0.30, datetime.date(2026, 9, 30)],
+        ["山东", "spot_base", "2026-01-01", 1, 0.31, datetime.date(2026, 9, 30)],
+        ["山东", "spot_base", "2026-01-01", 2, 0.32, datetime.date(2026, 9, 30)],
+    ], columns=schemas.CURVES_COLS)
+    loader.write_curves(conn, df)
+    assert conn.execute.call_count == 1                      # one batched call, not three
+    args = conn.execute.call_args_list[0].args
+    assert isinstance(args[1], list) and len(args[1]) == 3   # list of param dicts
+    assert args[1][0]["dh"] == 0 and args[1][2]["dh"] == 2
+
+
 def test_write_invoice_dedup_by_hash():
     conn = _mock_conn()
     # first execute (hash check) returns an existing id -> skip

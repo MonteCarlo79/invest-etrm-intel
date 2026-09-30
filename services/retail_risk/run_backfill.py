@@ -112,11 +112,22 @@ def run(root, provinces, kinds, dry_run: bool, echo=print) -> dict:
             out = mtm_workbook.parse_mtm_workbook(f)
             echo(f"[mtm] {f.name}: curves={len(out['curves'])} contracts={len(out['contracts'])}")
             if not dry_run:
-                with engine.begin() as conn:
-                    n_curves += loader.write_curves(conn, out["curves"])
-                    if not out["contracts"].empty:
-                        _, nc = loader.write_contracts(conn, out["province"], out["contracts"])
-                        n_contracts += nc
+                # per-workbook transaction; retry once on connection drop (RDS over
+                # home NAT) with a fresh engine — rolled-back workbook simply re-runs
+                for attempt in (1, 2):
+                    try:
+                        with engine.begin() as conn:
+                            n_curves += loader.write_curves(conn, out["curves"])
+                            if not out["contracts"].empty:
+                                _, nc = loader.write_contracts(conn, out["province"], out["contracts"])
+                                n_contracts += nc
+                        break
+                    except Exception as e:                       # noqa: BLE001
+                        if attempt == 2:
+                            raise
+                        echo(f"  !! {f.name}: {type(e).__name__}, retrying with fresh engine")
+                        engine.dispose()
+                        engine = loader.get_engine()
         summary["mtm"] = {"curves": n_curves, "contracts": n_contracts}
 
     if "benchmarks" in kinds:

@@ -134,19 +134,25 @@ def _volume_params(book_id, r, batch_id):
     return p
 
 
+_CURVES_SQL = """
+    INSERT INTO marketdata.rm_forward_curves
+      (province, product, curve_date, delivery_date, delivery_hour, price_cny_kwh, source)
+    VALUES (:p, :pr, :cd, :dd, :dh, :px, 'manual')
+    ON CONFLICT (province, product, curve_date, delivery_date, delivery_hour, source)
+    DO UPDATE SET price_cny_kwh = EXCLUDED.price_cny_kwh
+"""
+_CURVES_CHUNK = 1000
+
+
 def write_curves(conn, df: pd.DataFrame) -> int:
-    n = 0
-    for r in df.itertuples(index=False):
-        conn.execute(text("""
-            INSERT INTO marketdata.rm_forward_curves
-              (province, product, curve_date, delivery_date, delivery_hour, price_cny_kwh, source)
-            VALUES (:p, :pr, :cd, :dd, :dh, :px, 'manual')
-            ON CONFLICT (province, product, curve_date, delivery_date, delivery_hour, source)
-            DO UPDATE SET price_cny_kwh = EXCLUDED.price_cny_kwh
-        """), {"p": r.province, "pr": r.product, "cd": r.curve_date,
-               "dd": r.delivery_date, "dh": int(r.delivery_hour), "px": r.price_cny_kwh})
-        n += 1
-    return n
+    """Chunked executemany (list of param dicts per call): 8,760 single-row round
+    trips per workbook made home-network RDS drops near-certain."""
+    params = [{"p": r.province, "pr": r.product, "cd": r.curve_date,
+               "dd": r.delivery_date, "dh": int(r.delivery_hour), "px": r.price_cny_kwh}
+              for r in df.itertuples(index=False)]
+    for i in range(0, len(params), _CURVES_CHUNK):
+        conn.execute(text(_CURVES_SQL), params[i:i + _CURVES_CHUNK])
+    return len(params)
 
 
 def write_contracts(conn, province: str, df: pd.DataFrame) -> tuple[int, int]:
