@@ -40,6 +40,13 @@ def test_total_from_summary():
     assert parse_total_from_summary(JINAN_TEXT) == 175251.68
 
 
+def test_total_from_summary_multi_number_line():
+    """浙江 summary: 本月 <实际用电量> <结算电量> <合同电量> <偏差> <结算电费> —
+    the money total is the LAST number on the line, not the first."""
+    text = "期间 实际用电量 结算电量 合同电量 偏差考核电量 结算电费\n本月 27142.626 27142.626 24069.4070 - 9163096.47\n"
+    assert parse_total_from_summary(text) == 9163096.47
+
+
 def test_shandong_7021_excel(tmp_path):
     rows = [["2026年3月月清算临时结果单"] + [None] * 7,
             [None] * 8, [None] * 8, [None] * 8,

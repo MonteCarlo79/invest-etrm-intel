@@ -19,6 +19,7 @@ def test_province_for_filename():
 
 def _make_workbook(path: Path):
     price = pd.DataFrame([["1月"] + [300.0 + h for h in range(24)],
+                          ["月度备注"] + [None] * 24,      # junk label row: skipped
                           ["2月"] + [310.0 + h for h in range(24)]],
                          columns=["现货价格（中价假设）"] + list(range(24)))
     contracts = pd.DataFrame([

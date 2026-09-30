@@ -17,7 +17,6 @@ _LINE_RE = re.compile(
     r"^(?P<code>\d{2,10})\s+(?:(?P<name>[^\s\d].*?)\s+)?"
     r"(?P<nums>[\-\d.,]+(?:\s+[\-\d.,]+){0,3})(?:\s+(?P<note>[^\d].*))?$"
 )
-_TOTAL_RE = re.compile(r"本月\s+([\d,]+\.\d{2})")
 
 
 def _num(s: str) -> float | None:
@@ -80,6 +79,18 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
     return items
 
 
+_TOTAL_LINE_RE = re.compile(r"^本月\s+(.*)$")
+
+
 def parse_total_from_summary(text: str) -> float | None:
-    m = _TOTAL_RE.search(text)
-    return float(m.group(1).replace(",", "")) if m else None
+    """Money total from the 本月 summary line = the LAST numeric on that line
+    (冀南: 本月 175251.68; 浙江: 本月 <用电量> <结算电量> <合同电量> - <结算电费>)."""
+    for line in text.splitlines():
+        m = _TOTAL_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        nums = [_num(x) for x in m.group(1).split()]
+        nums = [v for v in nums if v is not None]
+        if nums:
+            return nums[-1]
+    return None

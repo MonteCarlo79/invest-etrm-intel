@@ -44,10 +44,15 @@ def _find_sheet(xl: pd.ExcelFile, *keywords: str) -> str | None:
 
 
 def _month_hour_grid(df: pd.DataFrame) -> pd.DataFrame:
-    """[month label col0, hour cols 1..24] -> long frame (month, hour, value)."""
+    """[month label col0, hour cols 1..24] -> long frame (month, hour, value).
+    Only pure 'N月' label rows are months; junk label rows are skipped."""
     df = df.rename(columns={df.columns[0]: "月份"})
-    df = df[df["月份"].astype(str).str.contains("月", na=False)]
-    df["month"] = df["月份"].astype(str).str.extract(r"(\d{1,2})").astype(int)
+    labels = df["月份"].astype(str).str.strip()
+    df = df[labels.str.fullmatch(r"\d{1,2}月")]
+    df["month"] = pd.to_numeric(labels[labels.str.fullmatch(r"\d{1,2}月")]
+                                .str.extract(r"(\d{1,2})")[0], errors="coerce")
+    df = df.dropna(subset=["month"])
+    df["month"] = df["month"].astype(int)
     hour_cols = [c for c in df.columns if c not in ("月份", "month")]
     long = df.melt(id_vars=["month"], value_vars=hour_cols, var_name="hour", value_name="value")
     long["hour"] = long["hour"].astype(int)
