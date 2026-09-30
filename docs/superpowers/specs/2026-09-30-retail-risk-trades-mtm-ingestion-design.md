@@ -11,7 +11,7 @@
 Three goals, framed by the user's monthly 经营复盘 materials (`data/trading/*/复盘*`):
 
 1. **Reconcile trades with settlement invoice numbers** — per book × month: traded 中长期 cost vs invoice 中长期电费, volume bridge to spot-settled exposure, total-bill residual explained.
-2. **P&L breakdown by source** — 复盘-aligned analytics: 批零价差 headline, channel alpha vs spot (年度/月度/月内 each marked to 现货均价), bridge waterfall, 月度盈亏 YTD trend.
+2. **P&L breakdown by source** — 复盘-aligned analytics: 批零价差 headline, channel alpha vs spot (年度/月度/月内 each marked to 现货均价), bridge waterfall, 月度盈亏 YTD trend. **Plus trader/sales attribution**: trader alpha = (market-avg channel price − our trade price) × volume (bought below market = gain); sales alpha = (retail price − 渠道费用 − wholesale market-avg price) × volume (sold above market net of channel fee = gain). The wholesale market average is the pivot, so批零价差 (net of 渠道费） = trader alpha + sales alpha.
 3. **MTM per book** — open positions × scenario forward curves (base / +10 / −10) plus retail-contract MtM, snapshotted daily.
 
 The 复盘 PPTs are the analytics **specification**, not an ingestion source: every number in them (批零价差, 景融合同价 vs 现货, 月度盈亏, 月末持仓%) is recomputed in-app from hard data.
@@ -36,6 +36,9 @@ The 复盘 PPTs are the analytics **specification**, not an ingestion source: ev
 | D7 | Retail revenue | invoice retail-side lines primary; fallback = contract 套餐价 × actual volume |
 | D8 | Province alias for spot joins | `冀南 → 河北南网` (spot_prices_hourly naming); 上海 absent from spot tables → phase 2 (track-log Excel) |
 | D9 | 绿电 | separate `rm_positions` row with `counterparty='绿电'`; folds into tenor channel in `rm_position_volumes`; invoice side uses `green_premium` |
+| D10 | Trader/sales attribution | trader alpha per channel: `(mkt_avg_c − our_price_c) × vol_c`; sales alpha: `(retail_price − 渠道费用 − mkt_avg_blended) × retail_vol` where `mkt_avg_blended = Σ(mkt_avg_c × vol_c)/Σvol_c` — identity with 批零价差 (net of 渠道费） holds by construction. 渠道费用 per contract from the MTM workbook 渠道分成比例 fields; exact formula verified against workbook 测算表格 logic at implementation |
+| D11 | Market-average benchmark | new additive table `marketdata.rm_market_benchmarks` (§10), sourced from `台账/mtm/*电力市场信息汇总by*.xlsx` 中长期价格 sheets (market-wide channel price + volume by month). Files are `by<date>` snapshots — keep latest row per (province, channel, month); months beyond the snapshot show alpha as N/A |
+| D12 | Policy docs (`data/exchange-annual-reports/2026年政策/`, 31 provinces + 国家层面） | P1: authoritative reference for per-province recon category maps and settlement-rule interpretation during implementation. P2: ingest into knowledge pool (`services/knowledge_pool`, supports PDF/DOCX) with province tags so the retail Agent tab can cite rules |
 
 ### Channel mapping (province term → schema)
 
@@ -60,8 +63,12 @@ data/trading/                                       marketdata.
 ├── 山东/2026XX/景融/持仓明细+持仓量.xlsx           →  rm_position_volumes (daily → hourly est.)
 ├── 安徽/交易记录/X月-中长期交易.xlsx               →  rm_positions + rm_position_volumes
 ├── {province}/月结算单*.pdf, 山东7021-*.xlsx      →  rm_settlements + rm_settlement_items
-└── 台账/mtm/*.xlsx (8 provinces × 3 scenarios)    →  rm_forward_curves + rm_customers
-                                                        + rm_customer_contracts
+├── 台账/mtm/*.xlsx (8 provinces × 3 scenarios)    →  rm_forward_curves + rm_customers
+│                                                        + rm_customer_contracts
+└── 台账/mtm/*电力市场信息汇总by*.xlsx               →  rm_market_benchmarks (全网 channel avg price/vol)
+
+reference (P1 implementation; P2 KB ingestion):
+  data/exchange-annual-reports/2026年政策/{province}/*.pdf|docx  →  settlement/trading rules per province
 
 computed (services/retail_risk/):
   reconcile.py   trades × invoices                →  recon report (Goal 1)
@@ -90,6 +97,7 @@ services/retail_risk/
     trades_shandong.py  # 山东 持仓明细/持仓量 (daily × channel + price sheet)
     trades_anhui.py     # 安徽 X月-中长期交易.xlsx (滚搓市场成交结果, 中长期合计)
     mtm_workbook.py     # all 8 provinces: price-forecast sheets → curves; 合约总表 → contracts
+    benchmark_infohub.py# 信息汇总 workbooks: 中长期价格 sheet → market benchmarks
     invoice_jinan.py    # 冀南 现货月结算 PDF
     invoice_zhejiang.py # 浙江 现货月依据 PDF
     invoice_anhui.py    # 安徽 统推售电公司结算单 PDF (reuse parser_stategrid_anhui patterns if importable)
@@ -139,6 +147,10 @@ Status: `matched` if all |Δ| ≤ tolerance, `explained` if residual maps to ite
 - `retail_revenue` (D7) − channel costs (annual / monthly_auction / monthly_listed / intramonth / green) − `spot_energy` − deviation (`imbalance`+`penalty`) − other (`govt_surcharges`+`market_redistribution`+`other`) = **net margin**.
 - **批零价差** = retail_avg_price − wholesale_avg_cost, `wholesale_avg_cost = (midlong + spot cost) / settled volume`.
 - **Channel alpha** = per channel: `(month_spot_VWAP − channel_VWAP) × channel_volume` (positive = 降本); hourly drill-down uses hour-level spot vs channel price (mirrors 冀南 复盘 slide 6).
+- **Trader/sales attribution** (D10):
+  - `trader_alpha_c = (mkt_avg_c − our_price_c) × vol_c` per channel (rm_market_benchmarks vs rm_positions VWAP)
+  - `sales_alpha = (retail_price − 渠道费用 − mkt_avg_blended) × retail_vol`, `mkt_avg_blended = Σ(mkt_avg_c × vol_c) / Σvol_c`
+  - Display per book × month: trader alpha by channel, sales alpha by contract type （联动/固定/分时）, and the identity check `trader + sales ≈ 批零价差(net of 渠道费)` (residual flows to spot/deviation lines). Months lacking benchmark data show N/A (D11).
 - Persist monthly: `rm_pnl_snapshots(snapshot_date = month-01)`: `realized_cny=net`, `bilateral_pnl_cny=midlong_alpha_total`, `spot_pnl_cny=−spot_cost`, `deviation_pnl_cny=−deviation`, `other_pnl_cny=−other`, upsert on UNIQUE(book_id, snapshot_date). Detailed per-channel alpha is computed on the fly for UI, not snapshotted.
 
 ### 7.3 mtm.py (Goal 3) — per book, per scenario
@@ -156,7 +168,7 @@ Each MTM workbook × scenario sheet → month×hour price grid → expand to `(d
 ## 9. App changes
 
 - **Reconciliation tab (new)**: book × month status matrix (matched/explained/flagged) → per-month drill-down: expected-vs-invoice per line, volume bridge, residual attribution.
-- **Realised P&L tab (rebuilt)**: §批零价差 cards (零售结算均价, 批发结算均价, spread, 月末持仓%); channel alpha table (vol, 成交均价, 现货均价, 降本/增支 CNY/MWh + ¥) with hourly drill; bridge waterfall; 月度盈亏 YTD trend (from rm_pnl_snapshots).
+- **Realised P&L tab (rebuilt)**: §批零价差 cards (零售结算均价, 批发结算均价, spread, 月末持仓%); channel alpha table (vol, 成交均价, 现货均价, 降本/增支 CNY/MWh + ¥) with hourly drill; **trader/sales attribution section** (trader alpha per channel vs 全网均价, sales alpha per contract type net of 渠道费， identity check vs 批零价差）; bridge waterfall; 月度盈亏 YTD trend (from rm_pnl_snapshots).
 - **Positions & MtM tab**: scenario selector (base/+10/−10), per-book cards (realised YTD + unrealised MtM + scenario band), open-position table, curve viewer. Existing queries otherwise unchanged.
 - **Data Upload tab (new)**: file → province + type (trades / invoice / MTM workbook) → parse → preview counts → write via loader. No S3.
 
@@ -177,11 +189,28 @@ ALTER TABLE marketdata.rm_settlement_items ADD CONSTRAINT rm_settlement_items_ca
 
 Rollback: reverse ALTER after deleting any rows using the 4 new categories. Backward-compatible: asset-side categories unchanged, asset-risk code untouched.
 
+Additive new table (same migration file; no existing-table impact):
+
+```sql
+CREATE TABLE IF NOT EXISTS marketdata.rm_market_benchmarks (
+    id               SERIAL PRIMARY KEY,
+    province         TEXT NOT NULL,
+    channel          TEXT NOT NULL,          -- same channel vocabulary as rm_positions
+    month            DATE NOT NULL,          -- 1st of delivery month
+    avg_price_cny_mwh NUMERIC(10,4) NOT NULL, -- 全网 market-average contract price
+    volume_mwh       NUMERIC(14,4),           -- 全网 cleared volume, when published
+    source           TEXT NOT NULL DEFAULT 'infohub',  -- infohub / manual
+    source_file      TEXT,
+    uploaded_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (province, channel, month, source)
+);
+```
+
 ## 11. Phasing
 
-- **P1 (this implementation)**: trades+invoices for 冀南/浙江/山东/安徽； all 8 MTM workbooks (curves+contracts); engines; 4 tabs; tests. Goals 1–3 live on 4 books; MtM live on all 8.
-- **P2**: 福建/广东/江苏/广西/上海 invoice + trade formats; daily-clearing (日清算/日清分) detail; 上海 spot from track-log Excel.
-- **P3**: 全网 benchmark overlay (信息披露月报 PDFs); per-customer retail settlement upload; 各省份台账 CRM enrichment via `rm_crm_import_configs`.
+- **P1 (this implementation)**: trades+invoices for 冀南/浙江/山东/安徽； all 8 MTM workbooks (curves+contracts); 信息汇总 benchmarks for the 8 provinces; engines (incl. trader/sales attribution); 4 tabs; tests. Goals 1–3 live on 4 books; MtM live on all 8. Policy docs used as implementation reference for per-province recon category maps.
+- **P2**: 福建/广东/江苏/广西/上海 invoice + trade formats; daily-clearing (日清算/日清分) detail; 上海 spot from track-log Excel; policy docs → knowledge pool with province tags, retail Agent tab gains rule-citation search.
+- **P3**: 信息披露月报 overlay (fresher 全网 benchmark + regulatory watch); per-customer retail settlement upload; 各省份台账 CRM enrichment via `rm_crm_import_configs`.
 
 ## 12. Testing
 
@@ -192,4 +221,4 @@ Rollback: reverse ALTER after deleting any rows using the 4 new categories. Back
 
 ## 13. Out of scope
 
-Asset-risk app/code/data; 复盘 PPT ingestion; VaR & Greeks tab; agent tab tooling; retail per-customer settlement (P3); 信息披露 benchmark (P3); automated scheduling of backfill (manual CLI this round).
+Asset-risk app/code/data; 复盘 PPT ingestion; VaR & Greeks tab; retail per-customer settlement (P3); policy-doc KB ingestion + agent rule search (P2); 信息披露 overlay (P3); automated scheduling of backfill (manual CLI this round).
