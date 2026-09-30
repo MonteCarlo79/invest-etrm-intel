@@ -18,12 +18,23 @@ def test_stack_imports_and_helpers():
 
 def test_stack_chart_structure():
     src = _APP.read_text(encoding="utf-8")
-    assert 'barmode="stack"' in src
-    assert 'facet_row="Duration"' in src
+    assert "make_subplots" in src
+    assert 'barmode="overlay"' in src                     # explicit-base waterfall, not px stack
+    assert 'categoryorder="array"' in src
+    assert 'autorange="reversed"' in src                  # largest NET at top
     assert "_load_installed_bess(_ENG_KEY)" in src
-    # data-length labels preserved on the stacked chart
+    # data-length labels preserved on the deduction segment
     assert "rank_days_unit" in src
-    assert 'text="label"' in src
+    assert 'textposition="outside"' in src
+
+
+def test_standard_station_conversion():
+    src = _APP.read_text(encoding="utf-8")
+    assert "scale = 100.0 * d / 1e4" in src               # per-MWh → 万元 for 100MW station
+    assert '"万元/年"' in src
+    assert "100MW/200MWh" in src or "100 MW" in src
+    assert "* 200 / 1e4" in src and "* 400 / 1e4" in src  # KPI conversion
+    assert "100MW/400MWh" in src
 
 
 def test_i18n_keys_both_locales():
@@ -45,11 +56,11 @@ def test_unified_model_wired():
     for fn in ("load_cap_comp_latest", "load_fr_pool", "load_sysopfee_latest",
                "fr_component", "sysopfee_annual_cost_per_mwh", "STACKABLE_STATUSES"):
         assert fn in src, f"{fn} not wired"
-    # sysopfee as a NEGATIVE 4th stack component
-    assert '(-sys_fee, "rank_stack_sys", _days_txt)' in src
-    assert "arb + cap + anc - sys_fee" in src
+    # sysopfee drawn as a NEGATIVE segment eating from the gross end (overlay base)
+    assert "xs.append(-v)" in src
+    assert "def _net(rec):" in src and '- rec.get("sys", 0.0)' in src
     # net totals in table + KPI
-    assert "+ anc_s.values - sys_s.values" in src
+    assert "- sys_s).values" in src or "- sys_s.values" in src
     assert 'assign(net=_net2)' in src and 'assign(net=_net4)' in src
     # legacy exclusions still enforced
     assert "not in STACKABLE_STATUSES" in src

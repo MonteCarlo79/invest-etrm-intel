@@ -105,11 +105,11 @@ _T: dict[str, dict[str, str]] = {
         "tab_agent":            "Quant",
         # ranking
         "rank_title":           "BESS Investment Screening — Province Ranking",
-        "rank_caption":         "Annual arbitrage revenue per MWh of **installed energy capacity** (= power_MW × duration_h). Based on LP perfect-foresight dispatch.",
+        "rank_caption":         "Annual net revenue for a standard 100 MW station (200 MWh at 2h / 400 MWh at 4h), 万元/yr: arbitrage + capacity + 调频 − 系统运行费. LP perfect-foresight dispatch.",
         "rank_kpi_2h":          "Best Province (2h)",
         "rank_kpi_4h":          "Best Province (4h)",
         "rank_kpi_capture":     "Avg Capture Rate",
-        "rank_chart_title":     "Annual Revenue by Province (¥/MWh_installed/yr)",
+        "rank_chart_title":     "Annual Net Revenue by Province (万元/yr, 100MW standard station)",
         "rank_col_province":    "Province",
         "rank_col_2h":          "2h Rev (¥/MWh_cap/yr)",
         "rank_col_4h":          "4h Rev (¥/MWh_cap/yr)",
@@ -382,11 +382,11 @@ _T: dict[str, dict[str, str]] = {
         "tab_mgmt":             "数据管理",
         "tab_agent":            "量化分析师",
         "rank_title":           "储能投资筛选 — 省份排名",
-        "rank_caption":         "每MWh**安装能量容量**（= 功率MW × 时长h）的年度套利收益（元/MWh/年）。基于LP完美预见调度。",
+        "rank_caption":         "100MW 标准储能站（2h=200MWh / 4h=400MWh）的年度净收益（万元/年）：套利 + 容量电价 + 调频 − 系统运行费（充电成本）。基于LP完美预见调度。",
         "rank_kpi_2h":          "最优省份（2h）",
         "rank_kpi_4h":          "最优省份（4h）",
         "rank_kpi_capture":     "平均捕获率",
-        "rank_chart_title":     "各省年度理论收益（元/MWh/年）",
+        "rank_chart_title":     "各省年度净收益（万元/年，100MW标准储能站）",
         "rank_col_province":    "省份",
         "rank_col_2h":          "2h年收益（元/MWh/年）",
         "rank_col_4h":          "4h年收益（元/MWh/年）",
@@ -1870,9 +1870,9 @@ with tab_ranking:
             best4 = _w4.sort_values("net", ascending=False).iloc[0] if not _w4.empty else None
             avg_cap = rank_df["capture_pct"].dropna()
             k1.metric(_t("rank_kpi_2h"),
-                      f"{best2['province']}  ¥{best2['net']:,.0f}" if best2 is not None else "—")
+                      f"{best2['province']}  ¥{best2['net'] * 200 / 1e4:,.0f}万" if best2 is not None else "—")
             k2.metric(_t("rank_kpi_4h"),
-                      f"{best4['province']}  ¥{best4['net']:,.0f}" if best4 is not None else "—")
+                      f"{best4['province']}  ¥{best4['net'] * 400 / 1e4:,.0f}万" if best4 is not None else "—")
             k3.metric(_t("rank_kpi_capture"), f"{avg_cap.mean():.1f}%" if not avg_cap.empty else "—")
             k4.metric(_t("rank_kpi_cycles"),
                       f"{avg_cycles_4h:.2f}/day" if avg_cycles_4h is not None else "—")
@@ -1904,52 +1904,73 @@ with tab_ranking:
             return ancillary_per_mwh_yr(_anc_annual.get(prov, 0.0),
                                         _installed.get(prov) or 0.0, d)
 
-        # long frame: one row per province × duration × component
+        # per-(province, duration) component values → per-100MW standard station (万元/yr)
+        # scale: per-MWh value × 100 MW × D h ÷ 1e4 (100MW/200MWh for 2h, 100MW/400MWh for 4h)
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+
         _arb_col = rank_annual_col
-        _rows = []
+        _per: dict[tuple, dict] = {}          # (prov, Duration) → component dict
         for _, r in plot_df.iterrows():
             d, prov = r["duration_h"], r["province"]
+            dur = r["Duration"]
+            scale = 100.0 * d / 1e4
             arb = float(r[_arb_col]) if pd.notna(r[_arb_col]) else 0.0
-            cap = _cap_for(prov, d)
-            anc = _anc_for(prov, d)
-            sys_fee = _sys_for(prov, d)
-            _days_txt = f"{int(r['days'])}{_t('rank_days_unit')}" if pd.notna(r["days"]) else ""
-            for val, ck, lbl in ((arb, "rank_stack_arb", ""),
-                                 (cap, "rank_stack_cap", ""),
-                                 (anc, "rank_stack_anc", ""),
-                                 (-sys_fee, "rank_stack_sys", _days_txt)):
-                _rows.append({"province": prov, "Duration": r["Duration"],
-                              "component": _t(ck), "value": val,
-                              "total": arb + cap + anc - sys_fee,
-                              "label": lbl})
-        stack_df = pd.DataFrame(_rows)
-        # Deterministic order by TOTAL: when a duration is filtered, use that
-        # duration's total; with both facets, use the 4h total (2h fallback) —
-        # never a mix (drop_duplicates kept whichever duration appeared first).
-        _tot = stack_df.groupby(["province", "Duration"])["total"].first().unstack()
-        if dur_filter != _t("all_durations"):
-            _key = _tot[dur_filter]
-        else:
-            _key = _tot["4h"].fillna(_tot["2h"])
-        _order = _key.sort_values(ascending=True).index
-        stack_df["province"] = pd.Categorical(stack_df["province"],
-                                              categories=_order, ordered=True)
+            _per[(prov, dur)] = {
+                "arb": arb * scale, "cap": _cap_for(prov, d) * scale,
+                "anc": _anc_for(prov, d) * scale, "sys": _sys_for(prov, d) * scale,
+                "days_txt": f"{int(r['days'])}{_t('rank_days_unit')}" if pd.notna(r["days"]) else "",
+            }
 
-        _comp_colors = {_t("rank_stack_arb"): "#1565C0",
-                        _t("rank_stack_cap"): "#43A047",
-                        _t("rank_stack_anc"): "#FB8C00",
-                        _t("rank_stack_sys"): "#E53935"}
-        fig_rank = px.bar(
-            stack_df, x="value", y="province", color="component",
-            orientation="h", barmode="stack", text="label",
-            facet_row="Duration" if dur_filter == _t("all_durations") else None,
-            color_discrete_map=_comp_colors,
-            labels={"value": "Annual Rev (¥/MWh/yr)", "province": "", "component": ""},
-            title=_t("rank_chart_title"),
-        )
-        fig_rank.update_traces(textposition="outside")
-        fig_rank.update_layout(height=max(400, len(_order) * 26), margin=dict(t=40, b=20),
-                                legend_title_text="")
+        def _net(rec):
+            return (rec.get("arb", 0.0) + rec.get("cap", 0.0)
+                    + rec.get("anc", 0.0) - rec.get("sys", 0.0))
+
+        # Order: largest NET at TOP. Key = selected duration's net, else 4h (2h fallback).
+        def _key_for(prov):
+            if dur_filter != _t("all_durations"):
+                return _net(_per.get((prov, dur_filter), {}))
+            return _net(_per.get((prov, "4h"), _per.get((prov, "2h"), {})))
+        _order = sorted({p for p, _ in _per}, key=_key_for, reverse=True)
+
+        _durs = ["2h", "4h"] if dur_filter == _t("all_durations") else [dur_filter]
+        _titles = ([f"{d} — 100MW/{int(100 * float(d[0]))}MWh 标准站" for d in _durs]
+                   if len(_durs) > 1 else None)
+        fig_rank = make_subplots(rows=len(_durs), cols=1, shared_xaxes=True,
+                                 subplot_titles=_titles, vertical_spacing=0.10)
+        _comps = [("arb", _t("rank_stack_arb"), "#1565C0"),
+                  ("cap", _t("rank_stack_cap"), "#43A047"),
+                  ("anc", _t("rank_stack_anc"), "#FB8C00"),
+                  ("sys", _t("rank_stack_sys"), "#E53935")]
+        for i, dur in enumerate(_durs, start=1):
+            base = {p: 0.0 for p in _order}
+            for key, label, color in _comps:
+                xs, bases, texts = [], [], []
+                for p in _order:
+                    rec = _per.get((p, dur))
+                    v = rec[key] if rec else 0.0
+                    if key == "sys":
+                        xs.append(-v)                 # negative: eats leftward from gross
+                        bases.append(base[p])
+                        base[p] += 0.0                # sys does not extend the stack
+                    else:
+                        xs.append(v)
+                        bases.append(base[p])
+                        base[p] += v
+                    texts.append(rec["days_txt"] if (rec and key == "sys") else "")
+                fig_rank.add_bar(
+                    name=label, y=_order, x=xs, base=bases, orientation="h",
+                    marker_color=color, legendgroup=label,
+                    showlegend=(i == 1), text=texts, textposition="outside",
+                    row=i, col=1,
+                )
+        fig_rank.update_yaxes(categoryorder="array", categoryarray=_order,
+                              autorange="reversed")
+        fig_rank.update_xaxes(title_text="万元/年")
+        fig_rank.update_layout(barmode="overlay",
+                               height=max(400, len(_order) * 26 * len(_durs)),
+                               margin=dict(t=40, b=20), legend_title_text="",
+                               title=_t("rank_chart_title"))
         st.plotly_chart(fig_rank, use_container_width=True)
 
         # Ranking table with cycles
@@ -1972,20 +1993,22 @@ with tab_ranking:
             "4h Rev", "4h Cap%", "4h Cycles",
         ]
         # stack components + totals per duration (Total = arb + cap + anc − sysopfee)
+        # all money columns in 万元/yr per 100MW standard station (×100×D/1e4)
         for d, rev_s in ((2.0, disp_wide[sort_2h]), (4.0, disp_wide[sort_4h])):
             tag = "2h" if d == 2.0 else "4h"
-            cap_s = disp_wide["province"].map(lambda p: _cap_for(p, d))
-            anc_s = disp_wide["province"].map(lambda p: _anc_for(p, d))
-            sys_s = disp_wide["province"].map(lambda p: _sys_for(p, d))
+            scale = 100.0 * d / 1e4
+            cap_s = disp_wide["province"].map(lambda p: _cap_for(p, d) * scale)
+            anc_s = disp_wide["province"].map(lambda p: _anc_for(p, d) * scale)
+            sys_s = disp_wide["province"].map(lambda p: _sys_for(p, d) * scale)
+            out[f"{tag} Rev"] = (disp_wide[sort_2h if d == 2.0 else sort_4h] * scale).values
             out[f"{tag} CapPmt"] = cap_s.values
             out[f"{tag} AncRev"] = anc_s.values
             out[f"{tag} SysOp"] = sys_s.values
-            out[f"{tag} Total"] = (rev_s.fillna(0.0).values + cap_s.values
-                                   + anc_s.values - sys_s.values)
+            out[f"{tag} Total"] = (rev_s.fillna(0.0) * scale + cap_s + anc_s - sys_s).values
         for col in ["2h Rev", "4h Rev", "2h CapPmt", "4h CapPmt",
                     "2h AncRev", "4h AncRev", "2h SysOp", "4h SysOp",
                     "2h Total", "4h Total"]:
-            out[col] = out[col].apply(lambda v: f"¥{v:,.0f}" if pd.notna(v) else "—")
+            out[col] = out[col].apply(lambda v: f"{v:,.0f}万" if pd.notna(v) else "—")
         for col in ["2h Cap%", "4h Cap%"]:
             out[col] = out[col].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—")
         for col in ["2h Cycles", "4h Cycles"]:

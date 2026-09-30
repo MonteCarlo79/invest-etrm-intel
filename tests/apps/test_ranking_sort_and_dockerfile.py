@@ -8,11 +8,11 @@ _APP = Path(__file__).resolve().parents[2] / "apps" / "bess-map" / "app.py"
 
 def test_sort_uses_unstacked_totals_not_drop_duplicates():
     src = _APP.read_text(encoding="utf-8")
-    assert 'groupby(["province", "Duration"])["total"].first().unstack()' in src
-    assert '_key = _tot["4h"].fillna(_tot["2h"])' in src
-    # the buggy pattern must be gone
-    assert 'drop_duplicates("province")\n' not in src.replace(
-        'stack_df.drop_duplicates("province")', "")
+    # deterministic net-key sort (v73: explicit categoryarray + largest at top)
+    assert "_order = sorted({p for p, _ in _per}, key=_key_for, reverse=True)" in src
+    assert 'categoryorder="array"' in src and 'autorange="reversed"' in src
+    # the buggy v72 patterns must be gone
+    assert 'drop_duplicates("province")' not in src
 
 
 def test_dockerfiles_copy_ancillary_revenue():
