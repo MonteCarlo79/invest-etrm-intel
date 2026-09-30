@@ -5,7 +5,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
-from libs.risk.mtm import compute_mtm
 
 
 def render_positions(engine):
@@ -25,6 +24,17 @@ def render_positions(engine):
         format_func=lambda x: books[books["id"] == x]["name"].iloc[0],
         key="retail_pos_book",
     )
+
+    with engine.connect() as conn:
+        snap = pd.read_sql(text("""
+            SELECT SUM(realized_cny) AS ytd,
+                   (SELECT unrealized_mtm_cny FROM marketdata.rm_pnl_snapshots s2
+                    WHERE s2.book_id = :b ORDER BY snapshot_date DESC LIMIT 1) AS mtm
+            FROM marketdata.rm_pnl_snapshots WHERE book_id = :b
+        """), conn, params={"b": book_id}).iloc[0]
+    c1, c2 = st.columns(2)
+    c1.metric("Realised P&L YTD", f"¥{snap['ytd']:,.0f}" if pd.notna(snap["ytd"]) else "N/A")
+    c2.metric("Latest Unrealised MtM", f"¥{snap['mtm']:,.0f}" if pd.notna(snap["mtm"]) else "N/A")
 
     subtab1, subtab2, subtab3, subtab4 = st.tabs([
         "Hourly Volumes", "Procurement Coverage", "Open Exposure", "MtM"
@@ -174,32 +184,31 @@ def _render_open_exposure(book_id: int, engine):
 
 
 def _render_mtm(book_id: int, engine):
-    """Compute and display MtM using forward curves."""
+    """Per-book MtM: procurement (open positions x scenario curve) + retail contracts."""
+    from services.retail_risk import mtm as mm
+
+    scenario = st.selectbox("Scenario", ["spot_base", "spot_p10", "spot_m10"],
+                            format_func={"spot_base": "Base", "spot_p10": "+10",
+                                         "spot_m10": "−10"}.get,
+                            key="mtm_scenario")
     with engine.connect() as conn:
-        pos_df = pd.read_sql(text("""
-            SELECT direction, volume_mwh, price_cny_mwh, province, start_date, end_date, channel
-            FROM marketdata.rm_positions
-            WHERE book_id = :bid AND status = 'open'
-        """), conn, params={"bid": book_id})
-        fwd = pd.read_sql(text("""
-            SELECT DISTINCT ON (province) province, price_cny_kwh * 1000 AS price
-            FROM marketdata.rm_forward_curves
-            ORDER BY province, curve_date DESC, delivery_date DESC
-        """), conn)
+        result = mm.book_mtm(conn, book_id, scenario=scenario)
 
-    if pos_df.empty:
-        st.info("No open positions for MtM.")
-        return
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Procurement MtM", f"¥{result.procurement_mtm_cny:,.0f}")
+    col2.metric("Retail-contract MtM", f"¥{result.retail_mtm_cny:,.0f}")
+    col3.metric("Total Unrealised", f"¥{result.total_mtm_cny:,.0f}")
 
-    forward_prices = dict(zip(fwd["province"], fwd["price"])) if not fwd.empty else {}
-    mtm_results = compute_mtm(pos_df.to_dict("records"), forward_prices)
-    mtm_df = pd.DataFrame(mtm_results)
-
-    total_unrealised = mtm_df["unrealized_pnl_cny"].sum()
-    st.metric("Total Unrealised P&L", f"¥{total_unrealised:,.0f}")
-
-    cols_to_show = [c for c in
-                    ["channel", "direction", "volume_mwh", "price_cny_mwh",
-                     "forward_price_cny_mwh", "unrealized_pnl_cny"]
-                    if c in mtm_df.columns]
-    st.dataframe(mtm_df[cols_to_show], use_container_width=True, hide_index=True)
+    if not result.positions_df.empty:
+        st.caption("Open positions (procurement)")
+        cols = [c for c in ["channel", "direction", "volume_mwh", "price_cny_mwh",
+                            "forward_price_cny_mwh", "unrealized_pnl_cny"]
+                if c in result.positions_df.columns]
+        st.dataframe(result.positions_df[cols], use_container_width=True, hide_index=True)
+    if not result.contracts_df.empty:
+        st.caption("Active retail contracts (remaining volume)")
+        cols = [c for c in ["contract_type", "price_cny_mwh", "remaining_mwh",
+                            "forward_price", "mtm_cny"] if c in result.contracts_df.columns]
+        st.dataframe(result.contracts_df[cols], use_container_width=True, hide_index=True)
+    if result.positions_df.empty and result.contracts_df.empty:
+        st.info("No open positions or active contracts for MtM.")

@@ -51,9 +51,9 @@ except Exception:
 
 st.title("Retail Risk Management")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "CRM", "Settlement", "Realised P&L",
-    "Positions & MtM", "VaR & Greeks", "Agent"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "CRM", "Settlement", "Realised P&L", "Positions & MtM",
+    "Reconciliation", "Data Upload", "VaR & Greeks", "Agent"
 ])
 
 with tab1:
@@ -73,9 +73,17 @@ with tab4:
     render_positions(engine)
 
 with tab5:
+    from apps.retail_risk.tab_reconciliation import render_reconciliation
+    render_reconciliation(engine)
+
+with tab6:
+    from apps.retail_risk.tab_data_upload import render_upload
+    render_upload(engine)
+
+with tab7:
     from apps.retail_risk.tab_var import render_var
     render_var(engine)
 
-with tab6:
+with tab8:
     from apps.retail_risk.tab_agent import render_agent
     render_agent(engine)
