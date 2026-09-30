@@ -180,18 +180,31 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
                   file_name: str, file_hash: str) -> int | None:
     """Insert settlement + items. Returns settlement id, or None if hash already ingested.
 
-    Cross-check: Σitems vs doc.total_amount_cny; mismatch >1% -> status='flagged'.
+    Cross-check (hierarchy-aware): the printed 本月 figure is the MARGIN, and naive
+    Σitems double counts nested subject lines, so instead: when a '01'-coded top
+    line with an amount exists, the midlong+spot top lines (min code length per
+    category) must tie it within 1% — mismatch, or zero parsed items, -> 'flagged'.
     """
+    from services.retail_risk.reconcile import invoice_by_category_frame
+
     dup = conn.execute(text(
         "SELECT id FROM marketdata.rm_settlements WHERE raw_data->>'file_hash' = :h"
     ), {"h": file_hash}).scalar()
     if dup is not None:
         return None
-    items_sum = sum(i["amount_cny"] for i in doc.items)
     status = "processed"
-    if doc.total_amount_cny is not None and doc.items:
-        if abs(items_sum - doc.total_amount_cny) > max(0.01 * abs(doc.total_amount_cny), 1.0):
-            status = "flagged"
+    if not doc.items:
+        status = "flagged"
+    else:
+        top01 = next((i for i in doc.items
+                      if (i.get("notes") or "").startswith("01")
+                      and len(i.get("notes") or "") == 2
+                      and i.get("amount_cny") is not None), None)
+        if top01 is not None:
+            by_cat = invoice_by_category_frame(pd.DataFrame(doc.items))
+            tie = by_cat.get("midlong_energy", 0.0) + by_cat.get("spot_energy", 0.0)
+            if abs(tie - top01["amount_cny"]) > max(0.01 * abs(top01["amount_cny"]), 1.0):
+                status = "flagged"
     sid = conn.execute(text("""
         INSERT INTO marketdata.rm_settlements
           (book_id, settlement_month, file_name, file_type, status, total_amount_cny, raw_data)

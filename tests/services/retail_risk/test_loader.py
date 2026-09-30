@@ -54,3 +54,52 @@ def test_write_invoice_dedup_by_hash():
     conn.execute.return_value.scalar.return_value = 7
     doc = schemas.InvoiceDoc(settlement_month=datetime.date(2026, 3, 1), items=[], total_amount_cny=1.0)
     assert loader.write_invoice(conn, 42, doc, "f.pdf", "deadbeef") is None
+
+
+def _invoice_conn():
+    """dup check -> None, settlement INSERT -> sid 99."""
+    conn = MagicMock()
+    conn.execute.return_value.scalar.side_effect = [None, 99] + [99] * 50
+    return conn
+
+
+def _settlement_status(conn):
+    for c in conn.execute.call_args_list:
+        if "INSERT INTO marketdata.rm_settlements" in str(c.args[0]):
+            return c.args[1]["st"]
+    return None
+
+
+def test_invoice_flagged_when_toplines_inconsistent():
+    """01-line amount must equal midlong+spot top lines (>1% -> flagged)."""
+    conn = _invoice_conn()
+    doc = schemas.InvoiceDoc(
+        settlement_month=datetime.date(2026, 3, 1),
+        items=[
+            {"category": "other", "label_cn": "电量清分", "amount_cny": 7263741.37,
+             "volume_mwh": 21906.46, "notes": "01"},
+            {"category": "midlong_energy", "label_cn": "中长期交易", "amount_cny": 6000657.47,
+             "volume_mwh": 17770.0, "notes": "0101"},
+            {"category": "spot_energy", "label_cn": "现货交易", "amount_cny": 1000000.00,
+             "volume_mwh": 3000.0, "notes": "0102"},   # 6.0M + 1.0M ≠ 7.26M -> flagged
+        ],
+        total_amount_cny=175251.68)
+    loader.write_invoice(conn, 42, doc, "f.pdf", "h1")
+    assert _settlement_status(conn) == "flagged"
+
+
+def test_invoice_processed_when_toplines_tie():
+    conn = _invoice_conn()
+    doc = schemas.InvoiceDoc(
+        settlement_month=datetime.date(2026, 3, 1),
+        items=[
+            {"category": "other", "label_cn": "电量清分", "amount_cny": 7263741.37,
+             "volume_mwh": 21906.46, "notes": "01"},
+            {"category": "midlong_energy", "label_cn": "中长期交易", "amount_cny": 6000657.47,
+             "volume_mwh": 17770.0, "notes": "0101"},
+            {"category": "spot_energy", "label_cn": "现货交易", "amount_cny": 1263083.90,
+             "volume_mwh": 4136.46, "notes": "0102"},
+        ],
+        total_amount_cny=175251.68)
+    loader.write_invoice(conn, 42, doc, "f.pdf", "h2")
+    assert _settlement_status(conn) == "processed"
