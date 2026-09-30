@@ -59,6 +59,89 @@ def _month_hour_grid(df: pd.DataFrame) -> pd.DataFrame:
     return long.dropna(subset=["value"])
 
 
+def _expand_month_hour(province: str, product: str, month: int, hour: int,
+                       price_mwh: float, curve_date) -> list:
+    ndays = calendar.monthrange(2026, month)[1]
+    return [[province, product, f"2026-{month:02d}-{day:02d}", hour,
+             price_mwh / 1000.0, curve_date] for day in range(1, ndays + 1)]
+
+
+def _curves_from_grid(xl: pd.ExcelFile, sheet: str, province: str, product: str,
+                      curve_date) -> list:
+    """Standard month(N月) x hour grid （分时 workbooks: 山东/安徽/冀南/浙江/上海)."""
+    grid = _month_hour_grid(xl.parse(sheet))
+    rows = []
+    for r in grid.itertuples(index=False):
+        rows.extend(_expand_month_hour(province, product, r.month, int(r.hour),
+                                       float(r.value), curve_date))
+    return rows
+
+
+def _curves_from_transposed(xl: pd.ExcelFile, sheet: str, province: str, product: str,
+                            curve_date) -> list:
+    """广东/福建 layout: price series in ROWS x month numbers in COLUMNS.
+    Uses the 实时 spot series when present, else 综合价/日前. Monthly flat -> 24h."""
+    df = xl.parse(sheet, header=None)
+    series_row = None
+    for i in range(len(df)):
+        label = str(df.iloc[i, 0])
+        if "实时" in label and "现货" in label:
+            series_row = i
+            break
+        if series_row is None and ("综合价" in label or ("现货" in label and "日前" in label)):
+            series_row = i
+    if series_row is None:
+        return []
+    rows = []
+    for j in range(1, df.shape[1]):
+        try:
+            month = int(float(df.iloc[0, j]))
+            price = float(df.iloc[series_row, j])
+        except (ValueError, TypeError):
+            continue
+        if not (1 <= month <= 12) or pd.isna(price):
+            continue
+        for h in range(24):
+            rows.extend(_expand_month_hour(province, product, month, h, price, curve_date))
+    return rows
+
+
+def _curves_from_flat_param(xl: pd.ExcelFile, province: str, product: str,
+                            curve_date) -> list:
+    """江苏 layout: 参数 sheet holds a scalar 预估现货均价 (CNY/kWh) -> flat curve."""
+    sheet = _find_sheet(xl, "参数")
+    if sheet is None:
+        return []
+    df = xl.parse(sheet, header=None)
+    price_kwh = None
+    for i in range(len(df)):
+        if "预估现货均价" in str(df.iloc[i, 0]):
+            try:
+                price_kwh = float(df.iloc[i, 1])
+            except (ValueError, TypeError):
+                pass
+            break
+    if price_kwh is None:
+        return []
+    rows = []
+    for month in range(1, 13):
+        for h in range(24):
+            rows.extend(_expand_month_hour(province, product, month, h,
+                                           price_kwh * 1000.0, curve_date))
+    return rows
+
+
+def _is_transposed_layout(xl: pd.ExcelFile, sheet: str) -> bool:
+    """Transposed sheets put month NUMBERS in the header row and series names in col 0."""
+    df = xl.parse(sheet, header=None, nrows=2)
+    if df.empty:
+        return False
+    first_col_label = str(df.iloc[0, 0])
+    label_ok = not any(k in first_col_label for k in ("月", "价格", "假设"))
+    nums = pd.to_numeric(df.iloc[0, 1:6], errors="coerce").dropna()
+    return label_ok and nums.between(1, 12).any()
+
+
 def parse_mtm_workbook(path: str | Path) -> dict:
     path = Path(path)
     province = province_for_filename(path.name)
@@ -66,20 +149,31 @@ def parse_mtm_workbook(path: str | Path) -> dict:
     xl = pd.ExcelFile(path)
     curve_date = pd.Timestamp(path.stat().st_mtime, unit="s").date()
 
-    curves = pd.DataFrame(columns=schemas.CURVES_COLS)
+    curve_rows: list = []
     price_sheet = _find_sheet(xl, "模型价格预测") or _find_sheet(xl, "价格预测")
     if price_sheet:
-        grid = _month_hour_grid(xl.parse(price_sheet))
+        if _is_transposed_layout(xl, price_sheet):
+            curve_rows = _curves_from_transposed(xl, price_sheet, province, product, curve_date)
+        else:
+            curve_rows = _curves_from_grid(xl, price_sheet, province, product, curve_date)
+    else:
+        curve_rows = _curves_from_flat_param(xl, province, product, curve_date)
+    curves = pd.DataFrame(curve_rows, columns=schemas.CURVES_COLS)
+
+    if "不分时" in path.name and not curves.empty:
+        # monthly-flat workbooks （上海 grid has only col-0 populated): broadcast each
+        # (province, product, delivery_date)'s price across all 24 hours.
+        daily = curves.drop_duplicates(subset=["province", "product", "delivery_date"])
         rows = []
-        for r in grid.itertuples(index=False):
-            ndays = calendar.monthrange(2026, r.month)[1]
-            for day in range(1, ndays + 1):
-                rows.append([province, product, f"2026-{r.month:02d}-{day:02d}",
-                             int(r.hour), float(r.value) / 1000.0, curve_date])
+        for r in daily.itertuples(index=False):
+            for h in range(24):
+                rows.append([r.province, r.product, r.delivery_date, h,
+                             r.price_cny_kwh, r.curve_date])
         curves = pd.DataFrame(rows, columns=schemas.CURVES_COLS)
 
     contracts = pd.DataFrame(columns=schemas.CONTRACTS_COLS)
-    c_sheet = _find_sheet(xl, "合约", "总表")
+    c_sheet = (_find_sheet(xl, "合约", "总表") or _find_sheet(xl, "零售签约原表")
+               or _find_sheet(xl, "零售总表"))
     if c_sheet and product == "spot_base":   # contracts identical across scenarios
         cdf = xl.parse(c_sheet)
         month_cols = [c for c in cdf.columns if re.fullmatch(r"\d{1,2}月(/\d{1,2}月)?电量", str(c))]

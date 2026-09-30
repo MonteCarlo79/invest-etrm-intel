@@ -63,3 +63,47 @@ def test_ratios_normalised(tmp_path):
     _make_workbook(f)
     r = m.load_hourly_ratios(f)
     assert r[r.month == 1].ratio.sum() == pytest.approx(1.0)
+
+
+def _make_transposed_workbook(path: Path):
+    """广东 layout: rows = price series x month columns (1..12 as numbers)."""
+    df = pd.DataFrame([
+        ["广东"] + list(range(1, 13)),
+        ["批发成本"] + [360.0] * 12,
+        ["年度中长期价格"] + [372.0] * 12,
+        ["月度现货价格（日前）"] + [290.0] * 12,
+        ["月度现货价格（实时）"] + [285.0] * 12,
+    ])
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        df.to_excel(w, sheet_name="广东模型价格预测", index=False, header=False)
+
+
+def test_transposed_monthly_layout_broadcast_24h(tmp_path):
+    """广东/福建 layout: monthly flat price from the 现货 series row, all 24 hours."""
+    f = tmp_path / "1 【广东测算】零售合同Mark to Market利润测算【分月-不分月分时】.xlsx"
+    _make_transposed_workbook(f)
+    out = m.parse_mtm_workbook(f)
+    curves = out["curves"]
+    assert not curves.empty
+    jan = curves[curves.delivery_date.astype(str).str.startswith("2026-01")]
+    assert set(jan.delivery_hour) == set(range(24))          # broadcast
+    h8 = jan[(jan.delivery_date.astype(str) == "2026-01-01") & (jan.delivery_hour == 8)]
+    assert h8.price_cny_kwh.iloc[0] == pytest.approx(0.285)  # 实时 series, not 日前
+
+
+def _make_flat_param_workbook(path: Path):
+    """江苏 layout: 参数 sheet with 预估现货均价 scalar (CNY/kWh)."""
+    df = pd.DataFrame([["预估长协均价", 0.344190, "年度"],
+                       ["预估月度均价", 0.337100, None],
+                       ["预估现货均价", 0.319770, None]])
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        df.to_excel(w, sheet_name="参数", index=False, header=False)
+
+
+def test_flat_param_layout_jiangsu(tmp_path):
+    f = tmp_path / "4 【江苏测算-更新】2026生效用户-利润测算&电量统计-汇总.xlsx"
+    _make_flat_param_workbook(f)
+    out = m.parse_mtm_workbook(f)
+    curves = out["curves"]
+    assert not curves.empty
+    assert curves.price_cny_kwh.unique().tolist() == [pytest.approx(0.319770)]
