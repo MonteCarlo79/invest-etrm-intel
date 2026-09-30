@@ -709,7 +709,8 @@ def _eng():
 # ── data loaders ──────────────────────────────────────────────────────────────
 # Sub-provincial regions without a regular data-update mechanism — excluded from
 # the Province Ranking tab: stale coverage makes their bars non-comparable.
-_RANKING_EXCLUDE = {"海南礼记", "海南那悦", "豫南", "豫中东", "豫北", "豫西", "甘肃河西"}
+_RANKING_EXCLUDE = {"海南礼记", "海南那悦", "豫南", "豫中东", "豫北", "豫西",
+                    "甘肃河西", "甘肃西河"}  # 西河 = source-data spelling of the same entity
 
 @st.cache_data(ttl=3600)
 def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_time_v1"):

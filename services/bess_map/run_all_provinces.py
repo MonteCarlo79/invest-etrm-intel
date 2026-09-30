@@ -55,6 +55,36 @@ def _clean_province_from_stem(stem: str) -> str:
     s = re.sub(r"[^\u4e00-\u9fa5]", "", s)  # keep only Chinese chars
     return s
 
+# Folder-scan guard: --indir ingestion must never CREATE a "province" from a
+# filename stem that isn't a real market. 2026-09-29 incident: the LingFeng
+# export for \u6cb3\u5317\u5357\u7f51 lands as \u8fd0\u884c\u6570\u636e\u62ab\u9732-_<dates>.xlsx (a UI section name)
+# and the scan ingested it into spot_prices_hourly as province "\u8fd0\u884c\u6570\u636e\u62ab\u9732"
+# (8.8k junk rows, re-created on every daily run).
+# Set = the 29 LingFeng markets + historical sub-provincial series already in
+# the DB. Add a name here ONLY when a new legitimate market comes online.
+_KNOWN_PROVINCES = frozenset({
+    # 29 LingFeng markets
+    "\u6cb3\u5357", "\u65b0\u7586", "\u5409\u6797", "\u6d77\u5357", "\u6e56\u5317", "\u56db\u5ddd", "\u9ed1\u9f99\u6c5f", "\u798f\u5efa",
+    "\u6d59\u6c5f", "\u6c5f\u82cf", "\u5e7f\u897f", "\u5b89\u5fbd", "\u9655\u897f", "\u8d35\u5dde", "\u4e91\u5357", "\u5e7f\u4e1c",
+    "\u8499\u4e1c", "\u6e56\u5357", "\u5b81\u590f", "\u8fbd\u5b81", "\u6cb3\u5317\u5357\u7f51", "\u7518\u8083", "\u8499\u897f", "\u5c71\u4e1c",
+    "\u5c71\u897f", "\u5180\u5317", "\u5e7f\u5dde", "\u9752\u6d77", "\u6c5f\u897f",
+    # historical sub-provincial series already in spot_prices_hourly
+    "\u6d77\u5357\u793c\u8bb0", "\u6d77\u5357\u90a3\u60a6", "\u8c6b\u5357", "\u8c6b\u4e2d\u4e1c", "\u8c6b\u5317", "\u8c6b\u897f", "\u7518\u8083\u897f\u6cb3",
+})
+
+
+def _resolve_province(cleaned_stem: str) -> str | None:
+    """Map a cleaned stem to a known province, or None if it isn't one.
+    Exact match first; then longest-prefix so '\u5c71\u4e1c\u5e02\u573a\u4f9b\u9700\u6570\u636e_\u2026' (an
+    un-renamed collector download) still resolves to \u5c71\u4e1c, while section
+    names like '\u8fd0\u884c\u6570\u636e\u62ab\u9732\u2026' resolve to nothing."""
+    if cleaned_stem in _KNOWN_PROVINCES:
+        return cleaned_stem
+    for p in sorted(_KNOWN_PROVINCES, key=len, reverse=True):
+        if cleaned_stem.startswith(p):
+            return p
+    return None
+
 def _guess_cols_from_header(xlsx_path: Path, province: str) -> Tuple[str, str]:
     """ Guess (rt_col, da_col) from the header row."""
     if pd is None:
@@ -221,7 +251,11 @@ def main() -> None:
     failed = 0
 
     for xlsx in xlsx_files:
-        province = _clean_province_from_stem(xlsx.stem)
+        province = _resolve_province(_clean_province_from_stem(xlsx.stem))
+        if province is None:
+            print(f"[GUARD] skipping {xlsx.name} — stem does not resolve to a "
+                  f"known province (refusing to create a junk market entity)")
+            continue
         print(f"Processing file: {xlsx.name} for province: {province}")  # Debugging line
 
         try:

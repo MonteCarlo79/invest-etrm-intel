@@ -6,7 +6,8 @@ from pathlib import Path
 
 _APP = Path(__file__).resolve().parents[2] / "apps" / "bess-map" / "app.py"
 
-_EXPECTED = {"海南礼记", "海南那悦", "豫南", "豫中东", "豫北", "豫西", "甘肃河西"}
+_EXPECTED = {"海南礼记", "海南那悦", "豫南", "豫中东", "豫北", "豫西",
+             "甘肃河西", "甘肃西河"}  # both spellings — DB carries 甘肃西河
 
 
 def _exclusion_set():
