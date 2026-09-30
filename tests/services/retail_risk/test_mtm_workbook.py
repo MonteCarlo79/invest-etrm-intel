@@ -107,3 +107,54 @@ def test_flat_param_layout_jiangsu(tmp_path):
     curves = out["curves"]
     assert not curves.empty
     assert curves.price_cny_kwh.unique().tolist() == [pytest.approx(0.319770)]
+
+
+def _make_grid_workbook(path: Path, header_label: str, hour_headers: list,
+                        extra_cols: dict | None = None, junk_cell: str | None = None):
+    """Generic month x hour grid fixture: header row + 1月/2月 rows."""
+    cols = [header_label] + hour_headers
+    rows = [list(cols)]
+    for mi, (mname, base) in enumerate([("1月", 300.0), ("2月", 310.0)]):
+        row = [mname] + [base + i for i in range(len(hour_headers))]
+        if junk_cell and mi == 0:
+            row[1] = junk_cell
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    if extra_cols:
+        for name, vals in extra_cols.items():
+            df[name] = vals
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        df.to_excel(w, sheet_name=path.stem[:2] + "模型价格预测", index=False, header=False)
+
+
+def test_grid_with_float_hour_headers_not_transposed(tmp_path):
+    """安徽 layout: header col0='批发侧成本（总）' with float hours 0..23 — must NOT
+    be detected as transposed (regression: numeric headers != month numbers)."""
+    f = tmp_path / "2 【安徽测算】零售合同Mark to Market利润测算【分月分时】.xlsx"
+    _make_grid_workbook(f, "批发侧成本（总）", [float(h) for h in range(24)])
+    out = m.parse_mtm_workbook(f)
+    assert not out["curves"].empty
+    assert set(out["curves"].delivery_hour) == set(range(24))
+
+
+def test_grid_with_hNN_hour_headers(tmp_path):
+    """冀南 layout: hour columns named h00..h23."""
+    f = tmp_path / "6 【冀南测算】零售合同Mark to Market利润测算【分月分时】.xlsx"
+    _make_grid_workbook(f, "批发市场参考价（零售）", [f"h{h:02d}" for h in range(24)])
+    out = m.parse_mtm_workbook(f)
+    assert not out["curves"].empty
+    assert set(out["curves"].delivery_hour) == set(range(24))
+
+
+def test_grid_with_trailing_unnamed_and_junk_cells(tmp_path):
+    """上海/浙江/山东 defects: trailing 'Unnamed: N' columns skipped; junk value
+    cells ('一季度340') dropped without crashing."""
+    f = tmp_path / "5 【上海测算】零售合同Mark to Market利润测算【分月不分时】.xlsx"
+    _make_grid_workbook(f, "月竞价格（中价假设）", [float(h) for h in range(24)],
+                        extra_cols={"Unnamed: 25": ["备注", "x", "y"]},
+                        junk_cell="一季度340")
+    out = m.parse_mtm_workbook(f)
+    assert not out["curves"].empty
+    # 不分时 broadcast: every day has 24 hours despite the junk cell
+    jan1 = out["curves"][out["curves"].delivery_date.astype(str) == "2026-01-01"]
+    assert len(jan1) == 24

@@ -43,20 +43,45 @@ def _find_sheet(xl: pd.ExcelFile, *keywords: str) -> str | None:
     return None
 
 
+def _hour_col_map(columns) -> dict:
+    """Map hour columns -> int hour (0-23). Accepts 0..23, '0'..'23', 0.0..23.0,
+    'h00'..'h23'. Skips everything else ('Unnamed: N', notes, duplicate '0.1')."""
+    out = {}
+    for c in columns:
+        s = str(c).strip()
+        h = None
+        m = re.fullmatch(r"h(\d{2})", s)
+        if m:
+            h = int(m.group(1))
+        else:
+            try:
+                f = float(s)
+                if f == int(f):
+                    h = int(f)
+            except ValueError:
+                pass
+        if h is not None and 0 <= h <= 23:
+            out[c] = h
+    return out
+
+
 def _month_hour_grid(df: pd.DataFrame) -> pd.DataFrame:
     """[month label col0, hour cols 1..24] -> long frame (month, hour, value).
-    Only pure 'N月' label rows are months; junk label rows are skipped."""
+    Month labels: pure 'N月' or pure int 1-12. Junk labels/values/columns dropped."""
     df = df.rename(columns={df.columns[0]: "月份"})
     labels = df["月份"].astype(str).str.strip()
-    df = df[labels.str.fullmatch(r"\d{1,2}月")]
-    df["month"] = pd.to_numeric(labels[labels.str.fullmatch(r"\d{1,2}月")]
-                                .str.extract(r"(\d{1,2})")[0], errors="coerce")
+    month_num = labels.str.extract(r"^(\d{1,2})月$", expand=False)
+    int_labels = labels.str.fullmatch(r"\d{1,2}(\.0)?")
+    month_num = month_num.fillna(labels[int_labels].apply(lambda s: str(int(float(s)))))
+    df["month"] = pd.to_numeric(month_num, errors="coerce")
     df = df.dropna(subset=["month"])
+    df = df[df["month"].between(1, 12)]
     df["month"] = df["month"].astype(int)
-    hour_cols = [c for c in df.columns if c not in ("月份", "month")]
-    long = df.melt(id_vars=["month"], value_vars=hour_cols, var_name="hour", value_name="value")
-    long["hour"] = long["hour"].astype(int)
-    return long.dropna(subset=["value"])
+    col_map = _hour_col_map([c for c in df.columns if c not in ("月份", "month")])
+    long = df.melt(id_vars=["month"], value_vars=list(col_map), var_name="hour", value_name="value")
+    long["hour"] = long["hour"].map(col_map)
+    long["value"] = pd.to_numeric(long["value"], errors="coerce")
+    return long.dropna(subset=["value", "hour"])
 
 
 def _expand_month_hour(province: str, product: str, month: int, hour: int,
@@ -132,14 +157,17 @@ def _curves_from_flat_param(xl: pd.ExcelFile, province: str, product: str,
 
 
 def _is_transposed_layout(xl: pd.ExcelFile, sheet: str) -> bool:
-    """Transposed sheets put month NUMBERS in the header row and series names in col 0."""
+    """Transposed sheets put month NUMBERS 1-12 in the header row and series names
+    in col 0. Hour grids (headers 0..23) are NOT transposed: they contain 0 and
+    values > 12."""
     df = xl.parse(sheet, header=None, nrows=2)
     if df.empty:
         return False
     first_col_label = str(df.iloc[0, 0])
     label_ok = not any(k in first_col_label for k in ("月", "价格", "假设"))
-    nums = pd.to_numeric(df.iloc[0, 1:6], errors="coerce").dropna()
-    return label_ok and nums.between(1, 12).any()
+    nums = pd.to_numeric(df.iloc[0, 1:], errors="coerce").dropna()
+    return (label_ok and len(nums) >= 6
+            and nums.between(1, 12).all() and nums.min() >= 1)
 
 
 def parse_mtm_workbook(path: str | Path) -> dict:
@@ -175,6 +203,10 @@ def parse_mtm_workbook(path: str | Path) -> dict:
     c_sheet = (_find_sheet(xl, "合约", "总表") or _find_sheet(xl, "零售签约原表")
                or _find_sheet(xl, "零售总表"))
     if c_sheet and product == "spot_base":   # contracts identical across scenarios
+        cdf = xl.parse(c_sheet)
+        if not {"序号", "零售用户名称"}.issubset(cdf.columns):
+            c_sheet = None                 # different contract schema (P2 scope) — skip
+    if c_sheet and product == "spot_base":
         cdf = xl.parse(c_sheet)
         month_cols = [c for c in cdf.columns if re.fullmatch(r"\d{1,2}月(/\d{1,2}月)?电量", str(c))]
         annual_col = next((c for c in cdf.columns if "年度电量" in str(c)), None)
