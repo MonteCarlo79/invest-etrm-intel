@@ -92,19 +92,34 @@ def ensure_table(cur) -> None:
 
 
 def upsert_rows(rows: list[AncillaryRow], pg_url: str) -> int:
+    """Draft-upsert extraction rows. Skips (province, month, metric) already
+    confirmed or superseded — a confirmed row is authoritative, and a
+    superseded one was human-dismissed; neither may be resurrected by a scan."""
     import psycopg2
     conn = psycopg2.connect(pg_url)
-    n = 0
+    n = skipped = 0
     try:
         with conn.cursor() as cur:
             ensure_table(cur)
             for r in rows:
+                cur.execute(
+                    "SELECT 1 FROM marketdata.province_ancillary_revenue "
+                    "WHERE province=%s AND month=%s AND metric=%s "
+                    "AND status IN ('confirmed','superseded') LIMIT 1",
+                    (r.province, r.month, r.metric))
+                if cur.fetchone():
+                    skipped += 1
+                    continue
                 cur.execute(_UPSERT, (r.province, r.month, r.metric,
                                       r.amount_yuan, r.source_file))
                 n += 1
         conn.commit()
     finally:
         conn.close()
+    if skipped:
+        import logging
+        logging.getLogger(__name__).info(
+            "ancillary upsert: skipped %d rows already confirmed/superseded", skipped)
     return n
 
 
