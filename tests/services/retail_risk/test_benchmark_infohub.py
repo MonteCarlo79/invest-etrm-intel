@@ -59,3 +59,12 @@ def test_newline_anchor_and_sparse_year(tmp_path):
     assert years == ["2024", "2025"]
     feb24 = out[out.month.astype(str) == "2024-02-01"]
     assert feb24.avg_price_cny_mwh.iloc[0] == pytest.approx(372.16)
+
+
+def test_missing_price_sheet_returns_empty(tmp_path):
+    """信息汇总 variants without a 中长期价格 sheet must not crash the backfill."""
+    f = tmp_path / "蒙西电力市场信息汇总by20260110.xlsx"
+    with pd.ExcelWriter(f, engine="openpyxl") as w:
+        pd.DataFrame([["a", 1]]).to_excel(w, sheet_name="Sheet1", index=False)
+    out = parse_infohub_benchmarks(f)
+    assert out.empty

@@ -81,7 +81,9 @@ def _month_hour_grid(df: pd.DataFrame) -> pd.DataFrame:
     long = df.melt(id_vars=["month"], value_vars=list(col_map), var_name="hour", value_name="value")
     long["hour"] = long["hour"].map(col_map)
     long["value"] = pd.to_numeric(long["value"], errors="coerce")
-    return long.dropna(subset=["value", "hour"])
+    long = long.dropna(subset=["value", "hour"])
+    # sheets may carry several 24h blocks (side-by-side or stacked): first block wins
+    return long.drop_duplicates(subset=["month", "hour"], keep="first")
 
 
 def _expand_month_hour(province: str, product: str, month: int, hour: int,
@@ -210,6 +212,14 @@ def parse_mtm_workbook(path: str | Path) -> dict:
         cdf = xl.parse(c_sheet)
         month_cols = [c for c in cdf.columns if re.fullmatch(r"\d{1,2}月(/\d{1,2}月)?电量", str(c))]
         annual_col = next((c for c in cdf.columns if "年度电量" in str(c)), None)
+
+        def _f(x):
+            """float() that tolerates junk text cells ('一季度340') -> None."""
+            try:
+                return float(x)
+            except (ValueError, TypeError):
+                return None
+
         rows = []
         for pos, r in enumerate(cdf.itertuples(index=False)):
             if pd.isna(getattr(r, "零售用户名称", None)):
@@ -217,18 +227,18 @@ def parse_mtm_workbook(path: str | Path) -> dict:
             monthly = {}
             for c in month_cols:
                 mnum = re.match(r"(\d{1,2})月", str(c)).group(1)
-                v = cdf.iloc[pos][c]
-                if pd.notna(v):
-                    monthly[mnum] = float(v) * 10.0      # 万度 -> MWh
-            annual_v = cdf.iloc[pos][annual_col] if annual_col else None
+                v = _f(cdf.iloc[pos][c])
+                if v is not None:
+                    monthly[mnum] = v * 10.0              # 万度 -> MWh
+            annual_v = _f(cdf.iloc[pos][annual_col]) if annual_col else None
             rows.append([
                 str(r.零售用户名称), str(r.序号), str(getattr(r, "套餐名称", "")),
                 str(getattr(r, "套餐类别", "")),
                 schemas.contract_type_for(str(getattr(r, "套餐类别", ""))),
-                float(r.套餐价格) if pd.notna(getattr(r, "套餐价格", None)) else None,
-                float(r.渠道分成比例) if pd.notna(getattr(r, "渠道分成比例", None)) else None,
+                _f(getattr(r, "套餐价格", None)),
+                _f(getattr(r, "渠道分成比例", None)),
                 pd.to_datetime(r.生效时间).date(), pd.to_datetime(r.失效时间).date(),
-                float(annual_v) * 10.0 if annual_v is not None and pd.notna(annual_v) else None,
+                annual_v * 10.0 if annual_v is not None else None,
                 json.dumps(monthly),
             ])
         contracts = pd.DataFrame(rows, columns=schemas.CONTRACTS_COLS)

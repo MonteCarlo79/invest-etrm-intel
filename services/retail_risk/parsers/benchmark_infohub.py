@@ -34,7 +34,10 @@ def parse_infohub_benchmarks(path: str | Path) -> pd.DataFrame:
     province = pm.group(1)
     default_year = int(_YEAR_RE.search(path.name).group(1)) if _YEAR_RE.search(path.name) else 2026
 
-    df = pd.read_excel(path, sheet_name="中长期价格", header=None)
+    try:
+        df = pd.read_excel(path, sheet_name="中长期价格", header=None)
+    except ValueError:
+        return pd.DataFrame(columns=schemas.BENCH_COLS)   # sheet variant missing
 
     def _squash(v) -> str:
         return re.sub(r"\s+", "", str(v))

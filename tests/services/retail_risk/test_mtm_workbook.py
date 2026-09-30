@@ -158,3 +158,41 @@ def test_grid_with_trailing_unnamed_and_junk_cells(tmp_path):
     # 不分时 broadcast: every day has 24 hours despite the junk cell
     jan1 = out["curves"][out["curves"].delivery_date.astype(str) == "2026-01-01"]
     assert len(jan1) == 24
+
+
+def test_multi_block_grid_dedups_to_first_block(tmp_path):
+    """冀南/浙江/山东 price sheets carry 2-4 side-by-side (or stacked) 24h blocks;
+    curves must dedup (month, hour) keeping the FIRST block — 8760 rows, not N×."""
+    f = tmp_path / "6 【冀南测算】零售合同Mark to Market利润测算【分月分时】.xlsx"
+    # two side-by-side 24h blocks with different prices
+    cols = ["批发市场参考价（零售）"] + [f"h{h:02d}" for h in range(24)] \
+        + [f"h{h:02d}" for h in range(24)]
+    rows = [cols]
+    for mname, base in [("1月", 300.0), ("2月", 310.0)]:
+        rows.append([mname] + [base + i for i in range(24)] + [base + 100 + i for i in range(24)])
+    with pd.ExcelWriter(f, engine="openpyxl") as w:
+        pd.DataFrame(rows).to_excel(w, sheet_name="冀南模型价格预测", index=False, header=False)
+    out = m.parse_mtm_workbook(f)
+    jan = out["curves"][out["curves"].delivery_date.astype(str).str.startswith("2026-01")]
+    assert len(jan) == 31 * 24                       # exactly one block
+    h0 = jan[(jan.delivery_date.astype(str) == "2026-01-01") & (jan.delivery_hour == 0)]
+    assert h0.price_cny_kwh.iloc[0] == pytest.approx(0.300)   # FIRST block's price
+
+
+def test_contracts_junk_numeric_cells_skipped(tmp_path):
+    """Contract sheets with junk text in numeric cells ('一季度340') must not crash."""
+    f = tmp_path / "8 【山东测算】零售合同Mark to Market利润测算【分月分时】.xlsx"
+    _make_workbook(f)
+    # rewrite the contract sheet with a junk cell in a month column
+    cdf = pd.DataFrame([
+        [1, "测试用户A", "单元1", "2025-12-22", "2026-01-01", "2026-03-31",
+         "景融参考价格联动类0792", "联动+上浮", "已生效", 6.0, "一季度340", 200.0, 300.0, 600.0, "渠道X", 0.9],
+    ], columns=["序号", "零售用户名称", "交易单元名称", "建立时间", "生效时间", "失效时间",
+                "套餐名称", "套餐类别", "状态", "套餐价格", "1月电量", "2月电量", "3月电量",
+                "年度电量/万度（匹配原始台账）", "渠道归属", "渠道分成比例"])
+    with pd.ExcelWriter(f, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        cdf.to_excel(w, sheet_name="新山东零售合约-总表", index=False)
+    out = m.parse_mtm_workbook(f)
+    c = out["contracts"].iloc[0]
+    assert '"1"' not in c.monthly_mwh or "340" not in c.monthly_mwh   # junk month dropped
+    assert '"2": 2000.0' in c.monthly_mwh
