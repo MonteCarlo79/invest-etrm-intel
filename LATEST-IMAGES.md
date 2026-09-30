@@ -27,8 +27,8 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 |---|---|---|---|---|---|
 | mengxi-dashboard | `bess-mengxi-dashboard` | **v28** (cc144bacdbcb) | **43** | 2026-09-27 | this session: add-candidate form in Asset Registry; built from current td:41 (parallel session's v27/nodal-trading), superset |
 | deal-structurer | `bess-platform-deal-structurer` | **v29** (27e9f57385f6) | **33** | 2026-09-25 | this session: screening NaN-node + SQL date-type fixes |
-| bess-map (Quant) | `bess-map` | **v69** (1957fa4ad2fd) | **104** | 2026-09-29 | this session: 甘肃河西 exclusion + σ vol labels + capacity/调频 revenue stack; built from working tree (preserves parallel session's uncommitted leaderboard UI) |
-| hermes | `bess-platform-hermes` | (latest hand-injected) | **183** | ~2026-09-24 | parallel session: coal cron + /fuelfleet; 31 env vars incl. FEISHU + WECHAT_PROXY_URL |
+| bess-map (Quant) | `bess-map` | **v70** (9daa6307c75e) | **105** | 2026-09-30 | this session: 调频收入 manual entry + draft review in Data Management |
+| hermes | `bess-platform-hermes` | (latest hand-injected) | **184** | 2026-09-30 | this session: ancillary 调频 screener + /frrev command + day-5 13:00 UTC cron; 31 env vars |
 | asset_risk | `bess-asset-risk` | v84 | 86 | 2026-09-23 | this session: merchant-exposure tile |
 | data-ingestion (tt-api/enos) | `bess-data-ingestion` | v20260927 (575657c91df8) | :latest-driven | 2026-09-27 | this session: schema-variant frame guard (SheYang KeyError) |
 | mengxi-reconcile (md_* ingestion) | `bess-mengxi-ingestion` | v20 | 21 | 2026-09-10 | this session: null-key row drop guard; launcher lambda pins td:21 |
@@ -51,6 +51,8 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-09-27 — `bess-data-ingestion:v20260927` + `:latest` (575657c91df8); schema-variant frame guard (this session).
 - 2026-09-29 — `bess-platform-lingfeng-ingest:10` ← `lingfeng-ingest:v8` (968335748051); auto-cols 电量-exclusion fix — 2026-09 LingFeng layout's `…-实时出清电量` volume columns were picked as rt_price (河北南网 volume-as-price contamination; rebuild of 河北南网 series in progress same day). Built from td:9 (this session).
 - 2026-09-29 — `bess-map:104` ← `bess-map:v69` (1957fa4ad2fd); ranking revenue stack (capacity payment from new `province_capacity_price` + 新疆 调频 from new `province_ancillary_revenue`), 甘肃河西 exclusion, σ annualised-vol labels on spread chart; 河北南网 series fully rebuilt + capture re-run same day. ECR push needed token re-login (this session).
+- 2026-09-30 — `bess-platform-hermes:184` ← `bess-platform-hermes:v20260930` (c816df53d9e8); ancillary 调频收入 KB screener (`services/hermes/ancillary_screener.py`) + `/frrev` chat command + monthly cron day-5 13:00 UTC; env guard 31/31 (this session).
+- 2026-09-30 — `bess-map:105` ← `bess-map:v70` (9daa6307c75e); Data Management 调频收入 section — manual entry form (confirmed) + draft review (this session).
 
 ## Known parallel-session coordination points
 

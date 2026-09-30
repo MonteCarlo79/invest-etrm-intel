@@ -145,7 +145,7 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v46 (td:145) |
-| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v69 (td:104) |
+| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v70 (td:105) |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v27 (td:41) |
 | Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v13 (td:70) |
 | Deal Structurer (Pillar 5) | Deal Structurer | `bess-platform-deal-structurer` | `/deal-structurer/*` | 8522 | v20 (td:24). Image deploys bypass terraform (td has `ignore_changes=[container_definitions]`): jq-swap image → register-task-definition → update-service |
@@ -260,7 +260,7 @@ aws ecs update-service --cluster bess-platform-cluster --service <svc> --task-de
 
 **jq-swap task-def edits (hermes, deal-structurer):** build the new revision from the service's CURRENT taskDefinitionArn (`aws ecs describe-services --cluster bess-platform-cluster --service <svc> --query 'services[0].taskDefinition' --output text`), never from the bare family name — family-latest can resolve to a terraform-registered revision that lacks hand-injected env vars (hermes td:176 incident 2026-09-07: lost FEISHU/TELEGRAM/ONEDRIVE/FENGXING env, bot deaf on Feishu for hours; see ERRORS.md).
 
-**Never move a service to an OLDER task-def revision.** A parallel session flipped hermes td:177→td:173 on 2026-09-08, silently dropping `WECHAT_PROXY_URL` for 7.6h (173 lacks it). Hermes must stay on the latest hand-injected revision (currently **td:183**: 31 env vars incl. FEISHU creds + WECHAT_PROXY_URL). Multiple Claude sessions share the terraform-admin identity — before touching a service you don't own, check its current tdArn and leave it as found. If a rollback is genuinely needed, diff the target revision's env list against the running one first.
+**Never move a service to an OLDER task-def revision.** A parallel session flipped hermes td:177→td:173 on 2026-09-08, silently dropping `WECHAT_PROXY_URL` for 7.6h (173 lacks it). Hermes must stay on the latest hand-injected revision (currently **td:184**: 31 env vars incl. FEISHU creds + WECHAT_PROXY_URL). Multiple Claude sessions share the terraform-admin identity — before touching a service you don't own, check its current tdArn and leave it as found. If a rollback is genuinely needed, diff the target revision's env list against the running one first.
 
 **All deployments require explicit in-session confirmation.** "You mentioned this earlier" is not confirmation.
 
