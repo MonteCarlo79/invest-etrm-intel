@@ -145,7 +145,7 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v46 (td:145) |
-| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v70 (td:105) |
+| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v71 (td:106) |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v27 (td:41) |
 | Portal | 4 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v13 (td:70) |
 | Deal Structurer (Pillar 5) | Deal Structurer | `bess-platform-deal-structurer` | `/deal-structurer/*` | 8522 | v20 (td:24). Image deploys bypass terraform (td has `ignore_changes=[container_definitions]`): jq-swap image → register-task-definition → update-service |
@@ -176,7 +176,7 @@ Automated daily data collection from LingFeng SaaS (`https://lingfeng-saas.tradi
 **29 markets:** 河南, 新疆, 吉林, 海南, 湖北, 四川, 黑龙江, 福建, 浙江, 江苏, 广西, 安徽, 陕西, 贵州, 云南, 广东, 蒙东, 湖南, 宁夏, 辽宁, 河北南网, 甘肃, 蒙西, 山东, 山西, 冀北, 广州, 青海, 江西
 
 **Scheduled runs:**
-- **Primary — ECS** `bess-platform-lingfeng-ingest-svc`: daily 20:00 UTC (04:00 CST); trigger check every 15 min (Feishu/Telegram backfills). Image **v8 / td:10** (2026-09-29): includes the auto-cols 电量-exclusion fix in services/bess_map/run_all_provinces.py (出清电量 volume columns were being picked as rt/da price — 河北南网 contamination); v7/td:9 had the placeholder-zero-day guard in services/bess_map/db.py
+- **Primary — ECS** `bess-platform-lingfeng-ingest-svc`: daily 20:00 UTC (04:00 CST); trigger check every 15 min (Feishu/Telegram backfills). Image **v9 / td:11** (2026-10-01): folder-scan guard in services/bess_map/run_all_provinces.py — files whose stem doesn't resolve to a known province are skipped loudly (运行数据披露 section-name entity incident); v8/td:10 has the auto-cols 电量-exclusion fix; v7/td:9 the placeholder-zero-day guard
 - **Fallback — MacBook launchd** agent `ai.pjh-etrm.lingfeng-daily`: daily 04:00 local, all 29 markets + 3 models. Register with `bash services/lingfeng/setup_schedule_launchd.sh`. Prereq: venv at `~/.venvs/bess-platform` + `python -m playwright install chromium`
 - Windows Task Scheduler version (`setup_schedule.ps1`) retired 2026-08-06 with the workstation move
 

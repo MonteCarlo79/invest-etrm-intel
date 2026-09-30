@@ -27,7 +27,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 |---|---|---|---|---|---|
 | mengxi-dashboard | `bess-mengxi-dashboard` | **v28** (cc144bacdbcb) | **43** | 2026-09-27 | this session: add-candidate form in Asset Registry; built from current td:41 (parallel session's v27/nodal-trading), superset |
 | deal-structurer | `bess-platform-deal-structurer` | **v29** (27e9f57385f6) | **33** | 2026-09-25 | this session: screening NaN-node + SQL date-type fixes |
-| bess-map (Quant) | `bess-map` | **v70** (9daa6307c75e) | **105** | 2026-09-30 | this session: 调频收入 manual entry + draft review in Data Management |
+| bess-map (Quant) | `bess-map` | **v71** (e5c062e1deeb) | **106** | 2026-10-01 | this session: 甘肃西河 spelling fix in ranking exclusion |
 | hermes | `bess-platform-hermes` | (latest hand-injected) | **185** | 2026-09-30 | this session: ancillary dedup patch (skip confirmed/superseded); 31 env vars |
 | asset_risk | `bess-asset-risk` | v84 | 86 | 2026-09-23 | this session: merchant-exposure tile |
 | data-ingestion (tt-api/enos) | `bess-data-ingestion` | v20260927 (575657c91df8) | :latest-driven | 2026-09-27 | this session: schema-variant frame guard (SheYang KeyError) |
@@ -35,7 +35,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 | spot-market | `bess-spot-markets` | v46 | 145 | ~2026-09-26 | per CLAUDE.md snapshot |
 | portal | `bess-platform-portal` | v13 | 70 | ~2026-09-26 | per CLAUDE.md snapshot |
 | gb-market | `bess-gb-market` | v107 | 30 | 2026-09-20 | parallel session: modo question rotation |
-| lingfeng-ingest | `lingfeng-ingest` | **v8** (968335748051) | **10** | 2026-09-29 | this session: auto-cols volume-trap fix (出清电量 was picked as rt_price for 河北南网) |
+| lingfeng-ingest | `lingfeng-ingest` | **v9** (3686f1452375) | **11** | 2026-10-01 | this session: folder-scan guard (non-province stems skipped; 运行数据披露 incident) |
 
 ## Deploy history (append-only, newest at bottom)
 
@@ -54,6 +54,8 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-09-30 — `bess-platform-hermes:184` ← `bess-platform-hermes:v20260930` (c816df53d9e8); ancillary 调频收入 KB screener (`services/hermes/ancillary_screener.py`) + `/frrev` chat command + monthly cron day-5 13:00 UTC; env guard 31/31 (this session).
 - 2026-09-30 — `bess-map:105` ← `bess-map:v70` (9daa6307c75e); Data Management 调频收入 section — manual entry form (confirmed) + draft review (this session).
 - 2026-09-30 — `bess-platform-hermes:185` ← `bess-platform-hermes:v20260930b` (d34cb6596ac4); ancillary upsert dedup — skip confirmed/superseded (province, month, metric) so scans can't resurrect dismissed rows (this session).
+- 2026-10-01 — `bess-platform-lingfeng-ingest:11` ← `lingfeng-ingest:v9` (3686f1452375); folder-scan guard — `_resolve_province` (exact + longest-prefix) refuses non-province stems like 运行数据披露-_<dates>.xlsx; 8,880 re-created junk rows deleted same day (this session).
+- 2026-10-01 — `bess-map:106` ← `bess-map:v71` (e5c062e1deeb); ranking exclusion 甘肃河西→both spellings (DB carries 甘肃西河) (this session).
 
 ## Known parallel-session coordination points
 
