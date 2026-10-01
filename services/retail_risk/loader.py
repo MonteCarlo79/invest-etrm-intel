@@ -18,7 +18,14 @@ def get_engine():
     url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
     if not url:
         raise RuntimeError("PGURL or DB_DSN not configured")
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(
+        url, pool_pre_ping=True,
+        connect_args={
+            "connect_timeout": 15,
+            # dead sockets from NAT drops error in ~1 min instead of hanging forever
+            "keepalives": 1, "keepalives_idle": 30,
+            "keepalives_interval": 10, "keepalives_count": 5,
+        })
 
 
 def file_sha256(path: str) -> str:
