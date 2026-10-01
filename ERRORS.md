@@ -464,3 +464,13 @@ Root cause of the Aug 20→Sep 23 silent death: launchd-spawned /bin/bash gets "
 1. `git status --porcelain` — if ANY line's index column (first letter) is non-space for a path that isn't mine, STOP: `git reset -q`, re-stage only my paths, re-check.
 2. Never run `git add <paths>` while foreign staged content exists — `git add` does not replace the index, it accumulates.
 3. After commit, `git show --stat HEAD` and confirm the file list = exactly my paths.
+
+## 2026-10-01 — Capture regen silently no-ops: upsert_capture_daily early-returns when theo is current
+
+**Symptom:** after fixing contaminated prices (河北南网 volume trap) or stale forecasts (河南/辽宁/黑龙江 NaN realized), re-running run_capture_pipeline `--force` reports `days(real)=636` — yet bess_capture_daily keeps the old NaN realized rows.
+
+**Root cause:** the daily capture write (`upsert_capture_daily`) returns early when `theoretical_profit_by_day` is empty, and it's empty whenever the theoretical dispatch is "already up to date" (`[SKIP] ... theoretical already up to date`). So with plain `--force`, realized/forecast ARE recomputed (and land in spot_dispatch_hourly_rt_forecast + spot_prices_hourly_rt_forecast), but the user-facing daily table is never rewritten. Manual join (dispatch table × prices) proves the data is fine.
+
+**Fix:** any historical realized rewrite must use `--force-theoretical` (recomputes theo → theo_profit_by_day non-empty → daily rows written). Plain `--force` only suffices when theo is being rebuilt anyway.
+
+**Also:** realized NaN is stored as literal 'NaN' doubles, not NULL — `df[c].where(df[c].notna(), other=None)` on a float64 series keeps np.nan (comment at run_capture_pipeline.py:449 claims it writes NULL). Query with `col != col` to find them; `IS NULL` finds nothing.
