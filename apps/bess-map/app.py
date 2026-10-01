@@ -108,7 +108,7 @@ _T: dict[str, dict[str, str]] = {
         "rank_caption":         "Annual net revenue for a standard 100 MW station (200 MWh at 2h / 400 MWh at 4h), 万元/yr: arbitrage + capacity + 调频 − 系统运行费. LP perfect-foresight dispatch.",
         "rank_kpi_2h":          "Best Province (2h)",
         "rank_kpi_4h":          "Best Province (4h)",
-        "rank_kpi_capture":     "Avg Capture Rate",
+        "rank_kpi_capture":     "Aggregate Capture",
         "rank_chart_title":     "Annual Net Revenue by Province (万元/yr, 100MW standard station)",
         "rank_col_province":    "Province",
         "rank_col_2h":          "2h Rev (¥/MWh_cap/yr)",
@@ -385,7 +385,7 @@ _T: dict[str, dict[str, str]] = {
         "rank_caption":         "100MW 标准储能站（2h=200MWh / 4h=400MWh）的年度净收益（万元/年）：套利 + 容量电价 + 调频 − 系统运行费（充电成本）。基于LP完美预见调度。",
         "rank_kpi_2h":          "最优省份（2h）",
         "rank_kpi_4h":          "最优省份（4h）",
-        "rank_kpi_capture":     "平均捕获率",
+        "rank_kpi_capture":     "综合捕获率",
         "rank_chart_title":     "各省年度净收益（万元/年，100MW标准储能站）",
         "rank_col_province":    "省份",
         "rank_col_2h":          "2h年收益（元/MWh/年）",
@@ -721,7 +721,7 @@ def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_t
     # Realized profit and capture rate are LEFT JOINed from the selected model only.
     sql = sql_text("""
         SELECT t.province, t.duration_h, t.annual_theo, t.days,
-               r.annual_real, r.capture_pct
+               r.annual_real, r.capture_pct, r.sum_real, r.sum_theo
         FROM (
             SELECT province, duration_h,
                    ROUND((AVG(theoretical_profit_per_mwh_day) * 365)::numeric, 0) AS annual_theo,
@@ -731,9 +731,16 @@ def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_t
             GROUP BY province, duration_h
         ) t
         LEFT JOIN (
+            -- Aggregate capture: SUM(realized)/SUM(theoretical) — a no-dispatch
+            -- (NaN-realized) day counts as 0 P&L in the numerator; NaN-theo days
+            -- are excluded from the denominator. Outlier-robust vs AVG of daily rates.
             SELECT province, duration_h,
                    ROUND((AVG(realized_profit_per_mwh_day)   * 365)::numeric, 0) AS annual_real,
-                   ROUND((AVG(NULLIF(capture_rate, 'NaN'::double precision)) * 100)::numeric, 1) AS capture_pct
+                   ROUND((SUM(COALESCE(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision), 0.0))
+                        / NULLIF(SUM(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision)), 0)
+                        * 100)::numeric, 1) AS capture_pct,
+                   SUM(COALESCE(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision), 0.0)) AS sum_real,
+                   SUM(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision)) AS sum_theo
             FROM marketdata.bess_capture_daily
             WHERE date BETWEEN :start AND :end AND model = :model
             GROUP BY province, duration_h
@@ -809,7 +816,9 @@ def load_monthly_economics(_eng_key, province: str, duration_h: float, start: st
         LEFT JOIN (
             SELECT date_trunc('month', date)::date AS month, province,
                    ROUND(AVG(realized_profit_per_mwh_day)::numeric, 2) AS real_avg,
-                   ROUND((AVG(NULLIF(capture_rate, 'NaN'::double precision)) * 100)::numeric, 1) AS capture_pct
+                   ROUND((SUM(COALESCE(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision), 0.0))
+                        / NULLIF(SUM(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision)), 0)
+                        * 100)::numeric, 1) AS capture_pct
             FROM marketdata.bess_capture_daily
             WHERE province = :p AND ABS(duration_h - :d) < 0.01
               AND date BETWEEN :start AND :end AND model = :model
@@ -1873,12 +1882,15 @@ with tab_ranking:
             _w4 = wide.dropna(subset=[sort_4h]).assign(net=_net4)
             best2 = _w2.sort_values("net", ascending=False).iloc[0] if not _w2.empty else None
             best4 = _w4.sort_values("net", ascending=False).iloc[0] if not _w4.empty else None
-            avg_cap = rank_df["capture_pct"].dropna()
+            # KPI capture = overall aggregate across provinces (not mean-of-means)
+            _sr = rank_df["sum_real"].dropna().sum()
+            _st = rank_df["sum_theo"].dropna().sum()
             k1.metric(_t("rank_kpi_2h"),
                       f"{best2['province']}  ¥{best2['net'] * 200 / 1e4:,.0f}万" if best2 is not None else "—")
             k2.metric(_t("rank_kpi_4h"),
                       f"{best4['province']}  ¥{best4['net'] * 400 / 1e4:,.0f}万" if best4 is not None else "—")
-            k3.metric(_t("rank_kpi_capture"), f"{avg_cap.mean():.1f}%" if not avg_cap.empty else "—")
+            k3.metric(_t("rank_kpi_capture"),
+                      f"{_sr / _st * 100:.1f}%" if _st else "—")
             k4.metric(_t("rank_kpi_cycles"),
                       f"{avg_cycles_4h:.2f}/day" if avg_cycles_4h is not None else "—")
 
