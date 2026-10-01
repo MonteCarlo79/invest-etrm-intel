@@ -40,6 +40,27 @@ def test_subject_lines_tracks_buy_sell_side():
     assert top_sell["amount_cny"] == 7632280.74
 
 
+ZHEJIANG_7COL = """
+购电侧
+01 电量清分 24069.407 27007.772 337.848 9124509.97 62770.132 67923.743 22997331.75
+0101 中长期交易 24069.407 - - 1395926.90 62770.132 - 1705392.06
+0102 现货交易 - 27007.772 286.161 7728583.07 - 67923.743 21291939.69
+01020203 实时交易 - 793.817 357.699 283947.29 - -2006.317 -125536.55
+"""
+
+
+def test_subject_lines_seven_column_layout():
+    """浙江 invoices append 年累计 (year-cumulative) columns: amount/volume/price
+    come from the FIRST four numerics （结算电费 = 4th), never the last."""
+    items = parse_subject_lines(ZHEJIANG_7COL, schemas.ZHEJIANG_CATEGORY_RULES)
+    by_code = {i["notes"]: i for i in items}
+    assert by_code["01"]["amount_cny"] == 9124509.97          # month, not 22.99M year-cum
+    assert by_code["01"]["volume_mwh"] == 27007.772
+    assert by_code["0101"]["amount_cny"] == 1395926.90        # not the volume 24069.407
+    assert by_code["0102"]["amount_cny"] == 7728583.07
+    assert by_code["01020203"]["amount_cny"] == 283947.29     # month RT, not -125536.55
+
+
 def test_subject_lines_categories_and_signs():
     items = parse_subject_lines(JINAN_TEXT, schemas.JINAN_CATEGORY_RULES)
     ml = [i for i in items if i["label_cn"] == "中长期交易"][0]

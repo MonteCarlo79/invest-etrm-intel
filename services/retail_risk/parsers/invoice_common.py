@@ -44,13 +44,14 @@ def extract_pdf_text(path: str | Path, drop_fonts: frozenset[str] = frozenset())
 
 
 def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas.InvoiceItem]:
-    """Parse 科目编码 lines. Tolerates degraded shapes:
+    """Parse 科目编码 lines, token-based. Layouts:
+    - standard 4-numeric: plan, settle_volume, price, amount
+    - 浙江 7-column (appended 年累计 year-cumulative columns): the FIRST four numerics
+      hold the month values — amount is numerics[3], never the last
     - 1-3 numerics: amount = last numeric; volume/price left None
-    - 4 numerics: plan, settle_volume, price, amount
     - name missing (code + numerics only): label_cn = ''
     - page-boundary repeats: dedup on (code, amount)
-    - 购电侧/售电侧 marker lines flip `side`; sell-side (售电侧) 01-subtree lines
-      become category 'retail_revenue' — the invoice's own retail revenue lines.
+    - 购电侧/售电侧 marker lines flip `side`; sell-side 01-subtree -> 'retail_revenue'.
     Fee aggregation downstream must use code length >= 4 lines; the 2-digit top
     lines ('01 电量清分') exist for settled-volume, not for category sums.
     """
@@ -65,16 +66,27 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
         if stripped == "售电侧":
             side = "sell"
             continue
-        m = _LINE_RE.match(stripped)
-        if not m:
+        toks = stripped.split()
+        if not toks or not re.fullmatch(r"\d{2,10}", toks[0]):
             continue
-        code = m.group("code")
-        nums = [_num(x) for x in m.group("nums").split()]
-        amount = next((v for v in reversed(nums) if v is not None), None)
+        code = toks[0]
+        name_parts: list[str] = []
+        nums: list[float | None] = []
+        for t in toks[1:]:
+            if not nums and not re.fullmatch(r"[\-\d.,]+", t):
+                name_parts.append(t)            # name tokens precede numerics
+            elif re.fullmatch(r"[\-\d.,]+", t):
+                nums.append(_num(t))
+            else:
+                break                            # trailing 备注 text ends the row
+        if not nums:
+            continue                             # name-only rows: skip
+        amount = nums[3] if len(nums) >= 4 and nums[3] is not None else \
+            next((v for v in reversed(nums) if v is not None), None)
         if amount is None:
-            continue                     # name-only rows / headers: skip
+            continue
         if (code, amount) in seen:
-            continue                     # page-repeat duplicate
+            continue                             # page-repeat duplicate
         seen.add((code, amount))
         if side == "sell" and code.startswith("01"):
             category = "retail_revenue"
@@ -82,10 +94,10 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
             category = "other"
         else:
             category = schemas.category_for_code(code, rules)
-        full = len(nums) == 4
+        full = len(nums) >= 4
         items.append(schemas.InvoiceItem(
             category=category,
-            label_cn=(m.group("name") or "").strip(),
+            label_cn=" ".join(name_parts).strip(),
             volume_mwh=nums[1] if full else None,
             price_cny_mwh=nums[2] if full else None,
             amount_cny=amount,
