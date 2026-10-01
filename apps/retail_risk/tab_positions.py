@@ -12,10 +12,12 @@ def render_positions(engine):
     st.subheader("Positions & MtM")
 
     with engine.connect() as conn:
-        books = pd.read_sql(text("SELECT id, name FROM marketdata.rm_books ORDER BY name"), conn)
+        books = pd.read_sql(text(
+            "SELECT id, name FROM marketdata.rm_books WHERE book_type = 'load' ORDER BY name"
+        ), conn)
 
     if books.empty:
-        st.warning("No books found. Create an asset book in Asset Risk first.")
+        st.warning("No retail load books found. Run the retail backfill or upload data first.")
         return
 
     book_id = st.selectbox(
