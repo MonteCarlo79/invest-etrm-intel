@@ -81,6 +81,7 @@ class InvoiceDoc:
     items: list[InvoiceItem] = field(default_factory=list)
     total_amount_cny: float | None = None    # printed 售电公司收益/合计, for cross-check
     total_kind: str = "margin"               # 'margin' (本月=收益) | 'spot_subtotal' (合计=spot bill)
+    settled_volume_mwh: float | None = None  # summary-header settled volume (安徽 '01' is amount-less)
 
 
 # --- Settlement subject-code -> rm_settlement_items.category -----------------

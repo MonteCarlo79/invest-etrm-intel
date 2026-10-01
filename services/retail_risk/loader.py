@@ -253,7 +253,9 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
     """), {"b": book_id, "m": doc.settlement_month, "f": file_name,
            "ft": "pdf" if file_name.lower().endswith(".pdf") else "excel",
            "st": status, "tot": doc.total_amount_cny,
-           "raw": '{"file_hash": "' + file_hash + '", "total_kind": "' + doc.total_kind + '"}'}).scalar()
+           "raw": '{"file_hash": "' + file_hash + '", "total_kind": "' + doc.total_kind + '", '
+                  + ('"settled_volume_mwh": ' + repr(doc.settled_volume_mwh) if doc.settled_volume_mwh is not None
+                     else '"settled_volume_mwh": null') + '}'}).scalar()
     for i in doc.items:
         # notes = '<code> | <label>' — code FIRST: reconcile's ^(\d+) extraction
         # (hierarchy-aware aggregation, settle_volume) depends on a leading code.

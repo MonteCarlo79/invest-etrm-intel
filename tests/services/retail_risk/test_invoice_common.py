@@ -61,6 +61,20 @@ def test_subject_lines_seven_column_layout():
     assert by_code["01020203"]["amount_cny"] == 283947.29     # month RT, not -125536.55
 
 
+def test_parse_summary_volume():
+    """Total settled volume lives in the invoice summary header, not the subject
+    lines (安徽's '01' line is amount-less). Shapes:
+    安徽: '购电侧 57513.494 38101.323 19411.918' -> first numeric （结算电量）
+    河北: '购电侧 21906.460 17770.000' -> first numeric
+    浙江: '本月 27142.626 27142.626 24069.4070 - 9163096.47' -> first numeric (>=3 nums)
+    河北 margin-only '本月 175251.68' -> NOT a volume (single number)."""
+    from services.retail_risk.parsers.invoice_common import parse_summary_volume
+    assert parse_summary_volume("期间 购电侧/售电侧 结算电量\n购电侧 57513.494 38101.323 19411.918\n本月 462471.22\n") == 57513.494
+    assert parse_summary_volume("购电侧 21906.460 17770.000\n本月 175251.68\n") == 21906.460
+    assert parse_summary_volume("本月 27142.626 27142.626 24069.4070 - 9163096.47\n") == 27142.626
+    assert parse_summary_volume("本月 175251.68\n") is None
+
+
 def test_subject_lines_categories_and_signs():
     items = parse_subject_lines(JINAN_TEXT, schemas.JINAN_CATEGORY_RULES)
     ml = [i for i in items if i["label_cn"] == "中长期交易"][0]

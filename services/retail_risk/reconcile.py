@@ -125,19 +125,23 @@ def _invoice_totals(conn, book_id: int, month: datetime.date) -> dict:
     (01 > 0101 > 010102…) double/triple count. Rule: the volume of the item with
     the SHORTEST subject code (top line '01 电量清分' = total settled); fallback
     Σ spot_energy volumes (山东 7021 daily RT rows carry actual load)."""
-    total = pd.read_sql(text("""
-        SELECT SUM(total_amount_cny) AS total FROM marketdata.rm_settlements
+    row = pd.read_sql(text("""
+        SELECT SUM(total_amount_cny) AS total,
+               MAX(CAST(raw_data->>'settled_volume_mwh' AS double precision)) AS doc_vol
+        FROM marketdata.rm_settlements
         WHERE book_id = :b AND settlement_month = :m
           AND COALESCE(raw_data->>'total_kind', 'margin') = 'margin'
-    """), conn, params={"b": book_id, "m": month}).iloc[0]["total"]
+    """), conn, params={"b": book_id, "m": month}).iloc[0]
+    total = row["total"]
     items = pd.read_sql(text("""
         SELECT si.volume_mwh, si.category, si.notes, si.counterparty
         FROM marketdata.rm_settlement_items si
         JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
         WHERE s.book_id = :b AND s.settlement_month = :m
     """), conn, params={"b": book_id, "m": month})
+    doc_vol = float(row["doc_vol"]) if pd.notna(row["doc_vol"]) else None
     return {"total": float(total) if pd.notna(total) else None,
-            "settled_vol": settle_volume(items)}
+            "settled_vol": doc_vol if doc_vol is not None else settle_volume(items)}
 
 
 def settle_volume(items: pd.DataFrame) -> float | None:

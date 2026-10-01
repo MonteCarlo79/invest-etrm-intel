@@ -123,3 +123,28 @@ def parse_total_from_summary(text: str) -> float | None:
         if nums:
             return nums[-1]
     return None
+
+
+def parse_summary_volume(text: str) -> float | None:
+    """Total settled volume (MWh) from the invoice summary header.
+
+    The subject lines don't always carry it （安徽's '01 电量清分' is amount-less),
+    so the bridge needs the summary row:
+    - '购电侧 <结算电量> <合同电量> [偏差电量]' (安徽/河北) -> first numeric
+    - '本月 <实际用电量> <结算电量> ... <结算电费>' (浙江, >=3 numerics) -> first numeric
+    A single-number 本月 line （冀南 margin) is NOT a volume.
+    """
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("购电侧 "):
+            nums = [_num(t) for t in s.split()[1:]]
+            nums = [v for v in nums if v is not None]
+            if nums:
+                return nums[0]
+        m = _TOTAL_LINE_RE.match(s)
+        if m:
+            nums = [_num(t) for t in m.group(1).split()]
+            nums = [v for v in nums if v is not None]
+            if len(nums) >= 3:
+                return nums[0]
+    return None

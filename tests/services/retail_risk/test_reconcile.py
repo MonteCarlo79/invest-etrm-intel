@@ -94,7 +94,7 @@ def test_invoice_totals_no_join_fanout():
     """C2 regression: settlement total must come from rm_settlements alone —
     joining items multiplies the printed total by the item count."""
     from unittest.mock import patch, MagicMock
-    settlements_df = pd.DataFrame([{"total": 175251.68}])
+    settlements_df = pd.DataFrame([{"total": 175251.68, "doc_vol": None}])
     items_df = pd.DataFrame([
         {"volume_mwh": 21906.46, "category": "other", "notes": "01 | 电量清分"},
         {"volume_mwh": 17770.0, "category": "midlong_energy", "notes": "0101 | 中长期交易"},
