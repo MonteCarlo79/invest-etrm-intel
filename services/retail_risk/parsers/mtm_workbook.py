@@ -228,7 +228,7 @@ def parse_mtm_workbook(path: str | Path) -> dict:
             for c in month_cols:
                 mnum = re.match(r"(\d{1,2})月", str(c)).group(1)
                 v = _f(cdf.iloc[pos][c])
-                if v is not None:
+                if v is not None and pd.notna(v):     # NaN cells -> dropped (jsonb rejects NaN tokens)
                     monthly[mnum] = v * 10.0              # 万度 -> MWh
             annual_v = _f(cdf.iloc[pos][annual_col]) if annual_col else None
             rows.append([

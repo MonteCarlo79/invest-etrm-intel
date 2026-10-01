@@ -197,3 +197,22 @@ def test_contracts_junk_numeric_cells_skipped(tmp_path):
     c = out["contracts"].iloc[0]
     assert '"1"' not in c.monthly_mwh or "340" not in c.monthly_mwh   # junk month dropped
     assert '"2": 2000.0' in c.monthly_mwh
+
+
+def test_contracts_nan_month_cells_produce_valid_json(tmp_path):
+    """Empty month cells (NaN floats) must be dropped from monthly JSON —
+    json.dumps emits 'NaN' tokens which PostgreSQL jsonb rejects."""
+    import json as _json
+    f = tmp_path / "8 【山东测算】零售合同Mark to Market利润测算【分月分时】.xlsx"
+    _make_workbook(f)
+    cdf = pd.DataFrame([
+        [1, "测试用户A", "单元1", "2025-12-22", "2026-01-01", "2026-03-31",
+         "景融参考价格联动类0792", "联动+上浮", "已生效", 6.0, float("nan"), 200.0, float("nan"), 600.0, "渠道X", 0.9],
+    ], columns=["序号", "零售用户名称", "交易单元名称", "建立时间", "生效时间", "失效时间",
+                "套餐名称", "套餐类别", "状态", "套餐价格", "1月电量", "2月电量", "3月电量",
+                "年度电量/万度（匹配原始台账）", "渠道归属", "渠道分成比例"])
+    with pd.ExcelWriter(f, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        cdf.to_excel(w, sheet_name="新山东零售合约-总表", index=False)
+    out = m.parse_mtm_workbook(f)
+    monthly = _json.loads(out["contracts"].iloc[0].monthly_mwh)   # must parse as valid JSON
+    assert monthly == {"2": 2000.0}
