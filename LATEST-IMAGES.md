@@ -27,7 +27,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 |---|---|---|---|---|---|
 | mengxi-dashboard | `bess-mengxi-dashboard` | **v28** (cc144bacdbcb) | **43** | 2026-09-27 | this session: add-candidate form in Asset Registry; built from current td:41 (parallel session's v27/nodal-trading), superset |
 | deal-structurer | `bess-platform-deal-structurer` | **v29** (27e9f57385f6) | **33** | 2026-09-25 | this session: screening NaN-node + SQL date-type fixes |
-| bess-map (Quant) | `bess-map` | **v73** (81fd1ccaf6a2) | **109** | 2026-10-01 | this session: waterfall 系统运行费 deduction, net-descending sort, 100MW standard-station 万元 basis |
+| bess-map (Quant) | `bess-map` | **v74** (23b2a524e2f3) | **111** | 2026-10-01 | this session: 放电量补偿 mode (蒙西/蒙东 0.28, 山东 0.0705 元/kWh) stacked via cap_comp curated rows |
 | hermes | `bess-platform-hermes` | (latest hand-injected) | **185** | 2026-09-30 | this session: ancillary dedup patch (skip confirmed/superseded); 31 env vars |
 | asset_risk | `bess-asset-risk` | v84 | 86 | 2026-09-23 | this session: merchant-exposure tile |
 | data-ingestion (tt-api/enos) | `bess-data-ingestion` | v20260927 (575657c91df8) | :latest-driven | 2026-09-27 | this session: schema-variant frame guard (SheYang KeyError) |
@@ -58,6 +58,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-10-01 — `bess-map:106` ← `bess-map:v71` (e5c062e1deeb); ranking exclusion 甘肃河西→both spellings (DB carries 甘肃西河) (this session).
 - 2026-10-01 — `bess-map:108` ← `bess-map:v72` (d44283c1ee8c); ranking sorts by NET total (arb+cap+调频−系统运行费); sysopfee deduction (¥/kWh × charge energy at measured cycles); capacity re-sourced to curated province_cap_comp + fr pool-share fallback (30% / 20% Southern Grid); Dockerfile ancillary_revenue COPY fix (v70/v71 crashed on missing module); committed via temp-index pattern after OneDrive index.lock hang (this session).
 - 2026-10-01 — `bess-map:109` ← `bess-map:v73` (81fd1ccaf6a2); 系统运行费 drawn as negative waterfall segment (px h-stack renders negatives positive — explicit base + go.Bar); sort fixed via categoryorder=array + autorange=reversed (px drops Categorical under facet_row); chart/KPI/table on 100MW/200MWh·2h + 100MW/400MWh·4h standard-station 万元 basis (this session).
+- 2026-10-01 — `bess-map:111` ← `bess-map:v74` (23b2a524e2f3); 放电量补偿 capacity income stacked — 蒙西/蒙东 0.28 元/kWh, 山东 0.0705 元/kWh via `province_cap_comp` confirmed rows (rate<1 = discharge mode), 内蒙古（蒙东）fans out to both 蒙东/蒙西 per user; 河北南网 forecast table (volume-era) deleted + forecast/realized regeneration for 河北南网/河南/辽宁/黑龙江 launched same session (this session).
 
 ## Known parallel-session coordination points
 
