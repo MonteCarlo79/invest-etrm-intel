@@ -56,12 +56,16 @@ def render_positions(engine):
 
 
 def _render_hourly_volumes(book_id: int, engine):
-    """Show hourly position volumes for book."""
+    """Show hourly position volumes for book (all channel columns, not just DA/RT)."""
     with engine.connect() as conn:
         df = pd.read_sql(text("""
-            SELECT delivery_date, hour, da_price_cny_mwh, rt_price_cny_mwh,
-                   da_volume_mwh, rt_volume_mwh, market_price_cny_mwh, pnl_cny,
-                   nominated_mwh, cleared_mwh, settled_mwh
+            SELECT delivery_date, hour,
+                   annual_volume_mwh, annual_price_cny_mwh,
+                   monthly_auction_volume_mwh, monthly_auction_price_cny_mwh,
+                   monthly_listed_volume_mwh, monthly_listed_price_cny_mwh,
+                   intramonth_match_volume_mwh, intramonth_match_price_cny_mwh,
+                   da_volume_mwh, rt_volume_mwh,
+                   nominated_mwh, settled_mwh
             FROM marketdata.rm_position_volumes
             WHERE book_id = :bid
             ORDER BY delivery_date DESC, hour
@@ -72,6 +76,8 @@ def _render_hourly_volumes(book_id: int, engine):
         st.info("No hourly position data yet for this book.")
         return
 
+    # collapse the all-NULL DA/RT columns for midlong books
+    df = df.dropna(axis=1, how="all")
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.download_button("Export CSV", df.to_csv(index=False), "position_volumes.csv", "text/csv")
 
