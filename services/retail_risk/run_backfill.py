@@ -20,6 +20,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 import pandas as pd
+from sqlalchemy import text
 
 from services.retail_risk import loader, schemas
 from services.retail_risk.parsers import (
@@ -112,12 +113,24 @@ def run(root, provinces, kinds, dry_run: bool, echo=print) -> dict:
             out = mtm_workbook.parse_mtm_workbook(f)
             echo(f"[mtm] {f.name}: curves={len(out['curves'])} contracts={len(out['contracts'])}")
             if not dry_run:
+                # resume-safe: skip files already fully written (idempotent re-runs)
+                with engine.connect() as conn:
+                    existing = conn.execute(text(
+                        "SELECT COUNT(*) FROM marketdata.rm_forward_curves "
+                        "WHERE province = :p AND product = :pr"
+                    ), {"p": out["province"], "pr": out["product"]}).scalar()
+                if existing == len(out["curves"]) and out["contracts"].empty:
+                    echo(f"  skip (already written: {existing} rows)")
+                    continue
+                if existing == len(out["curves"]) and not out["contracts"].empty:
+                    echo(f"  curves present ({existing}), writing contracts only")
                 # per-workbook transaction; retry once on connection drop (RDS over
                 # home NAT) with a fresh engine — rolled-back workbook simply re-runs
                 for attempt in (1, 2):
                     try:
                         with engine.begin() as conn:
-                            n_curves += loader.write_curves(conn, out["curves"])
+                            if existing != len(out["curves"]):
+                                n_curves += loader.write_curves(conn, out["curves"])
                             if not out["contracts"].empty:
                                 _, nc = loader.write_contracts(conn, out["province"], out["contracts"])
                                 n_contracts += nc
