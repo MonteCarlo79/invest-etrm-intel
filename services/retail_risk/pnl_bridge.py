@@ -138,15 +138,15 @@ def bridge_month(conn, book_id: int, month: datetime.date) -> BridgeResult:
 
 
 def channel_alpha(conn, book_id: int, month: datetime.date) -> pd.DataFrame:
+    from services.retail_risk.reconcile import _next_month
     pos = pd.read_sql(text("""
         SELECT channel, SUM(volume_mwh) AS volume_mwh,
                SUM(volume_mwh * price_cny_mwh) AS pv
         FROM marketdata.rm_positions
-        WHERE book_id = :b AND start_date >= :m
-          AND start_date < (:m::date + INTERVAL '1 month')::date
+        WHERE book_id = :b AND start_date >= :m AND start_date < :m_next
           AND direction = 'buy'
         GROUP BY channel
-    """), conn, params={"b": book_id, "m": month})
+    """), conn, params={"b": book_id, "m": month, "m_next": _next_month(month)})
     if pos.empty:
         return pd.DataFrame(columns=["channel", "volume_mwh", "vwap", "spot_vwap",
                                      "alpha_cny_mwh", "alpha_cny"])

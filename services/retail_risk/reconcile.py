@@ -158,6 +158,10 @@ def settle_volume(items: pd.DataFrame) -> float | None:
     return float(spot.sum()) if not spot.empty else None
 
 
+def _next_month(month: datetime.date) -> datetime.date:
+    return datetime.date(month.year + (month.month == 12), month.month % 12 + 1, 1)
+
+
 def _positions_cost(conn, book_id: int, month: datetime.date) -> tuple[float, float]:
     """Direction-signed: sell-backs （日滚动卖出, 合同转让） NET against buys —
     the invoice's midlong top line is net of them (review I1)."""
@@ -165,9 +169,8 @@ def _positions_cost(conn, book_id: int, month: datetime.date) -> tuple[float, fl
         SELECT SUM(CASE WHEN direction = 'sell' THEN -1 ELSE 1 END * volume_mwh * price_cny_mwh) AS cost,
                SUM(CASE WHEN direction = 'sell' THEN -1 ELSE 1 END * volume_mwh) AS vol
         FROM marketdata.rm_positions
-        WHERE book_id = :b AND start_date >= :m
-          AND start_date < (:m::date + INTERVAL '1 month')::date
-    """), conn, params={"b": book_id, "m": month}).iloc[0]
+        WHERE book_id = :b AND start_date >= :m AND start_date < :m_next
+    """), conn, params={"b": book_id, "m": month, "m_next": _next_month(month)}).iloc[0]
     return (float(row["cost"]) if row["cost"] is not None else 0.0,
             float(row["vol"]) if row["vol"] is not None else 0.0)
 
@@ -175,9 +178,9 @@ def _positions_cost(conn, book_id: int, month: datetime.date) -> tuple[float, fl
 def _rt_vwap(conn, province: str, month: datetime.date) -> float | None:
     df = pd.read_sql(text("""
         SELECT rt_price FROM marketdata.spot_prices_hourly
-        WHERE province = :p AND datetime >= :m
-          AND datetime < (:m::date + INTERVAL '1 month')::date
-    """), conn, params={"p": schemas.spot_province(province), "m": month})
+        WHERE province = :p AND datetime >= :m AND datetime < :m_next
+    """), conn, params={"p": schemas.spot_province(province), "m": month,
+                        "m_next": _next_month(month)})
     return spot_vwap_series(df) if not df.empty else None
 
 
