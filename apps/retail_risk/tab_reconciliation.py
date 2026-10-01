@@ -12,14 +12,12 @@ from services.retail_risk import reconcile as rc
 
 
 @st.cache_data(ttl=300)
-def _recon(book_id: int, month: str) -> dict:
-    from services.retail_risk.loader import get_engine
-    eng = get_engine()                      # env-based: engine.url masks the password
-    try:
-        with eng.connect() as conn:
-            r = rc.reconcile_month(conn, book_id, datetime.date.fromisoformat(month))
-    finally:
-        eng.dispose()
+def _recon(_engine, book_id: int, month: str) -> dict:
+    """Reuses the app's engine (underscore arg excluded from cache key).
+    A second engine built from env/engine.url either masks the password or
+    inherits a stale process env — there must be exactly one engine."""
+    with _engine.connect() as conn:
+        r = rc.reconcile_month(conn, book_id, datetime.date.fromisoformat(month))
     return {"status": r.status, "tolerance": r.tolerance_cny,
             "lines": [vars(l) for l in r.lines]}
 
@@ -50,7 +48,7 @@ def render_reconciliation(engine):
     month_list = [m.isoformat() for m in months["settlement_month"]]
     status_rows = []
     for m in month_list:
-        r = _recon(book_id, m)
+        r = _recon(engine, book_id, m)
         status_rows.append({"month": m, "status": r["status"], "tolerance_cny": r["tolerance"]})
     status_df = pd.DataFrame(status_rows)
 
@@ -60,6 +58,6 @@ def render_reconciliation(engine):
     st.dataframe(status_df, use_container_width=True, hide_index=True)
 
     sel = st.selectbox("Drill into month", month_list, key="recon_month")
-    r = _recon(book_id, sel)
+    r = _recon(engine, book_id, sel)
     lines = pd.DataFrame(r["lines"])
     st.dataframe(lines, use_container_width=True, hide_index=True)
