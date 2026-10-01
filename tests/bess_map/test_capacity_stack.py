@@ -122,3 +122,31 @@ def test_sysopfee_annual_cost():
     assert v == pytest.approx(9017.65, rel=1e-3)
     assert sysopfee_annual_cost_per_mwh(0.0, 0.7) == 0.0
     assert sysopfee_annual_cost_per_mwh(0.03, 0.0) == 0.0
+
+
+def test_discharge_comp_per_mwh_yr():
+    """蒙西/蒙东 0.28 元/kWh at 0.72 cycles: 0.28×1000×0.72×365 ≈ ¥73,584/MWh/yr."""
+    from capacity_stack import discharge_comp_per_mwh_yr
+    v = discharge_comp_per_mwh_yr(0.28, 0.72)
+    assert v == pytest.approx(0.28 * 1000 * 0.72 * 365)
+    assert v == pytest.approx(73584.0)
+    # 山东 0.0705: ≈ ¥18,532
+    assert discharge_comp_per_mwh_yr(0.0705, 0.72) == pytest.approx(18532.2, rel=1e-3)
+    assert discharge_comp_per_mwh_yr(0.28, 0.0) == 0.0
+    assert discharge_comp_per_mwh_yr(0.0, 0.72) == 0.0
+
+
+def test_discharge_mode_threshold():
+    from capacity_stack import DISCHARGE_MODE_RATE_THRESHOLD
+    assert DISCHARGE_MODE_RATE_THRESHOLD == 1.0
+    # every per-kW-year rate in the seed is ≥100; every discharge rate < 1
+    for prov, (rate, *_rest) in CAPACITY_PRICE_SEED.items():
+        if rate > 0:
+            assert rate >= 100 or rate < DISCHARGE_MODE_RATE_THRESHOLD
+
+
+def test_cap_comp_name_map():
+    from capacity_stack import CAP_COMP_NAME_MAP
+    assert "蒙西" in CAP_COMP_NAME_MAP["内蒙古（蒙东）"]
+    assert "蒙东" in CAP_COMP_NAME_MAP["内蒙古（蒙东）"]
+    assert CAP_COMP_NAME_MAP["冀南"] == ["河北南网"]

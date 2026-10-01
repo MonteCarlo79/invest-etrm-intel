@@ -1821,6 +1821,7 @@ with tab_ranking:
             ancillary_per_mwh_yr, load_capacity_rows, load_ancillary_annual,
             load_cap_comp_latest, load_fr_pool, load_sysopfee_latest,
             fr_component, sysopfee_annual_cost_per_mwh,
+            discharge_comp_per_mwh_yr, DISCHARGE_MODE_RATE_THRESHOLD,
             DEFAULT_RATE, DEFAULT_BASE_HOURS, STACKABLE_STATUSES,
         )
         _cap_comp = load_cap_comp_latest(_eng())       # curated 容量补偿 tab (primary)
@@ -1832,11 +1833,21 @@ with tab_ranking:
         _sysop = load_sysopfee_latest(_eng())           # ¥/kWh charging adder
         _installed = _load_installed_bess(_ENG_KEY)     # province → bess_mw
 
+        def _cycles_for(prov: str, d: float) -> float:
+            if cycles_df.empty:
+                return 0.0
+            cy = cycles_df[abs(cycles_df["duration_h"] - d) < 0.01].set_index("province")["avg_cycles"]
+            if cy.empty or prov not in cy.index:
+                # fall back to the other duration's measured cycles
+                cy = cycles_df[abs(cycles_df["duration_h"] - (4.0 if d == 2.0 else 2.0)) < 0.01].set_index("province")["avg_cycles"]
+            return float(cy.get(prov, 0.0)) if not cy.empty else 0.0
+
         def _cap_for(prov: str, d: float) -> float:
-            if _status_by_prov.get(prov) and _status_by_prov[prov] not in STACKABLE_STATUSES:
-                return 0.0                                # legacy/draft/none — never stacked
             if prov in _cap_comp:
                 rate, base_h = _cap_comp[prov]
+                if rate < DISCHARGE_MODE_RATE_THRESHOLD:
+                    # 放电量补偿 (元/kWh discharged): 蒙西/蒙东 0.28, 山东 0.0705
+                    return discharge_comp_per_mwh_yr(rate, _cycles_for(prov, d))
                 return capacity_payment_per_mwh_yr(rate, base_h,
                                                    _coef_by_prov.get(prov, 1.0), d)
             if prov in _status_by_prov:
@@ -1848,14 +1859,8 @@ with tab_ranking:
                                 _fr_pool.get(prov), _installed.get(prov) or 0.0)
 
         def _sys_for(prov: str, d: float) -> float:
-            if cycles_df.empty:
-                return 0.0
-            cy = cycles_df[abs(cycles_df["duration_h"] - d) < 0.01].set_index("province")["avg_cycles"]
-            if cy.empty or prov not in cy.index:
-                # fall back to the other duration's measured cycles
-                cy = cycles_df[abs(cycles_df["duration_h"] - (4.0 if d == 2.0 else 2.0)) < 0.01].set_index("province")["avg_cycles"]
-            cyc = float(cy.get(prov, 0.0)) if not cy.empty else 0.0
-            return sysopfee_annual_cost_per_mwh(_sysop.get(prov, 0.0), cyc)
+            return sysopfee_annual_cost_per_mwh(_sysop.get(prov, 0.0),
+                                                _cycles_for(prov, d))
 
         # KPI strip (best province by NET: arbitrage + capacity + 调频 − 系统运行费)
         k1, k2, k3, k4 = st.columns(4)

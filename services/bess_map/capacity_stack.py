@@ -165,6 +165,33 @@ def sysopfee_annual_cost_per_mwh(fee_yuan_kwh: float, cycles_per_day: float,
     return fee_yuan_kwh * 1000.0 * cycles_per_day * 365.0 / roundtrip_eff
 
 
+# ── 放电量补偿 (per-discharge-energy capacity compensation) ─────────────────
+# 蒙西/蒙东: 0.28 元/kWh discharged (280 ¥/MWh); 山东: 0.0705 元/kWh (dynamic).
+# In province_cap_comp these rows carry cap_comp_yuan_kw < 1 (元/kWh), while
+# per-kW-year rates are always ≥ 100 — the threshold discriminates the modes
+# without a schema change.
+DISCHARGE_MODE_RATE_THRESHOLD = 1.0
+
+
+def discharge_comp_per_mwh_yr(rate_yuan_kwh: float, cycles_per_day: float) -> float:
+    """¥/MWh_installed/yr for a per-discharge-energy compensation:
+    rate (元/kWh) × 1000 (→ ¥/MWh) × annual discharged MWh per MWh_installed
+    (cycles/day × 365). Duration-independent per MWh of installed energy."""
+    if rate_yuan_kwh <= 0 or cycles_per_day <= 0:
+        return 0.0
+    return rate_yuan_kwh * 1000.0 * cycles_per_day * 365.0
+
+
+# cap_comp province-name variants → spot price-series names.
+# 内蒙古(蒙东) covers BOTH 蒙东 and 蒙西 (same policy per user 2026-10-01).
+CAP_COMP_NAME_MAP: dict[str, list[str]] = {
+    "内蒙古（蒙东）": ["蒙东", "蒙西"],
+    "内蒙古（蒙西）": ["蒙西"],
+    "内蒙古": ["蒙西", "蒙东"],
+    "冀南": ["河北南网"],
+}
+
+
 def load_capacity_rows(eng) -> list[tuple]:
     """All province_capacity_price rows for capacity_stack_map."""
     from sqlalchemy import text as _t
@@ -179,7 +206,9 @@ def load_cap_comp_latest(eng) -> dict[str, tuple[float, float]]:
     """province → (cap_comp_yuan_kw, peak_duration_hours) from the curated
     容量补偿 tab (province_cap_comp, confirmed rows, latest effective_date).
     This is the PRIMARY capacity-rate source; province_capacity_price only
-    supplies coefficients and legacy exclusions."""
+    supplies coefficients and legacy exclusions.
+    cap_comp_yuan_kw < 1 means a per-kWh discharge compensation (元/kWh).
+    Name variants (内蒙古（蒙东）, 冀南) fan out per CAP_COMP_NAME_MAP."""
     from sqlalchemy import text as _t
     with eng.connect() as conn:
         rows = conn.execute(_t("""
@@ -189,8 +218,13 @@ def load_cap_comp_latest(eng) -> dict[str, tuple[float, float]]:
             WHERE status = 'confirmed' AND cap_comp_yuan_kw IS NOT NULL
             ORDER BY province, effective_date DESC, ingested_at DESC
         """)).fetchall()
-    return {p: (float(r), float(h) if h else DEFAULT_BASE_HOURS)
-            for p, r, h in rows}
+    out: dict[str, tuple[float, float]] = {}
+    for p, r, h in rows:
+        val = (float(r), float(h) if h else DEFAULT_BASE_HOURS)
+        out[p] = val
+        for mapped in CAP_COMP_NAME_MAP.get(p, []):
+            out.setdefault(mapped, val)
+    return out
 
 
 def load_fr_pool(eng) -> dict[str, float]:

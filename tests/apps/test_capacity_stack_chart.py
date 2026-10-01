@@ -56,13 +56,16 @@ def test_unified_model_wired():
     for fn in ("load_cap_comp_latest", "load_fr_pool", "load_sysopfee_latest",
                "fr_component", "sysopfee_annual_cost_per_mwh", "STACKABLE_STATUSES"):
         assert fn in src, f"{fn} not wired"
+    # discharge-energy compensation branch (蒙西/蒙东 0.28, 山东 0.0705)
+    assert "discharge_comp_per_mwh_yr" in src
+    assert "DISCHARGE_MODE_RATE_THRESHOLD" in src
+    # cap_comp (curated) takes precedence over the seed-status layer
+    assert src.index("if prov in _cap_comp:") < src.index("if prov in _status_by_prov:")
     # sysopfee drawn as a NEGATIVE segment eating from the gross end (overlay base)
     assert "xs.append(-v)" in src
     assert "def _net(rec):" in src and '- rec.get("sys", 0.0)' in src
     # net totals in table + KPI
     assert "- sys_s).values" in src or "- sys_s.values" in src
     assert 'assign(net=_net2)' in src and 'assign(net=_net4)' in src
-    # legacy exclusions still enforced
-    assert "not in STACKABLE_STATUSES" in src
     # i18n key both locales
     assert src.count('"rank_stack_sys"') >= 3
