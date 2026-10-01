@@ -72,6 +72,7 @@ class InvoiceItem(TypedDict, total=False):
     amount_cny: float
     delivery_date: datetime.date | None
     notes: str | None
+    side: str                                 # 'buy' (购电侧) | 'sell' (售电侧)
 
 
 @dataclass

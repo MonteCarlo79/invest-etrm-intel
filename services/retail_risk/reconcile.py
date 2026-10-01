@@ -77,23 +77,38 @@ def invoice_by_category_frame(items: pd.DataFrame) -> dict[str, float]:
     For each category, take lines whose subject code (notes) has the MINIMUM
     length within that category (top line of the subtree), ignoring longer
     sub-lines. The 2-digit header lines are excluded from category sums.
+    Cost categories (midlong/spot/fees) use BUY-side （购电侧） lines only;
+    'retail_revenue' comes from SELL-side （售电侧） 01-tree lines.
     """
     if items.empty:
         return {}
     df = items.copy()
     df["_code"] = df["notes"].fillna("").str.extract(r"^(\d+)")[0]
     df["_clen"] = df["_code"].str.len().fillna(99)
-    df = df[df["_clen"] >= 4]
+    if "counterparty" in df.columns:
+        is_sell = df["counterparty"].eq("售电侧")
+    elif "side" in df.columns:
+        is_sell = df["side"].eq("sell")
+    else:
+        is_sell = pd.Series(False, index=df.index)
     out: dict[str, float] = {}
     for cat, g in df.groupby("category"):
-        top = g[g["_clen"] == g["_clen"].min()]
+        if cat == "retail_revenue":
+            g2 = g[is_sell[g.index]] if is_sell.any() else g.iloc[0:0]
+            # sell-side '01' (len 2) IS the revenue tree top — no clen floor here
+        else:
+            g2 = g[~is_sell[g.index]] if is_sell.any() else g
+            g2 = g2[g2["_clen"] >= 4]     # 2-digit headers excluded from cost sums
+        if g2.empty:
+            continue
+        top = g2[g2["_clen"] == g2["_clen"].min()]
         out[cat] = float(top["amount_cny"].sum())
     return out
 
 
 def _invoice_by_category(conn, book_id: int, month: datetime.date) -> dict[str, float]:
     df = pd.read_sql(text("""
-        SELECT si.category, si.amount_cny, si.notes
+        SELECT si.category, si.amount_cny, si.notes, si.counterparty
         FROM marketdata.rm_settlement_items si
         JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
         WHERE s.book_id = :b AND s.settlement_month = :m
@@ -116,7 +131,7 @@ def _invoice_totals(conn, book_id: int, month: datetime.date) -> dict:
           AND COALESCE(raw_data->>'total_kind', 'margin') = 'margin'
     """), conn, params={"b": book_id, "m": month}).iloc[0]["total"]
     items = pd.read_sql(text("""
-        SELECT si.volume_mwh, si.category, si.notes
+        SELECT si.volume_mwh, si.category, si.notes, si.counterparty
         FROM marketdata.rm_settlement_items si
         JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
         WHERE s.book_id = :b AND s.settlement_month = :m
@@ -128,12 +143,18 @@ def _invoice_totals(conn, book_id: int, month: datetime.date) -> dict:
 def settle_volume(items: pd.DataFrame) -> float | None:
     if items.empty:
         return None
-    codes = items["notes"].fillna("").str.extract(r"^(\d+)")[0]
+    if "counterparty" in items.columns:
+        buy = items[items["counterparty"] != "售电侧"]
+        if buy.empty:
+            buy = items
+    else:
+        buy = items
+    codes = buy["notes"].fillna("").str.extract(r"^(\d+)")[0]
     if codes.notna().any():
-        top = items.loc[codes[codes.notna()].str.len().idxmin()]
+        top = buy.loc[codes[codes.notna()].str.len().idxmin()]
         if pd.notna(top["volume_mwh"]):
             return float(top["volume_mwh"])
-    spot = items[items["category"] == "spot_energy"]["volume_mwh"].dropna()
+    spot = buy[buy["category"] == "spot_energy"]["volume_mwh"].dropna()
     return float(spot.sum()) if not spot.empty else None
 
 

@@ -49,13 +49,23 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
     - 4 numerics: plan, settle_volume, price, amount
     - name missing (code + numerics only): label_cn = ''
     - page-boundary repeats: dedup on (code, amount)
+    - 购电侧/售电侧 marker lines flip `side`; sell-side (售电侧) 01-subtree lines
+      become category 'retail_revenue' — the invoice's own retail revenue lines.
     Fee aggregation downstream must use code length >= 4 lines; the 2-digit top
     lines ('01 电量清分') exist for settled-volume, not for category sums.
     """
     items = []
     seen: set[tuple[str, float]] = set()
+    side = "buy"
     for line in text.splitlines():
-        m = _LINE_RE.match(line.strip())
+        stripped = line.strip()
+        if stripped == "购电侧":
+            side = "buy"
+            continue
+        if stripped == "售电侧":
+            side = "sell"
+            continue
+        m = _LINE_RE.match(stripped)
         if not m:
             continue
         code = m.group("code")
@@ -66,15 +76,22 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
         if (code, amount) in seen:
             continue                     # page-repeat duplicate
         seen.add((code, amount))
+        if side == "sell" and code.startswith("01"):
+            category = "retail_revenue"
+        elif side == "sell":
+            category = "other"
+        else:
+            category = schemas.category_for_code(code, rules)
         full = len(nums) == 4
         items.append(schemas.InvoiceItem(
-            category=schemas.category_for_code(code, rules),
+            category=category,
             label_cn=(m.group("name") or "").strip(),
             volume_mwh=nums[1] if full else None,
             price_cny_mwh=nums[2] if full else None,
             amount_cny=amount,
             delivery_date=None,
             notes=code,
+            side=side,
         ))
     return items
 

@@ -22,14 +22,15 @@ class BridgeResult:
     spot_cost: float = 0.0
     deviation: float = 0.0
     other: float = 0.0
-    net: float | None = 0.0                 # == printed 售电公司收益; None when the
-                                            # month has no margin-kind invoice (山东 7021
-                                            # is a spot subtotal, not a margin)
+    net: float | None = 0.0                 # sell-side revenue - costs (independent);
+                                            # == printed 售电公司收益 when consistent
     retail_avg_price: float | None = None
     wholesale_avg_cost: float | None = None
     spread: float | None = None
     coverage_pct: float | None = None
     settled_vol_mwh: float | None = None
+    printed_margin_cny: float | None = None
+    margin_check_cny: float | None = None   # net - printed margin (true cross-check)
 
 
 def alpha_rows(positions_pv: pd.DataFrame, spot_vwap: float) -> pd.DataFrame:
@@ -109,16 +110,24 @@ def bridge_month(conn, book_id: int, month: datetime.date) -> BridgeResult:
     res.channel_costs = {"midlong": midlong, "green_premium": by_cat.get("green_premium", 0.0)}
     total_costs = midlong + res.spot_cost + res.deviation + res.other \
         + res.channel_costs["green_premium"]
-    margin = float(totals["total"]) if totals["total"] is not None else None
-    if margin is None:
-        # no margin-kind invoice this month （山东 7021 = spot subtotal): costs shown,
-        # revenue/net/spread honestly N/A — never double-count spot as revenue.
+    printed_margin = float(totals["total"]) if totals["total"] is not None else None
+    sell_side_revenue = by_cat.get("retail_revenue")
+    if sell_side_revenue is not None:
+        # invoice's own 售电侧 01 top line — real retail revenue; net is then an
+        # INDEPENDENT number and printed margin becomes a true cross-check.
+        res.retail_revenue = sell_side_revenue
+        res.net = sell_side_revenue - total_costs
+    elif printed_margin is not None:
+        # fallback (spec D7): revenue = costs + printed margin; net == margin by construction
+        res.retail_revenue = total_costs + printed_margin
+        res.net = printed_margin
+    else:
         res.retail_revenue = None
         res.net = None
         res.settled_vol_mwh = totals["settled_vol"]
         return res
-    res.retail_revenue = total_costs + margin
-    res.net = margin
+    res.printed_margin_cny = printed_margin
+    res.margin_check_cny = (res.net - printed_margin) if printed_margin is not None else None
     vols = totals["settled_vol"]
     if vols:
         res.wholesale_avg_cost = total_costs / float(vols)

@@ -231,7 +231,8 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
             status = "flagged"
     else:
         top01 = next((i for i in doc.items
-                      if (i.get("notes") or "").startswith("01")
+                      if i.get("side", "buy") == "buy"
+                      and (i.get("notes") or "").startswith("01")
                       and len(i.get("notes") or "") == 2
                       and i.get("amount_cny") is not None), None)
         if top01 is not None:
@@ -256,17 +257,19 @@ def write_invoice(conn, book_id: int, doc: schemas.InvoiceDoc,
     for i in doc.items:
         # notes = '<code> | <label>' — code FIRST: reconcile's ^(\d+) extraction
         # (hierarchy-aware aggregation, settle_volume) depends on a leading code.
+        # counterparty carries the invoice side (购电侧/售电侧) for side-aware sums.
         code = (i.get("notes") or "").strip()
         label = (i.get("label_cn") or "").strip()
         notes = f"{code} | {label}" if code else label
+        side_cn = {"sell": "售电侧", "buy": "购电侧"}.get(i.get("side", "buy"), "购电侧")
         conn.execute(text("""
             INSERT INTO marketdata.rm_settlement_items
-              (settlement_id, category, delivery_date, volume_mwh, price_cny_kwh, amount_cny, notes)
-            VALUES (:sid, :cat, :dd, :vol, :px, :amt, :notes)
+              (settlement_id, category, delivery_date, volume_mwh, price_cny_kwh, amount_cny, notes, counterparty)
+            VALUES (:sid, :cat, :dd, :vol, :px, :amt, :notes, :cp)
         """), {"sid": sid, "cat": i["category"], "dd": i.get("delivery_date"),
                "vol": i.get("volume_mwh"),
                "px": (i["price_cny_mwh"] / 1000.0) if i.get("price_cny_mwh") is not None else None,
-               "amt": i["amount_cny"], "notes": notes})
+               "amt": i["amount_cny"], "notes": notes, "cp": side_cn})
     return sid
 
 

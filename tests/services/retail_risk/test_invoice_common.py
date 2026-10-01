@@ -12,14 +12,32 @@ JINAN_TEXT = """
 结算单编号：HEPX-2026-03-SD0100
 本月 175251.68
 结算科目编码 结算科目 分月交易计划电量 结算电量 结算均价 结算电费 备注
+购电侧
 01 电量清分 17770.000 21906.460 331.580 7263741.37
 0101 中长期交易 17770.000 17770.000 337.685 6000657.47
 010105 合同交易 1418.946 1418.946 -60.718 -86155.80
 0102 现货交易 - 4136.460 305.354 1263083.90
 0202030002 中长期偏差收益回收（差额） - - - 10383.71
 0211030001 零售市场超额收益费用 - - - 193111.28
+售电侧
+01 电量清分 - 21906.460 348.403 7632280.74
+0101 中长期交易 - 21906.355 348.403 7632243.26
+010110 其他中长期交易 - 21906.460 -0.994 -21772.37
 第1页，共6页
 """
+
+
+def test_subject_lines_tracks_buy_sell_side():
+    """售电侧 marker flips side; sell-side 01-tree lines become retail_revenue —
+    this is the REAL retail revenue line, not a reconstruction."""
+    items = parse_subject_lines(JINAN_TEXT, schemas.JINAN_CATEGORY_RULES)
+    sell = [i for i in items if i.get("side") == "sell"]
+    assert len(sell) == 3
+    assert all(i["category"] == "retail_revenue" for i in sell)
+    buy = [i for i in items if i.get("side") != "sell"]
+    assert all(i["category"] != "retail_revenue" for i in buy)
+    top_sell = [i for i in sell if i["notes"] == "01"][0]
+    assert top_sell["amount_cny"] == 7632280.74
 
 
 def test_subject_lines_categories_and_signs():
