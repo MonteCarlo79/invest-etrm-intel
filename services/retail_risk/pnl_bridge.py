@@ -113,10 +113,10 @@ def bridge_month(conn, book_id: int, month: datetime.date) -> BridgeResult:
     printed_margin = float(totals["total"]) if totals["total"] is not None else None
     sell_side_revenue = by_cat.get("retail_revenue")
     if sell_side_revenue is not None:
-        # invoice's own 售电侧 01 top line — real retail revenue; net is then an
-        # INDEPENDENT number and printed margin becomes a true cross-check.
-        res.retail_revenue = sell_side_revenue
-        res.net = sell_side_revenue - total_costs
+        # invoice's own 售电侧: 01 top line + sell-side fee-tree adjustments
+        # (山东: 偏差考核 + 封顶结算差额 + 结算调整) = what the retailer actually collects
+        res.retail_revenue = sell_side_revenue + by_cat.get("retail_fee_adjustments", 0.0)
+        res.net = res.retail_revenue - total_costs
     elif printed_margin is not None:
         # fallback (spec D7): revenue = costs + printed margin; net == margin by construction
         res.retail_revenue = total_costs + printed_margin

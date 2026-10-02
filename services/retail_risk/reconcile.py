@@ -103,6 +103,12 @@ def invoice_by_category_frame(items: pd.DataFrame) -> dict[str, float]:
             continue
         top = g2[g2["_clen"] == g2["_clen"].min()]
         out[cat] = float(top["amount_cny"].sum())
+    if is_sell.any():
+        # sell-side fee-tree top lines ('02', '03' — len 2, not '01'): they adjust
+        # what the retailer actually collects (山东: 偏差考核, 封顶结算差额, 结算调整)
+        fee_top = df[is_sell & df["_clen"].eq(2) & ~df["_code"].eq("01")]
+        if not fee_top.empty:
+            out["retail_fee_adjustments"] = float(fee_top["amount_cny"].sum())
     return out
 
 

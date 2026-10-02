@@ -58,6 +58,7 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
     items = []
     seen: set[tuple[str, float]] = set()
     side = "buy"
+    seen_buy_01 = False
     for line in text.splitlines():
         stripped = line.strip()
         if stripped == "购电侧":
@@ -70,6 +71,12 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
         if not toks or not re.fullmatch(r"\d{2,10}", toks[0]):
             continue
         code = toks[0]
+        # 山东 retail block starts at the SECOND '01 电量清分' with no marker
+        if code == "01":
+            if side == "buy" and seen_buy_01:
+                side = "sell"
+            elif side == "buy":
+                seen_buy_01 = True
         name_parts: list[str] = []
         nums: list[float | None] = []
         for t in toks[1:]:
@@ -90,16 +97,15 @@ def parse_subject_lines(text: str, rules: list[tuple[str, str]]) -> list[schemas
         seen.add((code, amount))
         if side == "sell" and code.startswith("01"):
             category = "retail_revenue"
-        elif side == "sell":
-            category = "other"
         else:
             category = schemas.category_for_code(code, rules)
         full = len(nums) >= 4
+        three = len(nums) == 3
         items.append(schemas.InvoiceItem(
             category=category,
             label_cn=" ".join(name_parts).strip(),
-            volume_mwh=nums[1] if full else None,
-            price_cny_mwh=nums[2] if full else None,
+            volume_mwh=nums[1] if full else (nums[0] if three else None),
+            price_cny_mwh=nums[2] if full else (nums[1] if three else None),
             amount_cny=amount,
             delivery_date=None,
             notes=code,

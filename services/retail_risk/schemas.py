@@ -120,6 +120,19 @@ ANHUI_CATEGORY_RULES: list[tuple[str, str]] = [
     ("021103", "rule_charges"),
 ]
 
+SHANDONG_CATEGORY_RULES: list[tuple[str, str]] = [
+    ("0101", "midlong_energy"),       # 山东 midlong settles as CfD adjustment (can be negative)
+    ("0102", "spot_energy"),
+    ("0103", "ancillary_service"),    # 调频/辅助服务分摊
+    ("0201", "green_premium"),
+    ("02020300", "imbalance"),
+    ("0202", "market_redistribution"),
+    ("0204", "imbalance"),
+    ("0211", "rule_charges"),         # 售电公司服务费用 / 封顶结算差额
+    ("0301", "other"),                # 退补
+    ("0302", "other"),                # 清算
+]
+
 PACKAGE_CLASS_TO_CONTRACT_TYPE = {
     "联动": "indexed",
     "固定": "fixed",
