@@ -1,0 +1,1649 @@
+sources:
+- id: energy_risk_2012___kyos_power_plant_hedging_strategies
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Energy_Risk_2012_-_KYOS_Power_plant_hedging_strategies.pdf
+  title: Energy_Risk_2012_-_KYOS_Power_plant_hedging_strategies
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: likron_powerplants
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Likron_PowerPlants.pdf
+  title: Likron_PowerPlants
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: pareto_spikes
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Pareto
+    Spikes.pdf
+  title: Pareto Spikes
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: plant_hedging_and_trading_strategies_kyos_20110530
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Plant
+    hedging and trading strategies - KYOS - 20110530.pdf
+  title: Plant hedging and trading strategies - KYOS - 20110530
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: powerhedging
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/PowerHedging.pdf
+  title: PowerHedging
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dispatch_and_delta_hedging
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta Hedging.ppt
+  title: Dispatch and Delta Hedging
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: ce_template
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/CE template.ppt
+  title: CE template
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dispatch_and_delta_hedging_aom_v2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/Dispatch and Delta Hedging AOM v2.ppt
+  title: Dispatch and Delta Hedging AOM v2
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dispatch_and_delta_hedging_aom
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/Dispatch and Delta Hedging AOM.ppt
+  title: Dispatch and Delta Hedging AOM
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dispatch_and_delta_hedging_aom_2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/Dispatch and Delta Hedging AOM.pptx
+  title: Dispatch and Delta Hedging AOM
+  type: pptx
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dispatch_and_delta_hedging_v2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/Dispatch and Delta Hedging v2.ppt
+  title: Dispatch and Delta Hedging v2
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dispatch_and_delta_hedging_v3
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/Dispatch and Delta Hedging v3.ppt
+  title: Dispatch and Delta Hedging v3
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dispatch_and_delta_hedging_v4
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/Dispatch and Delta Hedging v4.ppt
+  title: Dispatch and Delta Hedging v4
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: understanding
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Dispatch
+    and Delta/Understanding.pdf
+  title: Understanding
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: the_caveats_in_aom_peak_delta_calculation
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Peak
+    Delta Calculation/The Caveats in AOM Peak Delta Calculation.doc
+  title: The Caveats in AOM Peak Delta Calculation
+  type: doc
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: overview_of_power_dispatch_models
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Power
+    Dispatch Models/Overview_of_Power_Dispatch_Models.pptx
+  title: Overview_of_Power_Dispatch_Models
+  type: pptx
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: incremental_peak_delta
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Risk
+    Models/Incremental Peak Delta.pdf
+  title: Incremental Peak Delta
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: incremental_peak_delta2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Risk
+    Models/Incremental Peak delta2.pdf
+  title: Incremental Peak delta2
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: pk_op_to_incrpk_and_comb_bl
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Hedging/Implementation/CE/Risk
+    Models/PK OP to IncrPK and Comb BL.pdf
+  title: PK OP to IncrPK and Comb BL
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: ccgt_replication
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/CCGT
+    Replication/CCGT Replication.ppt
+  title: CCGT Replication
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: css_distributions
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/NL
+    MACSS/NL CSS dist to Power dist/CSS Distributions.ppt
+  title: CSS Distributions
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: rough_results
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/NL
+    MACSS/NL DES Model/rough results.doc
+  title: rough results
+  type: doc
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: risksimulationstudy
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    Spread/EDFT-Dutch Power Deal/RiskSimulationStudy.doc
+  title: RiskSimulationStudy
+  type: doc
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: 120524_status_of_power_toll_project
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/120524 Status of power toll project.docx
+  title: 120524 Status of power toll project
+  type: docx
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: forward_curve_python_script
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/Curve Shaping (AB)/Forward Curve Python Script.doc
+  title: Forward Curve Python Script
+  type: doc
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: forward_curve_python_script_2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/Curve Shaping (AB)/Backup/120524/Forward Curve Python Script.doc
+  title: Forward Curve Python Script
+  type: doc
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: humbertollvaluation
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/HumberTollPricing_asof300412/HumberTollValuation.ppt
+  title: HumberTollValuation
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: humbertollvaluation_v2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/HumberTollPricing_asof300412/HumberTollValuation_v2.ppt
+  title: HumberTollValuation_v2
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: offpeakdeltas
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/HumberTollPricing_asof300412/OffpeakDeltas.txt
+  title: OffpeakDeltas
+  type: txt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: rwetollvaluation_310512
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/RWEPricing_asof300512/RWETollValuation_310512.pptx
+  title: RWETollValuation_310512
+  type: pptx
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: rwetollvaluation_v2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/RWEPricing_asof300512/RWETollValuation_v2.ppt
+  title: RWETollValuation_v2
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: rwetollvaluation_v3
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/RWEPricing_asof300512/RWETollValuation_v3.ppt
+  title: RWETollValuation_v3
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: humbertollvaluation_2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/RWEPricing_asof300512/Old stuff/HumberTollValuation.ppt
+  title: HumberTollValuation
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: humbertollvaluation_v2_2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/RWEPricing_asof300512/Old stuff/HumberTollValuation_v2.ppt
+  title: HumberTollValuation_v2
+  type: ppt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: offpeakdeltas_2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/RWEPricing_asof300512/Old stuff/OffpeakDeltas.txt
+  title: OffpeakDeltas
+  type: txt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: main
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/Scripts/main.txt
+  title: main
+  type: txt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: main_2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Models/Implementation/CE/Power
+    toll/Wrapper & Backtest/Scripts/main.txt
+  title: main
+  type: txt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: 0067_short_term_generation_asset_valuation_1
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/0067_Short-Term_Generation_Asset_Valuation[1].pdf
+  title: 0067_Short-Term_Generation_Asset_Valuation[1]
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: clewlow
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/Clewlow.pdf
+  title: Clewlow
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: decide_when_to_start_your_power_plant_v2
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/Decide_when_to_start_your_power_plant_v2.pdf
+  title: Decide_when_to_start_your_power_plant_v2
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: deng_real_options_approach
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/Deng
+    Real options approach.pdf
+  title: Deng Real options approach
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: optimal_switching_with_applications_to_energy_tolling_agreem
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/Optimal_Switching_with_Applications_to_Energy_Tolling_Agreements.pdf
+  title: Optimal_Switching_with_Applications_to_Energy_Tolling_Agreements
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/The_value_of_starting_up_a_power_plant_WorldPower_2010_Dijken_Abbema_Los_de_Jong.pdf
+  title: The_value_of_starting_up_a_power_plant_WorldPower_2010_Dijken_Abbema_Los_de_Jong
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: worldpower2009_realisticpowerplantvaluation
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/WorldPower2009_RealisticPowerPlantValuation.pdf
+  title: WorldPower2009_RealisticPowerPlantValuation
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: worldpower2010_thevalueofstartingupthepowerplant
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/WorldPower2010_TheValueofStartingUpthePowerPlant.pdf
+  title: WorldPower2010_TheValueofStartingUpthePowerPlant
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: deng_johnson_sogom_dss_2001
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/deng-johnson-sogom-dss-2001.pdf
+  title: deng-johnson-sogom-dss-2001
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: framework_tseng
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/framework
+    TSENG.pdf
+  title: framework TSENG
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: storage_value
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/storage
+    value.pdf
+  title: storage value
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Optimisation/tseng
+    barz - short term generation asset valuation a real options approa....pdf
+  title: tseng barz - short term generation asset valuation a real options approa...
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: kyhydropumpinput
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Pump
+    storage/Hydro Storage Project 20170421_Shell/Hydro Storage Project 20170421_Shell/KyHydroPumpInput.txt
+  title: KyHydroPumpInput
+  type: txt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: runlog
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Pump
+    storage/Hydro Storage Project 20170421_Shell/Hydro Storage Project 20170421_Shell/RunLog.txt
+  title: RunLog
+  type: txt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Risk/PaR/0109_ELECTRICITY_PRICE_MODELLING_FOR_PROFIT_AT_RISK_MANAGEMENT[1].pdf
+  title: 0109_ELECTRICITY_PRICE_MODELLING_FOR_PROFIT_AT_RISK_MANAGEMENT[1]
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: slides_for_13_april_2017_ne_deep_dive_final_short
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Storage/Slides
+    for 13 April 2017 NE Deep Dive FINAL short.pdf
+  title: Slides for 13 April 2017 NE Deep Dive FINAL short
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: storage_introduction_document_170413
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Storage/Storage
+    introduction document 170413.docx
+  title: Storage introduction document 170413
+  type: docx
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: storage_living_document_170413
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Storage/Storage
+    living document 170413.docx
+  title: Storage living document 170413
+  type: docx
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: '10_1_1_11_6839'
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Swing/10.1.1.11.6839.pdf
+  title: 10.1.1.11.6839
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: dphil_thesis
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Swing/dphil_thesis.pdf
+  title: dphil_thesis
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: out_6
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Swing/out
+    (6).pdf
+  title: out (6)
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: swing_last
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Swing/swing-last.pdf
+  title: swing-last
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: 111102_collector
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/111102_collector.pdf
+  title: 111102_collector
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: analytical_valuation_in_mean_reverting_world
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/Analytical
+    Valuation in Mean-Reverting World.pdf
+  title: Analytical Valuation in Mean-Reverting World
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: ccgt_valuation
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/CCGT
+    valuation.pdf
+  title: CCGT valuation
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: erratumtoelectricityderivativeschapterspreads_66_70
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/ErratumToElectricityDerivativesChapterSpreads-66-70.pdf
+  title: ErratumToElectricityDerivativesChapterSpreads-66-70
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: gav
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/Gav.pdf
+  title: Gav
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: non_markov_method
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/Non-Markov
+    Method.pdf
+  title: Non-Markov Method
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: value_ccgt
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/Value
+    CCGT.pdf
+  title: Value CCGT
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: valuing_generation_assets___overview___spark_spread_option_v
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/Valuing_generation_assets_-_overview_&_spark_spread_option_valuation.pdf
+  title: Valuing_generation_assets_-_overview_&_spark_spread_option_valuation
+  type: pdf
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: us_toll
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/Structure/Asset Modelling/Power/Valuation/us
+    toll.txt
+  title: us toll
+  type: txt
+  cleared: false
+  license_risk: high
+  year: null
+  market: null
+  level: null
+  class: library
+- id: power_alco
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Alco
+  title: power/Alco
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_alquimia
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Alquimia
+  title: power/Alquimia
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_battery
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Battery
+  title: power/Battery
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_energinet_wind
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/EnergiNet
+    Wind
+  title: power/EnergiNet Wind
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_european_toll
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/European
+    Toll
+  title: power/European Toll
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_flat_offtakes
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Flat
+    Offtakes
+  title: power/Flat Offtakes
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_german_i_c
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/German
+    I&C
+  title: power/German I&C
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_imbalancing_calc
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Imbalancing
+    Calc
+  title: power/Imbalancing Calc
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_infraserv_hoechst
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Infraserv
+    Hoechst
+  title: power/Infraserv Hoechst
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_kkr
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/KKR
+  title: power/KKR
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_kyos
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/KYOS
+  title: power/KYOS
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_landivisiau
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Landivisiau
+  title: power/Landivisiau
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_limejump
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Limejump
+  title: power/Limejump
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_live_power_valuation_tool
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Live
+    Power Valuation Tool
+  title: power/Live Power Valuation Tool
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_locational_spread_options
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Locational
+    Spread Options
+  title: power/Locational Spread Options
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_noble
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Noble
+  title: power/Noble
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_offtake
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Offtake
+  title: power/Offtake
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_peaker
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Peaker
+  title: power/Peaker
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_power_assets
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Power
+    Assets
+  title: power/Power Assets
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_power_storage
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Power
+    Storage
+  title: power/Power Storage
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_power_strategies
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Power
+    Strategies
+  title: power/Power Strategies
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_project_blue
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Project
+    Blue
+  title: power/Project Blue
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_rijnmond_dec17
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Rijnmond
+    Dec17
+  title: power/Rijnmond Dec17
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_trianel
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/Trianel
+  title: power/Trianel
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_uk_toll
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/UK
+    Toll
+  title: power/UK Toll
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: power_capacity_market
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/power/capacity
+    market
+  title: power/capacity market
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_admin
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Admin
+  title: dipeng/Admin
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_backhaul
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Backhaul
+  title: dipeng/Backhaul
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_biomass_and_others
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Biomass
+    and others
+  title: dipeng/Biomass and others
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_blue_august_exercise
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Blue
+    August exercise
+  title: dipeng/Blue August exercise
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_blue_corrections
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Blue
+    corrections
+  title: dipeng/Blue corrections
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_credit_risk_model
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Credit
+    risk model
+  title: dipeng/Credit risk model
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_curve_shaping
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Curve
+    Shaping
+  title: dipeng/Curve Shaping
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_de_gas_and_power
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/DE
+    Gas and Power
+  title: dipeng/DE Gas and Power
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_de_hourly_profile_trade
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/DE
+    hourly profile trade
+  title: dipeng/DE hourly profile trade
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_data
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Data
+  title: dipeng/Data
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_data_automation
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Data
+    Automation
+  title: dipeng/Data Automation
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_data_system
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Data
+    System
+  title: dipeng/Data System
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_data_model_system
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Data-Model
+    System
+  title: dipeng/Data-Model System
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_deal_sheet
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Deal
+    Sheet
+  title: dipeng/Deal Sheet
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_eon_css
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/EON
+    CSS
+  title: dipeng/EON CSS
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_eq
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/EQ
+  title: dipeng/EQ
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_embedded_benefits
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Embedded
+    benefits
+  title: dipeng/Embedded benefits
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_emissions
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Emissions
+  title: dipeng/Emissions
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_fr_pegn_market_analysis
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/FR
+    PegN Market Analysis
+  title: dipeng/FR PegN Market Analysis
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_gas_storage
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Gas
+    Storage
+  title: dipeng/Gas Storage
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_gaspool_data
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Gaspool
+    Data
+  title: dipeng/Gaspool Data
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_german_vol_analysis
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/German
+    Vol Analysis
+  title: dipeng/German Vol Analysis
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_goos
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/GoOs
+  title: dipeng/GoOs
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_initiatives
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Initiatives
+  title: dipeng/Initiatives
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_lbs
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/LBS
+  title: dipeng/LBS
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_limejump
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/LimeJump
+  title: dipeng/LimeJump
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_literature
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Literature
+  title: dipeng/Literature
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_locational_spread_options
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Locational
+    Spread Options
+  title: dipeng/Locational Spread Options
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_models
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Models
+  title: dipeng/Models
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_nl_css
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/NL
+    CSS
+  title: dipeng/NL CSS
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_new_folder
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/New
+    folder
+  title: dipeng/New folder
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_options_system
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Options
+    System
+  title: dipeng/Options System
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_power
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Power
+  title: dipeng/Power
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_power_deal_structuring
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Power
+    Deal Structuring
+  title: dipeng/Power Deal Structuring
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_purple
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Purple
+  title: dipeng/Purple
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_put_options
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Put
+    Options
+  title: dipeng/Put Options
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_rocs
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/ROCs
+  title: dipeng/ROCs
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_risk_documents
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Risk
+    documents
+  title: dipeng/Risk documents
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_rough
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Rough
+  title: dipeng/Rough
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_rough_capacity_issues_mar2015
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Rough
+    capacity issues Mar2015
+  title: dipeng/Rough capacity issues Mar2015
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_rules
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Rules
+  title: dipeng/Rules
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_show_models
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Show
+    models
+  title: dipeng/Show models
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_solar
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Solar
+  title: dipeng/Solar
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_supply
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Supply
+  title: dipeng/Supply
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_swing
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Swing
+  title: dipeng/Swing
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_team_meeting
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Team
+    Meeting
+  title: dipeng/Team Meeting
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_temperature_flex
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Temperature
+    Flex
+  title: dipeng/Temperature Flex
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_tools
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Tools
+  title: dipeng/Tools
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_vol_model
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Vol
+    model
+  title: dipeng/Vol model
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_volatility_forecast
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Volatility
+    Forecast
+  title: dipeng/Volatility Forecast
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_volatility_model
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Volatility
+    model
+  title: dipeng/Volatility model
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_wind
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Wind
+  title: dipeng/Wind
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_xmas_party
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/Xmas
+    Party
+  title: dipeng/Xmas Party
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_zema_testing
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/ZEMA
+    testing
+  title: dipeng/ZEMA testing
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_archived
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/archived
+  title: dipeng/archived
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_battery
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/battery
+  title: dipeng/battery
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_meetings
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/meetings
+  title: dipeng/meetings
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_news
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/news
+  title: dipeng/news
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_others
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/others
+  title: dipeng/others
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_presentation
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/presentation
+  title: dipeng/presentation
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
+- id: dipeng_valuation_reports
+  path: /Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/company/SEE/ote2/dipeng/valuation
+    reports
+  title: dipeng/valuation reports
+  type: folder
+  cleared: true
+  license_risk: low
+  year: null
+  market: null
+  level: null
+  class: practice
