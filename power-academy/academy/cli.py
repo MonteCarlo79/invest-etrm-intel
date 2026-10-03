@@ -73,7 +73,7 @@ def cmd_register(_a):
 
 
 def cmd_extract(_a):
-    rep = ex.extract_all(_entries(), ROOT / "cache")
+    rep = ex.extract_all(_entries(), ROOT / "cache", convert_dir=ROOT / "cache" / "_converted", ocr=True)
     print("extract counts", rep["counts"])
 
 
