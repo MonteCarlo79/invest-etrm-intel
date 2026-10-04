@@ -1,0 +1,12 @@
+pyyaml
+pymupdf
+python-pptx
+python-docx
+anthropic
+boto3
+pytest
+pandas
+matplotlib
+markdown
+sqlalchemy
+psycopg2-binary

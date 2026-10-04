@@ -1,0 +1,21 @@
+terms:
+  - {en: spark spread, zh: 火花价差}
+  - {en: dark spread, zh: 暗价差}
+  - {en: clean spark spread, zh: 清洁火花价差}
+  - {en: tolling agreement, zh: 委托加工协议}
+  - {en: swing option, zh: 摆动期权}
+  - {en: real option, zh: 实物期权}
+  - {en: mean reversion, zh: 均值回归}
+  - {en: forward curve, zh: 远期曲线}
+  - {en: merit order, zh: 优先发电顺序}
+  - {en: unit commitment, zh: 机组组合}
+  - {en: rolling intrinsic, zh: 滚动内在价值}
+  - {en: profit at risk, zh: 风险利润}
+  - {en: value at risk, zh: 风险价值}
+  - {en: imbalance price, zh: 不平衡价格}
+  - {en: capacity market, zh: 容量市场}
+  - {en: pumped storage, zh: 抽水蓄能}
+  - {en: energy storage, zh: 储能}
+  - {en: dispatch, zh: 调度}
+  - {en: capture rate, zh: 捕获率}
+  - {en: day-ahead market, zh: 日前市场}
