@@ -81,3 +81,27 @@ def test_verify_pack_reports_changes(tmp_path):
     with e.begin() as c:
         c.execute(sa.text("insert into p values (2)"))
     assert verify_pack(d, e) == ["e_d: data changed since retrieval"]
+
+
+def test_first_build_chart_over_restricted_input_raises(tmp_path):
+    d = new_article(tmp_path, 5, "demo5")
+    script = d / "evidence" / "charts" / "e_c.py"
+    script.write_text("import sys\nopen(sys.argv[1],'wb').write(b'png')\n", encoding="utf-8")
+    dump_yaml({"queries": [
+        {"id": "e_sd", "kind": "sql", "source": "marketdata.spot_prices_hourly",
+         "sql": "select 1"},
+        {"id": "e_c", "kind": "chart", "script": "e_c.py", "inputs": ["e_sd"],
+         "public": True}]}, d / "evidence" / "queries.yaml")
+    with pytest.raises(ValueError, match="licensed_restricted"):
+        build_pack(d, sa.create_engine("sqlite://"),
+                   {"marketdata.spot_prices_hourly": "licensed_restricted"},
+                   today="2026-10-04")
+
+
+def test_verify_pack_also_enforces_readonly(tmp_path):
+    d = new_article(tmp_path, 6, "demo6")
+    dump_yaml({"queries": [{"id": "e_bad", "kind": "sql", "source": "t",
+                            "sql": "delete from p"}]},
+              d / "evidence" / "queries.yaml")
+    with pytest.raises(ValueError):
+        verify_pack(d, None)

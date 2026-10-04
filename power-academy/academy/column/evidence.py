@@ -61,6 +61,9 @@ def build_pack(article_dir: Path, engine, licenses: dict, today: str | None = No
     mpath = article_dir / "evidence" / "manifest.yaml"
     if mpath.exists():
         prior = {e["id"]: e for e in (load_yaml(mpath).get("entries") or [])}
+    # licenses of sql entries in THIS run, so chart-input checks work on first build
+    same_run = {q["id"]: license_for(q["source"], licenses)
+                for q in queries if q["kind"] == "sql"}
     entries = []
     for q in queries:
         kind = q["kind"]
@@ -97,7 +100,7 @@ def build_pack(article_dir: Path, engine, licenses: dict, today: str | None = No
         elif kind == "chart":
             inputs = q.get("inputs") or []
             for dep in inputs:
-                lic = (prior.get(dep) or {}).get("license")
+                lic = (prior.get(dep) or {}).get("license") or same_run.get(dep)
                 if lic == "licensed_restricted" and q.get("public"):
                     raise ValueError(
                         f"chart {q['id']}: public chart uses licensed_restricted input {dep}")
@@ -127,6 +130,7 @@ def verify_pack(article_dir, engine) -> list:
     for q in queries:
         if q["kind"] != "sql":
             continue
+        check_readonly(q["sql"])
         fresh = _run_sql(engine, q["sql"], q.get("params")).head(MAX_ROWS)
         current = article_dir / "evidence" / "data" / f"{q['id']}.csv"
         if sha256_file(current) != hashlib.sha256(

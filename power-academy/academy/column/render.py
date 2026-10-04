@@ -5,7 +5,8 @@ from pathlib import Path
 import markdown
 
 from ..io import load_yaml
-from .gates import CHART_REF_RE, TAG_RE
+from .gates import CHART_REF_RE, TAG_RE, check_blocklist
+from .schema import check_approval_ready
 
 ALLOWED_TAGS = {"p", "h1", "h2", "h3", "blockquote", "strong", "em", "table",
                 "thead", "tbody", "tr", "td", "th", "ul", "ol", "li", "img",
@@ -30,7 +31,15 @@ def _sanitize(html: str) -> str:
 
 def render_article(article_dir: Path, column_root: Path) -> Path:
     article_dir, column_root = Path(article_dir), Path(column_root)
+    problems = check_approval_ready(article_dir)
+    if problems:
+        raise ValueError("article not approved: " + "; ".join(problems))
     draft = (article_dir / "draft.zh.md").read_text(encoding="utf-8")
+    bl_path = column_root / "style" / "blocklist.yaml"
+    names = (load_yaml(bl_path) or {}).get("names") or [] if bl_path.exists() else []
+    hits = check_blocklist({"draft": draft}, names)
+    if hits:
+        raise ValueError("blocklisted names in draft: " + "; ".join(hits))
     entries = {e["id"]: e for e in
                (load_yaml(article_dir / "evidence" / "manifest.yaml") or {}).get("entries") or []}
     refs, seen = [], {}
@@ -56,6 +65,8 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
         return f'<img src="data:image/png;base64,{b64}" alt="{cid}"/>'
 
     body = CHART_REF_RE.sub(chart_sub, body)
+    if "[[E:" in body or "[[C:" in body:
+        raise ValueError("malformed or unconverted tag in draft")
     html = markdown.markdown(body, extensions=["tables"])
     html = _sanitize(html)
 

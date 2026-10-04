@@ -13,7 +13,7 @@ EDITOR_SYSTEM = (
     "只输出一个JSON对象：{\"proposals\": [{\"working_title\", \"hook\": {\"source\", \"item\"}, "
     "\"thesis_hypothesis\", \"western\": {\"concept_ids\": [], \"angle\"}, "
     "\"china\": {\"provinces\": [], \"topics\": []}, \"evidence_candidates\": [], \"timeliness\"}]}。"
-    "hook.source 只能引用提供的素材文件名或文档标题，禁止编造来源或新闻。"
+    "hook.source 只能引用提供的素材文件名、文档标题或 weekly_scan（周度价格异动扫描），禁止编造来源或新闻。"
     "每个选题必须包含西方市场机制视角与可获取的中国数据支撑。")
 
 KB_RECENT_SQL = ("select title, created_at from staging.spot_knowledge_docs "
@@ -40,6 +40,8 @@ def gather_context(briefings_dir, kb_engine, scan_md, concept_ids, backlog_title
 
 def propose(client, model, context) -> list:
     sources = {b["file"] for b in context["briefings"]} | {d["title"] for d in context["kb_docs"]}
+    if context.get("scan_md") and context["scan_md"] != "(no scan)":
+        sources.add("weekly_scan")
     data = call_json(client, model, EDITOR_SYSTEM, json.dumps(context, ensure_ascii=False),
                      max_tokens=3000)
     out = []

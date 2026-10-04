@@ -53,3 +53,14 @@ def test_gather_context_reads_recent_briefings(tmp_path):
                          kb_limit=10, today="2026-10-06")
     assert len(ctx["briefings"]) == 1 and ctx["briefings"][0]["text"] == "新闻一"
     assert ctx["kb_docs"] == [] and ctx["scan_md"] == "扫描"
+
+
+def test_propose_keeps_scan_cited_hooks():
+    good = {"working_title": "甘肃基差异动分析", "hook": {"source": "weekly_scan",
+            "item": "甘肃基差 1.8x"}, "thesis_hypothesis": "t",
+            "western": {"concept_ids": [], "angle": "a"},
+            "china": {"provinces": ["甘肃"], "topics": ["现货"]},
+            "evidence_candidates": ["spot_prices_hourly"], "timeliness": "本周"}
+    c = FakeClient([json.dumps({"proposals": [good]}, ensure_ascii=False)])
+    props = propose(c, "m", _ctx())
+    assert [p["working_title"] for p in props] == ["甘肃基差异动分析"]

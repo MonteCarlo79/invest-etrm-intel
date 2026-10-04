@@ -7,8 +7,12 @@ CHART_REF_RE = re.compile(r"\[\[C:([A-Za-z0-9_\-]+)\]\]")
 _QUANTITY = re.compile(
     r"(\d+(?:\.\d+)?\s*(?:%|元|块|分|角|厘|亿|万|倍|千瓦时|兆瓦时|千瓦|兆瓦|吉瓦|省|"
     r"kWh|MWh|kW|MW|GW|GW?h|小时|bp|pct)|\d+\.\d+)")
-_DATE_LINE = re.compile(r"^\s*(?:\d{4}年|\(?\d{4}\)?[年/.\-])")
-_LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+[.、)]|[一二三四五六七八九十]+[，,、.])")
+# date spans are stripped from the line body (not line-skipping) so quantities
+# after a date still count; 1990年 inside 1990年代 is stripped too
+_DATE_SPAN = re.compile(
+    r"\d{4}年(\d{1,2}月(\d{1,2}日)?)?|\(\d{4}\)|\d{4}[/.\-]\d{1,2}([/.\-]\d{1,2})?|"
+    r"\d{1,2}月\d{1,2}日")
+_LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+[、)]|\d+\.\s|[一二三四五六七八九十]+[，,、.])")
 
 
 def extract_tags(draft: str) -> set:
@@ -22,9 +26,10 @@ def number_lines(draft: str) -> list:
             in_code = not in_code
             continue
         s = line.strip()
-        if in_code or not s or s.startswith("#") or _LIST_MARKER.match(s) or _DATE_LINE.match(s):
+        if in_code or not s or _LIST_MARKER.match(s):
             continue
-        body = TAG_RE.sub("", s)
+        s = s.lstrip("#").strip()          # headings are checked like prose
+        body = _DATE_SPAN.sub("", TAG_RE.sub("", s))
         if _QUANTITY.search(body):
             out.append((n, s))
     return out

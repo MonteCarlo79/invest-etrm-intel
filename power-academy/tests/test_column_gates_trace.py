@@ -23,9 +23,18 @@ def test_number_lines_flags_quantities_not_dates_or_lists():
     texts = [t for _, t in lines]
     assert any("0.42元/kWh" in t for t in texts)
     assert any("8省" in t for t in texts)
-    assert not any("2026年10月，山西" in t for t in texts)   # date-led line excluded
+    assert any("2026年10月，山西" in t for t in texts)   # date-led, but quantity after date
     assert not any("第一" in t for t in texts)
     assert not any("1990年代" in t for t in texts)
+    assert not any("标题" in t for t in texts)           # heading without quantity
+
+
+def test_number_lines_heading_and_decimal_lead_prose_flagged():
+    texts = [t for _, t in number_lines(
+        "## 山东均价0.42元创新高。[[E:e1]]\n1.5元/kWh的均价背后，是机制差异。[[E:e1]]\n1. 第一点。\n")]
+    assert any("均价0.42元" in t for t in texts)
+    assert any("1.5元/kWh" in t for t in texts)
+    assert not any("第一点" in t for t in texts)
 
 
 def test_fact_trace_unknown_and_uncovered():
@@ -33,3 +42,5 @@ def test_fact_trace_unknown_and_uncovered():
     joined = " | ".join(errs)
     assert "unknown tag" in joined and "uncovered" in joined
     assert check_fact_trace("均价0.42元/kWh。[[E:e_sd]]", {"e_sd"}) == []
+    # date-led line with an uncovered quantity must fail
+    assert check_fact_trace("2026年10月，山东实时均价0.42元/kWh。", {"e_sd"})
