@@ -67,7 +67,8 @@ def test_invoice_by_category_hierarchy_aware():
     by_cat = rc.invoice_by_category_frame(items)
     assert by_cat["midlong_energy"] == 6000657.47       # top line only, NOT 46M
     assert by_cat["spot_energy"] == 1263083.90
-    assert by_cat["market_redistribution"] == 176.41
+    # 0202 (176.41) contains the 0202030002 child (10,383.71 -> imbalance): reduced
+    assert by_cat["market_redistribution"] == pytest.approx(176.41 - 10383.71)
     assert by_cat["imbalance"] == 10383.71
     assert "other" not in by_cat                         # 2-digit header excluded
 
@@ -88,6 +89,41 @@ def test_invoice_by_category_db_notes_format():
     by_cat = rc.invoice_by_category_frame(items)
     assert by_cat["midlong_energy"] == 6000657.47       # NOT the double count
     assert rc.settle_volume(items) == 21906.46
+
+
+def test_parent_reduced_when_child_maps_elsewhere():
+    """山东 Feb shape: 0202 市场运营费用 (includes 020203) but 0202030006 maps to
+    imbalance — the parent must be reduced by the child, else double count.
+    河北 shape: 0202 (176.41) minus 偏差回收 children (3,610.11) -> -3,433.70."""
+    items = pd.DataFrame([
+        {"category": "market_redistribution", "amount_cny": 1841541.56,
+         "volume_mwh": None, "notes": "0202 | 市场运营费用", "counterparty": "购电侧"},
+        {"category": "market_redistribution", "amount_cny": 1743837.45,
+         "volume_mwh": None, "notes": "020201 | 成本补偿与分摊类费用", "counterparty": "购电侧"},
+        {"category": "market_redistribution", "amount_cny": 97704.11,
+         "volume_mwh": None, "notes": "020203 | 其他市场运营费用", "counterparty": "购电侧"},
+        {"category": "imbalance", "amount_cny": 97704.11,
+         "volume_mwh": None, "notes": "0202030006 | 用户侧中长期偏差收益回收", "counterparty": "购电侧"},
+    ])
+    by_cat = rc.invoice_by_category_frame(items)
+    assert by_cat["market_redistribution"] == pytest.approx(1743837.45)  # NOT 1841541.56
+    assert by_cat["imbalance"] == pytest.approx(97704.11)
+
+    jinan = pd.DataFrame([
+        {"category": "market_redistribution", "amount_cny": 176.41,
+         "volume_mwh": None, "notes": "0202 | 市场运营费用", "counterparty": "购电侧"},
+        {"category": "market_redistribution", "amount_cny": -3433.70,
+         "volume_mwh": None, "notes": "020202 | 市场平衡类费用", "counterparty": "购电侧"},
+        {"category": "imbalance", "amount_cny": 10383.71,
+         "volume_mwh": None, "notes": "0202030002 | 中长期偏差收益回收（差额）", "counterparty": "购电侧"},
+        {"category": "imbalance", "amount_cny": -6773.60,
+         "volume_mwh": None, "notes": "0202030003 | 偏差收益回收返还", "counterparty": "购电侧"},
+        {"category": "market_redistribution", "amount_cny": 3610.11,
+         "volume_mwh": None, "notes": "020203 | 其他市场运营费用", "counterparty": "购电侧"},
+    ])
+    by_cat2 = rc.invoice_by_category_frame(jinan)
+    assert by_cat2["market_redistribution"] == pytest.approx(-3433.70)   # NOT 176.41
+    assert by_cat2["imbalance"] == pytest.approx(3610.11)
 
 
 def test_invoice_totals_no_join_fanout():

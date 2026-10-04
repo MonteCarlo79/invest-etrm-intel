@@ -79,6 +79,9 @@ def invoice_by_category_frame(items: pd.DataFrame) -> dict[str, float]:
     sub-lines. The 2-digit header lines are excluded from category sums.
     Cost categories (midlong/spot/fees) use BUY-side （购电侧） lines only;
     'retail_revenue' comes from SELL-side （售电侧） 01-tree lines.
+    CRITICAL: when a child's category differs from its ancestors' (e.g. 0202 ->
+    market_redistribution but 0202030006 -> imbalance), each ancestor carrying
+    the child's amount is REDUCED by it — otherwise the fee double counts.
     """
     if items.empty:
         return {}
@@ -103,6 +106,28 @@ def invoice_by_category_frame(items: pd.DataFrame) -> dict[str, float]:
             continue
         top = g2[g2["_clen"] == g2["_clen"].min()]
         out[cat] = float(top["amount_cny"].sum())
+
+    # descendant-subtraction, restricted to codes that actually entered the sums:
+    # a summed child whose category differs from a summed ancestor's subtracts its
+    # amount from that ancestor's category (0202 includes 0202030006 otherwise).
+    summed: dict[str, str] = {}
+    for cat, g in df.groupby("category"):
+        if cat == "retail_revenue":
+            continue
+        g2 = g[~is_sell[g.index]] if is_sell.any() else g
+        g2 = g2[g2["_clen"] >= 4]
+        if g2.empty:
+            continue
+        for c in g2[g2["_clen"] == g2["_clen"].min()]["_code"]:
+            if isinstance(c, str):
+                summed[c] = cat
+    amt_by_code = dict(zip(df["_code"], df["amount_cny"]))
+    for code, cat in summed.items():
+        for plen in range(len(code) - 2, 3, -2):     # ancestors with clen >= 4 only
+            anc = code[:plen]
+            if anc in summed and summed[anc] != cat:
+                out[summed[anc]] -= float(amt_by_code[code])
+                break
     if is_sell.any():
         # sell-side fee-tree top lines ('02', '03' — len 2, not '01'): they adjust
         # what the retailer actually collects (山东: 偏差考核, 封顶结算差额, 结算调整)
