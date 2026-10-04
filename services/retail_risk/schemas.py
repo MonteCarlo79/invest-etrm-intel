@@ -123,7 +123,7 @@ ANHUI_CATEGORY_RULES: list[tuple[str, str]] = [
 SHANDONG_CATEGORY_RULES: list[tuple[str, str]] = [
     ("0101", "midlong_energy"),       # 山东 midlong settles as CfD adjustment (can be negative)
     ("0102", "spot_energy"),
-    ("0103", "ancillary_service"),    # 调频/辅助服务分摊
+    ("0103", "frequency"),           # 调频/辅助服务分摊 (CHECK has no ancillary_service)
     ("0201", "green_premium"),
     ("02020300", "imbalance"),
     ("0202", "market_redistribution"),

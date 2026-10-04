@@ -105,7 +105,7 @@ def bridge_month(conn, book_id: int, month: datetime.date) -> BridgeResult:
     res.spot_cost = by_cat.get("spot_energy", 0.0)
     res.deviation = by_cat.get("imbalance", 0.0) + by_cat.get("penalty", 0.0)
     res.other = sum(by_cat.get(c, 0.0) for c in
-                    ["govt_surcharges", "market_redistribution", "rule_charges", "other"])
+                    ["govt_surcharges", "market_redistribution", "rule_charges", "other", "frequency"])
     midlong = by_cat.get("midlong_energy", 0.0)
     res.channel_costs = {"midlong": midlong, "green_premium": by_cat.get("green_premium", 0.0)}
     total_costs = midlong + res.spot_cost + res.deviation + res.other \

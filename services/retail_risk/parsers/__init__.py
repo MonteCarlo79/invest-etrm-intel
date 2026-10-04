@@ -21,6 +21,6 @@ LOAD_PARSERS = {
 INVOICE_GLOBS = {   # province -> (glob relative to root, parser)
     "冀南": ("冀南/月结算单/*.pdf", invoice_jinan.parse_jinan_invoice),
     "浙江": ("浙江/月结算单/*.pdf", invoice_zhejiang.parse_zhejiang_invoice),
-    "山东": ("山东/2026*/景融/2026年*月景融*结算单.pdf", invoice_shandong_pdf.parse_shandong_pdf_invoice),
+    "山东": ("山东/2026*/景融/*结算单.pdf", invoice_shandong_pdf.parse_shandong_pdf_invoice),
     "安徽": ("安徽/结算单/*.pdf", invoice_anhui.parse_anhui_invoice),
 }

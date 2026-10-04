@@ -25,7 +25,7 @@ from sqlalchemy import text
 from services.retail_risk import schemas
 
 FEE_CATEGORIES = ["imbalance", "penalty", "govt_surcharges", "market_redistribution",
-                  "rule_charges", "other", "green_premium"]
+                  "rule_charges", "other", "green_premium", "frequency"]
 
 
 @dataclass

@@ -19,12 +19,14 @@ from services.retail_risk.parsers.invoice_common import (
     extract_pdf_text, parse_subject_lines, parse_summary_volume, parse_total_from_summary,
 )
 
-_MONTH_RE = re.compile(r"(\d{4})年(\d{1,2})月")
+_MONTH_RE = re.compile(r"(?:7021-)?(\d{4})[-年](\d{1,2})月?")
 
 
 def parse_shandong_pdf_invoice(path: str | Path) -> schemas.InvoiceDoc:
     path = Path(path)
     ym = _MONTH_RE.search(path.name)
+    if ym is None:
+        raise ValueError(f"Cannot parse month from {path.name}")
     text = extract_pdf_text(path, drop_fonts={"STSong-Light"})
     return schemas.InvoiceDoc(
         settlement_month=pd.to_datetime(f"{ym.group(1)}-{int(ym.group(2)):02d}-01").date(),
