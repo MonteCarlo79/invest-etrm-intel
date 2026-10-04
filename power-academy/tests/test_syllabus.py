@@ -51,3 +51,9 @@ def test_run_syllabus_end_to_end(tmp_path):
     rep = run_syllabus(outlines, mappings, FakeClient(replies), "m", tmp_path)
     assert rep["counts"]["asset_valuation"] == 2 and rep["errors"] == []
     assert (tmp_path / "review" / "syllabus_review.md").exists()
+
+
+def test_draft_track_requests_enough_tokens():
+    c = FakeClient([REPLY])
+    draft_track(c, "m", AV, [], ["s1"])
+    assert c.calls[0]["max_tokens"] >= 8000

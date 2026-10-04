@@ -28,7 +28,7 @@ def draft_track(client, model, track, items, source_ids) -> list:
     listing = "\n".join(f"- [{i['source_id']}] {i['name']}: {i['scope']}" for i in items) or "(none)"
     data = call_json(client, model, SYSTEM,
                      f"Track: {track['id']} — {track['title']}\n\nSource concepts:\n{listing}",
-                     max_tokens=4000)
+                     max_tokens=8000)
     stubs = []
     for c in data.get("concepts", []):
         srcs = [{"id": s, "use": "background"} for s in c.get("sources", []) if s in source_ids]

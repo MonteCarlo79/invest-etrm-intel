@@ -64,3 +64,9 @@ def test_run_outlines_isolates_failures_and_resumes(tmp_path):
     rep2 = run_outlines(es, cache, outd, c2, "m")
     assert rep2["ok"] == ["bad"]
     assert set(json.loads((outd / "_outlines.json").read_text())) == {"good", "bad"}
+
+
+def test_chunk_outline_requests_enough_tokens():
+    c = FakeClient([_reply(["A"])])
+    outline_source(c, "m", _e("a"), "x" * 100)
+    assert c.calls[0]["max_tokens"] >= 4000
