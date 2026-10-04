@@ -71,3 +71,16 @@ def new_article(root: Path, num: int, slug: str) -> Path:
     (d / "evidence" / "queries.yaml").write_text("queries: []\n", encoding="utf-8")
     (d / "draft.zh.md").write_text("", encoding="utf-8")
     return d
+
+
+def check_approval_ready(article_dir) -> list:
+    errs = []
+    gpath = Path(article_dir) / "gates.md"
+    body = gpath.read_text(encoding="utf-8") if gpath.exists() else ""
+    if "owner_signoff:" not in body or not body.split("owner_signoff:", 1)[1].strip():
+        errs.append("gates.md missing owner_signoff")
+    auto = body.split("<!-- auto:begin -->")[-1]
+    for gate in ("fact_trace", "license", "confidentiality", "terminology"):
+        if f"- {gate}: pass" not in auto:
+            errs.append(f"gate not passing: {gate}")
+    return errs
