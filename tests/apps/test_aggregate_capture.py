@@ -28,3 +28,13 @@ def test_label_updated_both_locales():
     src = _APP.read_text(encoding="utf-8")
     assert '"rank_kpi_capture":     "Aggregate Capture"' in src
     assert '"rank_kpi_capture":     "综合捕获率"' in src
+
+
+def test_annual_real_filters_nan():
+    """annual_real must average over evaluable days only — one NaN realized
+    day (model warmup / forecast hole) poisons an unfiltered AVG and the
+    arbitrage bar vanishes (2026-10-04 report)."""
+    src = _APP.read_text(encoding="utf-8")
+    assert "AVG(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision)) * 365" in src
+    # the unfiltered form must not remain in the ranking loader
+    assert "AVG(realized_profit_per_mwh_day)   * 365" not in src

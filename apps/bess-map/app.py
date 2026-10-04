@@ -734,8 +734,10 @@ def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_t
             -- Aggregate capture: SUM(realized)/SUM(theoretical) — a no-dispatch
             -- (NaN-realized) day counts as 0 P&L in the numerator; NaN-theo days
             -- are excluded from the denominator. Outlier-robust vs AVG of daily rates.
+            -- annual_real averages over evaluable days only: realized is NaN on
+            -- model-warmup / forecast-hole days, and one NaN poisons AVG.
             SELECT province, duration_h,
-                   ROUND((AVG(realized_profit_per_mwh_day)   * 365)::numeric, 0) AS annual_real,
+                   ROUND((AVG(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision)) * 365)::numeric, 0) AS annual_real,
                    ROUND((SUM(COALESCE(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision), 0.0))
                         / NULLIF(SUM(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision)), 0)
                         * 100)::numeric, 1) AS capture_pct,
