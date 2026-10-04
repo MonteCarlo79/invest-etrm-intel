@@ -18,7 +18,7 @@ launch() {  # $1 = shell command to run inside the container after unpacking the
   current=$(aws ecs describe-services --cluster $CLUSTER --services $SVC --region $R \
             --query 'services[0].taskDefinition' --output text)
   [ "$current" = "$TD" ] || { echo "ABORT: service is on $current, script pins $TD"; exit 1; }
-  CMD="pip install -q pyyaml pymupdf python-pptx python-docx && \
+  CMD="pip install -q pyyaml pymupdf python-pptx python-docx markdown pandas sqlalchemy && \
 python -c \"import boto3;boto3.client('s3').download_file('$B','$P/bundle.tar.gz','/tmp/b.tgz')\" && \
 mkdir -p /tmp/work && tar xzf /tmp/b.tgz -C /tmp/work && cd /tmp/work/power-academy && $1 && \
 python -m academy.cli push-results --bucket $B --prefix $P"
