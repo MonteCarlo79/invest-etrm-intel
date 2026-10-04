@@ -2,11 +2,18 @@ import argparse
 import json
 import os
 import tarfile
+from datetime import date
 from pathlib import Path
 
 from . import coverage as cv
 from . import extract as ex
 from . import llm, outline as ol, registry as rg, syllabus as sy
+from .column import editor as ed
+from .column import evidence as cev
+from .column import gates as cg
+from .column import render as crend
+from .column import scan as cscan
+from .column import schema as csch
 from .concepts import parse_concept, validate_concept, zh_is_stale
 from .glossary import check_pair, load_glossary
 from .graph import validate_graph
@@ -19,6 +26,9 @@ PRACTICE_ROOTS = [_OD / "company/SEE/power", _OD / "company/SEE/ote2/dipeng"]
 OUTLINE_MODEL = os.environ.get("ACADEMY_OUTLINE_MODEL", "claude-sonnet-4-6")
 TAG_MODEL = os.environ.get("ACADEMY_TAG_MODEL", "claude-haiku-4-5-20251001")
 RESULT_DIRS = ["inventory", "syllabus", "review", "concepts"]
+COLUMN_ROOT = ROOT / "columns" / "xiyangjing"
+BRIEFINGS_DIR = Path.home() / ("Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/"
+                               "knowledge/hermes/briefings")
 
 
 def validate_repo(root: Path) -> list:
@@ -136,6 +146,82 @@ def cmd_pull_results(a):
         t.extractall(ROOT)
 
 
+def _engine():
+    import sqlalchemy as sa
+    dsn = os.environ.get("PGURL")
+    if not dsn:
+        env = ROOT.parent / "config" / ".env"
+        if env.exists():
+            for line in env.read_text().splitlines():
+                if line.startswith("PGURL="):
+                    dsn = line.split("=", 1)[1]
+    if not dsn:
+        raise SystemExit("PGURL not set and config/.env not found")
+    try:
+        e = sa.create_engine(dsn)
+        with e.connect():
+            pass
+        return e
+    except Exception as e:
+        raise SystemExit(f"DB connect failed: {e} — check Astrill AWS bypass + RDS SG rule")
+
+
+def _licenses():
+    return (load_yaml(COLUMN_ROOT / "style" / "licenses.yaml") or {}).get("licenses") or {}
+
+
+def cmd_col_new(a):
+    print(csch.new_article(COLUMN_ROOT, a.num, a.slug))
+
+
+def cmd_col_evidence(a):
+    entries = cev.build_pack(csch.article_dir(COLUMN_ROOT, a.article), _engine(), _licenses())
+    print("built", len(entries), "evidence entries")
+
+
+def cmd_col_verify(a):
+    problems = cev.verify_pack(csch.article_dir(COLUMN_ROOT, a.article), _engine())
+    print("\n".join(problems) or "all snapshots current")
+    raise SystemExit(1 if problems else 0)
+
+
+def cmd_col_gates(a):
+    print(cg.run_gates(csch.article_dir(COLUMN_ROOT, a.article), COLUMN_ROOT))
+
+
+def cmd_col_render(a):
+    print(crend.render_article(csch.article_dir(COLUMN_ROOT, a.article), COLUMN_ROOT))
+
+
+def cmd_col_scan(a):
+    md = cscan.render_scan_md(cscan.scan_anomalies(cscan.load_prices(_engine()),
+                                                   date.today().isoformat()),
+                              date.today().isoformat())
+    (COLUMN_ROOT / "topics").mkdir(exist_ok=True)
+    (COLUMN_ROOT / "topics" / "weekly_scan.md").write_text(md, encoding="utf-8")
+    print(md)
+
+
+def cmd_col_propose(a):
+    today = date.today().isoformat()
+    engine = _engine()
+    scan_path = COLUMN_ROOT / "topics" / "weekly_scan.md"
+    scan_md = scan_path.read_text(encoding="utf-8") if scan_path.exists() else "(no scan)"
+    backlog = load_yaml(COLUMN_ROOT / "topics" / "backlog.yaml") or {"topics": []}
+    titles = [t.get("working_title") for t in backlog.get("topics", [])]
+    concept_ids = []
+    tracks = ROOT / "syllabus" / "tracks.yaml"
+    if tracks.exists():
+        concept_ids = [c["id"] for t in (load_yaml(tracks) or {}).get("tracks", [])
+                       for c in t.get("concepts", [])]
+    ctx = ed.gather_context(BRIEFINGS_DIR, engine, scan_md, concept_ids, titles)
+    props = ed.propose(_client(), os.environ.get("ACADEMY_EDITOR_MODEL", OUTLINE_MODEL), ctx)
+    n = ed.append_backlog(COLUMN_ROOT, props, today)
+    print(f"proposed {len(props)}, added {n}")
+    for p in props:
+        print("-", p.get("working_title"), "·", p.get("hook", {}).get("source"))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="academy")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -151,6 +237,18 @@ def main(argv=None):
         s = sub.add_parser(name)
         s.add_argument("--bucket", required=True)
         s.add_argument("--prefix", default="power-academy")
+        s.set_defaults(fn=fn)
+    col = sub.add_parser("column").add_subparsers(dest="sub", required=True)
+    n = col.add_parser("new")
+    n.add_argument("--num", type=int, required=True)
+    n.add_argument("--slug", required=True)
+    n.set_defaults(fn=cmd_col_new)
+    for name, fn in [("evidence", cmd_col_evidence), ("verify", cmd_col_verify),
+                     ("gates", cmd_col_gates), ("render", cmd_col_render),
+                     ("scan", cmd_col_scan), ("propose-topics", cmd_col_propose)]:
+        s = col.add_parser(name)
+        if name in ("evidence", "verify", "gates", "render"):
+            s.add_argument("article")
         s.set_defaults(fn=fn)
     a = p.parse_args(argv)
     a.fn(a)
