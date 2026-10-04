@@ -17,7 +17,7 @@ from .column import schema as csch
 from .concepts import parse_concept, validate_concept, zh_is_stale
 from .glossary import check_pair, load_glossary
 from .graph import validate_graph
-from .io import dump_yaml
+from .io import dump_yaml, load_yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 _OD = Path.home() / "Library/CloudStorage/OneDrive-Personal"

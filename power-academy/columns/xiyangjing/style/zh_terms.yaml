@@ -1,0 +1,6 @@
+terms:
+  - {canonical: 现货市场, variants: [即期市场]}
+  - {canonical: 中长期交易, variants: [中长期合约市场]}
+  - {canonical: 容量电价, variants: [容量价格]}
+  - {canonical: 偏差考核, variants: [偏差惩罚]}
+  - {canonical: 辅助服务, variants: []}

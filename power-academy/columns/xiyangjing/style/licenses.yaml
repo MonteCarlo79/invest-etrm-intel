@@ -1,0 +1,7 @@
+licenses:
+  marketdata.spot_prices_hourly: licensed_restricted   # LingFeng 第三方数据
+  marketdata.spot_fundamentals_hourly: licensed_restricted
+  marketdata.province_fundamentals: licensed_restricted
+  staging.spot_interprov_flow: licensed_restricted
+  marketdata.bess_capture_daily: licensed_restricted   # 派生自第三方价格
+  staging.spot_knowledge_docs: public                  # 政策文件为公开文件

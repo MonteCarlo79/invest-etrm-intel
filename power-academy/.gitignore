@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 bundle.tar.gz
 results.tar.gz
+columns/xiyangjing/articles/*/evidence/data/

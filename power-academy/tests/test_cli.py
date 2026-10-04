@@ -45,3 +45,11 @@ def test_zh_file_without_en_reported(tmp_path):
     _glossary(tmp_path)
     _write(tmp_path, "orphan.zh.md", {"id": "orphan"}, "x\n")
     assert any("orphan.zh.md" in e and "no English" in e for e in validate_repo(tmp_path))
+
+
+def test_column_licenses_reads_style_file(tmp_path, monkeypatch):
+    import academy.cli as cli
+    monkeypatch.setattr(cli, "COLUMN_ROOT", tmp_path)
+    (tmp_path / "style").mkdir()
+    (tmp_path / "style" / "licenses.yaml").write_text("licenses:\n  t: own\n", encoding="utf-8")
+    assert cli._licenses() == {"t": "own"}
