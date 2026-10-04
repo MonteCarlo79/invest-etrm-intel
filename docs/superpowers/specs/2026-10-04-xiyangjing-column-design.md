@@ -138,9 +138,9 @@ Runs with VPN on (Anthropic reachable); no new infrastructure. A scheduled Herme
 **Goal:** the editor (and morning briefings) see major European/American market developments without live web search.
 
 **Design:**
-- A feed list in config (`feeds.yaml`): name, type (`rss | modo_api`), URL/endpoint, cadence. Seeded with **Timera Energy** (public RSS) and **Modo Energy** (reuse the existing browser-free NextAuth session flow in `services/gb_knowledge/modo_ai.py`); extensible by editing the list.
-- A hermes ingestion job: fetch → dedupe (by URL hash) → store items as markdown under `knowledge/hermes/feeds/YYYY-MM-DD-<source>.md` with title/date/link/summary, and include a short international section in the daily briefing.
-- No paywalled-content circumvention: RSS summaries and headline+link for anything gated; Modo uses the existing licensed session.
+- A feed list in config (`feeds.yaml`): name, type (`rss | modo_api | file_drop`), URL/endpoint, cadence. Seeded with **Timera Energy** (public RSS), **Modo Energy** (existing browser-free NextAuth session flow in `services/gb_knowledge/modo_ai.py`), **Montel Energy** (public headlines/RSS; subscription articles as summaries + links only), **Cornwall Insight** (public insights RSS/blog), **EnAppSys** (public blog RSS, plus `file_drop` for subscriber reports the owner already receives — dropped into a watched folder, e.g. the existing OneDrive `EnAppSys` folder); extensible by editing the list.
+- A hermes ingestion job: fetch (or pick up dropped files) → dedupe (by URL/file hash) → store items as markdown under `knowledge/hermes/feeds/YYYY-MM-DD-<source>.md` with title/date/link/summary, and include a short international section in the daily briefing.
+- No paywalled-content circumvention: RSS summaries and headline+link for anything gated; Modo and subscription sources use only the owner's existing licensed access.
 
 **Cross-pillar impact:** hermes image change + deploy. Deploy follows CLAUDE.md hermes rules (jq-swap from the service's current tdArn, never family-latest; explicit in-session confirmation). Sequenced after the column tooling; the editor works without it (paste-in covers international until then).
 
