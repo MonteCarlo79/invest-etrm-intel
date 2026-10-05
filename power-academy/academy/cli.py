@@ -255,6 +255,10 @@ def main(argv=None):
     pk = con.add_parser("pack")
     pk.add_argument("concept_id")
     pk.set_defaults(fn=lambda a: print(auth.build_pack(ROOT, a.concept_id)))
+    ss = con.add_parser("set-status")
+    ss.add_argument("concept_id")
+    ss.add_argument("status", choices=["stub", "drafted", "reviewed", "published"])
+    ss.set_defaults(fn=lambda a: auth.set_status(ROOT, a.concept_id, a.status))
     a = p.parse_args(argv)
     a.fn(a)
 

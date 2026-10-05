@@ -33,3 +33,34 @@ def build_pack(root: Path, concept_id: str, max_excerpt: int = 4000) -> str:
             parts.append("(no cached text)")
         parts.append("")
     return "\n".join(parts)
+
+
+import subprocess
+import sys
+
+from .concepts import render_concept
+
+ORDER = ("stub", "drafted", "reviewed", "published")
+
+
+def set_status(root, concept_id, status, labs_root=None) -> None:
+    root = Path(root)
+    path = find_concept(root, concept_id)
+    fm, body = parse_concept(path)
+    if status not in ORDER:
+        raise ValueError(f"status must be one of {ORDER}")
+    if ORDER.index(status) < ORDER.index(fm["status"]):
+        raise ValueError(f"cannot move {fm['status']} -> {status}")
+    if status == "reviewed":
+        lab = Path(labs_root or root / "labs") / concept_id
+        if not fm.get("no_lab_reason"):
+            if not (lab / "test_lab.py").exists():
+                raise ValueError("reviewed requires a lab (labs/<id>/test_lab.py) or no_lab_reason")
+            r = subprocess.run([sys.executable, "-m", "pytest", str(lab), "-q"],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                raise ValueError("lab tests failing:\n" + r.stdout[-2000:])
+    if status == "published" and not (fm.get("signoff") or {}).get("en"):
+        raise ValueError("published requires signoff.en in front matter")
+    fm["status"] = status
+    path.write_text(render_concept(fm, body), encoding="utf-8")
