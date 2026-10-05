@@ -125,7 +125,7 @@ def cmd_bundle(a):
     out = ROOT / "bundle.tar.gz"
     with tarfile.open(out, "w:gz") as t:
         t.add(ROOT / "academy", arcname="power-academy/academy")
-        for d in ("cache", "sources", "glossary"):
+        for d in ("cache", "sources", "glossary", "concepts"):
             t.add(ROOT / d, arcname=f"power-academy/{d}")
     _s3().upload_file(str(out), a.bucket, f"{a.prefix}/bundle.tar.gz")
     print("uploaded", out.stat().st_size, "bytes")

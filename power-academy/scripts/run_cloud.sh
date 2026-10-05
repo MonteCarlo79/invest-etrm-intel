@@ -52,6 +52,10 @@ case "${1:-}" in
   pilot)   launch "python -m academy.cli outline --only $PILOT_IDS && python -m academy.cli push-results --bucket $B --prefix $P" ;;
   full)    (cd "$HERE" && "$PY" -m academy.cli bundle --bucket $B --prefix $P)
            launch "S=0; python -m academy.cli outline || S=1; python -m academy.cli push-results --bucket $B --prefix $P; python -m academy.cli coverage || S=1; python -m academy.cli push-results --bucket $B --prefix $P; python -m academy.cli syllabus || S=1; python -m academy.cli push-results --bucket $B --prefix $P; exit \$S" ;;
+  translate)
+           (cd "$HERE" && "$PY" -m academy.cli bundle --bucket $B --prefix $P)
+           IDS="spark_dark_spread_fundamentals heat_rate_and_plant_parameters intrinsic_vs_extrinsic_value stochastic_price_processes_for_power_and_fuel spread_option_pricing_models real_options_framework_for_generation_assets monte_carlo_and_lsm_for_generation_valuation piecewise_replication_and_ccgt_intrinsic_modelling power_price_spike_models_and_option_valuation ccgt_investment_option_and_optimal_timing tolling_agreement_structure_and_valuation dispatch_optimisation_and_delta_hedging"
+           launch "S=0; for id in $IDS; do python -m academy.cli concept translate \\$id || S=1; done; python -m academy.cli push-results --bucket $B --prefix $P; exit \\$S" ;;
   pull)    (cd "$HERE" && "$PY" -m academy.cli pull-results --bucket $B --prefix $P) ;;
   cleanup) aws s3 rm "s3://$B/$P/" --recursive ;;
   *) echo "usage: $0 pilot|full|pull|cleanup"; exit 2 ;;
