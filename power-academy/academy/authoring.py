@@ -84,7 +84,7 @@ def translate_concept(root, concept_id, client, model) -> Path:
     data = call_json(client, model, TRANSLATE_SYSTEM + prompt_block(terms), body,
                      max_tokens=8000)
     zh_path = path.with_name(path.stem + ".zh.md")
-    zh_path.write_text(data["zh_body"], encoding="utf-8")
+    zh_path.write_text(render_concept({"id": concept_id}, data["zh_body"]), encoding="utf-8")
     fm["translations"]["zh"] = {"status": "drafted", "en_hash": body_hash(body)}
     path.write_text(render_concept(fm, body), encoding="utf-8")
     return zh_path
