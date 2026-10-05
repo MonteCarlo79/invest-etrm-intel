@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shutil
 import tarfile
 from datetime import date
 from pathlib import Path
@@ -141,10 +142,28 @@ def cmd_push_results(a):
 
 
 def cmd_pull_results(a):
+    """Pull results from S3. Concepts are pulled selectively: only *.zh.md
+    translations are written back — never the EN concept files, which are
+    authored locally (a blind extract would clobber them with stale cloud
+    copies; the 2026-10-05 stub-overwrite incident)."""
     out = ROOT / "results.tar.gz"
     _s3().download_file(a.bucket, f"{a.prefix}/results.tar.gz", str(out))
+    stage = Path("/tmp/pa_pull_results")
+    shutil.rmtree(stage, ignore_errors=True)
     with tarfile.open(out) as t:
-        t.extractall(ROOT)
+        t.extractall(stage)
+    for d in RESULT_DIRS:
+        src = stage / d
+        if not src.exists():
+            continue
+        if d == "concepts":
+            for zh in src.rglob("*.zh.md"):
+                dest = ROOT / "concepts" / zh.relative_to(src)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(zh, dest)
+        else:
+            shutil.copytree(src, ROOT / d, dirs_exist_ok=True)
+    print("pulled (concepts: *.zh.md only)")
 
 
 def _engine():
