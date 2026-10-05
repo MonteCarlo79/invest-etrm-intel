@@ -474,3 +474,16 @@ Root cause of the Aug 20→Sep 23 silent death: launchd-spawned /bin/bash gets "
 **Fix:** any historical realized rewrite must use `--force-theoretical` (recomputes theo → theo_profit_by_day non-empty → daily rows written). Plain `--force` only suffices when theo is being rebuilt anyway.
 
 **Also:** realized NaN is stored as literal 'NaN' doubles, not NULL — `df[c].where(df[c].notna(), other=None)` on a float64 series keeps np.nan (comment at run_capture_pipeline.py:449 claims it writes NULL). Query with `col != col` to find them; `IS NULL` finds nothing.
+
+## 2026-10-05 — Forecast-hole days fossilize as "up to date" (山西 78 / 海南 66 NaN-realized days)
+
+**Symptom:** provinces accumulate scattered NaN-realized days (山西 78, 海南 66 over a year), invisible until annual_real is averaged — then the whole arbitrage column reads NaN.
+
+**Root cause chain (3 layers):**
+1. The daily cron's forecast generation can skip days per province (ingest failure / timeout / late data) — `spot_prices_hourly_rt_forecast` gets a hole.
+2. The capture write still writes the daily row with realized=NaN (stored as literal 'NaN' doubles — the `.where(notna(), None)` wart).
+3. The capture-freshness gate (`get_last_capture_day`) treats that NaN row as current → the day is never revisited by the cron and the hole fossilizes.
+
+**Fix:** historical rewrite via `run_capture_pipeline --force --force-theoretical` (in-run forecast builds from the complete price frame; NaN days recover exactly — verified 河南 09-26 to the decimal). The pipeline-level fix still open: the freshness gate must not treat NaN-realized rows as current (recompute when realized IS NaN), or the cron should retry forecast holes.
+
+**Detection query:** `WHERE realized_profit_per_mwh_day::text = 'NaN'` (IS NULL finds nothing; `col != col` fails in postgres which treats NaN = NaN).
