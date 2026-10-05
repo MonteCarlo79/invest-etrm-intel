@@ -273,10 +273,16 @@ def fetch_fundamentals(engine, schema: str, province: str) -> pd.DataFrame:
 
 
 def get_last_capture_day(engine, schema: str, province: str, model: str, duration_h: float, power_mw: float, rte: float) -> Optional[dt.date]:
+    # NaN-realized rows (forecast hole days) must NOT count as done — otherwise
+    # they fossilize: the cron writes them once and never recomputes (2026-10-05
+    # 山西/海南 incident, 700+ fossilized days nationwide). Excluding them makes
+    # the next run recompute from the first NaN day onward.
     sql = f"""
         SELECT MAX(date) AS max_date
         FROM {schema}.bess_capture_daily
         WHERE province=:p AND model=:m AND duration_h=:d AND power_mw=:pw AND roundtrip_eff=:rte
+          AND realized_profit_per_mwh_day IS NOT NULL
+          AND realized_profit_per_mwh_day::text != 'NaN'
     """
     with engine.connect() as conn:
         r = conn.execute(sql_text(sql), {"p": province, "m": model, "d": duration_h, "pw": power_mw, "rte": rte}).fetchone()
