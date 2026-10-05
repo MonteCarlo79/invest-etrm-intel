@@ -1,4 +1,4 @@
-import compute as c
+from . import compute as c
 
 
 def test_closed_form_numbers():

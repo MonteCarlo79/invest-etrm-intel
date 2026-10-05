@@ -1,6 +1,6 @@
 import pytest
 
-import compute as c
+from . import compute as c
 
 
 def test_heat_rate_curve_endpoints_and_midpoint():

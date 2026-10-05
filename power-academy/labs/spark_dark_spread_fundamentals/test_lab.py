@@ -1,4 +1,4 @@
-import compute as c
+from . import compute as c
 
 P, G, C, E, ETA_G, ETA_C = 80.0, 30.0, 15.0, 80.0, 0.50, 0.38
 

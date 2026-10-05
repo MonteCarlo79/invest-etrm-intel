@@ -1,6 +1,6 @@
 import numpy as np
 
-import compute as c
+from . import compute as c
 
 
 def shifted_mean():
