@@ -8,6 +8,7 @@ from pathlib import Path
 from . import coverage as cv
 from . import extract as ex
 from . import llm, outline as ol, registry as rg, syllabus as sy
+from . import authoring as auth
 from .column import editor as ed
 from .column import evidence as cev
 from .column import gates as cg
@@ -250,6 +251,10 @@ def main(argv=None):
         if name in ("evidence", "verify", "gates", "render"):
             s.add_argument("article")
         s.set_defaults(fn=fn)
+    con = sub.add_parser("concept").add_subparsers(dest="sub2", required=True)
+    pk = con.add_parser("pack")
+    pk.add_argument("concept_id")
+    pk.set_defaults(fn=lambda a: print(auth.build_pack(ROOT, a.concept_id)))
     a = p.parse_args(argv)
     a.fn(a)
 
