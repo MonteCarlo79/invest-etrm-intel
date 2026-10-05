@@ -5,15 +5,11 @@ Tolled: premium + residual, variance ~0. Where the deal zone sits.
 Deterministic seed=37. Units: EUR per MW-year.
 """
 
-import sys
-from pathlib import Path
-
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tolling_agreement_structure_and_valuation.compute import (SPREADS, HOURS,
-                                                               SIG_M, FEES,
-                                                               month_option_value)
+from ..tolling_agreement_structure_and_valuation.compute import (SPREADS, HOURS,
+                                                                  SIG_M, FEES,
+                                                                  month_option_value)
 
 SEED = 37
 N = 4000

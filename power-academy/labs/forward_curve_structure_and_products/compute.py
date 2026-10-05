@@ -12,9 +12,24 @@ PEAK_Q = np.array([70.0, 75.0, 65.0])
 DAYS, PEAK_H = 10, range(8, 20)          # peak 08:00-19:59 = 12h/day (simplified)
 
 
+def block_hours(month, kind):
+    """Actual hour count of a block in a month (weekends excluded from peak)."""
+    return sum(1 for d in range(DAYS) for h in range(24)
+               if (kind == "peak") == is_peak_hour(month, d, h))
+
+
 def implied_offpeak(base=BASE_Q, peak=PEAK_Q):
-    """F_op = 2*base - peak with a 12/12 hour split."""
-    return 2.0 * base - peak
+    """F_op from base/peak with the calendar's actual block hours.
+
+    General: n_b*F_base = n_pk*F_pk + n_op*F_op  ->  F_op = (n_b*F_base - n_pk*F_pk)/n_op.
+    Reduces to 2*base - peak only when peak and off-peak hours are equal.
+    """
+    out = []
+    for m in range(len(base)):
+        n_pk, n_op = block_hours(m, "peak"), block_hours(m, "offpeak")
+        n_b = n_pk + n_op
+        out.append((n_b * base[m] - n_pk * peak[m]) / n_op)
+    return np.array(out)
 
 
 def is_peak_hour(month, day, hour):
@@ -55,8 +70,12 @@ if __name__ == "__main__":
     print("implied offpeak:", implied_offpeak())
     flat = build_curve()
     for m in range(3):
+        n_pk, n_op = block_hours(m, "peak"), block_hours(m, "offpeak")
+        base = (n_pk * block_average(flat, m, "peak")
+                + n_op * block_average(flat, m, "offpeak")) / (n_pk + n_op)
         print(f"month {m}: peak reprices {block_average(flat, m, 'peak'):.6f} "
-          f"(quote {PEAK_Q[m]}), base { (block_average(flat, m, 'peak') + block_average(flat, m, 'offpeak')) / 2:.6f} (quote {BASE_Q[m]})")
+              f"(quote {PEAK_Q[m]}), base {base:.6f} (quote {BASE_Q[m]}, "
+              f"{n_pk}/{n_op}h)")
     w = normalised_profile({8: 1.3, 9: 1.2, 12: 0.7, 13: 0.7, 18: 1.25, 19: 1.15})
     shaped = build_curve(profile=w)
     energy = sum(shaped[m * DAYS * 24 + d * 24 + h]

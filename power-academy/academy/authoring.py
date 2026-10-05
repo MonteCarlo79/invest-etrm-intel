@@ -51,11 +51,11 @@ def set_status(root, concept_id, status, labs_root=None) -> None:
         raise ValueError(f"status must be one of {ORDER}")
     if ORDER.index(status) < ORDER.index(fm["status"]):
         raise ValueError(f"cannot move {fm['status']} -> {status}")
-    if status == "reviewed":
+    if status in ("reviewed", "published"):
         lab = Path(labs_root or root / "labs") / concept_id
         if not fm.get("no_lab_reason"):
             if not (lab / "test_lab.py").exists():
-                raise ValueError("reviewed requires a lab (labs/<id>/test_lab.py) or no_lab_reason")
+                raise ValueError(f"{status} requires a lab (labs/<id>/test_lab.py) or no_lab_reason")
             r = subprocess.run([sys.executable, "-m", "pytest", str(lab), "-q"],
                                capture_output=True, text=True)
             if r.returncode != 0:

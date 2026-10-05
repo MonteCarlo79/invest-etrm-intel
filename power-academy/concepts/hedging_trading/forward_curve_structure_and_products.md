@@ -41,7 +41,9 @@ Two disciplines keep the bridge honest. First, **consistency**: baseload is by d
 
 **Consistency.** Since base hours partition into peak and offpeak hours,
 
-$$F_{base} = \frac{|B_{pk}|\,F_{pk} + |B_{op}|\,F_{op}}{24}, \qquad F_{op}^{implied} = \frac{24 F_{base} - 12 F_{pk}}{12} \text{ (weekday day-counts aside)}.$$
+$$F_{base} = \frac{|B_{pk}|\,F_{pk} + |B_{op}|\,F_{op}}{|B_{pk}| + |B_{op}|}, \qquad F_{op}^{implied} = \frac{|B|\,F_{base} - |B_{pk}|\,F_{pk}}{|B_{op}|}.$$
+
+The implied-offpeak formula uses the **actual block hours of the calendar month** — peak days exclude weekends (and holidays), so the split is rarely 12/12. Only when peak and off-peak hours are equal does it reduce to the back-of-envelope $F_{op} = 2 F_{base} - F_{pk}$. Using the simplified formula on a real calendar misprices baseload — in the lab, by up to 6 €/MWh.
 
 **Cascade.** A year contract = its quarters; a quarter = its months. The cascade must reprice: the year's price is the hour-weighted average of the quarters', and so on down. When only some levels are quoted, the curve inherits the finest available quote per period and back-fills the rest from the parent.
 
@@ -51,9 +53,10 @@ $$F_{base} = \frac{|B_{pk}|\,F_{pk} + |B_{op}|\,F_{op}}{24}, \qquad F_{op}^{impl
 
 Three monthly quotes: base $[50, 55, 48]$, peak $[70, 75, 65]$ €/MWh (simplified: every month has 12 peak + 12 offpeak hours per day).
 
-- Implied offpeak: $2 \times base - peak = [30, 35, 31]$ €/MWh.
-- Hourly curve with a peak-hour profile $w_h$ (higher mornings/evenings, dip midday): block averages reprice base and peak quotes to $< 10^{-6}$; the shaped peak-block *energy-weighted* sum matches the quote times block hours exactly.
-- The lab builds the curve for a small synthetic calendar and asserts every repricing identity.
+The synthetic calendar (3 months × 10 days, weekends excluded from peak) gives 96/84/84 peak hours and 144/156/156 off-peak hours per month.
+
+- Implied offpeak with the actual block hours: $[36.7, 44.2, 38.8]$ €/MWh (the 12/12 shortcut would give $[30, 35, 31]$ — visibly wrong, and the volume-weighted base then misses the quote by several €/MWh).
+- Hourly curve with a peak-hour profile $w_h$: block averages reprice base and peak quotes to $< 10^{-6}$; the shaped peak-block energy matches the quote times block hours exactly; the equal-hours special case is asserted as a special case, not the rule.
 
 `labs/forward_curve_structure_and_products/compute.py` does the build; its test asserts implied offpeak, repricing to 1e-6, and shape preservation.
 

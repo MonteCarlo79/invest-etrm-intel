@@ -12,7 +12,7 @@ import numpy as np
 from scipy.stats import norm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from spread_option_pricing_models.compute import margrabe
+from ..spread_option_pricing_models.compute import margrabe
 
 F1, F2, S1, S2, RHO, T, DF = 80.0, 60.0, 0.50, 0.30, 0.40, 0.25, 0.99
 

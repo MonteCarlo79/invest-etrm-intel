@@ -5,13 +5,9 @@ Delta ladder -> tradeable volumes (with base/peak overlap adjustment)
 synthetic month. Deterministic seed=17. Units: MW, MWh, EUR.
 """
 
-import sys
-from pathlib import Path
-
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from baseload_peak_offpeak_delta_decomposition import compute as dec
+from ..baseload_peak_offpeak_delta_decomposition import compute as dec
 
 MEL, N_DAYS = 100.0, 20
 

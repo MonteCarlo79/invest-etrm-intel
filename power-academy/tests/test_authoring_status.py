@@ -49,3 +49,14 @@ def test_backward_status_allowed_without_gates(tmp_path):
     set_status(root, "c1", "drafted", labs_root=tmp_path / "labs")
     fm, _ = parse_concept(tmp_path / "concepts" / "asset_valuation" / "c1.md")
     assert fm["status"] == "drafted"
+
+
+def test_published_also_requires_lab(tmp_path):
+    root = _concept(tmp_path)          # no lab
+    p = root / "concepts" / "asset_valuation" / "c1.md"
+    from academy.concepts import parse_concept, render_concept
+    fm, body = parse_concept(p)
+    fm["signoff"] = {"en": "2026-10-05"}
+    p.write_text(render_concept(fm, body), encoding="utf-8")
+    with pytest.raises(ValueError, match="lab"):
+        set_status(root, "c1", "published", labs_root=tmp_path / "labs")

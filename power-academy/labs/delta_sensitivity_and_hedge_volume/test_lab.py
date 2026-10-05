@@ -1,5 +1,5 @@
 from . import compute as c
-from baseload_peak_offpeak_delta_decomposition import compute as dec
+from ..baseload_peak_offpeak_delta_decomposition import compute as dec
 
 
 def _setup():
