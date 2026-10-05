@@ -487,3 +487,11 @@ Root cause of the Aug 20→Sep 23 silent death: launchd-spawned /bin/bash gets "
 **Fix:** historical rewrite via `run_capture_pipeline --force --force-theoretical` (in-run forecast builds from the complete price frame; NaN days recover exactly — verified 河南 09-26 to the decimal). The pipeline-level fix still open: the freshness gate must not treat NaN-realized rows as current (recompute when realized IS NaN), or the cron should retry forecast holes.
 
 **Detection query:** `WHERE realized_profit_per_mwh_day::text = 'NaN'` (IS NULL finds nothing; `col != col` fails in postgres which treats NaN = NaN).
+
+## 2026-10-05 — 四川 realized disaster decomposition
+
+**Symptom:** 四川 aggregate realized = −¥17k/MWh/yr despite a working pipeline.
+
+**Decomposition (probe-verified):** (1) 2026-02-08 realized −12,683 ¥/MWh — single outlier day, on a wild February (theo avg 875.6/day vs 100–200 elsewhere; series starts 2026-02-04, likely bad early data); (2) May 2026 model failure — realized −385/day for a month (worst day −33,188% capture) with small positive theo; (3) recovery Jul–Oct (+59/+19/+65/+93). Recent data is healthy; the aggregate is poisoned by Feb+May.
+
+**Lesson:** province-level realized outliers decompose into (a) data-era artifacts (check the era's prices first), (b) genuine model-month failures (leaderboard/model-selection problem), (c) one-off catastrophe days (verify against source before trusting).
