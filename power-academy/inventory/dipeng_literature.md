@@ -1,0 +1,146 @@
+# dipeng/Literature
+
+- id: `dipeng_literature` · class: practice · type: folder
+- topic: Single-factor forward-curve-consistent energy option pricing and trinomial tree methods · level: advanced · market: mixed · year: 1999
+- worked examples: True · code: False
+
+## Concepts
+- **Forward curve consistency** — Property requiring a model to reproduce exactly the initially observed market forward price curve at every maturity.
+- **Single-factor forward price SDE** — Stochastic differential equation driving the entire energy forward curve with a negative-exponential volatility structure.
+- **Mean reversion in spot prices** — Tendency of energy spot prices to revert toward a long-run level, parameterised here by the speed-of-reversion coefficient alpha.
+- **Negative-exponential volatility structure** — Specification in which forward price return volatility declines exponentially with time-to-maturity, ensuring spot price Markovianity.
+- **Risk-neutral pricing** — Valuation of contingent claims as expected discounted payoffs under the equivalent martingale measure.
+- **European option on energy spot** — Closed-form Black-type formula for a call or put on the spot energy price under lognormal forward dynamics.
+- **European option on forward/futures contract** — Closed-form pricing formula for an option whose underlying is a forward contract maturing beyond the option expiry.
+- **Energy price cap** — Instrument limiting the floating price paid by the holder, valued as a portfolio of European call options on successive settlement dates.
+- **Energy price floor** — Instrument setting a minimum price received, valued as a portfolio of European put options.
+- **Energy price collar** — Combination of a long cap and a short floor used to bound energy price exposure within a range.
+- **Energy swaption** — Option to enter a swap exchanging floating spot price payments for a fixed strike, priced analytically by decomposition into forward options.
+- **Trinomial tree** — Discrete lattice with three branches per node used to approximate continuous spot price dynamics for American and path-dependent option pricing.
+- **State prices (Arrow-Debreu prices)** — Time-zero values of securities paying one unit if and only if a specific tree node is reached, used in forward induction to fit the forward curve.
+- **Forward induction** — Recursive computation of state prices moving forward through the tree to calibrate nodal displacements to observed forward prices.
+- **Nodal displacement (shift) method** — Two-stage tree-building technique that first constructs a zero-drift tree then shifts node levels to match the market forward curve exactly.
+- **American option early exercise** — Optimisation over stopping times embedded in backward induction through the tree to determine the value of early exercise rights.
+- **Asian (average price) option** — Path-dependent option whose payoff depends on the arithmetic average of the spot price over fixing dates, requiring storage of average distributions at each node.
+- **Path-dependent option pricing in trees** — Extension of standard backward induction storing multiple values of a path function at each node and interpolating between stored values.
+- **Convenience yield** — Implicit benefit from holding the physical commodity, inferred from the slope of the forward curve and affecting early exercise premia.
+- **Integrated forward price variance** — Integral of squared forward return volatility over the option life, determining the effective Black volatility for forward option pricing.
+- **Markovian spot price process** — Condition under which the spot price alone is sufficient as a state variable, achieved here by the exponential volatility form.
+- **Pipe-to-pipe competition (P2PC)** — The degree to which alternative pipeline routes constrain a transmission system operator from raising tariffs above competitive levels.
+- **Destination market** — A gas transport market defined by shippers who must deliver gas to a fixed network point and seek competing pipeline routes to reach it.
+- **Origin market** — A gas transport market defined by shippers who must evacuate gas from a fixed network point and seek competing pipeline routes away from it.
+- **Parallel-path (transit) market** — A gas transport market defined by shippers moving gas between two fixed external points across an intermediate network, who may have alternative transit routes.
+- **SSNIP test** — A hypothetical monopolist test that asks whether a small but significant non-transitory price increase would be profitable, used here to delineate relevant gas transport markets.
+- **Entry-exit tariff system** — A tariffication framework in which shippers pay separate charges for injecting and withdrawing gas at network nodes, independently of the specific path taken.
+- **Bypass pipeline** — A pipeline built by a network user to connect directly to an alternative network, thereby avoiding the incumbent TSO's tariffs.
+- **Herfindahl-Hirschman Index (HHI)** — A concentration measure used to assess whether the number and size distribution of competing pipelines is sufficient for effective competition.
+- **Residual Supplier Index (RSI)** — A market-power indicator measuring whether a specific supplier is pivotal to meeting demand, applied here to pipeline capacity markets.
+- **Long-run marginal cost (LRMC)** — The cost benchmark against which a TSO's tariff-setting ability is assessed to determine whether it can sustain supra-competitive prices.
+- **Secondary capacity market** — A market in which holders of long-term primary pipeline capacity resell that capacity, potentially providing competitive discipline on primary tariffs.
+- **Countervailing buyer power** — The ability of large gas shippers or project developers to negotiate tariffs bilaterally with a TSO, limiting the TSO's market power at specific entry or exit points.
+- **Spare capacity on alternative routes** — The available headroom on competing pipelines that determines whether transit or other flows can physically switch away from the incumbent TSO in response to a price increase.
+- **Natural monopoly** — A market structure in which a single pipeline operator can serve all demand at lower cost than two or more competing pipelines, underpinning the rationale for tariff regulation.
+- **Hub-to-hub capacity** — A virtual transport service facilitating gas transfers between separate virtual trading points operated by different TSOs across national borders.
+- **Virtual Trading Point (VTP)** — A notional node within an entry-exit zone where gas ownership can change without specifying a physical transport path.
+- **Tariff benchmarking** — A regulatory method that sets or validates pipeline tariffs by comparison with those of other operators rather than through a pure cost-of-service calculation.
+- **Supply-side substitutability** — The ability of alternative pipeline operators to offer competing capacity on a route within a timeframe relevant to market definition analysis.
+- **Barriers to entry in pipeline markets** — Structural and regulatory obstacles—including planning approvals, sunk costs, and right-of-way requirements—that prevent new pipelines from contesting an incumbent TSO's market.
+- **Light regulation vs full regulation** — A regulatory spectrum distinguishing pipelines subject only to third-party access obligations from those whose tariffs and service terms are also controlled in advance.
+- **Market power in gas transmission** — Covers the ability of a transmission system operator to profitably raise tariffs at entry, exit, and border points absent competitive constraints.
+- **Bypass pipeline threat** — Covers the conditions under which a shipper could economically build an independent pipeline to avoid an incumbent TSO's network.
+- **SSNIP test in pipeline markets** — Applies the Small Significant Non-transitory Increase in Price test to define relevant geographic and product markets for gas transit routes.
+- **Transit market definition** — Covers identification of origin-destination pairs for cross-border gas flows and assessment of alternative route substitutability.
+- **Origin and destination markets** — Distinguishes shipper categories based on whether gas is being injected into or withdrawn from a network at domestic or border points.
+- **Long-run marginal cost (LRMC) of pipeline capacity** — Covers the cost benchmark used to assess whether a new entrant or the incumbent can add capacity more cheaply, setting a ceiling on regulated or unregulated tariffs.
+- **Primary and secondary capacity markets** — Covers the distinction between capacity purchased directly from the TSO and capacity resold by existing shippers on bulletin boards.
+- **Price discrimination in entry-exit systems** — Covers the feasibility of charging different tariffs to transit versus domestic users by offsetting changes at paired entry and exit points.
+- **Contestability of pipeline markets** — Covers the extent to which the threat of new pipeline construction constrains the incumbent TSO's pricing for new and existing capacity.
+- **Demand elasticity for gas transport** — Covers the low responsiveness of shippers and end-customers to transport tariff increases given long-term contractual commitments and small transport cost share.
+- **Clean Development Mechanism (CDM)** — Covers the Kyoto Protocol flexibility mechanism allowing Annex I parties to earn certified emission reductions from projects in non-Annex I countries.
+- **Kyoto Mechanisms** — Covers the three market-based instruments—CDM, Joint Implementation, and International Emissions Trading—created under the Kyoto Protocol to achieve cost-effective GHG reductions.
+- **Certified Emission Reductions (CERs)** — Covers the carbon credits issued under the CDM after verification and certification of emission reductions achieved by registered project activities.
+- **Baseline and additionality in CDM** — Covers the requirement that CDM projects demonstrate emissions reductions beyond what would have occurred in the absence of the project.
+- **Crediting period for CDM projects** — Covers the time window over which a registered CDM project activity is eligible to generate CERs, including renewal procedures.
+- **Afforestation and Reforestation CDM (A/R CDM)** — Covers the specific CDM modality for land-use sink projects including the non-permanence risk and temporary credit instruments (tCER, lCER).
+- **Small-scale CDM (SSC)** — Covers simplified modalities and bundling procedures for CDM projects below defined capacity or output thresholds.
+- **Programme of Activities (PoA)** — Covers the CDM framework allowing a coordinating entity to implement multiple component project activities under a single registered programme.
+- **Designated Operational Entity (DOE)** — Covers the accredited third-party bodies responsible for validation of CDM project design documents and verification of emission reductions.
+- **Certified Emission Reduction (CER)** — Credit unit issued under the CDM representing verified GHG emission reductions from project activities in non-Annex I countries.
+- **Emission Reduction Unit (ERU)** — Credit unit issued under Joint Implementation representing GHG emission reductions transferred between Annex I Parties.
+- **Assigned Amount Unit (AAU)** — Kyoto Protocol unit representing the total permitted emissions of an Annex I Party derived from its base-year emissions and reduction target.
+- **Removal Unit (RMU)** — Kyoto Protocol unit representing net GHG removals by sinks such as afforestation and reforestation activities.
+- **Temporary CER (tCER) and Long-term CER (lCER)** — Special CER types issued specifically from afforestation and reforestation CDM project activities with time-limited validity.
+- **Joint Implementation (JI)** — Kyoto Protocol mechanism enabling credit transfers between Annex I Parties through project-based emission reductions without changing total Annex I caps.
+- **International Emissions Trading (IET)** — Market mechanism permitting Annex I Parties to buy and sell Kyoto Protocol units to achieve compliance cost-effectively without altering aggregate caps.
+- **Additionality** — Requirement that CDM or JI project emission reductions must exceed what would have occurred under a business-as-usual baseline scenario.
+- **Baseline Scenario** — Projected GHG emissions trajectory in the absence of a CDM or JI project activity, used as the reference against which reductions are measured.
+- **Project Design Document (PDD)** — Key CDM document describing a project's technical and organisational aspects including baseline and monitoring methodologies.
+- **CDM Project Cycle** — Sequential regulatory process from project planning through validation, registration, monitoring, verification, certification to CER issuance and distribution.
+- **Designated National Authority (DNA)** — National body that provides host-country approval of voluntary participation and confirms sustainable development contribution for CDM projects.
+- **CDM Executive Board (EB)** — Supervisory body under CMP authority responsible for registering CDM projects, approving methodologies, accrediting operational entities and issuing CERs.
+- **Validation** — Independent pre-registration evaluation of a CDM project against Kyoto Protocol requirements on the basis of the PDD.
+- **Verification and Certification** — Periodic independent review confirming the quantity of monitored GHG reductions achieved, leading to written assurance by a DOE.
+- **Share of Proceeds (SOP)** — Levy on issued CERs covering CDM administrative costs and a 2% adaptation fund contribution for vulnerable developing Parties.
+- **Compliance and Carry-over** — Rules determining consequences of Annex I excess emissions and conditions under which surplus KP units can be banked to subsequent commitment periods.
+- **Emission Cap** — Quantified GHG limit for an Annex I Party calculated as the sum of AAUs, RMUs, ERUs, CERs and IET adjustments over a commitment period.
+
+## Methods
+- Analytical integration of lognormal forward price SDE
+- Black-Scholes-type closed-form option pricing
+- Put-call parity
+- Trinomial tree construction with equal time and space steps
+- Two-stage nodal displacement calibration
+- Forward induction for state price computation
+- Backward induction for option valuation
+- Hull-White path-dependent pricing algorithm with interpolation
+- Log-linear grid for arithmetic average distribution approximation
+- Least-squares fitting of exponential volatility to historical futures return standard deviations
+- Convergence analysis across time steps and stored values
+- SSNIP test applied to pipeline route substitutability
+- HHI and RSI calculation for pipeline market concentration
+- Annualised capital cost comparison for bypass pipeline feasibility
+- Route-by-route transit capacity analysis
+- Qualitative assessment of barriers to entry and permitting
+- Survey review of shipper experience with route switching
+- Benchmarking of alternative route tariffs
+- SSNIP test
+- Tariff comparison analysis
+- Bypass cost estimation
+- Capacity availability assessment (primary and secondary markets)
+- Profit maximisation analysis under capacity constraints
+- Long-run marginal cost calculation
+- Entry-exit price decomposition
+- CDM project cycle procedural mapping
+- Baseline scenario analysis
+- Additionality assessment (investment analysis tool)
+- Cost-effectiveness analysis of emissions trading
+- Baseline and additionality assessment
+- GHG emission reduction quantification
+- KP unit accounting and compliance assessment
+
+## Implied prerequisites
+- Stochastic calculus and Ito's lemma
+- Risk-neutral valuation and equivalent martingale measure
+- Black-Scholes option pricing
+- Heath-Jarrow-Morton framework
+- Futures and forward contract mechanics
+- Lognormal distribution properties
+- Finite difference methods for PDEs
+- Basic fixed-income concepts (discount factors, forward rates)
+- Microeconomic market definition principles
+- Industrial organisation and natural monopoly theory
+- Energy regulation and third-party access frameworks
+- EU Gas Directive and network code requirements
+- Discounted cash flow and annualisation of capital costs
+- Merger control and competition law assessment tools
+- Microeconomics of natural monopoly
+- Industrial organisation and market definition
+- Pipeline network economics
+- Regulatory economics (price regulation, tariff setting)
+- Contract economics (long-term energy supply contracts)
+- Environmental economics (carbon markets, Kyoto Protocol framework)
+- Basic knowledge of EU gas market regulation (Second and Third Gas Directives)
+- Basic climate policy and UNFCCC framework
+- GHG accounting principles
+- Understanding of cap-and-trade systems
+- Kyoto Protocol structure and commitment periods

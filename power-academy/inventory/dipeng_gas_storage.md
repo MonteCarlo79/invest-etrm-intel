@@ -1,0 +1,161 @@
+# dipeng/Gas Storage
+
+- id: `dipeng_gas_storage` · class: practice · type: folder
+- topic: Gas Storage Valuation and Market Design · level: intermediate · market: EU · year: 2014
+- worked examples: True · code: False
+
+## Concepts
+- **Intrinsic Value of Storage** — The static value derived from locking in forward price differentials between injection and withdrawal seasons on the valuation date.
+- **Extrinsic Value of Storage** — The additional value beyond intrinsic value obtainable from dynamic re-optimisation using spot and forward price volatility and asset flexibility.
+- **Seasonal Spread** — The price differential between summer and winter gas forward prices used as the primary market signal for storage value, though argued to be an incomplete indicator.
+- **Rolling Intrinsic Strategy** — A dynamic hedging approach that repeatedly recalculates intrinsic value using updated forward curves and adjusts hedge positions to capture incremental gains without accepting lower value.
+- **Storage Flexibility Tools** — The set of competing instruments—storage, spot purchases, LNG, long-term contract flexibility, interruptible contracts—that shippers use to meet balancing and seasonal modulation needs.
+- **Security of Supply Insurance Value** — The option-like benefit storage provides as a physical hedge against supply interruptions, geopolitical events, and extreme weather that spot or hub markets cannot guarantee.
+- **Mothballing and Decommissioning** — Temporary or permanent removal of storage capacity from service, carrying high irreversible costs and multi-year lead times to restore, with implications for future supply security.
+- **Standard Bundled Unit (SBU)** — The contractual unit at Gas Storage Bergermeer bundling a fixed quantity of space, injection capacity, and withdrawal capacity sold under a Standard Storage Services Agreement.
+- **Working Gas Bundle (WGB)** — A tradeable package of gas-in-storage and associated withdrawal-period space at Bergermeer that can be transferred, reversed, or sold between customer and bank counterparties.
+- **Indexed Capacity Fee** — A storage tariff structure where the capacity fee is linked to the average TTF summer-winter spread observed over a defined pricing window prior to the storage year.
+- **Transmission Tariffs at Storage Points** — Entry and exit charges applied to storage injection and withdrawal flows that can erode storage economics and create cross-subsidies with other network users.
+- **Power-to-Gas Technology** — An emerging conversion process that uses surplus renewable electricity to produce hydrogen or synthetic methane for underground storage and later re-conversion to power.
+- **Storage Multiplier** — A back-tested ratio expressing realised storage value relative to the indexed capacity fee benchmark, used to calibrate contract pricing at Bergermeer.
+- **Pressure Factors (Injection/Withdrawal)** — Linear curtailment factors applied to nominal injection and withdrawal capacities reflecting reservoir pressure constraints that reduce effective throughput rates.
+- **Day-Ahead Firm Storage Contract** — A bilateral agreement granting firm injection, withdrawal, and space rights on a day-ahead nomination basis for a defined seasonal period at a specific facility.
+- **Third Energy Package Unbundling** — EU regulatory requirement for ownership or functional separation of gas transmission operations from supply and production activities to ensure non-discriminatory network access.
+- **Market Integration and Storage Complementarity** — The principle that deeper cross-border gas market integration increases hub liquidity but does not eliminate the need for physical storage flexibility near demand centres.
+- **GSB Multiplier** — A price multiplier applied to the seasonal spread to determine the capacity fee per Standard Bundled Unit of gas storage.
+- **Storage Year Spread (SW Spread)** — The absolute difference between average forward baseload winter and summer TTF gas prices over defined reference days preceding a storage year.
+- **Total/Intrinsic Ratio** — The ratio of total achieved storage value (including extrinsic value) to intrinsic value derived from the seasonal spread at pricing time.
+- **Intrinsic Value** — The locked-in value of gas storage derived solely from the observable forward price seasonal spread at the time of valuation.
+- **Extrinsic Value** — The additional value of gas storage beyond intrinsic value, arising from volatility and optionality in spot and forward price movements during the storage year.
+- **Forward Curve Volatility** — The degree of variation in the forward gas price structure over a storage year, which drives the extrinsic component of storage value.
+- **Reserve Multiplier** — The minimum multiplier below which TAQA will not sell any SBUs in the primary capacity auction.
+- **Cut-Off Multiplier** — The lowest multiplier at which SBUs are actually allocated in the auction clearing process.
+- **Primary Capacity Auction** — A sealed-bid, single-round auction mechanism through which storage capacity SBUs are allocated to bidders at indexed prices via ICE Endex.
+- **Indexed Price Formula** — The pricing structure for SBUs expressed as a multiplier times the Storage Year Spread, linking capacity fees to observable market spreads.
+- **Tender (Tenor)** — The contract duration selected by a bidder in the auction, covering one, two, or three consecutive storage years.
+- **Within-Day Value** — Additional storage value created by trading gas on a day-ahead or within-day basis to exploit short-term price movements.
+- **Injection and Withdrawal Fees** — Per-unit commodity charges applied when gas is physically injected into or withdrawn from the storage facility.
+- **Inventory Management under Capacity Constraints** — Operational decisions to sell gas early on spot markets when inventory risks not reaching full capacity due to insufficient forward hedges.
+- **TTF Forward Curve** — The term structure of natural gas forward prices at the Title Transfer Facility hub used as the reference index for storage valuation and fee calculation.
+- **Secondary Trading** — Transfer of capacity or gas-in-storage entitlements between storage customers after initial primary capacity allocation.
+- **Interruptible Capacity** — Storage capacity that may be curtailed by the operator under defined conditions, typically priced at a discount to firm capacity.
+- **Registered Capacity** — The contractually held injection capacity, space, or withdrawal capacity recorded in GSB's registers for a storage customer.
+- **Firm Capacity** — The effective available injection or withdrawal capacity after adjusting registered capacity by pressure factors and maintenance/outage/FM deduction factors.
+- **Injection Pressure Factor (ipf)** — A linear scaling factor reducing injection capacity as gas-in-storage increases from zero to full, ranging from 100% to 75.5%.
+- **Withdrawal Pressure Factor (wpf)** — A linear scaling factor increasing withdrawal capacity as gas-in-storage rises from zero to full, ranging from 52.3% to 100%.
+- **Maintenance Factor** — A decimal factor (0 to 1) representing the proportion of injection or withdrawal capacity unavailable due to planned or unplanned maintenance.
+- **Outage Factor** — A decimal factor (0 to 1) representing the proportion of injection or withdrawal capacity unavailable due to an unplanned outage event.
+- **Force Majeure Factor (iff / wff)** — A decimal factor applied to reduce firm injection or withdrawal capacity during a force majeure event affecting the storage facility.
+- **Gas-in-Storage** — The running contractual balance of gas held in the facility for a customer, updated each hour by injection, withdrawal, and trade quantities.
+- **Contract Quantity** — The binding injection or withdrawal quantity for a given hour, determined at the request close time from the customer's preliminary quantity.
+- **Preliminary Quantity** — The current nominated injection or withdrawal quantity for a given hour, which may be revised by the customer or GSB before the request close time.
+- **Register Transfer** — A bilateral transfer of gas-in-storage or registered capacity between two storage customers via the trade services system, without a price.
+- **Notified Trade** — A bilaterally agreed priced trade of gas-in-storage or registered capacity between two storage customers confirmed through matched notifications.
+- **Screen Trade** — An anonymous order-book trade of gas-in-storage or registered capacity executed through the central counterparty in the trade services system.
+- **Trade Services System (TSS)** — The operator-run electronic platform enabling storage customers to transfer and trade gas-in-storage and capacity among themselves.
+- **Outage Liquidated Damages (Outage LD)** — Pre-agreed damages payable by GSB to customers for each outage hour, calculated as 50% of the seasonal spread times affected registered capacity and outage factor.
+- **Spread** — The absolute difference between the average forward TTF baseload winter and summer gas prices for a storage year, used to calibrate outage damages.
+- **Outage LD Cap** — The annual ceiling on total outage liquidated damages payable by GSB to all storage customers, equal to the Spread times three million MWh.
+- **Injection Fee** — A per-kWh charge on injection contract quantities, set as a fixed fraction of the average forward Dutch baseload electricity price.
+- **Withdrawal Fee** — A per-kWh charge on withdrawal contract quantities, set as a fixed fraction of the average forward Dutch baseload electricity price.
+- **Average Forward Baseload Electricity Price** — The average of daily end-of-day settlement prices for Dutch calendar-year baseload power observed from 1 June to 31 August preceding the storage year.
+- **Capacity Fees** — Periodic charges for holding registered injection capacity, space, or withdrawal capacity under primary and secondary capacity agreements.
+- **Gas-in-Storage Price** — The agreed price at which gas-in-storage is bought or sold between customers in a notified trade or screen trade, settled via GSB.
+- **Default Quantity** — The difference between the contract quantity and the gas actually accepted or delivered at TTF in a given hour due to a party's breach.
+- **Gas Foundation** — A legal entity to which title to injected gas transfers at the connection point, holding gas in trust for the operation of the storage facility.
+- **Contractual Working Gas** — The aggregate gas-in-storage balance across all storage customers and users as recorded contractually in the GSB registers.
+- **Physical Working Gas** — The aggregate physical volume of gas in the facility beneficially owned by storage customers that can contractually be withdrawn within six months.
+- **Full Storage Day** — A day on which a customer's gas-in-storage equals or would exceed registered space, triggering GSB's right to adjust injection and withdrawal quantities.
+- **Credit Limit and Exposure** — The maximum financial exposure a customer may have outstanding with GSB, used to gate approval of trades and transfers on the TSS.
+- **TTF (Title Transfer Facility)** — The Dutch virtual gas trading and balancing point at which injection and withdrawal obligations under the agreement are physically and contractually effected.
+- **Storage Service Agreement (SSSA)** — Contractual framework governing rights and obligations between a storage operator and customer for gas storage capacity at a named facility.
+- **Customer Termination Event** — Defined conditions under which a storage customer may terminate the agreement, including operator breach, insolvency, or physical gas shortfall.
+- **GSB Termination Event** — Defined conditions under which the storage operator may terminate the agreement, including customer breach or insolvency.
+- **FM Termination Event** — Force-majeure-triggered termination right arising when injection or withdrawal outage and FM factors exceed a combined threshold over a sustained period.
+- **Injection Outage Factor (iof) and FM Factor (iff)** — Hourly capacity availability metrics that measure the proportion of injection capacity unavailable due to outage or force majeure respectively.
+- **Withdrawal Outage Factor (wof) and FM Factor (wff)** — Hourly capacity availability metrics that measure the proportion of withdrawal capacity unavailable due to outage or force majeure respectively.
+- **Termination Unwind and Present Value Settlement** — Mechanism for calculating and settling the present value of remaining registered capacities upon non-FM termination, netted against outstanding fees.
+- **Registered Injection, Withdrawal and Space Capacity** — Contractually booked capacity parameters specifying the maximum injection rate, withdrawal rate and working gas volume a customer may hold.
+- **Physical Working Gas vs Contractual Working Gas** — Comparison metric used to determine whether the operator has delivered the contracted storage volume, with a shortfall threshold triggering termination rights.
+- **Assignment and Security Interests** — Rules governing permitted transfers of contractual rights, including pledge or security interest, subject to counterparty credit and consent conditions.
+- **Customer Sensitive Information** — Category of commercially sensitive data about the customer's capacity, trades and financials that the operator is contractually required to keep confidential.
+- **Interruptible Withdrawal Capacity** — Optional additional withdrawal capacity available on a non-firm basis, subject to an incremental fee and operator discretion.
+- **Gas Quality and TTF** — Provision specifying that gas quality at the TTF virtual trading point is governed by the Dutch Network Code rather than the storage agreement.
+- **Storage Valuation Model** — Spreadsheet-based quantitative model for pricing gas storage capacity at multiple facilities using intrinsic and extrinsic value decomposition.
+- **Extrinsic (Optionality) Value of Storage** — The incremental value of storage above intrinsic arising from the ability to re-optimise injection and withdrawal decisions as prices evolve.
+- **Churn Rate** — The number of times the full working gas volume can be cycled through injection and withdrawal over a storage period, used to parameterise storage capacity.
+- **Winter-Summer Spread** — The forward price differential between winter delivery months and summer months that drives the core intrinsic value of seasonal gas storage.
+- **Within-Day and Day-Ahead Volatility** — Short-term price volatility parameters used to value the high-frequency re-optimisation rights inherent in fast-cycle or flexible storage.
+- **Working Capital (WC) in Storage Valuation** — The financing cost of the gas inventory held in storage, modelled as a drag on storage value in the pricing spreadsheets.
+- **Expert Determination** — Dispute resolution mechanism allowing either party to refer valuation disputes, including termination present-value calculations, to an independent expert.
+- **Neutral Gas Price** — A reference index price used within the agreement for fee settlement, liquidated damages and other financial calculations.
+- **Outage Liquidated Damages (Outage LDs)** — Pre-agreed financial compensation payable by the operator when planned or unplanned outages reduce available capacity below contracted levels.
+- **Capacity Fee Structure** — The schedule of fees payable for injection, withdrawal and space capacity, which are zeroed on termination except for amounts accrued pre-notice.
+- **Bulletin Board** — Operator-maintained electronic notice board used to communicate maintenance, outage, force majeure and full-storage notices to storage customers.
+- **Suspension Rights** — Customer right to suspend all contractual rights and obligations when physical gas shortfall conditions persist without a termination notice being issued.
+
+## Methods
+- Rolling intrinsic optimisation
+- Intrinsic value calculation from forward curve
+- Back-testing against historical TTF forward curves
+- Bid-ask spread adjustment
+- Working capital cost discounting (Euribor + spread)
+- Iteration over indexed pricing window (90 pricing days)
+- Seasonal spread analysis
+- Storage capacity sizing analysis (network investment avoidance)
+- Seasonal spread calculation over defined reference day windows
+- Multiplier-based indexed pricing formula
+- Single-round sealed-bid auction with pro-rata clearing at cut-off
+- Priority allocation by multiplier then tenor at tie-break
+- Historical back-testing of achieved multipliers across storage years
+- Total-to-intrinsic ratio analysis for extrinsic value quantification
+- Linear interpolation for pressure factor calculation
+- Factor-based capacity deduction (maintenance, outage, FM)
+- Pro-rata allocation of interruptible capacity
+- First-come-first-served allocation of interruptible space
+- Rolling hourly gas-in-storage accounting
+- Forward price averaging for fee and LD parameter calculation
+- Liquidated damages formula (50% × Spread × capacity × factor)
+- Aggregate cap on liquidated damages
+- Invoice netting and set-off
+- TSO nomination and scheduling coordination
+- Forward curve spread analysis for intrinsic storage valuation
+- Stochastic optimisation / Monte Carlo simulation for extrinsic storage value
+- Sensitivity analysis across injection/withdrawal capacity configurations
+- Churn-rate parameterisation of storage cycling flexibility
+- Present value calculation of remaining capacity for termination settlement
+- Working capital drag adjustment in storage pricing
+- Within-day and day-ahead volatility estimation for short-cycle value
+- Backtesting of storage dispatch strategies against historical prices
+- Threshold-based triggering logic for FM and termination event classification
+
+## Implied prerequisites
+- Natural gas forward and spot markets
+- Gas storage operational mechanics (injection, withdrawal, cushion gas)
+- European gas market structure and hubs (TTF, NBP)
+- EU energy regulation (Gas Directives, Third Energy Package, SoS Regulation 994/2010)
+- Real options concepts applied to physical assets
+- Basic commodity hedging with forward contracts
+- Energy market balancing and nomination procedures
+- Natural gas forward markets and curve structure
+- Seasonal price spread dynamics (winter/summer arbitrage)
+- Commodity storage optionality basics
+- TTF hub mechanics and settlement conventions
+- Auction theory fundamentals
+- Gas storage physical operations (injection, withdrawal, working gas)
+- Natural gas market structure and virtual trading hubs (TTF)
+- Gas storage operational concepts (injection, withdrawal, working gas, cushion gas)
+- Energy commodity forward and futures pricing
+- Seasonal spread trading and storage optionality
+- Dutch gas network code and TSO balancing rules
+- Financial risk and credit exposure management
+- Energy contract law and EFET master agreement framework
+- Natural gas market structure and physical storage mechanics
+- Forward curve construction for energy commodities
+- Options pricing theory and real-options analysis
+- Stochastic calculus and Monte Carlo methods
+- Energy commodity risk management
+- TTF and NBP gas market conventions
+- Credit risk and counterparty exposure measurement
+- Dutch energy regulatory framework and Network Code
+- Spreadsheet-based financial modelling

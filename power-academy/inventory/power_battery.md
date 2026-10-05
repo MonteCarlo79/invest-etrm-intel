@@ -1,0 +1,171 @@
+# power/Battery
+
+- id: `power_battery` · class: practice · type: folder
+- topic: GB Capacity Market auction results and battery energy storage project development · level: intermediate · market: GB · year: 2017
+- worked examples: True · code: False
+
+## Concepts
+- **Capacity Market auction clearing price** — The single price at which a GB capacity auction clears, set via bidding rounds and the Net Welfare Algorithm.
+- **Net Welfare Algorithm** — A regulatory procedure that decides whether to include a marginal capacity unit by comparing welfare gain against incremental procurement cost.
+- **Capacity Market Unit (CMU)** — The basic unit of participation in the GB Capacity Market, classified by technology type and build status.
+- **De-rated capacity** — Gross capacity adjusted downward by a technology-specific de-rating factor to reflect reliability of supply during stress events.
+- **Capacity Agreement** — A contract awarding a CMU the right to receive capacity payments in exchange for availability obligations in a defined delivery year.
+- **Early Capacity Auction (T-1 auction)** — A short-lead-time GB capacity auction targeting delivery one year ahead, distinct from the main T-4 auction.
+- **Demand Curve (capacity auction)** — A downward-sloping administrative price-quantity schedule defining the target volume of capacity procured at each price level.
+- **Proven and Unproven DSR** — Demand-Side Response CMUs distinguished by whether they have previously demonstrated delivery of their contracted capacity.
+- **CMU technology classification** — Categorisation of capacity units by generation technology (CCGT, nuclear, coal/biomass, hydro, storage, DSR, interconnector, etc.) for auction reporting.
+- **Battery Energy Storage System (BESS) as a Capacity Market unit** — Grid-scale battery storage registered as a New Build Generating CMU eligible to compete in GB capacity auctions.
+- **Storage de-rating and loop efficiency** — The round-trip efficiency of a battery storage facility used to adjust its gross capacity to net deliverable capacity.
+- **Development Consent Order (DCO)** — UK planning consent mechanism required for energy infrastructure projects above 50 MW classified as Nationally Significant Infrastructure Projects.
+- **Grid connection voltage and costs for large-scale storage** — The transmission or distribution voltage level and associated capital expenditure required to connect a utility-scale battery project.
+- **Transmission Network Use of System (TNUoS) charges** — Charges levied on generators and storage for use of the GB transmission network, which can be negative at certain connection points.
+- **Battery Management System (BMS) and EMC** — Control electronics managing cell-level battery operation, with electromagnetic compatibility challenges in large installations.
+- **Short-Term Operating Reserve (STOR)** — A National Grid ancillary service product requiring delivery of active power within a defined response time, for which storage can pre-qualify.
+- **Fast Frequency Response (FFR)** — A high-speed ancillary service requiring active power delivery within one second of a frequency deviation, relevant to battery storage.
+- **Battery degradation and end-of-life management** — The capacity fade of lithium-ion or other battery chemistries over time and the asset management procedures for replacement.
+- **Containerised vs building-housed storage deployment** — A site-level design choice comparing prefabricated container solutions with purpose-built structures for housing battery systems.
+- **Blended services procurement (EFR/FFR)** — National Grid's procurement framework combining enhanced and firm frequency response products into a single tender for storage assets.
+- **Multi-purpose energy storage application** — Covers the simultaneous or sequential delivery of multiple grid services from a single battery asset at a distribution substation.
+- **Energy Storage Device (ESD) architecture** — Covers the hierarchical hardware structure of a grid-scale battery system from individual trays through string BMS, SMS, BESDM and BESSM layers.
+- **Battery Management System (BMS)** — Covers the control and monitoring of individual battery strings and their state within a large-format grid storage installation.
+- **Power Conversion System (PCS)** — Covers the AC/DC inverter and DC/DC chopper units that mediate power flow between the battery arrays and the grid.
+- **Forecasting, Optimisation and Scheduling System (FOSS)** — Covers the software layer responsible for generating charge/discharge schedules to optimise storage dispatch across multiple services.
+- **Frequency response service** — Covers automated real-power delivery triggered by system frequency deviations, including droop curves, deadbands and response speed configuration.
+- **Static frequency response** — Covers constant-power delivery triggered by a pre-set frequency threshold, with configurable ramp rate and duration.
+- **Dynamic frequency regulation** — Covers continuous automated real-power modulation proportional to frequency deviation using configurable droop characteristics.
+- **Peak shaving** — Covers automated power threshold control that limits network loading by injecting or absorbing power when measured flows exceed an asset-rating limit.
+- **Voltage support** — Covers automated reactive or real-power delivery in response to local voltage deviations using configurable voltage droop curves.
+- **Energy arbitrage (tolling)** — Covers the commercial arrangement whereby a third party takes operational control of the storage to exploit energy price spreads or manage portfolio imbalance.
+- **State of charge (SoC) management** — Covers energy-based setpoint control used to position battery SoC in preparation for subsequent service delivery.
+- **Storage control modes** — Covers a standardised set of parameterised operating modes that map physical power/energy commands to specific use-case behaviours.
+- **SCADA integration for storage** — Covers the connection of a software-driven battery asset into an existing network SCADA and RTU architecture via digital interfaces rather than analogue signals.
+- **Enterprise Service Bus (ESB) messaging** — Covers the use of message-queue middleware to exchange schedules and status data between multi-vendor storage control and optimisation systems.
+- **Electromagnetic compatibility (EMC) in grid storage** — Covers conducted and radiated emissions arising from high-frequency switching in MW-scale PCS units and their interaction with battery management electronics.
+- **High-frequency circulating currents** — Covers unintended current flow at inverter switching harmonics through earthing and cable support structures due to skin effect at the installation scale.
+- **Factory Acceptance Testing (FAT)** — Covers formal witnessed testing of storage hardware and software at the supplier's facility against agreed functional requirements and defect acceptance criteria.
+- **Site Acceptance Testing (SAT) and System Integration Testing (SIT)** — Covers end-to-end functional and non-functional testing of the fully installed storage system within the live network environment.
+- **Network reinforcement deferral** — Covers the use of grid-connected storage to defer capital investment in conventional network infrastructure by providing additional capacity or flexibility.
+- **DNO asset management for storage** — Covers the incorporation of an energy storage asset into a distribution network operator's asset management database with appropriate data templates and maintenance schedules.
+- **Building-housed versus containerised storage** — Covers the comparative assessment of planning, logistics, balance-of-plant, operability and cost trade-offs between the two principal ESS housing approaches.
+- **Storage business models** — Covers alternative ownership and revenue structures for grid storage including DNO-owned and third-party-owned configurations with multiple revenue streams.
+- **Low Carbon Network Fund (LCNF)** — Covers the Ofgem innovation funding mechanism under which the SNS project was financed to demonstrate smart grid storage at scale.
+- **Battery Energy Storage System Management (BESSM)** — Centralised control platform coordinating battery dispatch, closed-loop power control and monitoring for a grid-connected energy storage device.
+- **State of Charge (SoC)** — Estimated proportion of remaining energy capacity in a battery system, subject to algorithmic uncertainty from temperature, ageing and current.
+- **State of Health (SoH)** — Calibration metric indicating the overall condition and usable capacity of battery cells relative to their nameplate rating.
+- **Closed-loop power control** — Feedback control architecture in which metered network power is used to continuously adjust energy storage output set-points.
+- **RTU data latency** — Communication delay introduced by a Remote Terminal Unit that limits the speed of closed-loop control response for an energy storage device.
+- **BESDM handover and SoC balancing** — Control logic that rotates active battery sub-modules to equalise state of charge, causing transient power fluctuations during ramp transitions.
+- **DC capacitor inrush current** — High transient current drawn from battery strings when charging Power Conversion System DC-side capacitors, capable of blowing protection fuses.
+- **Dynamic Firm Frequency Response (DFFR)** — Ancillary service in which a storage device responds to grid frequency deviations according to a droop characteristic, with a defined dead-band.
+- **Short Term Operating Reserve (STOR)** — National Grid reserve service requiring sustained MW delivery or absorption over a minimum two-hour window, with energy delivery tolerance penalties.
+- **Firm Frequency Response (FFR) pre-qualification testing** — Mandatory compliance testing to verify response speed and accuracy of a generator or storage asset before enrolment in the FFR market.
+- **Frequency droop characteristic** — Pre-agreed linear relationship between grid frequency deviation and storage power output used to deliver frequency response services.
+- **Reactive power support** — Provision of reactive power from a storage inverter to correct power factor, extendable indefinitely unlike energy-limited active power delivery.
+- **Flexibility Optimisation and Scheduling System (FOSS)** — Software platform used to schedule and optimise commercial and network services for an energy storage asset across multiple use cases.
+- **CAN-BUS interference** — Electromagnetic interference on the Controller Area Network communications bus degrading data integrity between battery and control subsystems.
+- **MODBUS communications link** — Serial protocol link between battery sub-modules and power conversion systems whose reliability affects coordinated power dispatch.
+- **Battery string protection fuse rating** — Selection of fuse ratings in battery strings balancing fast fault isolation against nuisance tripping from inrush currents during capacitor charging.
+- **Asset Management System (Ellipse)** — Enterprise asset register and maintenance scheduling platform used by a DNO to record asset attributes, condition indices and inspection tasks.
+- **Battery hierarchy granularity** — Decision on the level of sub-component aggregation (cell, tray, string, array) at which battery assets are registered and managed in an asset database.
+- **Engineering Maintenance Standard (EMS)** — Standardised document chain specifying inspection frequency, activities and scripts for a class of network assets to ensure consistent lifecycle management.
+- **SoC calibration drift** — Accumulating error in estimated state of charge that requires periodic full-cycle calibration to maintain accuracy in battery management systems.
+- **TRIAD period** — One of the three half-hour periods of highest national demand used by GB network operators to set transmission network use-of-system charges.
+- **Remote support link** — Secure communications path allowing geographically remote technology vendors to access, diagnose and update storage control systems without site visits.
+- **Battery Manager role** — Operational role responsible for commercial scheduling and manual control of an energy storage device, distinct from network control authorisation.
+- **Engineering Operating Standard (EOS)** — Site-specific procedural document defining roles, isolation procedures, alarm responses and safety requirements for operating a novel energy storage asset.
+- **Point of common coupling (PCC)** — Electrical connection point at which storage system power output is measured for performance assessment and network impact evaluation.
+- **Aggregator interface (KOMP)** — Control and metering interface between an energy storage operator and an aggregator enabling automated dispatch signals and performance reporting for ancillary services.
+- **Calibration Cycle** — Scheduled full charge-discharge routine used to recalibrate SoC or SoH measurements, creating a temporary loss of storage availability.
+- **Calibration Opportunity Cost** — Revenue foregone from commercial or network services during periods when the storage system is unavailable due to mandatory calibration routines.
+- **Battery Degradation** — Reduction in usable energy capacity over time due to calendar fade and cycle aging, governed by temperature, depth-of-discharge and cycling frequency.
+- **End of Life (EoL) Threshold** — The capacity level, conventionally 80% of rated capacity, at which battery cells are deemed to require replacement.
+- **Cycle Life** — The number of full charge-discharge cycles a battery technology can sustain before reaching its defined end-of-life capacity threshold.
+- **Calendar Life** — Degradation in battery capacity occurring with elapsed time independently of charge-discharge cycling activity.
+- **Second Life Application** — Re-use of battery modules that have reached end of life for their primary application in a less demanding secondary application or recycling stream.
+- **WEEE Directive** — EU regulation placing responsibility on manufacturers to recover and recycle battery modules at end of life.
+- **Stacked Service Revenue** — Combined commercial income from simultaneously offering multiple grid services using a single storage asset to maximise return on investment.
+- **Simultaneous Calibration and Service Delivery** — Scheduling calibration cycles to coincide with service delivery periods, such as exporting during a SoH discharge at peak demand to provide arbitrage or peak shaving.
+- **Net Present Value (NPV) of Storage Revenue** — Discounted sum of commercial service revenues earned over a storage asset's economic life, used to evaluate the financial impact of operational constraints.
+- **Frequency Response** — Fast injection or absorption of power by a storage system to stabilise grid frequency following generation-demand imbalances.
+- **Operating Reserve** — Committed energy capacity held available by a storage system to be dispatched by the transmission system operator when required.
+- **Energy Arbitrage** — Buying electricity at low-price periods for storage and selling at high-price periods to generate a price-spread profit.
+- **Demand Forecasting for ESS Scheduling** — Statistical prediction of local network demand used to reserve appropriate storage energy for priority network support services before allocating remaining capacity to commercial markets.
+- **Forecasting, Optimization and Scheduling System (FOSS)** — Software framework combining load forecasting, energy and power resource allocation, and cost-based optimisation to schedule a storage system across multiple concurrent service contracts.
+- **Greedy Search Heuristic** — Iterative optimisation algorithm that selects the highest-value available service at each step to build a near-optimal storage dispatch schedule.
+- **Multiple Linear Regression for Load Forecasting** — Statistical method used to predict local network demand from explanatory variables as an input to storage scheduling.
+- **Power and Energy Resource Allocation** — Apportioning the finite MW and MWh capacity of a storage system across concurrent service commitments while respecting physical and contractual constraints.
+- **Battery Replacement Procurement Considerations** — Commercial and contractual issues around warranty scope, cost responsibility and logistics for battery module replacement at end of life.
+
+## Methods
+- Sealed-bid descending-clock auction mechanism
+- Net Welfare Algorithm integration (Rule 5.9.6)
+- Exit ranking and supply curve construction
+- Capacity volume disaggregation by CMU type and technology
+- Multi-year capacity agreement duration scheduling
+- BESS commissioning and factory acceptance testing
+- EMC interference diagnosis and earthing design
+- Battery calibration and state-of-charge management
+- Grid connection staging (multi-phase 400 kV busbar works)
+- Capital cost estimation for utility-scale storage
+- Factory Acceptance Testing (FAT)
+- Site Acceptance Testing (SAT)
+- System Integration Testing (SIT)
+- User Acceptance Testing (UAT)
+- Operational Acceptance Testing (OAT)
+- Regression testing
+- EMC conducted and radiated emissions measurement
+- Thermal imaging for circulating current diagnosis
+- RTU analogue and digital data point commissioning
+- Defect tracking and prioritisation (showstopper/high/medium/low)
+- Comparative cost-benefit analysis of housing options
+- Closed-loop feedback control using metered network data
+- SoC balancing via BESDM rotation
+- Frequency droop response programming
+- STOR import/export capacity testing with energy delivery tolerance measurement
+- FFR pre-qualification testing with analogue frequency injection and digital SCADA synchronisation
+- DC capacitor inrush current calculation for fuse coordination
+- Asset hierarchy selection for database registration
+- Inspection and maintenance scheduling via asset management system
+- Battery calibration cycling for SoH and SoC reset
+- Thermal imaging for hotspot detection
+- Remote monitoring and vendor support link architecture
+- Sensitivity analysis of calibration frequency and duration on 10-year NPV revenues
+- Multiple linear regression for demand forecasting
+- Greedy search heuristic for service portfolio optimisation
+- Current integration and voltage measurement for SoC estimation
+- Full charge-discharge calibration cycle for SoH measurement
+- Probabilistic cost-based optimisation of service scheduling
+- Energy and power resource allocation under ESS constraints
+- Best-case/worst-case energy pricing analysis for calibration timing
+
+## Implied prerequisites
+- GB electricity market structure
+- Capacity Market regulatory framework (Electricity Capacity Regulations 2014)
+- Power system balancing and ancillary services
+- Basic auction theory
+- AC power systems and grid connection fundamentals
+- Battery electrochemistry basics
+- UK planning and permitting processes
+- Power systems fundamentals (AC/DC power flow, frequency and voltage control)
+- Battery electrochemistry and battery management basics
+- SCADA and RTU architecture
+- Distribution network operation
+- Power electronics and inverter switching principles
+- EMC standards (IEC 62040-2, IEC 61000 series)
+- Project management and testing lifecycle concepts
+- UK electricity market and ancillary services framework
+- Power electronics and inverter operation
+- Battery electrochemistry and lithium-ion technology
+- Distribution network protection and switching
+- SCADA and industrial communications protocols (MODBUS, CAN-BUS)
+- Ancillary services market structure in GB
+- DNO operational roles and Distribution Safety Rules
+- Basic control theory and feedback systems
+- Asset management principles for electricity networks
+- Electrochemical battery fundamentals
+- Power system operation and ancillary services
+- Distribution network planning concepts
+- Basic financial modelling and NPV calculation
+- Time-series demand data analysis
+- Optimisation under constraints
+- Electricity market price structures

@@ -1,0 +1,147 @@
+# CCGT valuation
+
+- id: `ccgt_valuation` · class: library · type: pdf
+- topic: CCGT valuation · level: advanced · market: mixed · year: 2003
+- worked examples: True · code: True
+
+## Concepts
+- **Real option to invest** — The right but not obligation to invest in a CCGT plant modelled as an American-style option over the licence period.
+- **Option to delay investment** — The value of postponing an irreversible capital commitment until conditions are more favourable.
+- **Spark spread** — The difference between the electricity price and the heat-rate-adjusted cost of natural gas per MWh produced.
+- **Spark spread forward curve** — A term structure of forward spark spread prices constructed from electricity and natural gas futures contracts.
+- **Arithmetic Brownian motion (ABM)** — A one-factor stochastic process for spark spread that permits negative values and implies a linear forward curve.
+- **One-factor mean-reverting process** — A single-factor Ornstein-Uhlenbeck process for spark spread capturing short-run reversion to a long-run equilibrium level.
+- **Two-factor mean-reverting model** — A stochastic model combining short-term mean reversion in spark spread with a long-term drifting equilibrium level.
+- **Spanning asset** — A traded financial instrument whose risk tracks that of a non-traded commodity, enabling contingent-claims valuation.
+- **Net present value (NPV) of the project** — The present value of expected cash flows from the CCGT plant minus the sunk investment cost.
+- **Investment trigger** — The spark spread level at which the NPV of investing equals the option value of waiting, defining the optimal exercise boundary.
+- **Exercise boundary** — The time-dependent threshold in the state variable space above which immediate investment is optimal.
+- **CO2 quota cost** — An additional operating cost per MWh reflecting the expected market price of emission allowances under the Kyoto framework.
+- **Take-or-pay (TOP) contract** — A long-term natural gas supply contract requiring the buyer to pay for a minimum contracted volume regardless of offtake.
+- **Heat rate** — The ratio of natural gas energy input to electrical energy output, used to convert gas prices into electricity-equivalent costs.
+- **Base load operation** — A plant operating strategy of running at maximum available capacity continuously rather than cycling with demand.
+- **Forward curve construction** — The process of synthesising long-dated annual spark spread forwards from shorter-maturity exchange-traded contracts using swap-pricing methods.
+- **Contingent claims analysis** — A valuation approach that prices an asset by constructing a replicating portfolio of traded securities to eliminate arbitrage.
+- **Risk-neutral drift** — The drift parameter of the underlying process under the risk-neutral measure used in contingent-claims pricing.
+- **Availability factor** — The fraction of hours per year a power plant is operationally available, determining effective annual generation.
+- **CCGT thermodynamic efficiency** — The ratio of electrical output to natural gas energy input for a combined-cycle gas turbine plant.
+- **Real options – option to invest** — The right but not obligation to invest in a CCGT plant, valued as a financial option to capture optimal investment timing.
+- **Infinite-horizon investment option** — A perpetual option to invest whose value satisfies an ODE with value-matching and smooth-pasting boundary conditions.
+- **Finite-horizon investment option** — A time-limited investment option whose value satisfies a PDE and requires numerical methods such as binomial or trinomial trees.
+- **One-factor mean-reversion model** — A single-factor Ornstein-Uhlenbeck process for spark spread that reverts to a long-run level, following Lucia and Schwartz (2002).
+- **Two-factor mean-reversion model** — A model decomposing spark spread into a short-term mean-reverting component and a long-term arithmetic Brownian motion component, following Lucia and Schwartz (2002).
+- **Forward curve / term structure of spark spread** — The market-implied expected future spark spread prices at various maturities, used to calibrate model parameters and assess investment profitability.
+- **Investment trigger / exercise boundary** — The critical spark spread level at which immediate investment is optimal, analogous to the early-exercise boundary of an American option.
+- **Value-matching and smooth-pasting conditions** — Boundary conditions requiring continuity of option value and its derivative at the exercise threshold for the perpetual investment option.
+- **Binomial tree** — A Cox-Ross-Rubinstein lattice discretising the ABM spark spread process to numerically value the finite investment option.
+- **Trinomial tree** — A Hull-White recombining three-branch lattice used to discretise the mean-reverting spark spread process for finite option valuation.
+- **Least Squares Monte Carlo (LSM)** — A Longstaff-Schwartz simulation method that approximates the continuation value of an American option by cross-sectional regression along simulated paths.
+- **Mean-reversion coefficient (κ)** — The speed at which the spark spread reverts toward its long-run level in the one- and two-factor models.
+- **Half-life of mean reversion** — The time for a spark spread deviation to revert halfway to the long-run mean, defined as ln(2)/κ.
+- **Market price of risk (λ)** — The risk-adjustment parameter linking the real-world drift to the risk-neutral drift used in no-arbitrage pricing of spark spread derivatives.
+- **Risk-neutral pricing / no-arbitrage** — The pricing framework under which derivative values are computed as discounted expected payoffs under the equivalent martingale measure.
+- **CO2 emission cost** — The per-tonne cost of carbon dioxide quotas that enters the operating cost of the CCGT plant and affects investment feasibility.
+- **Net present value (NPV) of investment** — The present value of expected future spark spread revenues minus investment and operating costs, used as the exercise payoff of the investment option.
+- **Parameter estimation via RMSE minimisation** — Calibration of model parameters by minimising the root mean square error between model-implied and observed forward prices.
+- **Constructed forward curve** — A proxy long-dated spark spread forward curve built from no-arbitrage conditions linking short-dated and long-dated contracts.
+- **Alternative branching in trinomial tree** — Modified up/middle/down branching at extreme nodes (jmax, jmin) that ensures non-negative probabilities under strong mean reversion.
+- **Real option** — The right but not obligation to invest in a power plant asset, valued using option-pricing techniques.
+- **American option** — An option exercisable at any time before expiry, used here to model the irreversible investment decision.
+- **Mean reversion** — The tendency of commodity prices to revert toward a long-run equilibrium level, captured in the single-factor stochastic process.
+- **Two-factor price model** — A stochastic model decomposing spot price into a mean-reverting short-term deviation and a drifting long-term component.
+- **Monte Carlo simulation** — Simulation of multiple price paths used together with the Longstaff-Schwartz least-squares method to value the American investment option.
+- **Least-squares Monte Carlo (Longstaff-Schwartz)** — A regression-based algorithm for approximating the continuation value in American option pricing via simulation.
+- **Project value (DCF of operating cash flows)** — The present value of future revenues minus operating costs over the plant lifetime, used as the underlying asset value.
+- **Early exercise boundary** — The threshold spark-spread level at which immediate investment dominates holding the option.
+- **CO2 emission quota / certificate cost** — The cost of carbon allowances under an emissions-trading scheme, modelled as a per-MWh deduction from plant revenues.
+- **Hull-White interest rate / lattice model** — A single-factor mean-reverting model and associated trinomial lattice calibration procedure adapted here for commodity price dynamics.
+- **CCGT plant economics** — Capital cost, O&M cost structure, thermal efficiency, availability, and degradation parameters for combined-cycle gas turbine plants.
+- **Irreversibility of investment** — The sunk-cost nature of capital expenditure that creates option value from waiting before committing.
+- **CHP (combined heat and power)** — A plant configuration that co-generates electricity and process steam, considered as an alternative CCGT design.
+- **Plant availability and RAM** — Reliability, availability, and maintainability metrics that affect the effective operating hours used in cash-flow valuation.
+- **NOx emission cost** — A per-MWh cost charge for nitrogen oxide emissions treated as an operating cost deduction.
+- **Two-factor electricity price model** — Electricity spot price decomposed into a mean-reverting short-term deviation and a long-term arithmetic Brownian motion component.
+- **Mean-reverting process** — Short-term price factor modelled as an Ornstein-Uhlenbeck discrete-time process with speed of reversion kappa.
+- **Arithmetic Brownian motion** — Long-term price factor modelled as an ABM with drift, correlated with the mean-reverting component.
+- **Exercise value of investment option** — Net present value of CCGT operating cash flows minus investment cost, computed analytically given current state variables.
+- **Price of risk** — Risk-adjustment parameter (alfa) applied to the short-term factor when computing risk-neutral expected revenues.
+- **Equivalent annual operating hours** — Parameter E representing the effective number of full-load hours per year used to scale revenue in the valuation formula.
+- **Weighted dummy price** — Composite scalar formed by weighting X and epsilon by their respective coefficients c1 and c2 to reduce two state variables to one for regression.
+- **Longstaff-Schwartz least-squares Monte Carlo** — American option pricing algorithm that estimates the continuation value by regressing discounted payoffs on basis functions of the state variable.
+- **Polynomial regression for continuation value** — Cubic polynomial fitted by polyfit to approximate the value-of-waiting function across in-the-money paths.
+- **Correlated simulation** — Technique for drawing correlated normal random variates to reproduce the specified correlation between the two price factors.
+- **Operating costs and insurance** — Fixed and variable running costs (opcost, insure) deducted when computing the CCGT exercise value.
+- **Carbon and certificate costs** — Clean and certificate charges per MWh incorporated as negative revenue adjustments in the exercise value function.
+- **European option benchmark** — Expected discounted terminal payoff computed at option maturity as a reference value against the American option price.
+- **Discount factor** — Continuous-time exponential discounting applied to move option payoffs back to the valuation date across simulation paths.
+
+## Methods
+- Binomial tree
+- Trinomial tree
+- Monte Carlo simulation
+- Ordinary differential equation (ODE) solution for infinite-horizon option
+- Partial differential equation (PDE) formulation
+- Ito's Lemma
+- Least squares regression for parameter estimation
+- Swap-pricing formula for forward curve construction
+- Contingent claims / replicating portfolio analysis
+- ODE solution for perpetual real option (value-matching and smooth-pasting)
+- PDE formulation for finite-horizon real options
+- Cox-Ross-Rubinstein binomial tree
+- Hull-White trinomial tree (two-stage construction)
+- Least Squares Monte Carlo (Longstaff-Schwartz) for American options
+- OLS regression on discrete AR(1) spark spread process
+- Forward curve construction via no-arbitrage swap conditions
+- RMSE minimisation for parameter calibration
+- Sensitivity / comparative statics analysis
+- Polynomial regression for continuation value approximation
+- Binomial tree (arithmetic Brownian motion underlying)
+- Trinomial tree (Hull-White mean-reverting underlying)
+- Monte Carlo simulation with Longstaff-Schwartz least-squares regression
+- Discounted cash flow (analytic project value formula)
+- Infinite-horizon real-option threshold (S-star) formula
+- VBA implementation of binomial lattice
+- MATLAB implementation of trinomial lattice and Monte Carlo
+- Least-squares Monte Carlo (Longstaff-Schwartz) for American option pricing
+- Ornstein-Uhlenbeck discrete-time simulation
+- Arithmetic Brownian motion simulation
+- Correlated random variate generation
+- Cubic polynomial regression (polyfit) for continuation value approximation
+- Analytical NPV integration for exercise value
+- Monte Carlo averaging with path-wise early-exercise override
+
+## Implied prerequisites
+- Stochastic calculus and Ito's Lemma
+- Financial derivatives pricing theory
+- Discounted cash flow and NPV analysis
+- Electricity and natural gas market structure
+- Numerical methods for PDEs
+- Basic econometrics and regression analysis
+- Options theory (American and European)
+- Commodity forward and futures markets
+- Stochastic calculus and Ito's lemma
+- Risk-neutral pricing and equivalent martingale measures
+- American and European option pricing theory
+- Ornstein-Uhlenbeck / mean-reverting processes
+- Binomial and trinomial lattice methods
+- Monte Carlo simulation techniques
+- Ordinary and partial differential equations
+- Time series regression and autoregressive models
+- Commodity forward curve theory
+- Basic energy market mechanics (electricity and natural gas)
+- Stochastic calculus and Brownian motion
+- Derivatives pricing theory (risk-neutral valuation)
+- Binomial and trinomial option pricing trees
+- Mean-reverting (Ornstein-Uhlenbeck) processes
+- Monte Carlo methods in finance
+- Discounted cash flow analysis
+- Basic thermodynamics and power-plant engineering
+- Emissions trading and carbon markets
+- Nordic electricity market structure
+- Stochastic processes and Ito calculus
+- Risk-neutral valuation and change of measure
+- Options pricing theory (American vs European)
+- Least-squares Monte Carlo method
+- Electricity market fundamentals
+- MATLAB programming
+- Correlated multivariate normal distributions

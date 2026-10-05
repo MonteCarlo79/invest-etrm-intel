@@ -1,0 +1,81 @@
+# dipeng/EQ
+
+- id: `dipeng_eq` · class: practice · type: folder
+- topic: CHP power plant forward valuation and dispatch optimisation · level: advanced · market: EU · year: 2015
+- worked examples: True · code: False
+
+## Concepts
+- **CHP plant forward valuation** — Determining the optimised economic performance of a combined heat and power plant over a forward valuation period using forecasted electricity, gas and CO2 prices.
+- **Intrinsic value** — Plant value derived from optimising dispatch against a single deterministic forward price curve.
+- **Extrinsic value** — Additional plant value captured beyond intrinsic value by optimising across multiple price scenarios representing price uncertainty.
+- **Dynamic Programming (DP) optimisation** — Recursive optimisation technique applied to determine start/end plant states and approximate fuel consumption within weekly sub-periods.
+- **Linear Programming (LP) optimisation** — Optimisation engine used after DP to solve for precise hourly dispatch subject to physical and contractual constraints within each weekly period.
+- **Plant state** — Binary or discrete representation of whether a CHP unit is running, starting up, or shut down at each time step.
+- **Start-up and shut-down costs** — Fixed cost charges incurred each time the plant transitions from off to on or on to off, affecting dispatch decisions.
+- **Heat demand constraint** — Minimum or required heat output the CHP must satisfy in each period, acting as an additional dispatch constraint.
+- **Maintenance periods** — Scheduled intervals during which the plant is unavailable for dispatch and must be excluded from the optimisation.
+- **Price scenario generation** — Construction of multiple electricity, gas and CO2 price paths around the forward curve for use in extrinsic value calculation.
+- **Gas day convention** — British market time convention defining a gas-flow day as 06:00 to 05:59 the following day, relevant when aligning gas and power price curves.
+- **Valuation date** — The end-of-day reference point at which forward prices are quoted, representing the last trading day before the forward curve commences.
+- **Weekly period decomposition** — Decomposition of the full valuation horizon into 168-hour sub-problems to make the optimisation computationally tractable.
+- **Variable operation and maintenance costs** — Output-dependent running costs of the plant included in the profit calculation alongside fuel and CO2 costs.
+- **CO2 emission costs** — Carbon cost component of plant dispatch economics derived from CO2 price scenarios and plant emission intensity.
+- **Electricity spot price** — Half-hourly observed market-clearing price for electricity in a wholesale spot market.
+- **Trading interval index** — Sequential numeric identifier (serial date format) labelling each half-hourly settlement period.
+- **Dispatch period flag** — Integer counter distinguishing sub-daily dispatch windows or trading periods within a day.
+- **Capacity or volume parameter** — Numeric field (≈100) likely representing a generation capacity, interconnector limit, or contract volume in MW.
+- **Price cap or reference level** — Numeric field (≈232–262) indicating an administered price ceiling, reference band, or settlement residue benchmark.
+- **Derived price or cost metric** — Numeric field (≈92–104) representing a calculated unit cost, strike price, or threshold derived from adjacent columns.
+- **Binary market-state indicator** — Zero/one flag denoting whether a particular market condition, intervention event, or constraint is active in a given interval.
+- **Intraday price seasonality** — Systematic within-day variation in electricity prices visible across the half-hourly panel.
+- **Half-hourly settlement period** — The discrete time unit (approx. 30-minute interval) used to record electricity prices and dispatch states in GB wholesale markets.
+- **Intraday spot price** — The traded or reference electricity price observed within each half-hourly settlement period.
+- **Dispatch flag / dispatch state** — A binary or categorical indicator recording whether a generating unit or schedule is in a dispatched (active) or non-dispatched state during a given period.
+- **Settlement date and period indexing** — A numeric timestamp (serial date plus fractional period) scheme used to uniquely identify each half-hourly observation in the dataset.
+- **Panel data structure for power markets** — Organisation of electricity market observations across multiple dimensions (time, unit, period type) stored in a rectangular numeric array.
+- **Half-hourly settlement periods** — Time index increments of 1/48 day used to align generation data with electricity market settlement intervals.
+- **Unit commitment flags** — Binary indicators recording whether a generating unit is online or offline in each settlement period.
+- **Dispatch quantity** — Megawatt output level assigned to a plant in each period, drawn from structured tabular records.
+- **Plant capacity and de-rating** — Registered and effective capacity values used to constrain feasible output ranges for a generating unit.
+- **Fuel and emissions parameters** — Fixed coefficients (e.g. heat rate, carbon content) embedded in the dataset to support variable-cost and emissions calculations.
+- **Bid stack / merit order** — Ordered offer prices and quantities that determine which plants are dispatched at each price level.
+- **Start-up and shut-down events** — Discrete transitions in the unit-commitment flag series marking the beginning and end of generation runs.
+- **Intraday price variation** — Within-day pattern of settlement-period prices reflecting demand peaks and off-peak troughs observable in the output series.
+
+## Methods
+- Dynamic Programming
+- Linear Programming
+- Multi-scenario simulation
+- Weekly horizon decomposition
+- Intrinsic/extrinsic value decomposition
+- LP solver selection (lpsolve / Gurobi)
+- Tabular panel data construction at half-hourly frequency
+- Binary indicator variable encoding
+- Serial date-number indexing
+- Time-series tabulation at half-hourly frequency
+- Serial date encoding of timestamps
+- Binary indicator variable construction for dispatch states
+- Fixed-field numeric panel formatting
+- Tabular time-series data structuring
+- Merit-order dispatch simulation
+- Unit commitment scheduling
+- Spreadsheet-based optimisation (Excel Solver / VBA)
+- Binary decision variable encoding
+
+## Implied prerequisites
+- Power market fundamentals
+- CHP plant physics and operating constraints
+- Forward curve construction
+- Optimisation theory (LP and DP)
+- Real options and energy asset valuation concepts
+- CO2 markets and carbon cost accounting
+- Matlab/Excel modelling
+- Understanding of wholesale electricity market settlement periods
+- Familiarity with tabular time-series data formats
+- Basic knowledge of dispatch and merit-order mechanisms
+- Basic understanding of electricity market settlement periods
+- Knowledge of GB electricity market structure
+- Electricity market structure and settlement mechanics
+- Basic optimisation and linear programming concepts
+- Spreadsheet modelling skills
+- Understanding of thermal plant operating constraints

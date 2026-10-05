@@ -1,0 +1,133 @@
+# power/Offtake
+
+- id: `power_offtake` · class: practice · type: folder
+- topic: SDE+ Renewable Energy Feed-in Subsidy Scheme (Netherlands, Spring 2017) · level: foundation · market: NL · year: 2017
+- worked examples: True · code: False
+
+## Concepts
+- **SDE+ Operating Subsidy** — A Dutch feed-in-premium scheme that compensates renewable energy producers for the gap between production cost and market value of energy supplied.
+- **Base Amount** — The technology-specific maximum cost-of-production benchmark denominated in €/kWh that sets the ceiling for subsidy eligibility.
+- **Correction Amount** — The annually recalibrated market-value proxy for the energy supplied, used to reduce the subsidy payment when market prices rise.
+- **SDE+ Contribution** — The per-unit subsidy payment equal to the base amount minus the correction amount, floored at zero above the base energy price.
+- **Base Energy Price** — The minimum value the correction amount may take, functioning as a floor that defines the maximum possible SDE+ payment.
+- **Phased Budget Release** — A mechanism dividing each SDE+ application round into sequential phases with rising maximum phase amounts to favour lower-cost technologies.
+- **Free Category** — An option allowing applicants to bid a subsidy rate below the phase maximum in increments of 0.001 €/kWh to improve competitive ranking.
+- **Full Load Hours** — The technology-specific annual cap on subsidisable production hours at nominal capacity, determining maximum eligible output.
+- **Maximum Annual Production Eligible for Subsidy** — The product of installed capacity and maximum full load hours, capping the volume of output that attracts subsidy in any year.
+- **Subsidy Period** — The technology-dependent duration (8, 12, or 15 years) over which an awarded SDE+ grant can be drawn.
+- **Banking (SDE+)** — A provision allowing producers to carry unused or excess subsidisable production between years, with forward banking capped at 25% of annual eligible output.
+- **Negative Electricity Price Rule** — A clause withholding SDE+ payments for electricity fed into the grid during periods when the spot price is negative for six or more consecutive hours.
+- **Wind Factor** — An alternative risk-management mechanism for wind projects that replaces banking by adjusting eligible output for inter-annual wind variability.
+- **P50 Capacity Estimate** — The median probabilistic production estimate required for geothermal and wind projects to set the nominal capacity used in grant calculations.
+- **Biomass Sustainability Criteria** — Regulatory requirements (including EU RED compliance) governing the feedstock quality and origin for solid and liquid biomass categories eligible for SDE+.
+- **Co-firing / Co-gasification Category** — SDE+ subsidy categories covering partial substitution of coal with biomass in coal-fired power stations, subject to an annual energy cap of 25 PJ.
+- **Extended Lifespan Category** — An SDE+ option allowing installations previously subsidised under MEP to apply for continued support subject to minimum age and eligibility conditions.
+- **Electrical Efficiency Requirement** — A minimum ratio of electrical output to fuel input (at least 10% for biomass CHP ≤100 MWe) that installations must meet to qualify for CHP categories.
+- **Provisional vs Final Correction Amount** — A two-stage settlement process whereby an indicative correction amount guides initial payments and a final value triggers a true-up in the following calendar year.
+- **Budget Claim** — The portion of the overall round budget reserved by a granted application, calculated using capacity, full load hours, and the base energy price.
+- **Power Purchase Agreement (PPA)** — Long-tenor bilateral contract governing the sale and purchase of electricity output from a generation facility between a seller and a licensed buyer.
+- **Contracts for Difference (CfD)** — UK low-carbon support mechanism providing a top-up or clawback payment between a strike price and a market reference price for eligible generators.
+- **CfD Market Reference Price** — The benchmark energy price used to settle CfD payments, here defined as the average settlement of the season-ahead contract during the season before delivery.
+- **Day-Ahead Reference Price** — The N2EX Day-Ahead Auction hourly clearing price used as the primary electricity index for PPA settlement.
+- **Imbalance Charge / Imbalance Premium** — A fixed per-MWh deduction from the reference price charged to the seller to compensate the buyer for bearing imbalance settlement risk under the BSC.
+- **Embedded Benefits** — Financial advantages accruing to an embedded generator's offtaker including avoided BSUoS, avoided transmission losses, avoided Capacity Market Supplier Charge, Triad/TNUoS savings, and AAHEDC avoidance.
+- **Triad / TNUoS Benefit** — The avoided demand transmission network use-of-system charge arising from a generator's output during the three half-hours of highest system demand in winter, passed through to the seller.
+- **BSUoS Avoidance** — Embedded generator benefit from reducing the buyer's balancing services use-of-system charge, passed through as part of embedded benefit receipts.
+- **Renewable Energy Guarantee of Origin (REGO)** — Certificate attesting to the renewable origin of electricity generation, transferred from seller to buyer and priced as a percentage of market value in the PPA.
+- **Capacity Market Agreement** — Contract entitling a capacity provider to periodic capacity payments in return for guaranteed availability, with associated supplier charge obligations and monthly weighting factors.
+- **Interim Levy Rate** — Quarterly per-MWh charge levied on electricity suppliers by the Low Carbon Contracts Company to fund CfD payments to generators.
+- **Total Reserve Amount** — Quarterly aggregate financial reserve determined by the LCCC to cover potential CfD payment obligations, funded through supplier levies.
+- **Operational Costs Levy** — Annual per-MWh charge on electricity suppliers covering the administrative operating costs of the CfD settlement body.
+- **Capacity Market Settlement Costs Levy** — Annual fixed amount charged to electricity suppliers to recover the administrative costs of Capacity Market settlement.
+- **Capacity Market Monthly Weighting Factor** — Month-specific percentage determining how annual capacity payments and supplier charges are distributed across the delivery year.
+- **Physical Hedging of PPA** — Arrangement allowing a seller to lock in a forward price on a portion of physical generation volumes for defined periods ahead of delivery.
+- **Financial Hedge under PPA** — Separate derivative instrument (documented under ISDA and Master Netting Agreement) allowing price fixing independently of physical delivery obligations.
+- **Imbalance Risk Allocation** — Contractual assignment of responsibility for deviations between nominated and actual generation volumes and their associated BSC settlement costs.
+- **Day-Ahead Nomination** — Seller's obligation to declare expected hourly export volumes to the buyer by a specified gate closure time on the preceding business day.
+- **Within-Day Re-nomination** — Intraday adjustment to the scheduled generation volume submitted by the seller within a defined notice period, priced at the within-day market reference.
+- **Generator Distribution Use of System (GDUoS) Charges** — Distribution network charges or credits applied to an embedded generator's export connection, passed through at cost between buyer and seller.
+- **BMRP Risk** — Risk of extended plant unavailability affecting contracted power delivery, addressed primarily through Force Majeure and Termination provisions of the PPA.
+- **SDE+ Subsidy Mechanism** — Dutch feed-in premium support scheme providing a top-up between a technology-specific base amount and the market energy price across phased application rounds.
+- **SDE+ Base Amount** — Maximum technology-specific production cost benchmark (€/kWh) above which no subsidy is granted under the Dutch SDE+ scheme.
+- **SDE+ Base Energy Price** — Market reference energy price (€/kWh) subtracted from the base amount to derive the subsidy top-up paid to renewable energy producers.
+- **SDE+ Correction Amount** — Annual adjustment to the SDE+ base energy price reflecting actual market prices, used to recalibrate subsidy payments ex-post.
+- **SDE+ Phased Release** — Sequential opening of application windows at rising maximum phase amounts (€ct/kWh) within a single application round to prioritise cost-effective technologies.
+- **SDE+ Free Category** — Option for applicants to request a subsidy amount below the technology maximum base amount, in multiples of 0.1 €ct/kWh, to tailor bids to their business case.
+- **Full Load Hours (FLH)** — Annual equivalent full-power operating hours per technology category used to determine total eligible energy production for SDE+ subsidy calculations.
+- **Energy-from-Waste (EfW) Generation** — Thermal conversion of municipal solid and commercial waste to produce electricity, with REGO eligibility limited to the biogenic fraction of fuel input.
+- **Change in Law Clause** — PPA provision allowing either party to renegotiate terms if legislative, regulatory, or market rule changes materially alter the balance of risks and benefits.
+- **Bundled PPA Application** — Mechanism allowing multiple project applications to be linked so that all are honoured together or ranked as a single unit for subsidy budget allocation purposes.
+- **Inter-creditor Agreement** — Legal arrangement governing the relative rights of the PPA offtaker and project senior lenders with respect to collateral and mark-to-market exposures.
+- **Mark-to-Market (MtM) Collateral** — Credit support posted by the generator when the unrealised value of hedged positions exceeds a threshold, ranking pari passu with senior lenders.
+- **REMIT Reporting** — EU regulatory obligation to report wholesale energy market transactions and fundamental data, assigned contractually to the buyer under the PPA.
+- **Self-Billing Invoice** — Settlement mechanism under which the buyer calculates and issues the invoice to the seller based on metered generation data and agreed pricing terms.
+- **Offtake Agreement** — Long-term bilateral contract governing the sale and purchase of electricity output between a generator and an offtaker.
+- **Force Majeure** — Contractual clause releasing a party from performance obligations when prevented by events beyond its reasonable control.
+- **Change in Law** — Provision addressing how legislative or regulatory changes affect party obligations and liability under a power purchase agreement.
+- **Termination Rights** — Conditions under which either party may exit the agreement, including prolonged force majeure events.
+- **Delivery and Acceptance Obligations** — Contractual duties of the seller to deliver and the buyer to accept specified quantities of electricity at an agreed delivery point.
+- **Payment Netting** — Mechanism allowing the buyer to offset unpaid delivered amounts against sums owed to the seller during a force majeure event.
+- **Potential Future Exposure (PFE)** — Credit risk metric estimating the maximum expected exposure on a power contract over its remaining term at a given confidence level.
+- **Value at Risk (VaR)** — Statistical measure quantifying the potential loss in contract value over a defined horizon under adverse price movements.
+- **Contract for Difference (CfD) Pricing** — Valuation of the government-backed CfD support mechanism relevant to renewable and low-carbon generation revenues in GB.
+- **Imbalance Settlement** — GB market mechanism by which generation deviations from contracted positions are priced and settled by the system operator.
+- **Waste-to-Energy / CHP Economics** — Project-level financial modelling of combined heat and power plants fuelled by waste, capturing revenues, costs and subsidy income.
+- **Return on Credit Model** — Framework for assessing whether the risk-adjusted return on a counterparty credit exposure meets internal hurdle rates.
+- **Non-Disclosure Agreement (NDA)** — Confidentiality contract governing the exchange of commercially sensitive information during pre-contractual negotiations.
+- **Price Curve Modelling** — Construction of forward electricity and gas price curves used as inputs to contract valuation and risk models.
+- **Gas Price Volatility (NBP/TTF)** — Measurement of implied or historical volatility on UK and continental European natural gas benchmarks used in power price models.
+
+## Methods
+- Subsidy calculation: base amount minus correction amount
+- Maximum annual eligible production calculation (capacity × full load hours)
+- Annual SDE+ contribution estimation (contribution rate × eligible production)
+- Phased competitive allocation across technology categories
+- Free-category bid optimisation
+- P50 probabilistic yield estimation for wind and geothermal
+- Electrical efficiency ratio calculation for CHP installations
+- Thermal capacity derivation from aperture area (solar thermal)
+- PPA gross margin calculation (with and without option overlays)
+- Daily call option structuring on partial merchant volumes with seasonal exercise
+- Strike price setting relative to forward market levels
+- Phased budget allocation with first-come / lowest-bid ranking and lot-drawing tie-break
+- Embedded benefit pass-through percentage calculation
+- Triad benefit forecasting and payment
+- P50 wind energy yield calculation using Windviewer
+- Physical hedge volume limits declining by year
+- Unplanned outage deduction formula based on cumulative under-nomination vs threshold
+- CfD season-ahead reference price indexation
+- Capacity Market monthly weighting factor application to capacity payments
+- Interim levy rate determination and Total Reserve Amount calculation
+- Potential Future Exposure (PFE) simulation
+- Value at Risk (VaR) calculation
+- Forward price curve construction
+- Half-hourly generation data analysis
+- Imbalance generation aggregate modelling
+- Project economics / discounted cash flow modelling
+- Credit return modelling
+- CfD pricing analysis
+- Lag-forecast imbalance modelling
+
+## Implied prerequisites
+- Basic electricity market price concepts
+- Understanding of feed-in tariffs and feed-in premiums
+- Renewable energy technology fundamentals (solar PV, wind, biomass, geothermal, hydro)
+- Combined heat and power (CHP) operation principles
+- Energy unit conversions (kWh, MWh, kW, MW, MWth, MWe)
+- EU Renewable Energy Directive (RED) framework
+- Electricity market structure and wholesale price formation
+- Balancing and Settlement Code (BSC) fundamentals
+- Basics of forward and futures markets for power
+- Options pricing concepts (strike, exercise, premium)
+- Credit risk and collateral management
+- Renewable energy certificate schemes
+- Project finance and lender security structures
+- Capacity Market mechanism design
+- ISDA master agreement and netting
+- Power purchase agreement structure
+- GB electricity market settlement rules
+- Credit risk measurement concepts
+- Forward curve construction
+- Options pricing fundamentals
+- Renewable energy support mechanisms (CfD, ROC)
+- Basic contract law

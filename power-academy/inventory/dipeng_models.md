@@ -1,0 +1,177 @@
+# dipeng/Models
+
+- id: `dipeng_models` · class: practice · type: folder
+- topic: KYOS Analytical Platform — energy analytics software user manual · level: intermediate · market: mixed · year: 2016
+- worked examples: True · code: True
+
+## Concepts
+- **Price forward curve construction (KyCurve)** — Covers building hourly/daily/monthly commodity forward curves from market price data including peak/offpeak/baseload decomposition.
+- **Gas storage valuation (KyStore)** — Covers intrinsic, rolling intrinsic, and spot-trading valuation of gas storage assets including optimisation and hedge generation.
+- **Swing contract valuation (KySwing)** — Covers valuation of flexible gas offtake contracts with take-or-pay, make-up, and rolling intrinsic strategies.
+- **Power plant valuation (KyPlant)** — Covers stochastic valuation, dispatch optimisation, P&L and hedge outputs for thermal power plants.
+- **Price simulation (KySim)** — Covers Monte Carlo simulation of multi-commodity energy prices using calibrated stochastic models including cointegration and merit-order power.
+- **Statistical calibration (KyCalibration)** — Covers estimation of volatility, mean-reversion and correlation parameters from historical commodity price data.
+- **Risk metrics (KyRisk / KyVaR)** — Covers Earnings-at-Risk, Cash-flow-at-Risk, Volumes-at-Risk, Hedges-at-Risk and Value-at-Risk calculations for energy portfolios.
+- **Power fundamentals modelling (KyPowerFundamentals)** — Covers merit-order-based fundamental electricity price simulation using plant fleet, demand, interconnector and fuel data.
+- **Intrinsic valuation** — Covers the deterministic present-value benchmark derived from current forward prices for storage or flexible contracts.
+- **Rolling intrinsic strategy** — Covers dynamic re-hedging of storage or swing assets as the forward curve evolves over time.
+- **Commodity forward curve bootstrapping** — Covers stripping of quoted monthly, quarterly and calendar forward prices into a consistent daily or hourly price curve.
+- **Bid-ask spread as trading cost** — Covers incorporation of half the bid-ask spread as a per-unit cost when optimising storage and swing dispatch.
+- **Take-or-pay provision** — Covers minimum offtake obligations and make-up rights embedded in gas supply contracts.
+- **Carbon Price Floor (UK CPF/CPS)** — Covers the UK Carbon Price Support mechanism and its effect on CO2 price simulation and power plant hedging.
+- **Settlement price calculation** — Covers computation of reference settlement prices from traded market data for mark-to-market and invoicing.
+- **Hedging strategy and target hedge percentage** — Covers parameterisation of desired hedge ratios by maturity bucket for use in portfolio risk reporting.
+- **Volume actuals and forecasts** — Covers upload and management of time-series consumption and production forecasts linked to delivery points and business units.
+- **KyDispatch** — Covers short-term unit-commitment and economic dispatch optimisation across a fleet of power plants.
+- **Scenario / What-If analysis** — Covers re-running valuation models under alternative price or volume scenarios to assess sensitivity.
+- **Inventory valuation (KyInventory / KyCavern)** — Covers valuation and optimisation of commodity inventory positions including cavern storage with tranche-based volume constraints.
+- **Production, demand and weather time series** — Structured time series inputs covering generation output, consumption load, temperature, costs, heat, traded positions and interconnect capacity used across platform models.
+- **Traded positions time series** — Daily delivery volume profiles derived from a portfolio of traded marker products, requiring user mapping from tradable products to daily positions.
+- **Temperature-gas price correlation** — Statistical relationship between temperature data and gas spot prices used in risk modelling, expected to exhibit negative correlation.
+- **Seasonal forecasting (KyForecast)** — Time series forecasting model for data with evident seasonal patterns, using daily or hourly granularity and requiring at least one full year of historical input.
+- **Price forward curve** — A single price for every delivery period (hourly, daily or monthly) in the future, built from market quotes and shaped into consistent granularity.
+- **Arbitrage-free forward curve construction (KyCurve)** — Model that shapes liquid market forward quotes into internally consistent, gap-free price forward curves across hourly, daily and monthly granularities for power and gas.
+- **Monthly shaping weights** — Relative seasonal price weights per calendar month calibrated from historical forward quotes or supplied by the user, applied within KyCurve.
+- **Day-type shaping** — Assignment of identical or distinct intra-week price profiles to grouped weekday categories, with public holidays treated as Sundays and bridge days as Saturdays.
+- **Balance-of-month (BOM) price** — Forward price for the remaining days of the current delivery month, optionally incorporating prices already settled earlier in that month.
+- **Curve extrapolation** — Extension of a forward curve beyond the last liquid market quote date, with each extrapolated month priced at the same month one year prior plus a fixed percentage.
+- **Curve smoothing** — Technique applied to the short end of a forward curve to ensure smooth price transitions across month boundaries.
+- **Curve shifting** — Manual rescaling of a constructed daily or hourly forward curve so that yearly average prices match user-specified target levels.
+- **Settlement curve** — Historical average price series derived from spot or forward fixings over a defined valuation period, used to price floating-rate commodity contracts.
+- **FX conversion for settlement prices** — Restatement of commodity settlement prices into another currency using either monthly-average or daily FX rates.
+- **Gas storage valuation inputs** — Physical parameters of a gas storage facility including working volume, injection and withdrawal rates, cost components, and volume restrictions used in optimisation models.
+- **Injection and withdrawal rates** — Volume-dependent or time-dependent capacity constraints governing how fast gas can be injected into or withdrawn from a storage facility on a given day.
+- **Take-or-Pay (ToP) clause** — Contractual minimum and maximum volume off-take obligations over specified periods (daily, monthly, quarterly, annual or total) attached to flexible gas supply contracts.
+- **Valuation curve (gas)** — Composite forward curve combining daily granularity for the spot month with monthly granularity thereafter, used for gas storage valuation requiring near-term price detail.
+- **Fixed vs. flexible volume contracts** — Distinction between contracts with a predetermined delivery profile and contracts whose actual volume lies within defined upper and lower bounds.
+- **Price indexation and fixings** — Contract pricing mechanisms linking delivery prices to spot, forward or oil indices, with optional partial conversion to fixed prices through price-click transactions.
+- **Power plant efficiency curve** — Relationship between plant output level and fuel-to-power conversion efficiency, parameterised at minimum, mid and maximum capacity set-points with optional seasonal corrections.
+- **Start-up and shut-down curves** — Time-stamped fuel consumption and power output profiles for each plant start type (hot to cold) and shutdown, including fixed costs and equivalent operating hours.
+- **Nominated volumes** — Daily or monthly delivery quantities formally declared under a flexible contract, converting it operationally into a fixed-volume obligation for reporting and dispatch purposes.
+- **Mark-to-Market (MtM) valuation** — Revaluation of fixed-price commodity contracts against the current market forward curve to determine unrealised gains or losses.
+- **Capacity factor adjustment** — Year-specific scaling applied to historical and forecast production or demand time series to reflect known changes in installed or utilised capacity.
+- **Forced outage modelling** — Distinguishes scheduled and unscheduled plant outages by yearly percentage, mean time to repair, and equivalent operating hours attribution.
+- **Equivalent Operating Hours (EOH)** — Cumulative measure of thermal stress on a power plant used to trigger maintenance scheduling and quantify trip impact.
+- **Dynamic maintenance scheduling** — EOH-based approach that allows maintenance timing to shift between high-margin and low-margin periods rather than following a fixed calendar.
+- **CHP heat dispatch modes** — Covers heat-led versus least-cost joint dispatch of boiler and power plant, subject to PQ diagram and heat transport limits.
+- **Ramp rate constraints** — Speed limits for ramping generation between minimum stable generation and maximum capacity applied as a post-process in valuation.
+- **Minimum on-time and off-time** — Operational constraints specifying the shortest permissible production run and inter-start interval for a thermal unit.
+- **Seasonal efficiency and output corrections** — Monthly multiplicative adjustments to efficiency curve and capacity bounds to capture ambient-temperature effects.
+- **Gas storage tranche structure** — Defines PAD, Back-Up and As-Available capacity layers with time-varying minimum and maximum volume bounds for inventory optimisation.
+- **Intrinsic storage value** — Maximum value lockable from a single forward curve via mixed-integer linear programming, computed at daily, monthly or tradable contract granularity.
+- **Full option (spot) value** — Monte Carlo-based storage value from optimal spot-market dispatch determined by Least Squares Monte Carlo, reflecting extrinsic optionality.
+- **Least Squares Monte Carlo (LSMC)** — Regression-based dynamic programming technique used to approximate the optimal continuation value across simulated price paths.
+- **Three-factor gas price model** — Mean-reverting simulation model decomposing gas price dynamics into long-term, short-term and seasonal factors with cointegration support.
+- **Spot mean-reversion rate** — Parameter controlling the speed at which simulated spot prices revert to the forward price level, typically 5–30 percent per day for natural gas.
+- **Geometric Brownian Motion (GBM) for forward prices** — Single-factor lognormal process used to simulate forward commodity and FX prices within the KyStore/KySwing simulation engine.
+- **Volatility term structure** — Differentiated spot, long-term and seasonal volatility inputs that can be supplemented with monthly weights to rescale spot volatility by delivery period.
+- **EWMA volatility estimation** — Exponentially Weighted Moving Average method that down-weights older returns via a decay factor to produce more responsive parameter estimates.
+- **Cointegration between commodities** — Long-run equilibrium relationship estimated between gas and other commodities constraining their joint simulation to avoid persistent divergence.
+- **Volume-based delta hedge** — Forward hedge sized by averaging simulated injection/withdrawal volumes across spot strategy paths for each delivery period.
+- **Value-based (actual) delta hedge** — Forward hedge sized by weighting simulated volumes by realised spot prices, providing theoretically superior value stabilisation.
+- **Static versus dynamic delta hedging** — Distinguishes a one-time hedge placed at valuation date from a periodically re-adjusted hedge that incurs incremental bid-ask costs.
+- **Discount rate (continuous)** — Continuously compounded rate applied via the exponential function to discount future storage cash-flows to the valuation date.
+- **Forward curve granularity (daily/monthly/mixed)** — Choice of price curve resolution sent to the optimisation engine, affecting whether sub-monthly spreads can be exploited intrinsically.
+- **Swing option constraints** — Volume restrictions, indexed strike prices, carry-forward and make-up provisions, and penalty terms that characterise long-term gas supply contracts.
+- **Gamma sensitivity** — Second-order measure of how delta changes with the gas price, optionally computed and saved to assess convexity of storage value.
+- **Backtest of storage strategy** — Ex-post comparison of projected versus realised storage values by replaying historical spot and forward prices through each trading strategy.
+- **Random seed control** — User-settable initialisation of the Monte Carlo random number generator enabling reproducibility and consistent cross-profile comparison.
+- **Mixed-integer linear programming (MILP) for storage** — Exact optimisation technique used for intrinsic valuation when storage injection/withdrawal rates are not inventory-dependent.
+- **Swing contract** — A physical gas supply contract granting flexible daily/periodic offtake volumes subject to minimum and maximum quantity constraints.
+- **Take-or-pay constraint** — A contractual obligation requiring the buyer to pay for a minimum volume of gas whether or not it is physically taken.
+- **Period quantity constraint (PCQ)** — Volume bounds applied over a defined sub-period (daily, monthly, quarterly, annual) within a swing contract.
+- **Make-up clause** — A contractual right allowing under-lifted volumes in one period to be compensated by additional offtake in a subsequent period.
+- **Intrinsic value** — The value of a swing contract optimised against a single deterministic forward curve without any stochastic component.
+- **Spot trading strategy** — An optimal dispatch policy that exploits spot price realisations relative to the strike price on each delivery day.
+- **Perfect foresight value** — An upper-bound valuation obtained by optimising offtake decisions with full knowledge of future spot price paths.
+- **Mean reversion rate** — A parameter controlling the speed at which the simulated spot price reverts toward the current forward price level each day.
+- **Monthly spot volatility weights** — User-defined multiplicative scalars that redistribute a single annual spot volatility parameter across calendar months.
+- **Delta hedge** — A forward position in gas products sized to neutralise the price sensitivity of the swing contract's mark-to-market value.
+- **One-factor commodity model** — A simplified stochastic model for non-primary commodities that shifts the entire forward curve up or down with no mean reversion.
+- **Cointegration** — A long-run equilibrium relationship between commodity prices that constrains their joint long-term dynamics in simulation.
+- **Forward curve granularity** — The temporal resolution (daily, monthly, or mixed) of the gas price forward curve used as input to the valuation model.
+- **Continuous discount rate** — An exponential discounting convention applied to future cash flows to express them in present-value terms.
+- **FX averaging convention** — The rule governing how exchange rates are applied when converting strike prices between the gas market currency and the domestic currency.
+- **Bid-ask spread** — The transaction cost embedded in the difference between buy and sell prices of hedging products, reducing realised trading profits.
+- **Minimum re-hedge profit** — A threshold net margin per MWh below which a re-hedging trade is suppressed to avoid unprofitable rebalancing after transaction costs.
+- **Backtest** — A historical simulation of the swing contract valuation and hedging strategy applied over a past delivery period using realised market data.
+- **Random seed** — An initialisation value for the Monte Carlo random number generator enabling reproducible or independently randomised simulation runs.
+- **Delivery point** — A designated location in the gas network at which physical offtake volumes under a contract are measured and allocated.
+- **Strike formula** — The contractual pricing formula determining the price at which gas is purchased under the swing contract on each delivery day.
+
+## Methods
+- Monte Carlo simulation
+- Mean-reversion stochastic price modelling
+- Cointegration modelling
+- Merit-order fundamental power price model
+- Dynamic programming / optimisation for storage and swing dispatch
+- Rolling intrinsic hedging
+- Value-at-Risk (VaR)
+- Earnings-at-Risk / Cash-flow-at-Risk
+- Forward curve bootstrapping / stripping
+- Statistical calibration of volatility and correlation
+- Forward curve building and shaping
+- Regression-based hourly spot price profiling
+- Seasonal time series forecasting (trigonometric / sine function decomposition)
+- Mean-reversion / auto-regressive seasonal modelling
+- Monthly and intra-day weighting and interpolation
+- Linear interpolation of volume restrictions and injection/withdrawal rates
+- Spot-price capping and outlier treatment in regression
+- FX conversion (month/month and day/day methods)
+- Historical settlement price averaging
+- Optimal dispatch scheduling with ramp and start/stop constraints
+- Automated FTP-based data ingestion and processing
+- Mixed-integer linear programming (MILP)
+- Dynamic programming
+- Least Squares Monte Carlo (LSMC)
+- Three-factor mean-reverting price model
+- Geometric Brownian Motion
+- Exponentially Weighted Moving Average (EWMA)
+- Quadratic regression for efficiency curves
+- Cointegration estimation
+- Delta hedging
+- Rolling intrinsic re-hedging
+- Continuous discounting
+- Three-factor stochastic price model
+- One-factor stochastic commodity model
+- Rolling intrinsic optimisation
+- Static monthly delta hedging
+- Dynamic (rolling intrinsic) delta hedging
+- Correlation matrix positive-definiteness correction
+- Additive and multiplicative strike formula calibration to zero intrinsic value
+- Historical backtesting
+
+## Implied prerequisites
+- Commodity derivatives pricing fundamentals
+- Energy market structure (gas, power, carbon)
+- Stochastic calculus basics
+- Monte Carlo methods
+- Options and real-options theory
+- Time-series econometrics
+- Portfolio risk management concepts
+- Commodity market structure (power and gas)
+- Forward curve concepts and market quoting conventions
+- Seasonal time series analysis
+- Gas storage economics and optionality
+- Contract pricing: fixed, indexed and floating
+- Basic statistics and regression
+- Energy unit conversions (MWh, m³, LHV/HHV)
+- Foreign exchange basics
+- Power plant dispatch economics (spark/dark spread)
+- Stochastic calculus and Itô processes
+- Options pricing theory
+- Linear and integer programming
+- Monte Carlo methods in finance
+- Forward curve construction
+- Time-series econometrics (volatility, cointegration)
+- Power plant thermodynamics and dispatch economics
+- Natural gas market structure and contracts
+- Risk management and hedging fundamentals
+- Stochastic calculus and diffusion processes
+- Monte Carlo simulation techniques
+- Dynamic programming and optimal stopping
+- Commodity market structure
+- Hedging and risk management fundamentals
+- Linear algebra (correlation matrices)
+- Time series analysis and calibration
+- Foreign exchange risk management

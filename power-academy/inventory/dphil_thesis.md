@@ -1,0 +1,211 @@
+# dphil_thesis
+
+- id: `dphil_thesis` · class: library · type: pdf
+- topic: Electricity derivatives pricing: swing options and spot price modelling · level: advanced · market: mixed · year: 2006
+- worked examples: True · code: False
+
+## Concepts
+- **Electricity spot price** — The market-clearing price per MWh determined by supply-demand bidding in day-ahead electricity exchanges.
+- **Price spikes** — Short-lived extreme upward price movements in electricity markets caused by supply-demand imbalances near capacity limits.
+- **Mean reversion** — The tendency of electricity spot prices to return toward a long-run equilibrium level, motivating Ornstein-Uhlenbeck-based models.
+- **Ornstein-Uhlenbeck (OU) process** — A continuous-time mean-reverting Gaussian diffusion used to model the normal-regime component of electricity spot prices.
+- **Pure jump process** — A mean-reverting jump component driven by a Poisson process and iid jump sizes, used to capture price spikes independently of the diffusion component.
+- **Exponential OU spot price model** — A spot price model defined as the exponential of a seasonal function plus an OU diffusion plus an independent mean-reverting jump process.
+- **Seasonality** — Deterministic periodic patterns in electricity prices reflecting predictable demand cycles across hours, days, weeks, and seasons.
+- **Moment generating function** — The transform of the log-spot-price distribution used to derive semi-analytic option pricing formulas under the proposed model.
+- **Forward contract** — A zero-cost agreement to deliver electricity at a fixed strike price, either at a point in time or averaged over a delivery period.
+- **Forward contract with delivery period** — A forward whose payoff is the difference between the average spot price and a strike over a specified delivery interval [T1, T2].
+- **Continuous forward curve** — An interpolated function of instantaneous forward prices consistent with the finite set of delivery-period forward prices observed in the market.
+- **Forward curve interpolation** — Methods for constructing a continuous forward curve from discrete delivery-period contract prices, including spline and basis-function approaches.
+- **Piecewise quadratic spline** — An interpolation of the forward curve using quadratic polynomial segments satisfying integral, continuity, and smoothness conditions.
+- **Piecewise cubic spline** — A higher-order polynomial spline interpolation of the forward curve imposing additional curvature conditions.
+- **Seasonal correction forward curve method** — A two-step forward curve construction using a seasonality first approximation calibrated to historical spot data, corrected by a quadratic spline to match market integrals.
+- **Swing option** — A path-dependent electricity derivative granting the holder multiple exercise rights to adjust consumption volume within specified limits over a contract period.
+- **Path-independent option pricing** — Valuation of electricity options whose payoff depends only on the spot or forward price at a single date, using moment generating function techniques.
+- **Call and put options on forwards** — Options whose payoff is based on the value of an electricity forward contract at expiry, with or without a delivery period in the underlying.
+- **Grid method for swing options** — A numerical dynamic-programming approach on a state-space grid that uses conditional density approximations to price swing options.
+- **Conditional density approximation** — Analytical approximations to the conditional distribution of the spot price process used as inputs to the grid-based swing option pricing algorithm.
+- **Equivalent martingale measure** — A risk-neutral probability measure under which discounted asset prices are martingales, used as the pricing measure for electricity derivatives.
+- **Market incompleteness** — The property of electricity markets whereby the non-storability of the underlying prevents perfect hedging, leaving the risk-neutral measure non-unique.
+- **q-optimal martingale measure** — The equivalent martingale measure minimising the q-th moment of the Radon-Nikodym derivative, used to select a canonical pricing measure in incomplete markets.
+- **Utility indifference pricing** — A valuation approach determining option prices as the compensation that leaves the agent's expected utility unchanged with or without the derivative position.
+- **Calibration to forward curve** — The process of adjusting model parameters so that model-implied forward prices match the observed market forward curve.
+- **PIDE formulation** — A partial integro-differential equation characterising the option price under a jump-diffusion spot price model.
+- **Markov switching model** — A spot price model that switches between a normal and a spiky regime according to a continuous-time Markov chain.
+- **Supply-demand equilibrium model** — A structural electricity price model in which the spot price is implicitly determined by equating a stochastic demand process with a deterministic supply stack function.
+- **Non-storability of electricity** — The physical constraint that electricity cannot be efficiently stored, making it a flow commodity and causing market incompleteness.
+- **Base load price** — The arithmetic average spot price over all hours of a day, serving as the standard underlying for most electricity derivative contracts.
+- **Parameter estimation for OU process** — Statistical calibration of mean-reversion speed and volatility parameters of the OU component from historical spot price time series.
+- **Stochastic volatility model** — An equity or commodity model in which the diffusion coefficient is itself a stochastic process, used here as a reference setting for q-optimal measure theory.
+- **Transform analysis** — Computation of characteristic or moment generating functions to obtain semi-analytic pricing formulas for derivatives under affine or exponential models.
+- **Ornstein-Uhlenbeck (OU) mean-reversion process** — Continuous-time diffusion process used to model the base stochastic component of log electricity spot prices with mean reversion.
+- **Spike process** — A separate jump-diffusion component with high mean-reversion rate capturing short-lived price spikes independently of the base OU process.
+- **Compound Poisson jump process** — A Poisson-driven process with random jump sizes used to model sudden large deviations in electricity prices.
+- **Seasonal component** — A deterministic function capturing yearly and weekly periodicity in log electricity prices, estimated via least-squares regression on Fourier terms.
+- **Moment generating function of the spike process** — Closed-form expression for the MGF of the mean-reverting jump process, used to derive moments and approximate densities.
+- **Truncated (approximated) spike process** — An approximation retaining only the last Poisson jump, whose distribution is analytically tractable and converges to the full spike process for large mean-reversion rates or small jump intensities.
+- **Stationary distribution of the spike process** — Long-run limiting distribution of the spike process, approximated by a Gamma-like distribution for exponentially distributed jump sizes.
+- **Incomplete electricity market** — A market setting where electricity cannot be stored or used to hedge, so no unique equivalent martingale measure exists from the underlying alone.
+- **Equivalent martingale measure (risk-neutral measure)** — A probability measure under which discounted derivative prices are martingales, parameterised here by market prices of diffusion and jump risk.
+- **Market price of diffusion risk** — A parameter function governing the Girsanov drift adjustment to the Brownian component of the OU process under the risk-neutral measure.
+- **Market price of jump risk** — A parameter governing the change in Poisson process intensity between the physical and risk-neutral measures.
+- **Forward curve consistency** — The requirement that the risk-neutral seasonal function is calibrated so that model-implied forward prices match observed market forward prices.
+- **Exponential utility function** — A utility function with constant absolute risk aversion used to derive closed-form indifference prices and marginal price connections to expectation under a martingale measure.
+- **Conditional expectation decomposition** — Analytical approximation for E[X_t | X_t + Y_t = c] used to separate the unobservable base and spike components given only the observable sum.
+- **Demand-supply stack model** — A structural model where the spot price is determined by inverting a supply function at the level of a stochastic demand process.
+- **Log-return distribution and heavy tails** — Empirical distributional property of de-seasonalised log electricity prices showing excess kurtosis attributed to non-constant volatility and spikes.
+- **Iterative spike-filtering calibration** — A heuristic parameter estimation procedure that alternately fits OU parameters and removes outliers beyond a conditional standard-deviation threshold.
+- **MGF-based option pricing (Duffie-Pan-Singleton)** — A Fourier-inversion formula expressing option payoff expectations in terms of the complex-valued moment generating function of the log price process.
+- **Mixture approximation for the combined process density** — An approximation of the density of X_t + Y_t as a probability-weighted mixture of a Gaussian and a jump-shifted Gaussian component.
+- **Lévy's Inversion Theorem** — Recovers the cumulative distribution function of a random variable from its moment generating function via an imaginary-axis integral.
+- **Truncated moment generating function** — Defines the conditional expectation of an exponentially weighted indicator restricted to a half-line, used to decompose put option payoffs.
+- **Laplace inversion for option pricing** — Prices European options by expressing the expected payoff as an inverse Laplace transform of the product of the payoff's Laplace transform and the MGF of the log-price.
+- **Convolution theorem for option pricing** — Converts the expected payoff integral into a product in Laplace space, enabling efficient computation via inversion.
+- **Black-76 formula** — A log-normal forward pricing formula used as the benchmark approximation for options on electricity forwards.
+- **Term structure of implied volatility** — Describes how the Black-76 implied volatility varies with time to maturity, driven by diffusive and jump components of the spot model.
+- **Implied volatility skew** — Captures the strike-dependence of implied volatility induced by the jump component's heavy-tailed distribution.
+- **Log-normal moment-matching approximation** — Approximates the distribution of a forward with a delivery period by matching the first two moments to a log-normal, enabling Black-76 pricing.
+- **Forward with delivery period** — An electricity forward delivering a flow commodity over an interval, priced as a weighted integral of single-delivery forwards.
+- **Dynamic programming for swing options** — Recursively computes swing option value by choosing at each node between holding and exercising, working backward from the terminal condition.
+- **Grid (non-tree) backward induction** — Extends tree-based dynamic programming to a full spatial grid to handle jump-induced heavy tails in the transition density.
+- **Gaussian quadrature integration** — Approximates the conditional expectation integrals in the backward induction using three-point Gauss-Legendre weights on sub-intervals.
+- **Dimension reduction for swing options** — Reduces the two-dimensional state space to one dimension by conditioning on the sum of the diffusion and spike factors given the observable spot price.
+- **Partial integro-differential equation (PIDE)** — Characterises the no-arbitrage value of a contingent claim under a jump-diffusion spot model via the Feynman-Kac representation.
+- **Diffusive delta-hedging in incomplete markets** — Hedges only the Brownian-motion component of option risk using a second derivative, leaving jump risk unhedged.
+- **Minimal relative entropy measure** — The q=1 special case of q-optimal measures, minimising the Kullback-Leibler divergence from the physical measure.
+- **Minimal martingale measure** — The equivalent martingale measure obtained by setting the market price of volatility risk to zero, coinciding with all q-optimal measures when the Sharpe ratio depends only on time.
+- **Heston stochastic volatility model** — A mean-reverting variance model used to study q-optimal measure selection and its effect on European option prices and implied volatility smiles.
+- **Implied volatility smile** — The strike profile of Black-Scholes implied volatility extracted from model option prices, shaped by correlation and volatility-of-volatility parameters.
+- **Mean-reversion and spike two-factor spot model** — Represents the electricity spot price as the exponential of a diffusive Ornstein-Uhlenbeck factor plus a compound-Poisson spike factor.
+- **Exponential jump size distribution** — Models spike magnitudes as exponentially distributed, giving analytically tractable moment generating functions and density approximations.
+- **Ornstein-Uhlenbeck (OU) spot price model** — Mean-reverting log-price process used as the base model for electricity spot prices, with constant or time-varying parameters.
+- **Exponential OU process** — Spot electricity price modelled as the exponential of a seasonal function plus an OU component, ensuring positive prices with mean reversion.
+- **Jump-diffusion spot model** — Extension of the OU model incorporating a compound Poisson process to capture electricity price spikes.
+- **Incomplete markets** — Market setting where electricity spot cannot be used to hedge derivatives, making the risk-neutral measure non-unique.
+- **Equivalent martingale measure (EMM)** — Probability measure equivalent to the real-world measure under which discounted asset prices are martingales, used for arbitrage-free pricing.
+- **q-optimal pricing measure** — Risk-neutral measure selected by minimising the q-norm of the Radon-Nikodym derivative, interpolating between minimal reverse entropy (q=0) and minimal relative entropy (q=1).
+- **Market price of risk** — Process ψ parameterising the change of measure from the real-world to the risk-neutral measure via the Girsanov kernel.
+- **Market price of volatility risk** — Component of the measure change associated with the untraded volatility factor in stochastic volatility models, shown to be time-inhomogeneous.
+- **Implied volatility smile and skew** — Strike-dependent implied volatility surface extracted from option prices, used to compare pricing measures and diagnose model behaviour.
+- **Forward curve consistency constraint** — Requirement that the pricing measure reproduces observed forward electricity prices as conditional expectations of the spot.
+- **Bermudan option** — Option exercisable at a discrete set of dates, related to swing options via asymptotic expansions in the number of exercise rights.
+- **Forward price formula for mean-reverting spot** — Closed-form expression for the expected spot price under Q when the log-price follows an OU process with seasonal drift.
+- **Call option pricing on lognormal underlying** — Black-Scholes-type formula adapted for mean-reverting spot dynamics, with time-dependent effective variance.
+- **Affine jump-diffusion transform analysis** — Method of Duffie-Pan-Singleton using exponential-affine ansatz to obtain the moment generating function of a jump-diffusion via ODEs.
+- **Girsanov's theorem** — Result describing how the drift of a stochastic process changes under an equivalent probability measure defined by a Radon-Nikodym derivative.
+- **Minimal reverse entropy measure** — EMM that minimises E[-ln(dQ/dP)], equivalent to minimising the expected squared market price of risk under P.
+- **Speed of mean reversion (α)** — Parameter controlling how fast the OU process reverts to its long-term level, estimated from data and potentially re-calibrated under Q.
+- **Seasonality function** — Deterministic time-dependent component of the log-spot price capturing periodic patterns in electricity prices.
+- **Maximum likelihood estimation for OU processes** — Calibration procedure using the known Gaussian transition density of the OU process to estimate mean reversion, level and volatility from discrete observations.
+- **Martingale estimation functions** — Alternative parameter estimation approach for discretely observed diffusions that yields analytic estimators without requiring the full likelihood.
+- **Moment generating function (MGF) of jump-diffusion** — Exponential-affine function of the initial state obtained by solving a system of ODEs, used to price options via Fourier inversion.
+- **Fourier inversion / Gil-Pelaez formula** — Numerical integration technique converting the complex-valued MGF into option prices or distribution functions.
+- **Grid-based numerical option pricing** — Finite-difference or lattice method for path-dependent options, applied to swing contracts with spike dynamics.
+- **Non-uniform spatial grids** — Grid generation technique concentrating mesh points near regions of interest (e.g. the strike) to improve PDE solver accuracy.
+- **Stochastic volatility with correlation** — Model feature linking the asset price and variance innovations, producing skewed implied volatility smiles.
+- **Fundamental theorem of asset pricing** — Equivalence between absence of arbitrage and existence of an equivalent martingale measure, underpinning all derivative pricing.
+- **Risk-neutral valuation PDE** — Partial differential equation for the option price derived from the no-arbitrage condition when the underlying follows an Itô process.
+- **Feynman-Kac formula** — Correspondence between conditional expectations under Q and solutions of the pricing PDE, linking probabilistic and PDE approaches.
+- **Compensation of jump processes** — Technique subtracting the predictable compensator of a jump integral to obtain a martingale, used in deriving the MGF ODE.
+- **Conditional expectations for normal and exponential random variables** — Closed-form results for E[X | X+Y=c] and truncated moments used analytically in spike and option pricing calculations.
+
+## Methods
+- Ornstein-Uhlenbeck stochastic differential equation
+- Compound Poisson jump process modelling
+- Moment generating function derivation
+- Probability density function approximation
+- Piecewise quadratic spline interpolation
+- Piecewise cubic spline interpolation
+- Basis function least-squares approximation
+- Seasonal function calibration to historical data
+- Dynamic programming on state-space grid
+- Conditional density approximation for numerical integration
+- Semi-analytic option pricing via transform methods
+- Equivalent martingale measure selection
+- q-optimal martingale measure derivation
+- Utility indifference pricing
+- PIDE formulation for jump-diffusion models
+- Maximum likelihood / regression parameter estimation
+- Sparse matrix solver for spline equation systems
+- Dimension reduction for swing option pricing
+- Ito's formula for exponential transforms of SDE solutions
+- Moment generating function derivation via conditional expectation and ODE
+- Laplace/Fourier inversion for probability densities
+- Least-squares Fourier regression for seasonal component estimation
+- Maximum likelihood estimation for OU parameters
+- Iterative outlier-removal spike identification
+- Monte Carlo simulation for density validation
+- Girsanov's theorem for jump-diffusion measure changes
+- Hamilton-Jacobi-Bellman equation for stochastic optimal control
+- Incomplete Gamma function approximations for spike density
+- Moment matching for mixture distribution parameter selection
+- Laplace/Fourier inversion (Carr-Madan / Lewis approach)
+- Lévy inversion theorem for CDF recovery
+- Truncated MGF decomposition for put pricing
+- Put-call parity
+- Log-normal moment-matching for Asian-style delivery forwards
+- Backward dynamic programming on a spatial grid
+- Three-point Gaussian quadrature for conditional expectation
+- Non-uniform grid with point concentration
+- Monte Carlo simulation (least-squares / duality bounds)
+- Dimension reduction via conditional expectation of latent factors
+- Feynman-Kac / Itô calculus derivation of PIDE
+- Finite difference method (Crank-Nicolson) for PDE solution
+- Nonlinear PDE solution for q-optimal measure (Hobson framework)
+- Sensitivity analysis (parameter perturbation ±20%)
+- Girsanov measure change
+- q-optimal measure constrained optimisation
+- Exponential-affine ODE system (Duffie-Pan-Singleton transform)
+- Fourier / Gil-Pelaez inversion for option pricing
+- Heston model implied volatility computation
+- Closed-form Black-Scholes-type formula for mean-reverting spot
+- Martingale estimation functions
+- Finite-difference PDE solver
+- Non-uniform grid generation via generating function
+- Newton iteration for grid parameter calibration
+- Monte Carlo simulation of OU process
+- Longstaff-Schwartz least-squares Monte Carlo
+- Numerical optimisation over mean-reversion parameter
+- Asymptotic expansion for Bermudan options
+
+## Implied prerequisites
+- Stochastic calculus and Itô's formula
+- Poisson processes and compound Poisson processes
+- Risk-neutral pricing and fundamental theorem of asset pricing
+- Partial differential equations
+- Linear algebra and matrix methods
+- Numerical analysis and spline theory
+- Probability theory and conditional expectations
+- Fourier and Laplace transform methods
+- Basic financial derivatives theory (calls, puts, forwards)
+- Measure theory and Radon-Nikodym derivatives
+- Utility theory and expected utility maximisation
+- Statistical time series analysis
+- Stochastic differential equations and Ito calculus
+- Ornstein-Uhlenbeck process properties
+- Girsanov's theorem and change of measure for jump-diffusion models
+- Fourier and Laplace transforms
+- Arbitrage pricing theory and martingale measures
+- Stochastic optimal control and HJB equations
+- Statistical estimation: MLE and least squares
+- Basic real analysis and probability theory
+- Compound Poisson processes and jump-diffusion SDEs
+- Risk-neutral pricing and equivalent martingale measures
+- Characteristic functions and moment generating functions
+- Ornstein-Uhlenbeck process
+- Black-Scholes and Black-76 pricing framework
+- Girsanov's theorem
+- Radon-Nikodým derivatives
+- Dynamic programming and Bellman equation
+- Numerical integration and finite difference methods
+- Utility theory and convex duality
+- Itô calculus and stochastic differential equations
+- Brownian motion and Poisson processes
+- Measure theory and probability
+- Black-Scholes option pricing framework
+- Lognormal distribution and Black-76 formula
+- Fourier analysis
+- Ordinary differential equations
+- Linear algebra and numerical methods
+- Maximum likelihood estimation
+- Basic energy markets and forward/futures contracts
