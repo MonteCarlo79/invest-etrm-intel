@@ -19,10 +19,12 @@ K_PEAKER, K_MUSTRUN = 60.0, 20.0
 SHOCK = 2.0
 
 
-def prices_day(rng, level_sd: float = 0.0, hour_sd: float = SIG):
+def prices_day(rng, level_sd: float = 0.0, hour_sd: float = SIG, peak_sd: float = 0.0):
     noise = rng.normal(0, hour_sd, 24)
     if level_sd > 0.0:
         noise = noise + rng.normal(0, level_sd)
+    if peak_sd > 0.0:                       # extra common shock on peak hours only
+        noise[:12] = noise[:12] + rng.normal(0, peak_sd)
     return np.concatenate([PEAK_PROFILE, np.full(12, OFFPEAK_LEVEL)]) + noise
 
 
@@ -34,9 +36,10 @@ def run_mwh(prices, k, mel=1.0):
     return mel * (prices > k).astype(float)
 
 
-def simulate(n_days=N_DAYS, seed=SEED, level_sd: float = 0.0, hour_sd: float = SIG):
+def simulate(n_days=N_DAYS, seed=SEED, level_sd: float = 0.0, hour_sd: float = SIG,
+             peak_sd: float = 0.0):
     rng = np.random.default_rng(seed)
-    return np.array([prices_day(rng, level_sd, hour_sd) for _ in range(n_days)])
+    return np.array([prices_day(rng, level_sd, hour_sd, peak_sd) for _ in range(n_days)])
 
 
 def block_mask(block):
