@@ -64,3 +64,27 @@ def set_status(root, concept_id, status, labs_root=None) -> None:
         raise ValueError("published requires signoff.en in front matter")
     fm["status"] = status
     path.write_text(render_concept(fm, body), encoding="utf-8")
+
+
+from .concepts import body_hash
+from .glossary import load_glossary, prompt_block
+from .llm import call_json
+
+TRANSLATE_SYSTEM = (
+    "Translate the following markdown section from English to Chinese for a "
+    "power-markets quant curriculum. Keep all markdown structure, formulas and "
+    "numbers unchanged. Return ONLY JSON: {\"zh_body\": \"<translated markdown>\"}.\n")
+
+
+def translate_concept(root, concept_id, client, model) -> Path:
+    root = Path(root)
+    path = find_concept(root, concept_id)
+    fm, body = parse_concept(path)
+    terms = load_glossary(root / "glossary" / "terms.yaml")
+    data = call_json(client, model, TRANSLATE_SYSTEM + prompt_block(terms), body,
+                     max_tokens=8000)
+    zh_path = path.with_name(path.stem + ".zh.md")
+    zh_path.write_text(data["zh_body"], encoding="utf-8")
+    fm["translations"]["zh"] = {"status": "drafted", "en_hash": body_hash(body)}
+    path.write_text(render_concept(fm, body), encoding="utf-8")
+    return zh_path

@@ -259,6 +259,10 @@ def main(argv=None):
     ss.add_argument("concept_id")
     ss.add_argument("status", choices=["stub", "drafted", "reviewed", "published"])
     ss.set_defaults(fn=lambda a: auth.set_status(ROOT, a.concept_id, a.status))
+    tr = con.add_parser("translate")
+    tr.add_argument("concept_id")
+    tr.set_defaults(fn=lambda a: print(auth.translate_concept(
+        ROOT, a.concept_id, _client(), os.environ.get("ACADEMY_EDITOR_MODEL", OUTLINE_MODEL))))
     a = p.parse_args(argv)
     a.fn(a)
 
