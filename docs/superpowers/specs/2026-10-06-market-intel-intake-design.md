@@ -83,13 +83,13 @@ files → uploader → session_state pages
 | `ancillary_revenue` | realized 调频收入 monthly amounts (万元) | `marketdata.province_ancillary_revenue` | `status='draft'` → existing bess-map 调频收入 review queue |
 | `capacity_comp_rate` | 容量电价/容量补偿标准, 元/kW·年, 峰段小时 | `marketdata.province_cap_comp` | `status='draft'` (table already has status column) → bess-map review |
 | `fr_market_params` | 调频容量价格 元/kW·h, 全省调频资金池 亿元/年 | `marketdata.province_fr_market` | `status='draft'` (table already has status column) → bess-map review |
-| `pipeline_stat` | 装机/在库/备案/规划 GW, 缺口 | `agent_memory` app=`spot_market`, category=`province_note` (new category for this app — CLAUDE.md "extend as needed"), source=`intake` | active immediately |
-| `generation_stat` | 发电量/利用小时/负荷/峰谷差 | same as pipeline_stat | active immediately |
-| `policy_change` | 规则/机制变化 affecting BESS revenue | `agent_memory` app=`bess_map`, category=`province_note`, source=`intake` | active immediately |
-| `sysopfee` (note-only v1) | 系统运行费 元/kWh | folded into Strategist/Quant note content, **not** written to `province_sysopfee_monthly` | — |
+| `spot_note` | pipeline/generation/load/targets/fundamentals (装机, 在库, 备案, 规划, 发电量, 负荷, 峰谷差, 缺口) | `agent_memory` app=`spot_market`, category=`province_note` (new category for this app — CLAUDE.md "extend as needed"), source=`intake` | active immediately |
+| `quant_note` | BESS-revenue-relevant intelligence (AGC/调峰 demand sizing, mechanism/eligibility rules, structural constraints, 系统运行费 figures) | `agent_memory` app=`bess_map`, category=`province_note`, source=`intake` | active immediately |
 | anything else | — | KB chunk text only | — |
 
-**Sysopfee constraint (why note-only):** `province_sysopfee_monthly` has no status/draft column — bare `(province, year_month, fee_yuan_kwh)` with upsert-overwrite semantics. Direct writes would silently overwrite confirmed values with unreviewed intel. The automated monthly screener (1st of month) already fills it systematically. A full draft queue (status column + bess-map review wiring + 系统运行费 tab filter) is deferred.
+Note routes are **persona-typed** (which agent consumes it), not content-typed — the extractor decides who cares, avoiding content-classification misfits (e.g. AGC demand sizing is neither a pipeline stat nor a policy change, but Quant clearly cares).
+
+**Sysopfee constraint (why note-only):** `province_sysopfee_monthly` has no status/draft column — bare `(province, year_month, fee_yuan_kwh)` with upsert-overwrite semantics. Direct writes would silently overwrite confirmed values with unreviewed intel. The automated monthly screener (1st of month) already fills it systematically. Sysopfee figures therefore ride the `quant_note` route as text. A full draft queue (status column + bess-map review wiring + 系统运行费 tab filter) is deferred.
 
 **Writer idempotency:** agent_memory writers check for an existing active row with same (app, category, subject) and update content in place (mirrors the register_url lesson — never soft-delete + re-ingest duplicates). Rate-draft writers check for existing non-superseded row on same natural key — (province, month, metric) for `province_ancillary_revenue`; (province, effective_date, source) for `province_cap_comp` / `province_fr_market` — and skip if present (mirrors hermes td:185 dedup pattern).
 
@@ -103,7 +103,7 @@ files → uploader → session_state pages
 ## 7. Testing
 
 - **Unit:** new keyword categories classify 宁夏-deck-style text into `capacity_pipeline`/`ancillary_market`; batch hash order-independence; proposal-JSON parsing (mocked Claude response); partial-page failure path; route-writer idempotency (no dup rows on retry).
-- **Local live fixture:** the 9-image 宁夏 deck (`IMG_3828`–`IMG_3836`): upload → verify proposal (expect category `capacity_pipeline` or `market_intel`, province 宁夏, routes: pipeline_stat + generation_stat + policy_change, **no** rate drafts — deck has demand figures, no compensation rates) → edit one field deliberately → commit → verify doc+chunks, both agent_memory rows, zero ancillary rows.
+- **Local live fixture:** the 9-image 宁夏 deck (`IMG_3828`–`IMG_3836`): upload → verify proposal (expect category `capacity_pipeline` or `market_intel`, province 宁夏, routes: `spot_note` carrying pipeline/load/registry figures + `quant_note` carrying AGC-demand sizing and 4h-constraint intelligence, **no** rate drafts — deck has demand figures, no compensation rates) → edit one field deliberately → commit → verify doc+chunks, both agent_memory rows, zero ancillary rows.
 - Existing suites must stay green. Hermes/Feishu path untouched.
 
 ## 8. Cost
