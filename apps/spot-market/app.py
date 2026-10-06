@@ -171,6 +171,18 @@ _T: dict[str, dict[str, str]] = {
         "kb_delete":            "Remove",
         "kb_pages":             "{n} pages",
         "kb_chunks":            "chunks indexed",
+        # intel intake
+        "intake_tab":            "🧠 Intel Intake",
+        "intake_caption":        "Drop a whole intel batch (any number of images/docs of ONE topic). Claude reads every page, proposes classification + data routes; you review and commit.",
+        "intake_upload_label":   "Intel files (images / pdf / pptx / docx / txt)",
+        "intake_extract_btn":    "Extract & propose",
+        "intake_commit_btn":     "Commit to knowledge base",
+        "intake_retry_btn":      "Retry failed routes",
+        "intake_dup_warn":       "This batch (identical content) is already in the KB as doc #{doc_id}《{title}》. Tick to ingest anyway.",
+        "intake_dup_anyway":     "Ingest anyway",
+        "intake_success":        "Committed as doc #{doc_id}. Routes: {report}",
+        "intake_extract_fail":   "Extraction failed: {err}",
+        "intake_routes_label":   "Proposed routes (uncheck to skip; click text to edit)",
         # memory
         "mem_saved_ok":         "Saved {n} memory item(s).",
         "mem_confirm_title":    "💡 Suggested memories from this conversation",
@@ -482,6 +494,18 @@ _T: dict[str, dict[str, str]] = {
         "kb_delete":            "删除",
         "kb_pages":             "{n} 页",
         "kb_chunks":            "个片段已索引",
+        # intel intake
+        "intake_tab":            "🧠 情报录入",
+        "intake_caption":        "整批拖入同一主题的情报文件（图片数量不限，可混合文档）。Claude 逐页阅读后给出分类与数据路由建议，你确认后一键入库。",
+        "intake_upload_label":   "情报文件（图片 / pdf / pptx / docx / txt）",
+        "intake_extract_btn":    "提取并生成建议",
+        "intake_commit_btn":     "确认入库",
+        "intake_retry_btn":      "重试失败路由",
+        "intake_dup_warn":       "该批次（内容完全相同）已存在于知识库：文档 #{doc_id}《{title}》。勾选后仍可强制入库。",
+        "intake_dup_anyway":     "强制入库",
+        "intake_success":        "已入库，文档 #{doc_id}。路由结果：{report}",
+        "intake_extract_fail":   "提取失败：{err}",
+        "intake_routes_label":   "路由建议（取消勾选即跳过；文字可编辑）",
         # memory
         "mem_saved_ok":         "已保存 {n} 条记忆。",
         "mem_confirm_title":    "💡 本次对话中发现的记忆建议",
@@ -787,6 +811,56 @@ def _spot_kb_stats() -> dict:
         "n_chunks":    n_chunks,
         "n_insights":  n_insights,
     }
+
+
+def _commit_routes(sel_routes, doc_id: int, province: str | None, title: str) -> list[tuple[str, str, str]]:
+    """Fire each selected route writer; return [(type, status, detail)]. Isolated per route."""
+    from services.knowledge_pool import intake_routes as _ir
+    outcomes = []
+    for r, content in sel_routes:
+        try:
+            if r.type == "pipeline_stat":
+                n = _ir.write_pipeline_rows(
+                    r.structured.get("rows", []),
+                    province=r.province or province, source_doc_id=doc_id)
+                outcomes.append((r.type, "ok", f"{n} rows"))
+            elif r.type == "spot_note":
+                a = _ir.upsert_memory_note(app="spot_market",
+                                           subject=f"{r.province or province} — {title[:40]}",
+                                           content=content)
+                outcomes.append((r.type, "ok", a))
+            elif r.type == "quant_note":
+                a = _ir.upsert_memory_note(app="bess_map",
+                                           subject=f"{r.province or province} — {title[:40]}",
+                                           content=content)
+                outcomes.append((r.type, "ok", a))
+            elif r.type == "capacity_comp_rate":
+                s = _ir.write_capcomp_draft(
+                    province=r.province or province,
+                    effective_date=r.structured["effective_date"],
+                    cap_comp_yuan_kw=r.structured.get("cap_comp_yuan_kw"),
+                    peak_duration_hours=r.structured.get("peak_duration_hours"),
+                    source=f"intake:{title[:60]}")
+                outcomes.append((r.type, "ok", s))
+            elif r.type == "fr_market_params":
+                s = _ir.write_fr_market_draft(
+                    province=r.province or province,
+                    effective_date=r.structured["effective_date"],
+                    fr_price_yuan_kw_h=r.structured.get("fr_price_yuan_kw_h"),
+                    fr_pool_billion_yuan=r.structured.get("fr_pool_billion_yuan"),
+                    source=f"intake:{title[:60]}")
+                outcomes.append((r.type, "ok", s))
+            elif r.type == "ancillary_revenue":
+                s = _ir.write_ancillary_draft(
+                    province=r.province or province,
+                    month=r.structured["month"],
+                    metric=r.structured.get("metric", "调频收入"),
+                    amount_yuan=r.structured["amount_yuan"],
+                    source_file=f"intake:{title[:60]}")
+                outcomes.append((r.type, "ok", s))
+        except Exception as exc:
+            outcomes.append((r.type, "failed", str(exc)[:200]))
+    return outcomes
 
 
 # ── APScheduler — daily spot market report ────────────────────────────────────
@@ -3825,7 +3899,8 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         except Exception:
             pass
 
-        _kb_up_tab, _kb_url_tab = st.tabs(["📂 Upload Files", "🌐 Fetch from URL"])
+        _kb_up_tab, _kb_url_tab, _kb_intake_tab = st.tabs(
+            ["📂 Upload Files", "🌐 Fetch from URL", _t("intake_tab")])
 
         # ── Upload Files tab ───────────────────────────────────────────────────
         with _kb_up_tab:
@@ -3912,6 +3987,129 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                             st.info("This URL is already in the knowledge base.")
                     except Exception as _url_exc:
                         st.error(f"Fetch failed: {_url_exc}")
+
+        # ── Intel Intake tab ───────────────────────────────────────────────────
+        with _kb_intake_tab:
+            from services.knowledge_pool.intake_extract import (
+                Page as _IntakePage, extract_batch as _ib_extract,
+                PROVINCES as _IB_PROVINCES, IMAGE_EXTS as _IB_IMG_EXTS,
+            )
+            from services.knowledge_pool import intake_routes as _ir
+
+            st.caption(_t("intake_caption"))
+            _ib_files = st.file_uploader(
+                _t("intake_upload_label"),
+                type=["pdf", "pptx", "txt", "docx", "png", "jpg", "jpeg", "webp"],
+                accept_multiple_files=True, key="intake_uploader",
+            )
+            _api_key_ib = _os.environ.get("ANTHROPIC_API_KEY")
+
+            if st.button(_t("intake_extract_btn"), key="intake_extract_btn",
+                         disabled=not _ib_files):
+                _pages = []
+                for _f in _ib_files:
+                    _b = _f.read()
+                    _ext = _f.name.rsplit(".", 1)[-1].lower()
+                    if _ext in _IB_IMG_EXTS:
+                        _pages.append(_IntakePage(filename=_f.name, data=_b, kind="image"))
+                    else:
+                        try:
+                            from services.knowledge_pool.knowledge_docs import _extract_pages as _exp
+                            _txts = _exp(_b, _f.name, api_key=_api_key_ib)
+                            _pages.append(_IntakePage(
+                                filename=_f.name, data=_b, kind="text",
+                                text="\n".join(t for _, t in _txts)))
+                        except Exception as _e:
+                            _pages.append(_IntakePage(filename=_f.name, data=_b,
+                                                      kind="text", error=str(_e)))
+                with st.spinner("Claude reading…"):
+                    try:
+                        st.session_state["intake_proposal"] = _ib_extract(
+                            _pages, api_key=_api_key_ib)
+                        st.session_state.pop("intake_route_outcomes", None)
+                    except Exception as _e:
+                        st.error(_t("intake_extract_fail", err=_e))
+
+            _prop = st.session_state.get("intake_proposal")
+            if _prop:
+                # duplicate-batch guard
+                from services.knowledge_pool.knowledge_docs import get_conn as _kb_get_conn
+                _dup = None
+                try:
+                    with _kb_get_conn() as _c:
+                        with _c.cursor() as _cur:
+                            _cur.execute(
+                                "SELECT id, title FROM staging.spot_knowledge_docs WHERE file_hash = %s",
+                                (_prop.batch_hash,))
+                            _dup = _cur.fetchone()
+                except Exception:
+                    pass
+                _anyway = False
+                if _dup:
+                    st.warning(_t("intake_dup_warn", doc_id=_dup[0], title=_dup[1]))
+                    _anyway = st.checkbox(_t("intake_dup_anyway"), key="intake_anyway")
+
+                _ib_title = st.text_input("Title", _prop.title, key="intake_title")
+                _prov_opts = ["—"] + _IB_PROVINCES
+                _ib_prov = st.selectbox("Province", _prov_opts,
+                                        index=(_prov_opts.index(_prop.province)
+                                               if _prop.province in _prov_opts else 0),
+                                        key="intake_province")
+                _cat_keys = list(_KB_CATS.keys())
+                _ib_cat = st.selectbox(
+                    "Category", _cat_keys,
+                    index=_cat_keys.index(_prop.category) if _prop.category in _cat_keys else len(_cat_keys) - 1,
+                    format_func=lambda k: f"{k} — {_KB_CATS.get(k, k)}",
+                    key="intake_category")
+                _ib_summary = st.text_area("Summary", _prop.summary, key="intake_summary")
+
+                st.markdown(f"**{_t('intake_routes_label')}**")
+                _sel_routes = []
+                for _i, _r in enumerate(_prop.routes):
+                    _c1, _c2 = st.columns([1, 11])
+                    _on = _c1.checkbox("✓", value=True, key=f"intake_route_on_{_i}")
+                    _txt = _c2.text_area(f"`{_r.type}` · {_r.province or '—'}",
+                                         _r.content, key=f"intake_route_txt_{_i}")
+                    if _on:
+                        _sel_routes.append((_r, _txt))
+
+                if st.button(_t("intake_commit_btn"), key="intake_commit_btn",
+                             disabled=bool(_dup) and not _anyway):
+                    from services.knowledge_pool.knowledge_docs import (
+                        ingest_document_batch as _idb)
+                    _doc_id, _is_new, _ = _idb(
+                        _prop.pages,
+                        file_name=_ib_title or _prop.title,
+                        file_hash=_prop.batch_hash,
+                        title=_ib_title, category=_ib_cat,
+                        province=None if _ib_prov == "—" else _ib_prov,
+                        app="strategist", api_key=_api_key_ib,
+                    )
+                    _outcomes = _commit_routes(_sel_routes, _doc_id, _ib_prov, _ib_title)
+                    st.session_state["intake_route_outcomes"] = _outcomes
+                    st.session_state["intake_last_commit"] = (
+                        _doc_id, _ib_prov, _ib_title, _sel_routes)
+                    if not any(o[1] == "failed" for o in _outcomes):
+                        st.session_state.pop("intake_proposal", None)
+                    st.success(_t("intake_success", doc_id=_doc_id,
+                                  report="; ".join(f"{t}:{s}" for t, s, _ in _outcomes)))
+
+                _outcomes = st.session_state.get("intake_route_outcomes")
+                if _outcomes and any(o[1] == "failed" for o in _outcomes):
+                    for _t_, _s_, _d_ in _outcomes:
+                        (st.error if _s_ == "failed" else st.caption)(f"{_t_}: {_s_} {_d_}")
+                    if st.button(_t("intake_retry_btn"), key="intake_retry_btn"):
+                        _doc_id2, _prov2, _title2, _routes2 = st.session_state["intake_last_commit"]
+                        _failed_pairs = [(r, txt) for (r, txt), (t, s, d)
+                                         in zip(_routes2, _outcomes) if s == "failed"]
+                        _new = _commit_routes(_failed_pairs, _doc_id2, _prov2, _title2)
+                        _merged, _ni = [], iter(_new)
+                        for o in _outcomes:
+                            _merged.append(next(_ni) if o[1] == "failed" else o)
+                        st.session_state["intake_route_outcomes"] = _merged
+                        if not any(o[1] == "failed" for o in _merged):
+                            st.session_state.pop("intake_proposal", None)
+                        st.rerun()
 
         # ── Document list ──────────────────────────────────────────────────────
         _kb_docs = _cached_kb_docs()
