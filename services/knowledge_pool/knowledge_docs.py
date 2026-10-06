@@ -636,6 +636,83 @@ def register_and_ingest(
     return doc_id, True, category
 
 
+def ingest_document_batch(
+    pages_text: list[tuple[int, str]],
+    *,
+    file_name: str,
+    file_hash: str,
+    title: str,
+    category: str,
+    province: Optional[str],
+    app: str = "strategist",
+    api_key: Optional[str] = None,
+    synthesize: bool = True,
+) -> tuple[int, bool, str]:
+    """
+    Register ONE document from an intake batch (N pre-extracted pages).
+    Text extraction happens upstream (intake_extract); this only persists.
+    Returns (doc_id, is_new, category); is_new=False on duplicate file_hash.
+    """
+    init_knowledge_tables()
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, category FROM staging.spot_knowledge_docs WHERE file_hash = %s",
+                (file_hash,),
+            )
+            row = cur.fetchone()
+    if row:
+        return row[0], False, row[1]
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO staging.spot_knowledge_docs
+                    (file_name, file_hash, category, app, title, province,
+                     file_size_bytes, page_count, ingest_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'parsed')
+                RETURNING id
+                """,
+                (file_name, file_hash, category, app, title, province,
+                 0, len(pages_text)),
+            )
+            doc_id = cur.fetchone()[0]
+
+            inserts = []
+            chunk_index = 0
+            for page_no, text in pages_text:
+                for chunk in _chunk_text(text):
+                    inserts.append((doc_id, page_no, chunk_index, chunk))
+                    chunk_index += 1
+            if inserts:
+                cur.executemany(
+                    """
+                    INSERT INTO staging.spot_knowledge_chunks
+                        (doc_id, page_no, chunk_index, chunk_text)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (doc_id, chunk_index) DO NOTHING
+                    """,
+                    inserts,
+                )
+        conn.commit()
+
+    threading_mod = __import__("threading")
+    threading_mod.Thread(target=_embed_chunks_for_doc, args=(doc_id,), daemon=True).start()
+
+    if api_key and synthesize:
+        try:
+            from .synthesis import synthesize_on_ingest
+            threading_mod.Thread(
+                target=synthesize_on_ingest, args=(doc_id, api_key), daemon=True,
+            ).start()
+        except Exception:
+            pass
+
+    return doc_id, True, category
+
+
 def _embed_chunks_for_doc(doc_id: int) -> None:
     """Embed all un-embedded chunks for a document. Runs in a background thread."""
     try:
