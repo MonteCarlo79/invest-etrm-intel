@@ -45,3 +45,10 @@ entries:
   retrieved_at: '2026-10-07'
   license: own
   sha256: 5aba78f6ca423d8215a57f8daec0f70dabce075d32fe0e937263d7bc8559c873
+- id: e_fj_capacity_2025
+  kind: data
+  source: 景融持仓表 分月文件 25年发电侧 sheet (自有)
+  query: Fujian installed capacity by type, monthly 2025 (万千瓦)
+  retrieved_at: '2026-10-07'
+  license: own
+  sha256: 2f44a3aab00585f08ef7cb10af10107af9f4bcd0199da840b48a75f2039dc6a6
