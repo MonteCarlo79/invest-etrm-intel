@@ -4027,6 +4027,12 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                         st.session_state["intake_proposal"] = _ib_extract(
                             _pages, api_key=_api_key_ib)
                         st.session_state.pop("intake_route_outcomes", None)
+                        st.session_state.pop("intake_last_commit", None)
+                        for _k in [k for k in list(st.session_state)
+                                   if k.startswith(("intake_title", "intake_province",
+                                                    "intake_category", "intake_summary",
+                                                    "intake_route_on_", "intake_route_txt_"))]:
+                            del st.session_state[_k]
                     except Exception as _e:
                         st.error(_t("intake_extract_fail", err=_e))
 
