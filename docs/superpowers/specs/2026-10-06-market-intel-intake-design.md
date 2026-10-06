@@ -25,6 +25,7 @@ The user's market-intelligence capture flow (PPT/PDF/DOC/images/URLs collected d
 | Classification | Doc-level, from content (vision), user-editable before commit |
 | Route menu | Open-typed: extractor proposes whichever route types it finds (see §5) |
 | 系统运行费 | Note-only for v1 (no draft queue — see §5 constraint) |
+| Pipeline statistics | **Structured table** `marketdata.province_storage_pipeline` (recurring series; approved 2026-10-06) + Strategist read tool `get_storage_pipeline` |
 | Review | Nothing auto-commits; review panel with per-route checkboxes |
 
 ## 3. Architecture
@@ -57,6 +58,34 @@ Three units, single-purpose each:
 - **`ingest_document_batch()`**: one doc row (`file_hash` = sha256 of sorted per-file sha256 concatenation → order-independent dedup) + one chunk per page (`page_no` set, `chunk_index` = page order). Returns `(doc_id, is_new, category)`.
 - Dedup: existing `file_hash UNIQUE` constraint; UI warns on duplicate batch and requires explicit "ingest anyway".
 
+### 3.2b Pipeline statistics table — `marketdata.province_storage_pipeline` (new)
+
+Recurring per-province storage pipeline series, populated by the `pipeline_stat` route. Metric-keyed long format (same idiom as `province_ancillary_revenue`) so new metric types never need an ALTER:
+
+```sql
+CREATE TABLE IF NOT EXISTS marketdata.province_storage_pipeline (
+    id            SERIAL PRIMARY KEY,
+    province      TEXT   NOT NULL,          -- Chinese market name (宁夏), same convention as province_cap_comp
+    as_of_date    DATE   NOT NULL,          -- date the statistic refers to; targets use horizon (e.g. 2030-12-31)
+    metric        TEXT   NOT NULL,          -- vocabulary below
+    value         NUMERIC,
+    unit          TEXT,                     -- GW | GWh | 个 | 倍
+    source        TEXT,                     -- e.g. 国网宁电[2026]70号, deck title
+    source_doc_id INT REFERENCES staging.spot_knowledge_docs(id),  -- traceability to KB doc
+    status        TEXT   NOT NULL DEFAULT 'confirmed',  -- intake is human-reviewed → confirmed; future screeners write 'draft'
+    notes         TEXT,
+    ingested_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_psp_nat
+    ON marketdata.province_storage_pipeline (province, as_of_date, metric, COALESCE(source, ''));
+CREATE INDEX IF NOT EXISTS idx_psp_prov_date
+    ON marketdata.province_storage_pipeline (province, as_of_date DESC);
+```
+
+Initial metric vocabulary: `installed_new_storage_gw` (全口径新型储能并网), `installed_grid_side_storage_gw` (电网侧独立储能), `registry_projects` / `registry_gw` / `registry_gwh` (在库), `filed_not_registry_gw` / `filed_not_registry_gwh` (备案未入库), `total_filed_gw` / `total_filed_gwh` (全部备案合计), `planning_gap_gw` (规划缺口), `grid_access_gap_gw` (网架接入缺口), `grid_remaining_access_gw` (网架剩余可接入), `target_gw` (规划目标; 口径 differences — 自治区 vs 能源局 — become separate rows distinguished by `source`/`notes`). Extendable by string, no DDL.
+
+**Consumption:** one new read-only Strategist tool `get_storage_pipeline(province=None, metric=None)` in `apps/spot-market/app.py`, following the existing tool pattern — returns latest value per metric + history, so the agent can answer "宁夏储能备案多少 / 在库缺口多大" from the table. No bess-map changes; Quant consumes pipeline intelligence via `quant_note` text.
+
 ### 3.3 UI — `apps/spot-market/app.py`, Knowledge tab, "Intel Intake" section
 
 - `st.file_uploader(accept_multiple_files=True)` — png/jpg/jpeg/webp + pdf/pptx/docx/txt. Any count.
@@ -83,11 +112,12 @@ files → uploader → session_state pages
 | `ancillary_revenue` | realized 调频收入 monthly amounts (万元) | `marketdata.province_ancillary_revenue` | `status='draft'` → existing bess-map 调频收入 review queue |
 | `capacity_comp_rate` | 容量电价/容量补偿标准, 元/kW·年, 峰段小时 | `marketdata.province_cap_comp` | `status='draft'` (table already has status column) → bess-map review |
 | `fr_market_params` | 调频容量价格 元/kW·h, 全省调频资金池 亿元/年 | `marketdata.province_fr_market` | `status='draft'` (table already has status column) → bess-map review |
-| `spot_note` | pipeline/generation/load/targets/fundamentals (装机, 在库, 备案, 规划, 发电量, 负荷, 峰谷差, 缺口) | `agent_memory` app=`spot_market`, category=`province_note` (new category for this app — CLAUDE.md "extend as needed"), source=`intake` | active immediately |
+| `pipeline_stat` | structured pipeline figures (装机/在库/备案/规划/缺口, each with value + unit + as_of_date) | `marketdata.province_storage_pipeline` (§3.2b) | `status='confirmed'` — intake panel IS the human review; `source_doc_id` links back to the KB doc |
+| `spot_note` | interpretive fundamentals context (oversupply ratios, load shape, targets narrative) | `agent_memory` app=`spot_market`, category=`province_note` (new category for this app — CLAUDE.md "extend as needed"), source=`intake` | active immediately |
 | `quant_note` | BESS-revenue-relevant intelligence (AGC/调峰 demand sizing, mechanism/eligibility rules, structural constraints, 系统运行费 figures) | `agent_memory` app=`bess_map`, category=`province_note`, source=`intake` | active immediately |
 | anything else | — | KB chunk text only | — |
 
-Note routes are **persona-typed** (which agent consumes it), not content-typed — the extractor decides who cares, avoiding content-classification misfits (e.g. AGC demand sizing is neither a pipeline stat nor a policy change, but Quant clearly cares).
+Note routes are **persona-typed** (which agent consumes it), not content-typed — the extractor decides who cares, avoiding content-classification misfits (e.g. AGC demand sizing is neither a pipeline stat nor a policy change, but Quant clearly cares). Structured pipeline *numbers* go to the `pipeline_stat` table; `spot_note` carries only the *interpretation* (e.g. "备案31.6GW vs 20GW目标 → 1.45x oversupply, spread-compression risk"), so numbers and narrative have exactly one home each.
 
 **Sysopfee constraint (why note-only):** `province_sysopfee_monthly` has no status/draft column — bare `(province, year_month, fee_yuan_kwh)` with upsert-overwrite semantics. Direct writes would silently overwrite confirmed values with unreviewed intel. The automated monthly screener (1st of month) already fills it systematically. Sysopfee figures therefore ride the `quant_note` route as text. A full draft queue (status column + bess-map review wiring + 系统运行费 tab filter) is deferred.
 
@@ -102,8 +132,8 @@ Note routes are **persona-typed** (which agent consumes it), not content-typed �
 
 ## 7. Testing
 
-- **Unit:** new keyword categories classify 宁夏-deck-style text into `capacity_pipeline`/`ancillary_market`; batch hash order-independence; proposal-JSON parsing (mocked Claude response); partial-page failure path; route-writer idempotency (no dup rows on retry).
-- **Local live fixture:** the 9-image 宁夏 deck (`IMG_3828`–`IMG_3836`): upload → verify proposal (expect category `capacity_pipeline` or `market_intel`, province 宁夏, routes: `spot_note` carrying pipeline/load/registry figures + `quant_note` carrying AGC-demand sizing and 4h-constraint intelligence, **no** rate drafts — deck has demand figures, no compensation rates) → edit one field deliberately → commit → verify doc+chunks, both agent_memory rows, zero ancillary rows.
+- **Unit:** new keyword categories classify 宁夏-deck-style text into `capacity_pipeline`/`ancillary_market`; batch hash order-independence; proposal-JSON parsing (mocked Claude response); partial-page failure path; route-writer idempotency (no dup rows on retry); `province_storage_pipeline` upsert respects (province, as_of_date, metric, source) natural key; `get_storage_pipeline` returns latest-per-metric correctly.
+- **Local live fixture:** the 9-image 宁夏 deck (`IMG_3828`–`IMG_3836`): upload → verify proposal (expect category `capacity_pipeline` or `market_intel`, province 宁夏, routes: `pipeline_stat` rows — registry_gw=19.93, filed_not_registry_gw=11.7, total_filed_gw=31.63, planning_gap_gw=11.46, grid_access_gap_gw=6.36, installed_new_storage_gw series 7.63/8.0/10.13, target_gw 30/20 with two 口径 — + `spot_note` (oversupply interpretation) + `quant_note` (AGC-demand sizing and 4h-constraint intelligence), **no** rate drafts — deck has demand figures, no compensation rates) → edit one field deliberately → commit → verify doc+chunks, pipeline rows with `source_doc_id` backlink, both agent_memory rows, zero ancillary rows → ask Strategist "宁夏独立储能在库规模多少" and confirm it answers from `get_storage_pipeline`.
 - Existing suites must stay green. Hermes/Feishu path untouched.
 
 ## 8. Cost
@@ -115,5 +145,6 @@ One sonnet vision call per batch (~9 images ≈ 15–20k tokens). Negligible vs 
 - Hermes/Feishu image path fixes (kept as-is for mobile capture).
 - Sysopfee structured draft queue (needs status column + bess-map wiring).
 - bess-map and portal code — untouched; they consume via existing queues/memory.
+- Pipeline-stats chart/dashboard UI (table + Strategist tool only; visualisation when a second consumer appears).
 - URL intake (existing `register_url` path already covers URLs).
 - KB browser province facet (province column is written but not yet surfaced in search UI).
