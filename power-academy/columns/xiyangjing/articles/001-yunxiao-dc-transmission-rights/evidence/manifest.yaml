@@ -1,4 +1,11 @@
 entries:
+- id: ndrc_734_notice
+  kind: policy_excerpt
+  source: 国家发展改革委官网 (发改体改〔2026〕734号)
+  query: photo of official page (owner-provided IMG_3847), transcribed page 1
+  retrieved_at: '2026-10-06'
+  license: public
+  sha256: df4d52ff7238f06de3c59a352e5756f4e1f0044f36d2291592a3a988c0995d2a
 - id: e_fj_send_price
   kind: data
   source: staging.spot_interprov_flow
