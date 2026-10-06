@@ -102,7 +102,7 @@ def _call_vision(client, image_blocks: list[dict], text_pages: list[str],
         prompt += "\n\n以下为文本页内容：\n" + "\n\n".join(text_pages)
     resp = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=16384,
         messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": prompt}]}],
     )
     raw = resp.content[0].text.strip()

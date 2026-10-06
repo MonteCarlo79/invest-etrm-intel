@@ -47,6 +47,7 @@ def test_extract_batch_parses_and_filters_routes():
     assert [r.type for r in prop.routes] == ["pipeline_stat", "quant_note"]  # unknown dropped
     assert prop.batch_hash == batch_hash([b"\xff\xd8img1", b"\xff\xd8img2"])
     assert len(client.calls) == 1                      # one vision call for 2 images
+    assert client.calls[0]["max_tokens"] >= 16384   # dense multi-slide batches need the headroom
     content = client.calls[0]["messages"][0]["content"]
     assert sum(1 for b in content if b.get("type") == "image") == 2
 
