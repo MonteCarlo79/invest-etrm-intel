@@ -73,3 +73,10 @@ def test_extract_batch_text_pages_skip_vision():
     content = client.calls[0]["messages"][0]["content"]
     assert not [b for b in content if b.get("type") == "image"]
     assert "政策全文" in content[-1]["text"]           # text pages inlined in prompt
+
+
+def test_prompt_carries_metric_vocabulary():
+    from services.knowledge_pool.intake_extract import _PROMPT_TMPL
+    for token in ("registry_gw", "installed_new_storage_gw", "planning_gap_gw",
+                  "target_gw", "禁止出现日期"):
+        assert token in _PROMPT_TMPL, token

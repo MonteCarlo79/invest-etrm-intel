@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_psp_prov_date
     ON marketdata.province_storage_pipeline (province, as_of_date DESC);
 ```
 
-Initial metric vocabulary: `installed_new_storage_gw` (全口径新型储能并网), `installed_grid_side_storage_gw` (电网侧独立储能), `registry_projects` / `registry_gw` / `registry_gwh` (在库), `filed_not_registry_gw` / `filed_not_registry_gwh` (备案未入库), `total_filed_gw` / `total_filed_gwh` (全部备案合计), `planning_gap_gw` (规划缺口), `grid_access_gap_gw` (网架接入缺口), `grid_remaining_access_gw` (网架剩余可接入), `target_gw` (规划目标; 口径 differences — 自治区 vs 能源局 — become separate rows distinguished by `source`/`notes`). Extendable by string, no DDL.
+Initial metric vocabulary: `installed_new_storage_gw` (全口径新型储能并网), `installed_grid_side_storage_gw` (电网侧独立储能), `registry_projects` / `registry_gw` / `registry_gwh` (在库), `filed_not_registry_gw` / `filed_not_registry_gwh` (备案未入库), `total_filed_gw` / `total_filed_gwh` (全部备案合计), `planning_gap_gw` (规划缺口), `grid_access_gap_gw` (网架接入缺口), `grid_remaining_access_gw` (网架剩余可接入), `target_gw` (规划目标; 口径 differences — 自治区 vs 能源局 — become separate rows distinguished by `source`/`notes`), `installed_thermal_gw` (火电), `installed_renewables_gw` (风光合计), `peak_load_gw` (统调最高负荷), `pumped_storage_target_gw` (抽蓄规划). Extendable by string, no DDL.
 
 **Consumption:** one new read-only Strategist tool `get_storage_pipeline(province=None, metric=None)` in `apps/spot-market/app.py`, following the existing tool pattern — returns latest value per metric + history, so the agent can answer "宁夏储能备案多少 / 在库缺口多大" from the table. No bess-map changes; Quant consumes pipeline intelligence via `quant_note` text.
 

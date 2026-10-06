@@ -83,7 +83,18 @@ _PROMPT_TMPL = """你在分析一组中文电力市场情报文件（同一主�
 - capacity_comp_rate: 容量电价/容量补偿标准 → structured: {{"cap_comp_yuan_kw": 数值, "peak_duration_hours": 数值或null, "effective_date": "YYYY-MM-DD"}}
 - fr_market_params: 调频容量价格(元/kW·h)/全省资金池 → structured: {{"fr_price_yuan_kw_h": 数值或null, "fr_pool_billion_yuan": 数值或null, "effective_date": "YYYY-MM-DD"}}
 - ancillary_revenue: 已结算调频/辅助服务收入月度金额 → structured: {{"month": "YYYY-MM-01", "metric": "指标名", "amount_yuan": 数值（元）}}
-- pipeline_stat: 装机/在库/备案/规划/缺口统计 → structured: {{"rows": [{{"metric": "英文蛇形名", "value": 数值, "unit": "GW|GWh|个|倍", "as_of_date": "YYYY-MM-DD", "source": "出处"}}]}}
+- pipeline_stat: 装机/在库/备案/规划/缺口统计 → structured: {{"rows": [{{"metric": "...", "value": 数值, "unit": "GW|GWh|个|倍", "as_of_date": "YYYY-MM-DD", "source": "出处"}}]}}
+  metric 命名规则：
+  a) 优先使用以下标准词表（无匹配项时才可自创简洁蛇形名）：
+     installed_new_storage_gw 全口径新型储能并网装机; installed_grid_side_storage_gw 电网侧独立储能装机;
+     registry_projects 在库项目数; registry_gw 在库功率; registry_gwh 在库能量;
+     filed_not_registry_gw 备案未入库功率; filed_not_registry_gwh 备案未入库能量;
+     total_filed_gw 全部备案合计功率; total_filed_gwh 全部备案合计能量;
+     planning_gap_gw 规划缺口; grid_access_gap_gw 网架接入缺口; grid_remaining_access_gw 网架剩余可接入;
+     target_gw 规划目标（as_of_date 用目标年份-12-31，口径差异放 source，如 自治区政府/国家能源局）;
+     installed_thermal_gw 火电装机; installed_renewables_gw 风光合计装机; peak_load_gw 统调最高负荷;
+     pumped_storage_target_gw 抽水蓄能规划
+  b) metric 名中禁止出现日期/年份 —— 时间一律进 as_of_date；同一指标多个时点 = 同一 metric 多行
 - spot_note: 给现货策略分析师的供需/格局解读（structured 留空 {{}}）
 - quant_note: 给储能量化分析师的收益机制/约束/需求体量解读（structured 留空 {{}}）
 
