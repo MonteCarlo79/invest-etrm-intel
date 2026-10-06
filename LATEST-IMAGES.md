@@ -35,7 +35,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 | spot-market | `bess-spot-markets` | v46 | 145 | ~2026-09-26 | per CLAUDE.md snapshot |
 | portal | `bess-platform-portal` | v13 | 70 | ~2026-09-26 | per CLAUDE.md snapshot |
 | gb-market | `bess-gb-market` | v107 | 30 | 2026-09-20 | parallel session: modo question rotation |
-| lingfeng-ingest | `lingfeng-ingest` | **v9** (3686f1452375) | **11** | 2026-10-01 | this session: folder-scan guard (non-province stems skipped; 运行数据披露 incident) |
+| lingfeng-ingest | `lingfeng-ingest` | **v10** (3f1d025fb50e) | **12** | 2026-10-06 | this session: residual-quantile forecast bands in capture pipeline + column_to_matrix KeyError guard |
 
 ## Deploy history (append-only, newest at bottom)
 
@@ -63,6 +63,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-10-04 — `bess-map:114` ← `bess-map:v76` (cedb86400d29); annual_real averages over evaluable days only (NULLIF NaN) — one warmup/forecast-hole NaN day poisoned AVG and erased every arbitrage bar under the realized basis (this session).
 
 - 2026-10-04 — `bess-retail-risk:3` ← `bess-retail-risk:v3` (18d675fcab35); retail-risk P1 full build (8 tabs: trades/invoices/MTM ingestion live, recon + P&L bridge + per-book MtM; replaces Sep v2 shell). jq-swap from live tdArn rev 2 (td:3 registered), update-service force-new-deployment; tfvars set v3, NO terraform apply (parallel-session tf edits in tree + td has ignore_changes) (this session).
+- 2026-10-06 — `bess-platform-lingfeng-ingest:12` ← `lingfeng-ingest:v10` (3f1d025fb50e); residual-quantile forecast bands in capture pipeline (`--with-quantiles` default-on, ols_rt_time_v1 backbone → new bands table, model `ols_rt_time_q_v1`) + column_to_matrix KeyError guard for schema-variant API responses (Jiangsu_SheYang no-`time`-column). First ECR push attempt EOF-failed silently despite exit 0 — verified absent via describe-images before re-push. Built 2026-10-05 (prior session), deployed this session.
 
 ## Known parallel-session coordination points
 
