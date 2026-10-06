@@ -326,6 +326,20 @@ CATEGORIES: dict[str, list[str]] = {
         "研究报告", "分析报告", "调研报告", "白皮书", "研究院", "研究所",
         "market analysis", "research report", "white paper",
     ],
+    "market_intel": [
+        "市场情报", "市场分析", "市场调研", "行业动态", "第三方分析",
+        "market intelligence", "market intel",
+    ],
+    "capacity_pipeline": [
+        "装机", "在库", "备案", "项目储备", "并网装机", "规划目标",
+        "建设清单", "接入缺口", "规划缺口",
+        "installed capacity", "project pipeline", "grid connection queue",
+    ],
+    "ancillary_market": [
+        "调频", "调峰", "辅助服务", "一次调频", "二次调频", "AGC",
+        "容量补偿", "容量电价", "资金池",
+        "frequency regulation", "ancillary service", "capacity payment",
+    ],
 }
 
 CATEGORY_LABELS: dict[str, str] = {
@@ -334,6 +348,9 @@ CATEGORY_LABELS: dict[str, str] = {
     "policy_doc":        "Policy Document",
     "technical_spec":    "Technical Spec",
     "research_report":   "Research Report",
+    "market_intel":      "Market Intelligence",
+    "capacity_pipeline": "Capacity & Pipeline",
+    "ancillary_market":  "Ancillary Market",
     "monthly_report":    "Exchange Monthly Report",
     "conversation_log":  "Conversation Log",
     "other":             "Other",
@@ -345,6 +362,9 @@ CATEGORY_LABELS_ZH: dict[str, str] = {
     "policy_doc":        "政策文件",
     "technical_spec":    "技术规范",
     "research_report":   "研究报告",
+    "market_intel":      "市场情报",
+    "capacity_pipeline": "装机与项目储备",
+    "ancillary_market":  "辅助服务",
     "monthly_report":    "交易所月报",
     "conversation_log":  "对话记录",
     "other":             "其他",
@@ -400,6 +420,10 @@ def init_knowledge_tables() -> None:
             cur.execute("""
                 ALTER TABLE staging.spot_knowledge_docs
                 ADD COLUMN IF NOT EXISTS app TEXT NOT NULL DEFAULT 'shared'
+            """)
+            cur.execute("""
+                ALTER TABLE staging.spot_knowledge_docs
+                ADD COLUMN IF NOT EXISTS province TEXT
             """)
         conn.commit()
     _TABLES_INITIALIZED = True
