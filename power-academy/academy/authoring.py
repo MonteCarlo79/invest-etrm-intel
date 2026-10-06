@@ -73,7 +73,8 @@ from .llm import call_json
 TRANSLATE_SYSTEM = (
     "Translate the following markdown section from English to Chinese for a "
     "power-markets quant curriculum. Keep all markdown structure, formulas and "
-    "numbers unchanged. Return ONLY JSON: {\"zh_body\": \"<translated markdown>\"}.\n")
+    "numbers unchanged. Return ONLY the translated markdown, no JSON wrapper, "
+    "no commentary.\n")
 
 
 def translate_concept(root, concept_id, client, model) -> Path:
@@ -81,10 +82,18 @@ def translate_concept(root, concept_id, client, model) -> Path:
     path = find_concept(root, concept_id)
     fm, body = parse_concept(path)
     terms = load_glossary(root / "glossary" / "terms.yaml")
-    data = call_json(client, model, TRANSLATE_SYSTEM + prompt_block(terms), body,
-                     max_tokens=8000)
+    zh_body = None
+    try:
+        data = call_json(client, model, TRANSLATE_SYSTEM + prompt_block(terms), body,
+                         max_tokens=16000)
+        zh_body = data["zh_body"]
+    except ValueError:
+        resp = client.messages.create(model=model, max_tokens=16000,
+                                      system=TRANSLATE_SYSTEM + prompt_block(terms),
+                                      messages=[{"role": "user", "content": body}])
+        zh_body = resp.content[0].text
     zh_path = path.with_name(path.stem + ".zh.md")
-    zh_path.write_text(render_concept({"id": concept_id}, data["zh_body"]), encoding="utf-8")
+    zh_path.write_text(render_concept({"id": concept_id}, zh_body), encoding="utf-8")
     fm["translations"]["zh"] = {"status": "drafted", "en_hash": body_hash(body)}
     path.write_text(render_concept(fm, body), encoding="utf-8")
     return zh_path

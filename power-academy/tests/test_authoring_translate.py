@@ -31,3 +31,20 @@ def test_translate_writes_zh_and_stamps_hash(tmp_path):
     assert fm["translations"]["zh"] == {"status": "drafted", "en_hash": body_hash(body)}
     # glossary was injected into the prompt
     assert "火花价差" in c.calls[0]["system"]
+
+
+def test_translate_falls_back_to_raw_markdown(tmp_path):
+    root, body = _setup(tmp_path)
+    # model returns plain markdown instead of JSON
+    # (call_json retries once -> two garbage replies, then the fallback call)
+    c = FakeClient(["garbage 1", "garbage 2", "## 直觉\n火花价差很重要。\n"])
+    out = translate_concept(root, "c1", c, "m")
+    _, zh_body = parse_concept(out)
+    assert "火花价差" in zh_body and "学习目标" not in zh_body
+    fm, _ = parse_concept(root / "concepts" / "asset_valuation" / "c1.md")
+    assert fm["translations"]["zh"]["status"] == "drafted"
+
+
+def test_translate_asks_for_plain_markdown():
+    from academy.authoring import TRANSLATE_SYSTEM
+    assert "Return ONLY the translated markdown" in TRANSLATE_SYSTEM
