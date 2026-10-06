@@ -21,8 +21,8 @@ sources:
 originality: synthesized
 translations:
   zh:
-    status: none
-    en_hash: null
+    status: drafted
+    en_hash: 321d84b78b6ff05d
 ---
 ## Learning objectives
 
