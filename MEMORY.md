@@ -169,3 +169,24 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 ## 2026-09-27 — Writer schedule fixed (family-ARN pin) + first green cron-path run
 **Incident:** first two scheduled firings (09-26, 09-27 08:00 UTC) FAILED — EventBridge target pinned nodal-writer:1, deregistered by the v27 terraform apply → RunTask 'TaskDefinition is inactive' (FailedInvocations=1 both days, found via CloudTrail). **Fix:** target now uses the td FAMILY arn (arn_without_revision), resolves latest-active at run time (7c82c67). Manual run on the fixed path: exit 0, RUN_DAY 2026-09-28 23 plants (iterations=3, delta 2414 MWh; shape_misses=17). Tomorrow 08:00 UTC is the first true cron run on the fixed target.
 **Flagged sibling breakage:** rule bess-platform-nodal-pf-daily pins bess-platform-mengxi-dashboard:33 — same 'inactive' failure mode since the v23 deploy (09-23); its owner needs the same family-ARN repoint (feeds reports.nodal_pf_node_daily → T6 theoretical + Nodal Maps tab).
+
+## Session Summary, 2026-10-02 → 2026-10-06
+**Worked on:** Two new workstreams from scratch: (1) Power Academy — bilingual power-markets quant curriculum built from the owner's Western-market library + SEE practice folders; (2) 西洋镜看中国电力市场 column (xiyangjing) — evidence-pack publishing pipeline. Both live in new `power-academy/` package, merged to main (96888b0) and pushed.
+
+**Completed:**
+- Power Academy Phase 0-1: 126 sources indexed (LibreOffice conversion for legacy .ppt/.doc, local macOS Vision OCR for scanned PDFs), 8-track syllabus with 100 stubs, zero coverage gaps (owner-approved). Cloud LLM stages run on Fargate via `power-academy/scripts/run_cloud.sh` (Anthropic geo-blocked from Mac; owner runs script manually — `aws ecs run-task` is classifier-blocked for Claude sessions).
+- Power Academy Phase 2: 24 concepts EN+ZH (asset_valuation ×12, hedging_trading ×12), each with a tested runnable lab; 3 gate-enforced CLI tools (pack/set-status/translate); suite 196; fresh-context review with Critical/Important fixes (hour-weighted implied offpeak, published lab gate, relative cross-lab imports).
+- Xiyangjing column: evidence-pack pipeline (read-only SQL/KB, sha256 manifest, [[E:id]] claim tracing), 7 gates incl. hard-coded owner_signoff render gate, 公众号 HTML renderer, editor agent `column propose-topics` (hermes briefings + KB + weekly anomaly scan). Suite 87, reviewed and fixed.
+- RDS-from-Mac solved: Astrill excludes AWS → direct PGURL works with VPN on (no AWS changes needed).
+
+**In progress:** nothing active. ZH translations complete for all 24 concepts.
+
+**Decisions made:**
+- Mixed labs (worked-example per concept + 2-3 anchor model reproductions per track); owner reviews per 6-concept batch; pen-name first for the column (byline is a field); bilingual EN authoring + locked-glossary ZH with staleness hashes; no live web search anywhere (hermes is the only news intake).
+- Anchors assert internal consistency (formula = ground truth); practice xlsm models out of approved scope.
+- Plan corrections made honestly during execution: rolling-intrinsic tracking is curve-vol-driven (not rebalance frequency); dynamic delta rebalancing fails through jumps; linear beats benchmark hedging under mean reversion.
+
+**Next session:**
+- Candidates: xiyangjing pilot article (pick topic from `columns/xiyangjing/topics/backlog.yaml`; workflow in its README), Phase 3 simulation games, or hermes international-feeds workstream (Timera/Modo/Montel/Cornwall/EnAppSys — needs hermes deploy confirmation).
+- Carry-forward: `/tmp/bess-pa` worktree kept (holds git-ignored `cache/` extracted source text reused by future phases). Incident lessons logged in ledgers: pull-results EN-overwrite (guard added — zh-only pull), forward-curve tautology, translate JSON fragility (now plain-markdown output).
+- Project memories written: `project_power_academy.md`, `project_xiyangjing_column.md`.
