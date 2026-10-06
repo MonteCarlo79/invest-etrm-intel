@@ -2879,6 +2879,7 @@ the file is already ingested and searchable without calling ingest_kb_document a
 10. For questions about Inner Mongolia BESS asset performance, P&L, dispatch cycles, or strategy \
 comparison across suyou/hangjinqi/siziwangqi/gushanliang, call get_bess_pnl. \
 It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
+- 储能装机/在库/备案/规划缺口/接入缺口 → get_storage_pipeline（先查表，不足再 search_reference_docs）
 """
 
     def _build_spot_system(query: str = "") -> str:
@@ -3089,6 +3090,30 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
             },
         },
         {
+            "name": "get_storage_pipeline",
+            "description": (
+                "Fetch per-province energy-storage pipeline statistics collected from market "
+                "intel: installed capacity (新型储能/电网侧储能 GW), project registry "
+                "(在库 项目数/GW/GWh), filed-but-not-registered (备案未入库), planning "
+                "targets and gaps (规划缺口/接入缺口). Returns latest value per metric "
+                "plus dated history. Use for 储能装机/在库/备案/规划/缺口 questions."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "provinces": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Chinese province names, e.g. ['宁夏','甘肃']. Omit for all.",
+                    },
+                    "metric": {
+                        "type": "string",
+                        "description": "Optional single metric filter, e.g. registry_gw.",
+                    },
+                },
+                "required": [],
+            },
+        },
+        {
             "name": "search_reference_docs",
             "description": (
                 "Search the uploaded reference document knowledge base. Covers market rules, "
@@ -3170,6 +3195,9 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                 result = _rp(**inputs)
             elif name == "get_market_fundamentals":
                 result = _gmf(**inputs)
+            elif name == "get_storage_pipeline":
+                from services.knowledge_pool.intake_routes import read_storage_pipeline as _rsp
+                result = _rsp(_conn(), inputs.get("provinces"), inputs.get("metric"))
             elif name == "search_reference_docs":
                 from services.knowledge_pool.knowledge_docs import search_reference_docs as _srd
                 _limit = min(int(inputs.get("limit", 5)), 10)
