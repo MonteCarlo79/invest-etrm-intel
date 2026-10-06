@@ -1,0 +1,148 @@
+# Value CCGT
+
+- id: `value_ccgt` · class: library · type: pdf
+- topic: CCGT valuation under price uncertainty and operational constraints · level: advanced · market: GB · year: 2012
+- worked examples: True · code: False
+
+## Concepts
+- **Clean spark spread (CSS)** — The per-unit contribution margin of a gas-fired plant defined as the electricity price minus heat-rate-weighted gas and carbon costs.
+- **Market heat rate** — The ratio of electricity price to (carbon-adjusted) gas price used as a proxy for the marginal generator's efficiency.
+- **Combined cycle gas turbine (CCGT) operational constraints** — Physical limits on plant operation including ramp times, minimum/maximum output, startup costs, and temperature-dependent restart requirements.
+- **Real options valuation of power plants** — Application of option-pricing theory to capture the value of operational flexibility in switching a generation asset on or off.
+- **Least Squares Monte Carlo (LSM) algorithm** — A simulation-based dynamic programming method that approximates continuation value via least-squares regression to solve optimal stopping and switching problems.
+- **Basis function selection in LSM** — The choice of regressors (e.g., power functions, Laguerre polynomials, univariate spread vs. multivariate prices) used in the LSM continuation-value regression and its impact on value estimates.
+- **Co-integration of energy prices** — The long-run equilibrium relationship linking electricity, natural gas, and carbon allowance prices that prevents them from drifting apart indefinitely.
+- **Vector error-correction model (VECM)** — A multivariate time-series model that represents co-integrated price dynamics by separating short-run adjustments from long-run equilibrium corrections.
+- **Johansen trace test** — A likelihood-ratio procedure for determining the number of co-integrating relationships among a set of integrated variables.
+- **Constant conditional correlation GARCH (CCC-GARCH)** — A multivariate volatility model where individual series follow GARCH processes and cross-series correlations are held constant through time.
+- **Multivariate normal-inverse Gaussian (MNIG) distribution** — A heavy-tailed, skewed multivariate distribution used to model non-Gaussian residuals in energy price systems.
+- **Stochastic volatility and GARCH modelling** — Time-varying conditional variance frameworks capturing volatility clustering observed in commodity price returns.
+- **Day-ahead market price timing** — The institutional feature that prices for a given delivery day are fixed the preceding day, giving plant operators an additional day of price foresight.
+- **Deterministic intraday production scheduling** — Within-day linear or network optimization of generation output given known hourly prices and plant technical constraints.
+- **EU Emissions Trading Scheme (EU ETS)** — The cap-and-trade mechanism that adds a carbon cost to fossil fuel generation via mandatory surrender of EU allowances (EUAs) per tonne of CO2 emitted.
+- **Seasonality in commodity prices** — Deterministic periodic patterns in electricity and gas prices captured via sine-cosine Fourier terms at annual, semi-annual, and quarterly frequencies.
+- **Unit root and stationarity testing** — Statistical procedures (ADF and KPSS tests) used to classify price series as integrated of order one before co-integration analysis.
+- **Merit order curve** — The supply-side ranking of generators by marginal cost that determines the equilibrium electricity price given inelastic demand.
+- **Information criteria for model selection** — Penalised likelihood statistics (AIC, BIC, HQ, SC) used to compare competing price model specifications.
+- **Price foresight and myopic assumptions** — The distinction between assuming prices are known only at the moment of delivery (myopic/zero foresight) versus known one day in advance (day-ahead foresight) and its effect on dispatch decisions and plant value.
+- **Cointegration of energy prices** — Long-run equilibrium relationship linking logarithms of electricity, gas and carbon prices such that deviations are mean-reverting.
+- **Vector Error Correction Model (VECM)** — Multivariate time-series model that captures short-run dynamics and adjustment toward a long-run cointegrating equilibrium.
+- **BEKK GARCH** — Multivariate GARCH specification ensuring positive-definiteness of the conditional covariance matrix via quadratic forms.
+- **Dynamic Conditional Correlation (DCC) GARCH** — Multivariate GARCH variant allowing the correlation matrix to vary over time as a function of past standardized residuals.
+- **Multivariate skewed-t distribution** — Generalized hyperbolic distribution accommodating both tail heaviness and asymmetry in multiple dimensions.
+- **EM algorithm for MNIG** — Expectation-Maximization procedure used to estimate parameters of the MNIG distribution on standardized residuals.
+- **Quasi Maximum Likelihood Estimation (QML)** — Estimation method that maximises a Gaussian log-likelihood to obtain consistent parameter estimates even under non-normality.
+- **Risk-neutral measure adjustment** — Modification of the MNIG skewness parameter so that simulated log-price increments have expected return equal to the risk-free rate.
+- **Least Squares Monte Carlo (LSM)** — Simulation-based dynamic programming algorithm that approximates continuation values via OLS regression for optimal stopping and switching decisions.
+- **Bellman equation for power plant dispatch** — Recursive optimality condition expressing the plant value as the maximum over next-state transitions of immediate profit plus discounted expected continuation value.
+- **Power plant state space** — Discrete set of operating modes (Cold, Warm, Hot, Min, Max) representing boiler temperature and generator output for scheduling purposes.
+- **Start-up costs and ramp constraints** — Operational restrictions governing minimum transition times and fuel consumption required to move between plant states.
+- **Price ratio pre-solving** — Computational technique exploiting that optimal intraday profiles depend only on three price ratios, allowing lookup-table substitution in Monte Carlo.
+- **Perfect foresight benchmark** — Upper-bound valuation obtained by assuming exact knowledge of future continuation values rather than regression estimates.
+- **Seasonality decomposition** — Extraction of deterministic calendar patterns from price series prior to fitting the stochastic VECM component.
+- **Weekday dummy variables** — Indicator variables capturing systematic day-of-week price effects, split pre- and post-2009 to reflect market structural changes.
+- **Carbon intensity (IC)** — Fixed coefficient converting gas consumption into equivalent CO2 emissions for computing carbon cost in the spark spread.
+- **Myopic vs. day-ahead price information assumption** — Comparison of plant dispatch decisions made with and without 12-hour advance knowledge of the next day's prices.
+- **LSM regression basis functions** — Choice of regressors (power functions, Laguerre polynomials, multivariate price terms) used to approximate continuation values in the LSM algorithm.
+- **ARCH-LM test** — Lagrange-multiplier test for autoregressive conditional heteroscedasticity in univariate or multivariate residual series.
+- **Information criteria (AIC, BIC, HQ, SC)** — Penalised likelihood statistics used to select lag length, GARCH specification and residual distribution.
+- **Cointegrating vector (beta)** — Linear combination of log prices that is stationary and interpreted as long-run price elasticities in the VECM.
+- **Speed-of-adjustment coefficients (alpha)** — Parameters in the VECM measuring how quickly each price series corrects deviations from the long-run equilibrium.
+- **Cointegration** — Long-run equilibrium relationship linking electricity, gas and carbon log prices within the VECM framework.
+- **De-seasonalised log prices** — Transformation of commodity spot prices removing deterministic seasonal patterns before econometric modelling.
+- **Day-of-week dummy variables** — Indicator variables for weekdays included in the VECM to capture systematic calendar effects in power and gas prices.
+- **Multivariate Normal Inverse Gaussian (MNIG) distribution** — Heavy-tailed, skewed multivariate distribution used to model standardised residuals of the price process as a normal mean-variance mixture with an inverse Gaussian mixing variable.
+- **EM algorithm for generalised hyperbolic distributions** — Expectation-Maximisation procedure that alternates between computing conditional expectations of the latent mixing variable and updating distribution parameters to achieve maximum likelihood estimates.
+- **Modified Bessel function of the second kind** — Special function appearing in the MNIG and skewed-t probability density functions and their EM update equations.
+- **Spark spread / clean spark spread** — Net revenue margin of a gas-fired plant equal to the power price minus variable costs and fuel costs adjusted for carbon intensity.
+- **Dark spread / clean dark spread** — Revenue margin for coal-fired generation, used as a benchmark comparator to the clean spark spread for CCGT.
+- **Merit order effect** — Mechanism by which renewable generation displaces higher-marginal-cost plant and thereby reduces equilibrium wholesale electricity prices.
+- **Heat rate** — Thermal efficiency ratio converting gas input to electricity output, determining the fuel cost component of the spark spread.
+- **Intraday production scheduling** — Deterministic optimisation of hourly dispatch decisions for a CCGT over a 24-hour period given plant state transitions and prevailing prices.
+- **Dynamic programming for CCGT dispatch** — Backward-induction algorithm computing optimal start/stop and loading trajectories for a CCGT over each operating day.
+- **Plant state transitions** — Discrete operational states (off, warming-up, generating, cooling-down) with associated gas consumption and electricity output matrices governing feasible CCGT transitions.
+- **Dimensionality reduction via load multiplier** — Proof that the optimal intraday production profile depends only on relative price ratios (load multiplier and fuel cost ratio) rather than absolute price levels, allowing pre-computation of universal dispatch rules.
+- **Load multiplier (LM)** — Ratio of net electricity revenue to fuel cost used to parameterise the dimensionality-reduced CCGT dispatch decision.
+- **Fuel cost ratio (ΔcF)** — Ratio of next-day to current-day fuel cost capturing intraday fuel price changes for cross-midnight dispatch optimisation.
+- **Real options valuation of generation assets** — Framework treating a CCGT as a portfolio of options on the spark spread and applying dynamic programming or simulation to compute asset value.
+- **Carbon emission certificates (EUAs)** — EU allowances whose price enters the clean spark spread as an additional variable cost proportional to the plant's carbon intensity.
+- **Unit root testing (ADF/SAID-DICKEY)** — Statistical tests applied to price series to determine the order of integration prior to cointegration analysis.
+- **Multivariate GARCH with time-varying correlations** — Dynamic volatility model used to capture changing second-moment structure in joint commodity price innovations.
+- **Normal mean-variance mixture** — Construction principle representing both the MNIG and skewed-t distributions as conditionally Gaussian processes with a random variance mixing variable.
+
+## Methods
+- Vector error-correction model (VECM) estimation
+- Johansen co-integration trace test
+- Augmented Dickey-Fuller (ADF) unit root test
+- KPSS stationarity test
+- CCC-GARCH multivariate volatility estimation
+- Quasi-maximum likelihood (QML) estimation
+- Multivariate normal-inverse Gaussian (MNIG) distribution fitting via EM algorithm
+- Sine-cosine Fourier seasonal decomposition via OLS
+- Least Squares Monte Carlo (LSM) simulation
+- Monte Carlo price simulation
+- Deterministic dynamic programming for intraday scheduling
+- Information criterion model comparison (AIC, BIC, HQ)
+- Likelihood ratio tests
+- OLS regression for LSM continuation value (power functions, Laguerre polynomials, multivariate regressors)
+- Johansen cointegration trace test
+- Vector Error Correction Model (VECM) estimation
+- Multivariate GARCH estimation (Scalar BEKK, Diagonal BEKK, DCC-Engle, DCC-Tse-Tsui, CCC)
+- Quasi Maximum Likelihood Estimation
+- EM algorithm for MNIG parameter estimation
+- Multivariate normal-inverse Gaussian distribution fitting
+- Multivariate skewed-t distribution fitting
+- Risk-neutral skewness adjustment via numerical optimisation
+- Monte Carlo simulation of multivariate price paths
+- Least Squares Monte Carlo (LSM) dynamic programming
+- Deterministic intraday dynamic programming for dispatch
+- OLS regression for continuation value approximation
+- Price-ratio lookup-table pre-solving
+- Backward induction with Bellman equation
+- KPSS unit root test
+- Finite Prediction Error lag selection
+- Hannan-Quinn information criterion for lag selection
+- Jarque-Bera normality test
+- Multivariate ARCH-LM test
+- Backtesting via 95% predictive confidence intervals
+- Augmented Dickey-Fuller unit root testing
+- Maximum likelihood estimation
+- EM algorithm (Expectation-Maximisation)
+- Method of moments initialisation for NIG parameters
+- Multivariate GARCH estimation
+- Backward induction dynamic programming
+- Least Squares Monte Carlo simulation
+- Numerical differentiation of Bessel functions
+- Dimensionality reduction via relative price ratios
+
+## Implied prerequisites
+- Time-series econometrics (VAR, unit roots, co-integration)
+- GARCH and multivariate volatility modelling
+- Probability theory and non-Gaussian distributions
+- Monte Carlo simulation
+- Dynamic programming and stochastic optimisation
+- Real options theory
+- Power market microstructure and merit order pricing
+- EU ETS and carbon market mechanics
+- Basic thermodynamics of gas turbine cycles
+- Linear algebra and matrix calculus
+- OLS regression
+- Time series analysis (unit roots, stationarity, lag selection)
+- Cointegration theory
+- Multivariate GARCH modelling
+- Monte Carlo simulation methods
+- Dynamic programming and Bellman equations
+- Options pricing and risk-neutral valuation
+- Electricity and gas market fundamentals
+- EU ETS carbon market mechanics
+- Maximum likelihood and quasi-maximum likelihood estimation
+- Heavy-tailed and skewed multivariate distributions
+- Spark spread and heat rate concepts
+- Operational research for power plant dispatch
+- Stochastic processes and time series econometrics
+- Cointegration and error correction models
+- Maximum likelihood and EM estimation theory
+- Multivariate probability distributions and heavy-tailed distributions
+- Bessel functions and special functions
+- Commodity markets: electricity, gas, carbon
+- CCGT plant engineering basics (heat rates, start-up costs)

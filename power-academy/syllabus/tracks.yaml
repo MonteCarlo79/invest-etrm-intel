@@ -1,0 +1,2952 @@
+tracks:
+- id: market_fundamentals
+  title: 'Market fundamentals: price formation, merit order, market designs, products'
+  concepts:
+  - id: electricity_as_commodity
+    track: market_fundamentals
+    scope: Electricity's physical properties—non-storability, instantaneous balancing
+      requirement, and network constraints—that distinguish it from other commodities
+      and drive unique price dynamics.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: dphil_thesis
+      use: background
+    originality: synthesized
+  - id: supply_demand_equilibrium
+    track: market_fundamentals
+    scope: The fundamental mechanism by which electricity spot prices are determined
+      through the intersection of aggregate supply (the merit stack) and inelastic
+      demand in each settlement period.
+    level: foundation
+    prerequisites:
+    - electricity_as_commodity
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: dphil_thesis
+      use: background
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: storage_value
+      use: background
+    originality: synthesized
+  - id: merit_order_and_srmc
+    track: market_fundamentals
+    scope: The cost-ranked dispatch sequence of generation technologies by short-run
+      marginal cost that determines which plants run at any demand level and sets
+      the market-clearing price.
+    level: foundation
+    prerequisites:
+    - supply_demand_equilibrium
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: marginal_cost_pricing
+    track: market_fundamentals
+    scope: The principle that the wholesale electricity clearing price equals the
+      short-run marginal cost of the last (most expensive) unit dispatched to meet
+      demand, including fuel, carbon, and variable O&M costs.
+    level: foundation
+    prerequisites:
+    - merit_order_and_srmc
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: dipeng_power
+      use: background
+    originality: synthesized
+  - id: fuel_and_carbon_cost_inputs
+    track: market_fundamentals
+    scope: The role of gas, coal, oil, and CO2 allowance prices as the primary variable
+      cost drivers that position generators in the merit order and transmit commodity
+      price signals into wholesale electricity prices.
+    level: foundation
+    prerequisites:
+    - merit_order_and_srmc
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: dipeng_nl_css
+      use: background
+    - id: dipeng_de_gas_and_power
+      use: background
+    originality: synthesized
+  - id: standard_power_products
+    track: market_fundamentals
+    scope: The taxonomy of standardised wholesale electricity delivery products—baseload,
+      peak, off-peak, and incremental peak—and the arithmetic identities linking them
+      across markets and settlement calendars.
+    level: foundation
+    prerequisites:
+    - electricity_as_commodity
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: pk_op_to_incrpk_and_comb_bl
+      use: background
+    - id: incremental_peak_delta
+      use: background
+    - id: the_caveats_in_aom_peak_delta_calculation
+      use: background
+    - id: offpeakdeltas
+      use: background
+    - id: offpeakdeltas_2
+      use: background
+    - id: rough_results
+      use: background
+    - id: dipeng_data
+      use: background
+    - id: dipeng_data_model_system
+      use: background
+    - id: power_project_blue
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_tools
+      use: background
+    originality: synthesized
+  - id: forward_and_futures_markets
+    track: market_fundamentals
+    scope: The structure, conventions, and uses of exchange-traded calendar futures
+      and OTC forward contracts for power, including baseload and peak tenors, EFA
+      and Gregorian calendars, and the swap-versus-forward distinction.
+    level: foundation
+    prerequisites:
+    - standard_power_products
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: likron_powerplants
+      use: background
+    - id: 111102_collector
+      use: background
+    - id: forward_curve_python_script_2
+      use: background
+    - id: rwetollvaluation_310512
+      use: background
+    - id: rwetollvaluation_v2
+      use: background
+    - id: rwetollvaluation_v3
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_data_automation
+      use: background
+    - id: dipeng_rules
+      use: background
+    originality: synthesized
+  - id: day_ahead_and_spot_markets
+    track: market_fundamentals
+    scope: The operation of organised day-ahead auctions and intraday markets in which
+      hourly or half-hourly clearing prices are established, forming the reference
+      for physical dispatch and financial settlement.
+    level: foundation
+    prerequisites:
+    - supply_demand_equilibrium
+    - standard_power_products
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: dipeng_data
+      use: background
+    - id: dipeng_eq
+      use: background
+    - id: dipeng_supply
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_energinet_wind
+      use: background
+    - id: dphil_thesis
+      use: background
+    originality: synthesized
+  - id: fundamental_dispatch_models
+    track: market_fundamentals
+    scope: Bottom-up engineering models that minimise total generation cost by dispatching
+      plant in merit order against a demand forecast, incorporating fuel prices, carbon
+      costs, and transmission constraints to produce price and generation forecasts.
+    level: intermediate
+    prerequisites:
+    - merit_order_and_srmc
+    - fuel_and_carbon_cost_inputs
+    - supply_demand_equilibrium
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_power
+      use: background
+    originality: synthesized
+  - id: market_design_and_regulatory_frameworks
+    track: market_fundamentals
+    scope: The comparative architecture of wholesale electricity market structures—energy-only
+      versus capacity market designs, balancing and settlement codes, imbalance pricing,
+      and zonal versus nodal pricing—and their effects on investment and dispatch
+      incentives.
+    level: intermediate
+    prerequisites:
+    - forward_and_futures_markets
+    - day_ahead_and_spot_markets
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: power_european_toll
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: power_german_i_c
+      use: background
+    - id: dipeng_power_deal_structuring
+      use: background
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: dipeng_power
+      use: background
+    originality: synthesized
+  - id: capacity_mechanisms
+    track: market_fundamentals
+    scope: Regulatory schemes—including capacity auctions, capacity agreements, de-rating
+      factors, and the missing money problem—that remunerate generators for availability
+      to address security of supply concerns beyond energy market revenues.
+    level: intermediate
+    prerequisites:
+    - market_design_and_regulatory_frameworks
+    - merit_order_and_srmc
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_battery
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: power_offtake
+      use: background
+    - id: power_capacity_market
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_battery
+      use: background
+    originality: synthesized
+  - id: ancillary_services_and_system_services
+    track: market_fundamentals
+    scope: Grid-stability products—frequency containment reserves, spinning reserve,
+      and balancing services—procured by system operators from generators and storage,
+      and their contribution to plant revenue stacks.
+    level: intermediate
+    prerequisites:
+    - market_design_and_regulatory_frameworks
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: dipeng_battery
+      use: background
+    - id: dipeng_power
+      use: background
+    originality: synthesized
+  - id: locational_pricing_and_interconnectors
+    track: market_fundamentals
+    scope: The formation of locational price differentials between bidding zones or
+      nodes arising from transmission constraints and congestion, and the role of
+      interconnectors in arbitraging cross-border price spreads.
+    level: intermediate
+    prerequisites:
+    - marginal_cost_pricing
+    - market_design_and_regulatory_frameworks
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: power_locational_spread_options
+      use: background
+    - id: power_energinet_wind
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: overview_of_power_dispatch_models
+      use: background
+    originality: synthesized
+  - id: carbon_markets_and_merit_order_effect
+    track: market_fundamentals
+    scope: The mechanics of cap-and-trade carbon pricing under the EU ETS and UK Carbon
+      Price Floor, their pass-through into generation marginal costs, and the merit
+      order effect by which renewable entry reduces wholesale prices.
+    level: intermediate
+    prerequisites:
+    - fuel_and_carbon_cost_inputs
+    - merit_order_and_srmc
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: value_ccgt
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_nl_css
+      use: background
+    - id: dipeng_emissions
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    originality: synthesized
+  - id: long_term_supply_contracts_and_ppas
+    track: market_fundamentals
+    scope: Structured long-term commercial arrangements for fuel supply and power
+      offtake—including oil-indexed gas contracts, take-or-pay provisions, and power
+      purchase agreements—and their interaction with wholesale market hedging.
+    level: intermediate
+    prerequisites:
+    - forward_and_futures_markets
+    - fuel_and_carbon_cost_inputs
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: powerhedging
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_de_gas_and_power
+      use: background
+    - id: dipeng_lbs
+      use: background
+    originality: synthesized
+  - id: market_power_and_strategic_behaviour
+    track: market_fundamentals
+    scope: Game-theoretic models of oligopolistic electricity markets—including Cournot
+      quantity-setting, supply function equilibria, and competitive fringe interactions—and
+      their implications for price formation and welfare.
+    level: advanced
+    prerequisites:
+    - supply_demand_equilibrium
+    - fundamental_dispatch_models
+    - market_design_and_regulatory_frameworks
+    markets:
+    - AU
+    - EU
+    - GB
+    sources:
+    - id: storage_value
+      use: background
+    originality: synthesized
+- id: price_curve_modelling
+  title: 'Price and curve modelling: mean reversion, spikes, forward curves, shaping'
+  concepts:
+  - id: stochastic_process_foundations
+    track: price_curve_modelling
+    scope: Introduces the core continuous-time stochastic process building blocks—Brownian
+      motion, Itô's lemma, and SDEs—needed before any energy price model can be understood.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources: []
+    originality: original
+  - id: gbm_and_lognormal_prices
+    track: price_curve_modelling
+    scope: Covers geometric Brownian motion as a baseline commodity price model, its
+      log-normal distributional implications, and why it is the default assumption
+      in Black-Scholes and Margrabe-type spread option frameworks.
+    level: foundation
+    prerequisites:
+    - stochastic_process_foundations
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: understanding
+      use: background
+    - id: deng_johnson_sogom_dss_2001
+      use: background
+    - id: erratumtoelectricityderivativeschapterspreads_66_70
+      use: background
+    - id: dipeng_tools
+      use: background
+    - id: 111102_collector
+      use: background
+    originality: synthesized
+  - id: mean_reversion_models
+    track: price_curve_modelling
+    scope: Covers arithmetic and geometric Ornstein-Uhlenbeck processes as the primary
+      models for stationary commodity prices, including mean-reversion rate calibration,
+      effective volatility, and forward-curve consistency conditions.
+    level: foundation
+    prerequisites:
+    - stochastic_process_foundations
+    - gbm_and_lognormal_prices
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: pareto_spikes
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: optimal_switching_with_applications_to_energy_tolling_agreem
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: out_6
+      use: background
+    - id: swing_last
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: analytical_valuation_in_mean_reverting_world
+      use: background
+    - id: gav
+      use: background
+    - id: dipeng_literature
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: deng_johnson_sogom_dss_2001
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    originality: synthesized
+  - id: electricity_price_spikes
+    track: price_curve_modelling
+    scope: Covers the statistical modelling of short-lived extreme price spikes in
+      power markets using regime-switching, compound-Poisson jump, and non-Markovian
+      spike-product processes, including spike detection, Pareto magnitude distributions,
+      and ergodic properties.
+    level: intermediate
+    prerequisites:
+    - mean_reversion_models
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: pareto_spikes
+      use: background
+    - id: non_markov_method
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: out_6
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: clewlow
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: power_locational_spread_options
+      use: background
+    - id: 111102_collector
+      use: background
+    - id: analytical_valuation_in_mean_reverting_world
+      use: background
+    originality: synthesized
+  - id: cointegration_and_spread_dynamics
+    track: price_curve_modelling
+    scope: Covers the econometric theory and empirical testing of long-run equilibrium
+      relationships between power, gas, and carbon prices, including unit-root tests,
+      Johansen cointegration, VECM specification, and implications for spark-spread
+      stationarity.
+    level: intermediate
+    prerequisites:
+    - mean_reversion_models
+    - gbm_and_lognormal_prices
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: rough_results
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: power_locational_spread_options
+      use: background
+    originality: synthesized
+  - id: volatility_and_correlation_term_structures
+    track: price_curve_modelling
+    scope: Covers the calibration and modelling of term structures of forward-price
+      volatility and pairwise commodity correlations across maturities, including
+      Samuelson effect, GARCH, EWMA, and SABR extensions for power markets.
+    level: intermediate
+    prerequisites:
+    - gbm_and_lognormal_prices
+    - mean_reversion_models
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: powerhedging
+      use: background
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: humbertollvaluation
+      use: background
+    - id: humbertollvaluation_v2
+      use: background
+    - id: humbertollvaluation_2
+      use: background
+    - id: humbertollvaluation_v2_2
+      use: background
+    - id: clewlow
+      use: background
+    - id: deng_johnson_sogom_dss_2001
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    - id: us_toll
+      use: background
+    - id: dipeng_data_automation
+      use: background
+    - id: dipeng_vol_model
+      use: background
+    - id: dipeng_volatility_model
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_options_system
+      use: background
+    - id: 111102_collector
+      use: background
+    - id: swing_last
+      use: background
+    originality: synthesized
+  - id: forward_curve_construction
+    track: price_curve_modelling
+    scope: Covers no-arbitrage bootstrapping of power forward curves from liquid exchange
+      products, resolution of overlapping contracts, and derivation of off-peak prices
+      from baseload and peak instruments.
+    level: foundation
+    prerequisites:
+    - stochastic_process_foundations
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: forward_curve_python_script
+      use: background
+    - id: forward_curve_python_script_2
+      use: background
+    - id: clewlow
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: dipeng_literature
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_data
+      use: background
+    - id: dipeng_curve_shaping
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_options_system
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_rijnmond_dec17
+      use: background
+    - id: power_live_power_valuation_tool
+      use: background
+    - id: main
+      use: background
+    - id: '10_1_1_11_6839'
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: swing_last
+      use: background
+    originality: synthesized
+  - id: forward_curve_shaping
+    track: price_curve_modelling
+    scope: Covers ratio-based and seasonality-based methods for disaggregating coarse
+      seasonal or annual forward prices into monthly, daily, and hourly granularity,
+      including peak/off-peak splitting, weekday/weekend ratios, and normalisation
+      to preserve no-arbitrage.
+    level: intermediate
+    prerequisites:
+    - forward_curve_construction
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: forward_curve_python_script
+      use: background
+    - id: forward_curve_python_script_2
+      use: background
+    - id: humbertollvaluation
+      use: background
+    - id: humbertollvaluation_v2
+      use: background
+    - id: incremental_peak_delta
+      use: background
+    - id: the_caveats_in_aom_peak_delta_calculation
+      use: background
+    - id: dipeng_curve_shaping
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    - id: power_rijnmond_dec17
+      use: background
+    - id: clewlow
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: us_toll
+      use: background
+    originality: synthesized
+  - id: multi_factor_and_multi_commodity_forward_models
+    track: price_curve_modelling
+    scope: Covers stochastic models that jointly drive movements in power, gas, and
+      carbon forward curves using multiple correlated risk factors, including two-factor
+      Lucia-Schwartz decompositions, PCA-based factor models, and calibration to observed
+      term structures.
+    level: advanced
+    prerequisites:
+    - mean_reversion_models
+    - cointegration_and_spread_dynamics
+    - volatility_and_correlation_term_structures
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: power_locational_spread_options
+      use: background
+    - id: power_noble
+      use: background
+    - id: dipeng_literature
+      use: background
+    originality: synthesized
+  - id: monte_carlo_price_simulation
+    track: price_curve_modelling
+    scope: Covers construction of correlated multi-commodity price path ensembles
+      via Euler discretisation of SDEs, Cholesky decomposition, and random-seed control,
+      and their use in asset valuation and risk quantification.
+    level: intermediate
+    prerequisites:
+    - gbm_and_lognormal_prices
+    - mean_reversion_models
+    - forward_curve_construction
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: ce_template
+      use: background
+    - id: dispatch_and_delta_hedging_v2
+      use: background
+    - id: dispatch_and_delta_hedging_v3
+      use: background
+    - id: dispatch_and_delta_hedging_v4
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: power_locational_spread_options
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_eq
+      use: background
+    - id: gav
+      use: background
+    originality: synthesized
+  - id: seasonality_and_calendar_effects
+    track: price_curve_modelling
+    scope: Covers deterministic modelling of intra-day, intra-week, and intra-year
+      periodic price patterns through Fourier decompositions, dummy variables, and
+      PCA of hourly price matrices, including their role in forward-curve calibration
+      and model de-seasonalisation.
+    level: intermediate
+    prerequisites:
+    - forward_curve_shaping
+    - mean_reversion_models
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: dphil_thesis
+      use: background
+    - id: out_6
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: swing_last
+      use: background
+    - id: clewlow
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: dipeng_de_hourly_profile_trade
+      use: background
+    - id: dipeng_eq
+      use: background
+    - id: dipeng_data_automation
+      use: background
+    - id: dipeng_volatility_model
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: us_toll
+      use: background
+    - id: rough_results
+      use: background
+    - id: forward_curve_python_script
+      use: background
+    - id: forward_curve_python_script_2
+      use: background
+    originality: synthesized
+  - id: lattice_and_tree_price_models
+    track: price_curve_modelling
+    scope: Covers recombining trinomial and two-factor lattice constructions for mean-reverting
+      commodity prices, including moment matching, branching probability feasibility,
+      correlation representation, and convergence guarantees.
+    level: advanced
+    prerequisites:
+    - mean_reversion_models
+    - monte_carlo_price_simulation
+    - multi_factor_and_multi_commodity_forward_models
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: swing_last
+      use: background
+    - id: dphil_thesis
+      use: background
+    originality: synthesized
+- id: asset_valuation
+  title: 'Asset valuation: spark spreads, tolling, CCGT, real options'
+  concepts:
+  - id: spark_dark_spread_fundamentals
+    track: asset_valuation
+    scope: Define spark spread, dark spread, and clean (carbon-adjusted) variants
+      as the core margin metrics for thermal plant dispatch profitability across fuel
+      types.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: ce_template
+      use: background
+    - id: dispatch_and_delta_hedging_v2
+      use: background
+    - id: dispatch_and_delta_hedging_v3
+      use: background
+    - id: dispatch_and_delta_hedging_v4
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: ccgt_replication
+      use: background
+    - id: likron_powerplants
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_kkr
+      use: background
+    - id: power_peaker
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_nl_css
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    - id: erratumtoelectricityderivativeschapterspreads_66_70
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    originality: synthesized
+  - id: heat_rate_and_plant_parameters
+    track: asset_valuation
+    scope: Explain heat rate as the fuel-to-power conversion ratio, its variation
+      with output level (heat rate curve), plant efficiency, emissions intensity,
+      and auxiliary cost parameters that define the economic operating envelope of
+      a thermal unit.
+    level: foundation
+    prerequisites:
+    - spark_dark_spread_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: ccgt_replication
+      use: background
+    - id: clewlow
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: deng_johnson_sogom_dss_2001
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    - id: optimal_switching_with_applications_to_energy_tolling_agreem
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: intrinsic_vs_extrinsic_value
+    track: asset_valuation
+    scope: Distinguish intrinsic value (plant value computed from current forward
+      spread levels with no price uncertainty) from extrinsic or time value (the additional
+      value arising from volatility and operational flexibility), and explain hourly
+      shaping as a refinement of intrinsic value.
+    level: foundation
+    prerequisites:
+    - spark_dark_spread_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: humbertollvaluation
+      use: background
+    - id: humbertollvaluation_v2
+      use: background
+    - id: humbertollvaluation_2
+      use: background
+    - id: humbertollvaluation_v2_2
+      use: background
+    - id: us_toll
+      use: background
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: dipeng_eq
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    - id: power_rijnmond_dec17
+      use: background
+    - id: dipeng_gas_storage
+      use: background
+    originality: synthesized
+  - id: spread_option_pricing_models
+    track: asset_valuation
+    scope: Cover closed-form and approximate pricing models for spread options including
+      Margrabe's exchange-option formula, Kirk's approximation, the Bjerksund-Stensland
+      and Li-Deng-Zhou refinements, and Black's formula, explaining when each is appropriate
+      for spark and dark spread valuation.
+    level: intermediate
+    prerequisites:
+    - spark_dark_spread_fundamentals
+    - intrinsic_vs_extrinsic_value
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: deng_johnson_sogom_dss_2001
+      use: background
+    - id: erratumtoelectricityderivativeschapterspreads_66_70
+      use: background
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    - id: power_project_blue
+      use: background
+    - id: power_locational_spread_options
+      use: background
+    - id: dipeng_team_meeting
+      use: background
+    - id: dipeng_vol_model
+      use: background
+    originality: synthesized
+  - id: tolling_agreement_structure_and_valuation
+    track: asset_valuation
+    scope: Define tolling agreements as strips of spark-spread options giving dispatch
+      rights in exchange for capacity fees and variable costs, and cover the decomposition
+      into peak/off-peak daily option strips, intrinsic/extrinsic value split, and
+      key GB-market cost items such as BSUoS and NTS charges.
+    level: intermediate
+    prerequisites:
+    - spread_option_pricing_models
+    - intrinsic_vs_extrinsic_value
+    - heat_rate_and_plant_parameters
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: humbertollvaluation
+      use: background
+    - id: humbertollvaluation_v2
+      use: background
+    - id: humbertollvaluation_2
+      use: background
+    - id: humbertollvaluation_v2_2
+      use: background
+    - id: rwetollvaluation_310512
+      use: background
+    - id: rwetollvaluation_v2
+      use: background
+    - id: rwetollvaluation_v3
+      use: background
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: optimal_switching_with_applications_to_energy_tolling_agreem
+      use: background
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: us_toll
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: power_peaker
+      use: background
+    - id: power_landivisiau
+      use: background
+    - id: power_kkr
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: main
+      use: background
+    - id: main_2
+      use: background
+    originality: synthesized
+  - id: real_options_framework_for_generation_assets
+    track: asset_valuation
+    scope: Apply real options theory to power plant valuation, treating operational
+      flexibility (run/stop decisions, start costs, minimum up/down times) as financial
+      options on the spark spread and contrasting the real options approach with DCF
+      and static strip-of-European-options benchmarks.
+    level: intermediate
+    prerequisites:
+    - spread_option_pricing_models
+    - intrinsic_vs_extrinsic_value
+    - heat_rate_and_plant_parameters
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: clewlow
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: deng_johnson_sogom_dss_2001
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: optimal_switching_with_applications_to_energy_tolling_agreem
+      use: background
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: dispatch_optimisation_and_delta_hedging
+    track: asset_valuation
+    scope: Explain optimal dispatch rules based on the clean spark spread signal,
+      derive the delta-dispatch equivalence result showing that delta equals the probability
+      of exercise, and contrast Monte Carlo, trinomial tree, and least-squares Monte
+      Carlo approaches for computing Greeks and hedge positions.
+    level: intermediate
+    prerequisites:
+    - real_options_framework_for_generation_assets
+    - spread_option_pricing_models
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: dispatch_and_delta_hedging_v2
+      use: background
+    - id: dispatch_and_delta_hedging_v3
+      use: background
+    - id: dispatch_and_delta_hedging_v4
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: the_caveats_in_aom_peak_delta_calculation
+      use: background
+    - id: incremental_peak_delta
+      use: background
+    - id: ccgt_replication
+      use: background
+    - id: gav
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: ccgt_investment_option_and_optimal_timing
+    track: asset_valuation
+    scope: Model the decision to invest in a CCGT plant as an American-style real
+      option on the spark spread, covering perpetual and finite-horizon formulations,
+      investment trigger computation, value-matching and smooth-pasting conditions,
+      and numerical solution via binomial/trinomial trees and least-squares Monte
+      Carlo.
+    level: advanced
+    prerequisites:
+    - real_options_framework_for_generation_assets
+    - dispatch_optimisation_and_delta_hedging
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: ccgt_valuation
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: dipeng_power
+      use: background
+    originality: synthesized
+  - id: piecewise_replication_and_ccgt_intrinsic_modelling
+    track: asset_valuation
+    scope: Decompose CCGT cash flows into time-of-use segments and replicate them
+      with piecewise call-option portfolios calibrated by heat rate and volume parameters,
+      assessing fit quality via R-squared and explained-value metrics.
+    level: advanced
+    prerequisites:
+    - intrinsic_vs_extrinsic_value
+    - spread_option_pricing_models
+    - heat_rate_and_plant_parameters
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: ccgt_replication
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    - id: dipeng_power
+      use: background
+    originality: synthesized
+  - id: power_price_spike_models_and_option_valuation
+    track: asset_valuation
+    scope: Value European contingent claims on power in spiking markets using the
+      eigenclaim method, asymmetric power options, Pareto-averaged payoffs, and the
+      spike-smoothing property, and derive ergodic implied volatility and put-call
+      parity extensions for spiked forward options.
+    level: advanced
+    prerequisites:
+    - spread_option_pricing_models
+    - real_options_framework_for_generation_assets
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: pareto_spikes
+      use: background
+    - id: non_markov_method
+      use: background
+    - id: analytical_valuation_in_mean_reverting_world
+      use: background
+    originality: synthesized
+  - id: stochastic_price_processes_for_power_and_fuel
+    track: asset_valuation
+    scope: Survey the stochastic models used for power and fuel prices in asset valuation—including
+      mean-reverting Ornstein-Uhlenbeck, geometric Brownian motion, jump-diffusion,
+      and MNIG processes—and explain calibration to forward curves and volatility
+      surfaces.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: dipeng_vol_model
+      use: background
+    - id: dipeng_literature
+      use: background
+    originality: synthesized
+  - id: monte_carlo_and_lsm_for_generation_valuation
+    track: asset_valuation
+    scope: Implement Monte Carlo simulation and the Least Squares Monte Carlo algorithm
+      for valuing generation assets and tolling agreements, addressing perfect-foresight
+      bias, basis-function selection, price-foresight assumptions, and convergence
+      for multi-factor commodity models.
+    level: advanced
+    prerequisites:
+    - real_options_framework_for_generation_assets
+    - stochastic_price_processes_for_power_and_fuel
+    - dispatch_optimisation_and_delta_hedging
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: gav
+      use: background
+    - id: power_locational_spread_options
+      use: background
+    - id: dipeng_tools
+      use: background
+    - id: dipeng_options_system
+      use: background
+    originality: synthesized
+- id: optimisation_dispatch
+  title: 'Optimisation and dispatch: LP/MIP, start-up value, unit commitment, switching'
+  concepts:
+  - id: lp_mip_dispatch_fundamentals
+    track: optimisation_dispatch
+    scope: Formulation of power plant dispatch as a linear programme (LP) and mixed-integer
+      linear programme (MILP/MIP), covering binary on/off commitment variables, linear
+      cost and revenue objectives, and the role of integrality in capturing start-up
+      logic.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: '10_1_1_11_6839'
+      use: background
+    - id: dipeng_eq
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: plant_technical_constraints
+    track: optimisation_dispatch
+    scope: Catalogue of physical operating restrictions on thermal generation units
+      including minimum stable generation, maximum export limit, ramp rates, minimum
+      up/down times, and no-load costs that bound the feasible dispatch set.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: likron_powerplants
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: clewlow
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: gav
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: valuing_generation_assets___overview___spark_spread_option_v
+      use: background
+    - id: power_landivisiau
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_eq
+      use: background
+    originality: synthesized
+  - id: start_up_costs_and_classification
+    track: optimisation_dispatch
+    scope: Modelling of cold, warm, and hot restart costs as functions of boiler cooling
+      state, covering fuel consumption, maintenance wear, equivalent operating hours
+      accrual, and their incorporation into dispatch objective functions.
+    level: foundation
+    prerequisites:
+    - plant_technical_constraints
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: clewlow
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: gav
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_landivisiau
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_eq
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    originality: synthesized
+  - id: unit_commitment_state_space
+    track: optimisation_dispatch
+    scope: Representation of a thermal generator's operational status as a discrete
+      state machine tracking current mode (off, starting, online, shutting down),
+      time in state, and cumulative starts to enforce path-dependent commitment constraints.
+    level: intermediate
+    prerequisites:
+    - plant_technical_constraints
+    - start_up_costs_and_classification
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: clewlow
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: gav
+      use: background
+    - id: value_ccgt
+      use: background
+    originality: synthesized
+  - id: dynamic_programming_dispatch
+    track: optimisation_dispatch
+    scope: Backward-induction optimisation over time and unit-commitment state that
+      embeds price uncertainty into sequential start/stop and output decisions, computing
+      the Bellman value function at each node and deriving the optimal dispatch policy.
+    level: intermediate
+    prerequisites:
+    - unit_commitment_state_space
+    - lp_mip_dispatch_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: framework_tseng
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    - id: gav
+      use: background
+    - id: value_ccgt
+      use: background
+    - id: storage_value
+      use: background
+    - id: dipeng_eq
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    originality: synthesized
+  - id: lsmc_for_dispatch
+    track: optimisation_dispatch
+    scope: 'Least-squares Monte Carlo methodology applied to power plant dispatch:
+      simulation of price paths, cross-sectional regression of continuation values
+      on state variables as basis functions, and backward-induction policy extraction
+      without perfect-foresight bias.'
+    level: intermediate
+    prerequisites:
+    - dynamic_programming_dispatch
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: optimal_switching_with_applications_to_energy_tolling_agreem
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    originality: synthesized
+  - id: optimal_switching_and_tolling
+    track: optimisation_dispatch
+    scope: 'Stochastic control framework for valuing power tolling agreements as an
+      optimal switching problem: characterisation via quasi-variational inequalities
+      and the dynamic programming principle, hysteresis bands, switching boundaries,
+      and numerical solution by regression-based Monte Carlo schemes.'
+    level: advanced
+    prerequisites:
+    - lsmc_for_dispatch
+    - dynamic_programming_dispatch
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: optimal_switching_with_applications_to_energy_tolling_agreem
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    originality: synthesized
+  - id: start_count_limits_and_shadow_costs
+    track: optimisation_dispatch
+    scope: Handling of hard annual or contractual caps on plant start counts within
+      dynamic programming, including state-space expansion for long-history tracking,
+      iterative shadow-cost calibration as an alternative, and their application in
+      Virtual Power Plant contracts.
+    level: intermediate
+    prerequisites:
+    - unit_commitment_state_space
+    - dynamic_programming_dispatch
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: decide_when_to_start_your_power_plant_v2
+      use: background
+    - id: the_value_of_starting_up_a_power_plant_worldpower_2010_dijke
+      use: background
+    - id: worldpower2010_thevalueofstartingupthepowerplant
+      use: background
+    originality: synthesized
+  - id: intrinsic_vs_extrinsic_dispatch_value
+    track: optimisation_dispatch
+    scope: Decomposition of plant value into intrinsic dispatch (bang-bang on/off
+      against variable cost ignoring operational constraints) and extrinsic optionality
+      (value from flexibility, look-forward logic, and start management), and comparison
+      of dispatch volumes against delta hedges.
+    level: intermediate
+    prerequisites:
+    - plant_technical_constraints
+    - lp_mip_dispatch_fundamentals
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: dispatch_and_delta_hedging_v2
+      use: background
+    - id: dispatch_and_delta_hedging_v3
+      use: background
+    - id: dispatch_and_delta_hedging_v4
+      use: background
+    - id: dispatch_and_delta_hedging_aom_v2
+      use: background
+    - id: dispatch_and_delta_hedging_aom
+      use: background
+    - id: dispatch_and_delta_hedging_aom_2
+      use: background
+    - id: ce_template
+      use: background
+    - id: likron_powerplants
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: overview_of_power_dispatch_models
+      use: background
+    - id: swing_last
+      use: background
+    originality: synthesized
+  - id: forced_outage_and_availability_modelling
+    track: optimisation_dispatch
+    scope: Stochastic representation of unplanned plant unavailability using exponential
+      time-to-failure and time-to-repair distributions, integration into dispatch
+      state machines, and interaction with planned maintenance scheduling driven by
+      equivalent operating hours.
+    level: intermediate
+    prerequisites:
+    - unit_commitment_state_space
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: clewlow
+      use: background
+    - id: optimal_switching_with_applications_to_energy_tolling_agreem
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_de_gas_and_power
+      use: background
+    originality: synthesized
+  - id: ccgt_specific_dispatch_modelling
+    track: optimisation_dispatch
+    scope: 'Dispatch modelling tailored to combined-cycle gas turbines: multi-state
+      plant representation (cold/warm/hot/min/max), dimensionality reduction via load-multiplier
+      and fuel-cost-ratio pre-solving, intraday production scheduling, and EOH-based
+      maintenance integration.'
+    level: advanced
+    prerequisites:
+    - dynamic_programming_dispatch
+    - start_up_costs_and_classification
+    - forced_outage_and_availability_modelling
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: value_ccgt
+      use: background
+    - id: ccgt_valuation
+      use: background
+    - id: ccgt_replication
+      use: background
+    - id: power_landivisiau
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_rijnmond_dec17
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: storage_and_battery_dispatch_optimisation
+    track: optimisation_dispatch
+    scope: Optimisation of energy storage dispatch across multiple concurrent services
+      using LP, MILP, greedy heuristics, and stochastic dynamic programming, incorporating
+      state-of-charge constraints, power/energy resource allocation, demand forecasting,
+      and real-time closed-loop control.
+    level: advanced
+    prerequisites:
+    - lp_mip_dispatch_fundamentals
+    - dynamic_programming_dispatch
+    markets:
+    - EU
+    - GB
+    - AU
+    sources:
+    - id: storage_value
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: power_battery
+      use: background
+    - id: dipeng_battery
+      use: background
+    - id: dipeng_gas_storage
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+- id: storage_flexibility
+  title: 'Storage and flexibility: hydro, pumped storage, swing, BESS'
+  concepts:
+  - id: storage_technology_taxonomy
+    track: storage_flexibility
+    scope: Classification of electricity storage technologies by physical mechanism,
+      power-to-energy ratio, and discharge duration, covering pumped hydro, CAES,
+      lithium-ion, flow batteries, and emerging chemistries.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: dipeng_battery
+      use: background
+    originality: synthesized
+  - id: storage_services_framework
+    track: storage_flexibility
+    scope: Categorisation of grid storage applications into stabilisation, capacity,
+      and energy-shifting services differentiated by response speed, discharge duration,
+      and required power rating.
+    level: foundation
+    prerequisites:
+    - storage_technology_taxonomy
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: power_battery
+      use: background
+    - id: dipeng_battery
+      use: background
+    originality: synthesized
+  - id: bess_techno_economics
+    track: storage_flexibility
+    scope: Techno-economic characterisation of battery energy storage systems including
+      round-trip efficiency, state of charge, cycle life, calendar degradation, levelised
+      cost of storage, and CAPEX component breakdown.
+    level: foundation
+    prerequisites:
+    - storage_technology_taxonomy
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: power_battery
+      use: background
+    - id: dipeng_battery
+      use: background
+    originality: synthesized
+  - id: hydro_reservoir_scheduling
+    track: storage_flexibility
+    scope: Optimal inter-temporal allocation of water releases from reservoirs to
+      minimise fuel and shortage costs subject to stochastic inflow uncertainty, storage
+      bounds, and spill risk.
+    level: intermediate
+    prerequisites:
+    - storage_services_framework
+    markets:
+    - EU
+    - GB
+    - AU
+    sources:
+    - id: storage_value
+      use: background
+    - id: runlog
+      use: background
+    - id: power_landivisiau
+      use: background
+    originality: synthesized
+  - id: marginal_water_value_and_ddp
+    track: storage_flexibility
+    scope: Computation of the shadow price of stored water as a function of reservoir
+      level and time using stochastic dynamic programming, including construction
+      of the water value surface, demand curve for release, and demand curve for storage.
+    level: advanced
+    prerequisites:
+    - hydro_reservoir_scheduling
+    markets:
+    - EU
+    - GB
+    - AU
+    sources:
+    - id: storage_value
+      use: background
+    originality: synthesized
+  - id: pumped_storage_modelling
+    track: storage_flexibility
+    scope: Representation and dispatch optimisation of two-reservoir pumped-storage
+      facilities including top/bottom storage configuration, de-rating for round-trip
+      efficiency, and scheduling within wholesale and ancillary service markets.
+    level: intermediate
+    prerequisites:
+    - hydro_reservoir_scheduling
+    - bess_techno_economics
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: runlog
+      use: background
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: power_battery
+      use: background
+    - id: power_landivisiau
+      use: background
+    originality: synthesized
+  - id: energy_arbitrage_and_value_stacking
+    track: storage_flexibility
+    scope: Quantification of storage value from wholesale price spread capture across
+      time periods and the simultaneous or sequential stacking of multiple non-coincident
+      grid services from a single asset to maximise total revenue.
+    level: intermediate
+    prerequisites:
+    - storage_services_framework
+    - bess_techno_economics
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: power_battery
+      use: background
+    - id: dipeng_battery
+      use: background
+    - id: dipeng_options_system
+      use: background
+    originality: synthesized
+  - id: frequency_response_services
+    track: storage_flexibility
+    scope: Design, contracting, and technical delivery of fast active-power frequency
+      response services by storage assets, covering dynamic and static response, droop
+      characteristics, deadbands, EFR, FFR, and synthetic inertia under declining
+      system inertia.
+    level: intermediate
+    prerequisites:
+    - storage_services_framework
+    - bess_techno_economics
+    markets:
+    - GB
+    - EU
+    sources:
+    - id: power_battery
+      use: background
+    - id: dipeng_battery
+      use: background
+    originality: synthesized
+  - id: swing_option_pricing
+    track: storage_flexibility
+    scope: Valuation of flexibility-of-delivery contracts granting multiple exercise
+      rights over power or gas volumes subject to daily and periodic energy constraints,
+      using decomposition into forward and option components and Bermudan/LSMC methods.
+    level: advanced
+    prerequisites:
+    - energy_arbitrage_and_value_stacking
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: '10_1_1_11_6839'
+      use: background
+    - id: swing_last
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_admin
+      use: background
+    - id: dipeng_rules
+      use: background
+    originality: synthesized
+  - id: gas_storage_valuation
+    track: storage_flexibility
+    scope: Intrinsic, rolling-intrinsic, and full spot-trading valuation of underground
+      gas storage facilities using optimisation over injection/withdrawal rate constraints,
+      working gas bounds, and tranche structures, including LSMC-based extrinsic value
+      capture.
+    level: advanced
+    prerequisites:
+    - swing_option_pricing
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: dipeng_models
+      use: background
+    - id: dipeng_gas_storage
+      use: background
+    - id: dipeng_initiatives
+      use: background
+    - id: dipeng_options_system
+      use: background
+    originality: synthesized
+  - id: flexibility_supply_curve_and_competition
+    track: storage_flexibility
+    scope: Merit-order ranking of grid flexibility resources—storage, demand response,
+      interconnectors, and flexible thermal generation—by cost and volume, and analysis
+      of how storage competes across service categories and price regimes.
+    level: intermediate
+    prerequisites:
+    - storage_services_framework
+    - energy_arbitrage_and_value_stacking
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: dipeng_supply
+      use: background
+    - id: dipeng_news
+      use: background
+    originality: synthesized
+  - id: storage_investment_and_market_design
+    track: storage_flexibility
+    scope: Assessment of storage participation in capacity markets, ancillary service
+      procurement frameworks, behind-the-meter versus grid-scale deployment economics,
+      technology learning curves, and CAPEX thresholds for service competitiveness.
+    level: advanced
+    prerequisites:
+    - bess_techno_economics
+    - flexibility_supply_curve_and_competition
+    - frequency_response_services
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: power_battery
+      use: background
+    - id: dipeng_battery
+      use: background
+    - id: dipeng_gas_storage
+      use: background
+    originality: synthesized
+- id: hedging_trading
+  title: 'Hedging and trading strategy: plant hedging, delta, rolling intrinsic'
+  concepts:
+  - id: power_plant_economics_and_dispatch
+    track: hedging_trading
+    scope: Foundational mechanics of thermal generation assets including heat rates,
+      spark/dark spreads, marginal cost, and optionality of dispatch as prerequisites
+      for any hedging framework.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    sources: []
+    originality: original
+  - id: forward_curve_structure_and_products
+    track: hedging_trading
+    scope: Structure of power and fuel forward markets including baseload, peak, off-peak,
+      seasonal strips, and calendar products traded on exchanges and OTC, forming
+      the instrument universe for hedging.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: dipeng_rules
+      use: background
+    - id: power_rijnmond_dec17
+      use: background
+    - id: 111102_collector
+      use: background
+    originality: synthesized
+  - id: delta_sensitivity_and_hedge_volume
+    track: hedging_trading
+    scope: Definition and numerical estimation of delta as the first-order sensitivity
+      of a generation asset's expected value to a forward price shift, determining
+      the MW-equivalent volume to hedge per commodity and period.
+    level: foundation
+    prerequisites:
+    - power_plant_economics_and_dispatch
+    - forward_curve_structure_and_products
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: dispatch_and_delta_hedging_v2
+      use: background
+    - id: dispatch_and_delta_hedging_v3
+      use: background
+    - id: dispatch_and_delta_hedging_v4
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: ce_template
+      use: background
+    - id: dipeng_valuation_reports
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: static_vs_dynamic_hedging
+    track: hedging_trading
+    scope: Contrast between a fixed hedge placed once at the start of the delivery
+      horizon and a dynamically rebalanced hedge that adjusts forward positions as
+      spread levels and expected production volumes evolve over time.
+    level: intermediate
+    prerequisites:
+    - delta_sensitivity_and_hedge_volume
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: likron_powerplants
+      use: background
+    - id: worldpower2009_realisticpowerplantvaluation
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_gas_storage
+      use: background
+    originality: synthesized
+  - id: gradual_linear_and_benchmark_hedging_strategies
+    track: hedging_trading
+    scope: Benchmark hedging approaches that build forward hedge volumes incrementally
+      and uniformly over the hedging horizon, against which actual trading positions
+      and performance are monitored.
+    level: intermediate
+    prerequisites:
+    - delta_sensitivity_and_hedge_volume
+    - static_vs_dynamic_hedging
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: baseload_peak_offpeak_delta_decomposition
+    track: hedging_trading
+    scope: Decomposition of a generation asset's total delta into mutually exclusive
+      baseload and incremental peak components, enabling granular hedging across flat
+      and shaped forward products.
+    level: intermediate
+    prerequisites:
+    - delta_sensitivity_and_hedge_volume
+    - forward_curve_structure_and_products
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: dispatch_and_delta_hedging_aom
+      use: background
+    - id: dispatch_and_delta_hedging_aom_v2
+      use: background
+    - id: dispatch_and_delta_hedging_aom_2
+      use: background
+    - id: the_caveats_in_aom_peak_delta_calculation
+      use: background
+    - id: incremental_peak_delta2
+      use: background
+    - id: pk_op_to_incrpk_and_comb_bl
+      use: background
+    - id: offpeakdeltas
+      use: background
+    - id: offpeakdeltas_2
+      use: background
+    - id: humbertollvaluation
+      use: background
+    - id: humbertollvaluation_v2
+      use: background
+    - id: humbertollvaluation_2
+      use: background
+    - id: humbertollvaluation_v2_2
+      use: background
+    originality: synthesized
+  - id: tolling_and_asset_backed_trading
+    track: hedging_trading
+    scope: Framework for delta-hedging a generation tolling position using daily Greeks
+      derived from a tolling model across electricity, gas, and carbon markets, and
+      the separation of asset-backed from speculative trading for P&L attribution.
+    level: intermediate
+    prerequisites:
+    - delta_sensitivity_and_hedge_volume
+    - baseload_peak_offpeak_delta_decomposition
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: power_european_toll
+      use: background
+    - id: power_project_blue
+      use: background
+    - id: dipeng_power
+      use: background
+    - id: us_toll
+      use: background
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: humbertollvaluation
+      use: background
+    - id: humbertollvaluation_v2
+      use: background
+    - id: humbertollvaluation_2
+      use: background
+    - id: humbertollvaluation_v2_2
+      use: background
+    - id: gav
+      use: background
+    originality: synthesized
+  - id: rolling_intrinsic_strategy
+    track: hedging_trading
+    scope: Dynamic re-hedging approach for storage and swing assets that repeatedly
+      recalculates intrinsic value from updated forward curves and adjusts hedge positions
+      incrementally to capture value without accepting a lower locked-in margin.
+    level: intermediate
+    prerequisites:
+    - static_vs_dynamic_hedging
+    - forward_curve_structure_and_products
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: dipeng_gas_storage
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: option_greeks_for_power_derivatives
+    track: hedging_trading
+    scope: Analytical computation and practical application of delta, gamma, vega,
+      theta, and rho for European and path-dependent power options and spread options,
+      including Black-76 adaptations for swap-hedged instruments.
+    level: intermediate
+    prerequisites:
+    - delta_sensitivity_and_hedge_volume
+    - forward_curve_structure_and_products
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: 111102_collector
+      use: background
+    - id: erratumtoelectricityderivativeschapterspreads_66_70
+      use: background
+    - id: power_project_blue
+      use: background
+    - id: pareto_spikes
+      use: background
+    - id: understanding
+      use: background
+    - id: dipeng_options_system
+      use: background
+    - id: dipeng_literature
+      use: background
+    - id: dipeng_power
+      use: background
+    originality: synthesized
+  - id: ppa_structures_and_route_to_market
+    track: hedging_trading
+    scope: Contractual structures for the long-term forward sale of renewable and
+      thermal generation output, spanning fixed-price, flexible, corporate, and back-to-back
+      PPA variants and the embedded benefits, balancing obligations, and settlement
+      mechanics associated with each.
+    level: intermediate
+    prerequisites:
+    - forward_curve_structure_and_products
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: energy_risk_2012___kyos_power_plant_hedging_strategies
+      use: background
+    - id: power_limejump
+      use: background
+    - id: power_offtake
+      use: background
+    - id: power_peaker
+      use: background
+    - id: power_kkr
+      use: background
+    - id: power_landivisiau
+      use: background
+    - id: dipeng_rocs
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: dipeng_supply
+      use: background
+    - id: dipeng_limejump
+      use: background
+    originality: synthesized
+  - id: profit_at_risk_and_hedging_objective
+    track: hedging_trading
+    scope: Risk measurement and optimisation framework that sizes forward hedge positions
+      to satisfy a Profit-at-Risk constraint, balancing expected revenue against downside
+      variability through pay-off analysis.
+    level: advanced
+    prerequisites:
+    - gradual_linear_and_benchmark_hedging_strategies
+    - option_greeks_for_power_derivatives
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: storage_value
+      use: background
+    originality: synthesized
+  - id: hedging_under_incomplete_markets_and_spike_dynamics
+    track: hedging_trading
+    scope: Advanced hedging theory for power contingent claims in incomplete markets
+      where price spikes and jumps preclude perfect replication, including diffusive
+      delta-hedging of Brownian components and dynamic replication using regular-regime
+      claim portfolios.
+    level: advanced
+    prerequisites:
+    - option_greeks_for_power_derivatives
+    - rolling_intrinsic_strategy
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: pareto_spikes
+      use: background
+    - id: dphil_thesis
+      use: background
+    - id: non_markov_method
+      use: background
+    - id: '10_1_1_11_6839'
+      use: background
+    - id: out_6
+      use: background
+    originality: synthesized
+- id: risk_management
+  title: 'Risk management: PaR, VaR, credit, limits, model risk'
+  concepts:
+  - id: var_and_par_fundamentals
+    track: risk_management
+    scope: Defines Value-at-Risk and Profit-at-Risk as the core distributional risk
+      metrics for power portfolios, covering confidence levels, holding periods, and
+      the distinction between financial-book VaR and physical-asset PaR.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: plant_hedging_and_trading_strategies_kyos_20110530
+      use: background
+    - id: powerhedging
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: dipeng_risk_documents
+      use: background
+    - id: dipeng_emissions
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: power_offtake
+      use: background
+    originality: synthesized
+  - id: earnings_and_cashflow_at_risk
+    track: risk_management
+    scope: Extends the PaR/VaR framework to Earnings-at-Risk and Cash-flow-at-Risk
+      metrics for generation assets, including Monte Carlo-based profit distributions
+      across price and volume scenarios.
+    level: intermediate
+    prerequisites:
+    - var_and_par_fundamentals
+    - monte_carlo_simulation_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: clewlow
+      use: background
+    - id: storage_value
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    originality: synthesized
+  - id: volume_and_hydrological_risk
+    track: risk_management
+    scope: Models the uncertainty in power plant output arising from forced outages
+      (Markov availability processes), correlated price-spike events, and hydrological
+      variability in hydro-dominated markets.
+    level: intermediate
+    prerequisites:
+    - var_and_par_fundamentals
+    markets:
+    - EU
+    - GB
+    - AU
+    sources:
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: storage_value
+      use: background
+    originality: synthesized
+  - id: counterparty_credit_risk
+    track: risk_management
+    scope: Covers mark-to-market exposure, potential future exposure, credit support
+      arrangements, netting agreements, and return-on-credit frameworks used to manage
+      bilateral counterparty default risk in energy contracts.
+    level: intermediate
+    prerequisites:
+    - var_and_par_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: dipeng_credit_risk_model
+      use: background
+    - id: dipeng_rocs
+      use: background
+    - id: power_noble
+      use: background
+    - id: power_offtake
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: dipeng_supply
+      use: background
+    - id: dipeng_purple
+      use: background
+    - id: dipeng_risk_documents
+      use: background
+    originality: synthesized
+  - id: imbalance_and_settlement_risk
+    track: risk_management
+    scope: Quantifies the financial exposure from deviations between nominated and
+      metered volumes under BSC and equivalent settlement regimes, including tail-risk
+      estimation via bootstrap resampling and P99 metrics.
+    level: intermediate
+    prerequisites:
+    - var_and_par_fundamentals
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_imbalancing_calc
+      use: background
+    - id: power_limejump
+      use: background
+    - id: power_offtake
+      use: background
+    - id: dipeng_supply
+      use: background
+    - id: power_peaker
+      use: background
+    - id: dipeng_power_deal_structuring
+      use: background
+    - id: power_uk_toll
+      use: background
+    originality: synthesized
+  - id: risk_limits_and_risk_budgets
+    track: risk_management
+    scope: Establishes how trading and hedging desks set, monitor, and enforce quantitative
+      risk limits—including position limits, VaR budgets, and credit thresholds—within
+      an ETRM framework.
+    level: foundation
+    prerequisites:
+    - var_and_par_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    - CN
+    sources:
+    - id: likron_powerplants
+      use: background
+    - id: power_german_i_c
+      use: background
+    - id: dipeng_emissions
+      use: background
+    - id: power_rijnmond_dec17
+      use: background
+    - id: dipeng_gas_storage
+      use: background
+    - id: power_capacity_market
+      use: background
+    originality: synthesized
+  - id: mark_to_market_and_pnl_attribution
+    track: risk_management
+    scope: Covers daily revaluation of derivative and physical positions at prevailing
+      market prices, decomposition of P&L into realised and unrealised components,
+      and Greeks-based attribution across a power trading book.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: power_live_power_valuation_tool
+      use: background
+    - id: power_noble
+      use: background
+    - id: power_project_blue
+      use: background
+    - id: dipeng_admin
+      use: background
+    - id: dipeng_credit_risk_model
+      use: background
+    - id: rwetollvaluation_v3
+      use: background
+    - id: dipeng_supply
+      use: background
+    originality: synthesized
+  - id: backtesting_and_model_validation
+    track: risk_management
+    scope: Describes frameworks for retrospectively evaluating hedging strategies,
+      valuation models, and storage dispatch rules against historical and simulated
+      market data to detect bias and quantify model error.
+    level: intermediate
+    prerequisites:
+    - mark_to_market_and_pnl_attribution
+    - var_and_par_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    sources:
+    - id: likron_powerplants
+      use: background
+    - id: 120524_status_of_power_toll_project
+      use: background
+    - id: dipeng_models
+      use: background
+    - id: dipeng_team_meeting
+      use: background
+    - id: dispatch_and_delta_hedging_aom
+      use: background
+    - id: dispatch_and_delta_hedging_v4
+      use: background
+    originality: synthesized
+  - id: model_risk_and_parameter_sensitivity
+    track: risk_management
+    scope: Identifies sources of model risk including parameterisation errors, structural
+      mis-specification, and discretisation bias, and quantifies their impact through
+      parameter sensitivity analysis and stress testing.
+    level: advanced
+    prerequisites:
+    - backtesting_and_model_validation
+    - earnings_and_cashflow_at_risk
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: 0109_electricity_price_modelling_for_profit_at_risk_manageme
+      use: background
+    - id: humbertollvaluation_v2_2
+      use: background
+    - id: storage_value
+      use: background
+    - id: dipeng_emissions
+      use: background
+    - id: dipeng_models
+      use: background
+    originality: synthesized
+  - id: incomplete_markets_and_market_price_of_risk
+    track: risk_management
+    scope: Explains why electricity's non-storability renders markets incomplete,
+      how the equivalent martingale measure is non-unique, and how the market price
+      of diffusion and jump risk are selected via entropy or utility-based criteria.
+    level: advanced
+    prerequisites:
+    - var_and_par_fundamentals
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: dphil_thesis
+      use: background
+    - id: deng_real_options_approach
+      use: background
+    - id: tseng_barz_short_term_generation_asset_valuation_a_real_opti
+      use: background
+    originality: synthesized
+  - id: monte_carlo_simulation_fundamentals
+    track: risk_management
+    scope: Introduces Monte Carlo methods for power risk including correlated price-path
+      generation via Cholesky decomposition, portfolio loss probability estimation,
+      and convergence via the law of large numbers.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: dipeng_tools
+      use: background
+    - id: storage_value
+      use: background
+    originality: synthesized
+  - id: contractual_and_regulatory_risk_controls
+    track: risk_management
+    scope: Surveys the contractual mechanisms—credit support, collateral, netting,
+      change-in-law clauses, force majeure, and regulatory reporting obligations (REMIT,
+      EMIR, Dodd-Frank)—that transfer, cap, or allocate risk in power trading and
+      project finance agreements.
+    level: intermediate
+    prerequisites:
+    - counterparty_credit_risk
+    - risk_limits_and_risk_budgets
+    markets:
+    - EU
+    - GB
+    - US
+    sources:
+    - id: power_noble
+      use: background
+    - id: power_landivisiau
+      use: background
+    - id: power_offtake
+      use: background
+    - id: power_limejump
+      use: background
+    - id: power_rijnmond_dec17
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: power_capacity_market
+      use: background
+    - id: dipeng_gas_storage
+      use: background
+    - id: dipeng_lbs
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: dipeng_supply
+      use: background
+    originality: synthesized
+- id: modern_markets
+  title: 'Modern markets: renewables-heavy, intraday, imbalance, China spot'
+  concepts:
+  - id: vres_integration_fundamentals
+    track: modern_markets
+    scope: Understand the physical and operational challenges of accommodating non-dispatchable
+      wind and solar output in power systems, including variability, forecast error,
+      and the resulting demand for flexibility.
+    level: foundation
+    prerequisites: []
+    markets:
+    - EU
+    - GB
+    - US
+    - AU
+    - CN
+    sources:
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    - id: storage_introduction_document_170413
+      use: background
+    - id: dipeng_lbs
+      use: background
+    originality: synthesized
+  - id: wind_solar_generation_modelling
+    track: modern_markets
+    scope: Model wind and solar generation output from meteorological inputs using
+      power curves, capacity constraints, and intraday/seasonal profiles, producing
+      half-hourly or hourly time series for settlement and trading analysis.
+    level: foundation
+    prerequisites:
+    - vres_integration_fundamentals
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: dipeng_wind
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: dipeng_de_gas_and_power
+      use: background
+    - id: dipeng_zema_testing
+      use: background
+    originality: synthesized
+  - id: generation_forecasting_and_error
+    track: modern_markets
+    scope: Produce and evaluate short-term wind and solar generation forecasts, quantify
+      forecast error relative to metered actuals, and understand how forecast accuracy
+      drives imbalance exposure and intraday trading opportunity.
+    level: intermediate
+    prerequisites:
+    - wind_solar_generation_modelling
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_alco
+      use: background
+    - id: power_imbalancing_calc
+      use: background
+    - id: dipeng_data
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: dipeng_wind
+      use: background
+    - id: dipeng_zema_testing
+      use: background
+    originality: synthesized
+  - id: imbalance_settlement_mechanics
+    track: modern_markets
+    scope: Master the regulatory and pricing frameworks by which TSOs financially
+      settle deviations between contracted and metered positions, covering single
+      and dual cashout structures, settlement granularity, and the roles of BRPs across
+      GB, Germany, Belgium, and the Netherlands.
+    level: intermediate
+    prerequisites:
+    - generation_forecasting_and_error
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_alco
+      use: background
+    - id: power_imbalancing_calc
+      use: background
+    - id: power_german_i_c
+      use: background
+    - id: power_noble
+      use: background
+    - id: dipeng_data
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: dipeng_wind
+      use: background
+    - id: dipeng_show_models
+      use: background
+    - id: dipeng_power_deal_structuring
+      use: background
+    originality: synthesized
+  - id: nomination_and_brp_strategy
+    track: modern_markets
+    scope: Design and back-test nomination strategies for balancing responsible parties,
+      including portfolio netting, turbine-level disaggregation, intraday re-nomination,
+      and cross-country comparison of imbalance regimes to optimise expected settlement
+      cost.
+    level: intermediate
+    prerequisites:
+    - imbalance_settlement_mechanics
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_alco
+      use: background
+    - id: power_imbalancing_calc
+      use: background
+    - id: power_limejump
+      use: background
+    - id: dipeng_supply
+      use: background
+    - id: dipeng_data
+      use: background
+    originality: synthesized
+  - id: intraday_market_trading
+    track: modern_markets
+    scope: Understand the structure and operation of continuous intraday power markets,
+      including 15-minute product trading on EPEX, gate closure mechanics, and the
+      capture of extrinsic value by re-optimising renewable positions as forecasts
+      improve closer to delivery.
+    level: intermediate
+    prerequisites:
+    - nomination_and_brp_strategy
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_german_i_c
+      use: background
+    - id: dipeng_solar
+      use: background
+    - id: dipeng_power_deal_structuring
+      use: background
+    originality: synthesized
+  - id: gb_balancing_mechanism_and_reform
+    track: modern_markets
+    scope: Analyse the GB Balancing Mechanism including bid/offer submission, NIV-chasing,
+      single cash-out pricing, reserve scarcity pricing, demand control pricing, and
+      the EBSCR reform package shaping real-time price formation.
+    level: advanced
+    prerequisites:
+    - intraday_market_trading
+    - imbalance_settlement_mechanics
+    markets:
+    - GB
+    sources:
+    - id: power_peaker
+      use: background
+    - id: power_uk_toll
+      use: background
+    - id: dipeng_power_deal_structuring
+      use: background
+    - id: dipeng_limejump
+      use: background
+    originality: synthesized
+  - id: renewable_support_schemes
+    track: modern_markets
+    scope: Compare the design and revenue implications of renewable support mechanisms
+      across jurisdictions, including GB Contracts for Difference, ROCs, Feed-in Tariffs,
+      and the Dutch SDE+ feed-in premium, with emphasis on interaction with market
+      prices, negative price clauses, and imbalance deductions.
+    level: intermediate
+    prerequisites:
+    - vres_integration_fundamentals
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_offtake
+      use: background
+    - id: power_limejump
+      use: background
+    - id: dipeng_rocs
+      use: background
+    - id: dipeng_solar
+      use: background
+    originality: synthesized
+  - id: guarantees_of_origin_and_green_certificates
+    track: modern_markets
+    scope: Explain the issuance, trading, and cancellation of Guarantees of Origin
+      and equivalent certificates (REGOs, GoOs, CertiQ), including additionality requirements,
+      hourly matching, and the interaction of GoO pricing with SDE+ correction amounts.
+    level: intermediate
+    prerequisites:
+    - renewable_support_schemes
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: dipeng_goos
+      use: background
+    - id: dipeng_supply
+      use: background
+    - id: power_limejump
+      use: background
+    originality: synthesized
+  - id: flexibility_and_storage_in_renewable_systems
+    track: modern_markets
+    scope: Evaluate the role of battery storage and other flexibility resources in
+      managing vRES variability, system inertia decline, wind curtailment, and long-run
+      energy system transitions, including frequency services and capacity adequacy
+      contributions.
+    level: advanced
+    prerequisites:
+    - vres_integration_fundamentals
+    - gb_balancing_mechanism_and_reform
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: storage_introduction_document_170413
+      use: background
+    - id: storage_living_document_170413
+      use: background
+    - id: dipeng_battery
+      use: background
+    - id: slides_for_13_april_2017_ne_deep_dive_final_short
+      use: background
+    originality: synthesized
+  - id: capacity_market_mechanisms
+    track: modern_markets
+    scope: Understand the design and revenue mechanics of capacity markets and adequacy
+      mechanisms, covering the GB T-4/T-1 Capacity Market, the French mécanisme de
+      capacité certificate scheme, and their interaction with energy and balancing
+      revenues.
+    level: intermediate
+    prerequisites:
+    - renewable_support_schemes
+    markets:
+    - EU
+    - GB
+    sources:
+    - id: power_kkr
+      use: background
+    - id: power_landivisiau
+      use: background
+    - id: power_uk_toll
+      use: background
+    originality: synthesized
+  - id: china_carbon_and_spot_markets
+    track: modern_markets
+    scope: Describe the architecture of China's evolving power sector, including the
+      pilot and national ETS cap-and-trade schemes, CCER offset mechanism, and the
+      transition toward provincial and national spot electricity markets with increasing
+      renewable penetration.
+    level: advanced
+    prerequisites:
+    - vres_integration_fundamentals
+    markets:
+    - CN
+    sources:
+    - id: dipeng_presentation
+      use: background
+    originality: synthesized

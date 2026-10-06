@@ -1,0 +1,116 @@
+# power/Landivisiau
+
+- id: `power_landivisiau` · class: practice · type: folder
+- topic: CCGT tolling agreements and power plant project finance · level: advanced · market: FR · year: 2017
+- worked examples: True · code: False
+
+## Concepts
+- **Tolling agreement** — A contract whereby a generator makes plant capacity available to a toller who bears all commodity price risk in exchange for a fixed capacity charge.
+- **Capacity charge (tolling fee)** — The periodic fixed payment made by the toller to the generator covering capital cost recovery and fixed O&M, structured as a function of Deemed Available Capacity.
+- **Deemed Available Capacity (DAC)** — An ambient-condition-adjusted measure of the capacity actually made available by the generator to the toller in each settlement period.
+- **Capacity premium (public subsidy)** — A government-contracted availability-linked payment per MW per year to the project company, forming the primary revenue floor for the plant.
+- **French capacity market** — A market mechanism issuing capacity certificates whose revenues are deducted from the public capacity premium received by the project company.
+- **Spark spread / clean spark spread** — The margin between the electricity price and the cost of gas and CO2 required to generate it, representing the toller's market opportunity.
+- **Dark spread equivalent / heat rate** — Plant efficiency expressed as HHV percentage, used to convert gas input cost to electricity output cost for dispatch economics.
+- **Equivalent Operating Hour (EOH)** — A unit measuring turbine wear that weights operating hours by stress level, used to calculate variable maintenance costs and start/stop costs.
+- **Plant degradation curve** — Tabulated factors showing how power output and heat rate deteriorate with cumulative operating hours between major overhauls.
+- **Ambient condition correction factors** — Temperature- and humidity-dependent multipliers applied to nameplate capacity and efficiency to reflect actual site meteorological conditions.
+- **Start classification and costs** — Categorisation of turbine starts (hot, hot-warm, warm, cold) by time since shutdown, each with distinct duration, efficiency and EOH cost.
+- **Guaranteed Available Capacity / Annual Guaranteed Availability** — Contractual performance floors below which the generator incurs liquidated-damage penalties to the toller.
+- **Energy manager role** — An intermediary entity responsible for plant programming, balancing, gas/electricity shipping, ancillary service participation and capacity certificate management on behalf of co-tollers.
+- **Co-toller structure** — A multi-party tolling arrangement where several tollers share reserved capacity and jointly bear imbalance and outage risk.
+- **Non-recourse project finance** — A debt structure where lender recourse is limited to project assets and cash flows, requiring direct agreements with contractual counterparties.
+- **Debt-to-equity ratio in power project finance** — The leverage ratio (here 70:30) used to fund CAPEX, influencing required tolling fee levels and lender covenant terms.
+- **CSPE (contribution to the public service of electricity)** — A French levy funding public-service obligations including the capacity premium paid to the project company via EDF.
+- **PEG Nord day-ahead gas price** — The French northern gas hub spot price used as the floating fuel cost reference in the tolling variable cost pass-through.
+- **ICE ECX CO2 price** — The EU ETS carbon allowance closing price used to calculate the CO2 variable cost passed through in the tolling structure.
+- **Electricity injection costs** — Network use-of-system charges payable to RTE per MWh injected, treated as a variable pass-through cost in the tolling agreement.
+- **Day-ahead power price modelling** — Hourly fundamental stack-based simulation of French wholesale electricity prices using demand, nuclear, hydro and interconnector sub-models.
+- **Nuclear availability modelling** — Historical-data-based generation availability curves for French nuclear fleet used as a key input in the power price model.
+- **Hydro dispatch modelling (RoR, reservoir, pumped storage)** — Sub-models representing run-of-river, reservoir and pumped-storage hydro dispatch strategies as inputs to the French power price simulation.
+- **Interconnector import constraint** — A scenario assumption limiting cross-border imports in winter to reflect correlated demand peaks across neighbouring markets.
+- **ENTSO-E scenario framework** — Published long-run capacity and demand scenarios (Constrained Progress, National Green Transition) used to bracket future French power price projections.
+- **Maintenance schedule (minor / hot gas path / major overhaul)** — A tiered outage programme at defined cumulative operating-hour intervals driving planned unavailability and maintenance cost in the tolling model.
+- **Reliability Run period** — An initial commissioning phase during which the toller may dispatch the plant but generator performance guarantees are not yet in force.
+- **Delay liquidated damages** — Pre-agreed daily penalties payable by the generator if the scheduled commercial operation date is not achieved within a defined grace period.
+- **Force majeure allocation** — Contractual provisions defining which party bears risk and cost when plant unavailability results from events outside either party's control.
+- **Inflation indexation of capacity charge** — An escalation mechanism linking the fixed O&M component of the capacity charge to a basket of price indices over the contract term.
+- **Capacity charge** — A fixed monthly payment made by the toller to the generator to reserve plant generation capacity, covering fixed costs and debt service regardless of dispatch.
+- **Variable charge** — A monthly payment linked to Toller Equivalent Operating Hours, variable O&M rate, and an inflation escalator, compensating the generator for wear-and-tear from actual operation.
+- **Equivalent Operating Hours (EOH)** — A normalised measure of plant utilisation that aggregates dispatch hours, start-related wear, trip penalties, and top-up hours to track maintenance interval consumption.
+- **Toller Equivalent Operating Hours (TEOH)** — The portion of total EOH attributed to the toller, comprising dispatch hours, start EOH, trip EOH up to a cap, and top-up EOH, forming the basis of the variable charge.
+- **Top-up EOH** — Unused EOH credited to the toller when maintenance is brought forward or insufficient dispatch would otherwise waste the remaining interval before a scheduled outage.
+- **Guaranteed Available Capacity** — The contractually guaranteed net electrical output (MW) that the generator must make available to the toller under standard ambient conditions.
+- **Guaranteed Efficiency / Guaranteed Heat Rate** — The minimum contractual thermal efficiency (or equivalent heat rate) of the plant at standard ambient conditions, against which tested performance is benchmarked.
+- **Tested Efficiency** — The actual plant efficiency established by pre-commercial performance tests, with shortfalls relative to guaranteed efficiency triggering liquidated damage payments.
+- **Declared Available Capacity** — The capacity the generator notifies as available for dispatch in each settlement period, capping what the toller may nominate.
+- **Minimum Stable Generation (MSG)** — The lowest generation level at which the plant can operate stably, defining the floor for toller dispatch nominations.
+- **Dispatch nomination** — The toller's instruction to the generator, submitted after day-ahead market close, specifying desired output for each settlement period of the following day.
+- **Plant start types (cold / warm / hot / ambient)** — Classifications of plant restarts by prior shutdown duration, each with distinct start durations, fuel consumption, electricity production profiles, and EOH charges.
+- **Scheduled maintenance period** — Planned outage windows triggered by accumulated EOH thresholds (minor, HGPI, major overhaul), during which the capacity charge continues to be paid up to an agreed maximum duration.
+- **Equivalent Availability Factor** — An annual guaranteed availability metric that accounts for both planned and forced outage durations as a percentage of total possible operating hours.
+- **Pass-through costs** — Specified network, nomination, and administrative charges incurred by the generator or energy manager that are recharged to the toller at cost without margin.
+- **Pass-through revenues** — Imbalance, intraday optimisation, and ancillary-service revenues collected by the energy manager that are credited directly back to the toller.
+- **CO2 allowance transfer mechanism** — A monthly netting arrangement under which the toller delivers EUAs sufficient for actual dispatch, with penalties to the toller for any shortfall causing generator regulatory non-compliance.
+- **Capacity premium (mécanisme de capacité)** — A French state-awarded payment of €94,000/MW/year for 20 years, forming the primary revenue stream for the generator and partially offset by capacity market revenues.
+- **Inflation escalation factor (ESCV / ESCC)** — Index-linked multipliers applied to variable and capacity charges to adjust payments for changes in a basket of inflation indices since a reference date.
+- **Degradation correction factors** — Tabulated multipliers applied to measured power output and heat rate as a function of cumulative EOH to reflect progressive performance deterioration between overhauls.
+- **Performance correction curves** — Engineering functions that adjust measured plant output and heat rate for deviations in ambient temperature, pressure, humidity, fuel LHV, grid frequency, and inlet pressure drop.
+- **Change-in-law pass-through** — A clause transferring to the toller incremental costs or revenue losses caused by legislative or regulatory changes, subject to a cumulative threshold and mitigation obligation.
+- **Termination payment (NPV-based)** — Upon generator-triggered termination, the toller owes the net present value of remaining capacity and fixed O&M charges assuming full guaranteed availability for the remaining term.
+- **Payment security / letter of credit** — Collateral equivalent to 12 months of projected capacity and variable charges that the toller must maintain in favour of the generator throughout the agreement.
+- **Non-recourse project finance / lender direct agreement** — A financing structure where lenders have security only over project assets, requiring toller cooperation and a direct agreement that governs lender step-in and assignment rights.
+- **Reliability Run** — A 22-day phased commissioning test demonstrating sustained plant operability within defined forced-outage frequency and duration limits before the commercial start date.
+- **Spark spread / dark spread** — The margin between electricity prices and fuel (gas or coal) costs per MWh of generation, used to assess plant intrinsic value and tolling fee affordability.
+- **Forward curve modelling (power, gas, CO2)** — Construction of long-term price paths for French power, PEG-N gas, and EUA CO2 markets out to 2030, used to value the tolling option and set the capacity charge.
+- **Plant intrinsic value (KyPlant / stochastic dispatch model)** — The expected net present value of optimal dispatch decisions given a set of forward curves, capturing the option value embedded in the tolling arrangement.
+- **CCGT dispatch optimisation** — Determination of profit-maximising operating decisions (start, run, stop) for a combined-cycle plant subject to technical constraints including ramp rates, minimum run times, and start costs.
+- **Ramp rates and minimum on/off times** — Plant technical parameters constraining how quickly output can change and how long the unit must run or remain offline, directly affecting dispatchable value and EOH accumulation.
+
+## Methods
+- Fundamental power price simulation (merit-order stack dispatch)
+- Hourly demand profile construction from historical data
+- Nuclear availability curve estimation from historical generation data
+- Hydro optimisation modelling (reservoir, pumped storage)
+- Dynamic interconnector flow modelling with price-based arbitrage
+- Scenario analysis (Constrained Progress vs National Green Transition)
+- Back-testing / model validation against historical day-ahead prices
+- Ambient condition correction factor interpolation (temperature/humidity grid)
+- Plant degradation factor interpolation from operating-hours table
+- EOH-based variable cost calculation
+- Tolling fee (capacity charge) formula computation
+- Deemed Available Capacity calculation
+- Project finance cash flow modelling (EBITDA, debt sizing)
+- EOH-based variable charge calculation
+- Performance correction factor application (multiplicative curves for temperature, pressure, humidity, LHV, frequency, pressure drop)
+- Degradation factor interpolation from EOH tables
+- Heat rate measurement and correction (LHV/HHV conversion)
+- Equivalent availability factor calculation
+- Long-term forward curve construction for power, gas, and CO2
+- Stochastic/intrinsic plant dispatch valuation (KyPlant)
+- NPV-based termination payment calculation
+- Inflation indexation of tolling fees
+- Day-ahead and intraday nomination scheduling
+- Sensitivity and scenario analysis of tolling economics
+- Capacity charge benchmarking across market scenarios
+
+## Implied prerequisites
+- Power plant thermodynamics (combined cycle, heat rate, HHV/LHV)
+- Electricity market microstructure (day-ahead, intraday, balancing)
+- EU ETS carbon market mechanics
+- Natural gas market pricing and hub conventions
+- French capacity market rules
+- Project finance fundamentals (debt structuring, DSRA, covenants)
+- Commodity derivatives (gas, power, CO2 forward curves)
+- Dispatch optimisation and unit commitment
+- Probabilistic scenario construction for long-run price forecasting
+- CCGT thermodynamic fundamentals (heat rate, efficiency, LHV/HHV)
+- Power market structure (day-ahead, intraday, balancing, ancillary services)
+- French electricity market rules (RTE, mécanisme de capacité, ARENH)
+- Gas market mechanics (PEG-N, GRTgaz capacity booking, nomination)
+- EU ETS and CO2 allowance trading
+- Real options and energy asset valuation
+- Project finance structures and debt covenants
+- Commodity forward curve construction
+- Contract law fundamentals (force majeure, liquidated damages, termination)
+- Inflation indexation and index selection

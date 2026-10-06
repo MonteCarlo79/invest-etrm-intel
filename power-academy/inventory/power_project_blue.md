@@ -1,0 +1,116 @@
+# power/Project Blue
+
+- id: `power_project_blue` · class: practice · type: folder
+- topic: Energy spread option risk reporting — daily Greeks and P&L by delivery period · level: advanced · market: EU · year: 2015
+- worked examples: True · code: False
+
+## Concepts
+- **Spread option** — An option whose payoff depends on the difference between two underlying commodity prices, here power and gas.
+- **Underlying (Underlying 1 and Underlying 2)** — The two commodity forward prices (gas and power) that jointly determine the spread option value.
+- **Implied volatility (per leg)** — The market-implied volatility input assigned separately to each underlying commodity in the two-factor spread option model.
+- **Correlation (MOD CORR)** — The assumed price correlation between the two underlying commodities used in the spread option pricing formula.
+- **Strike price** — The fixed spread level at which the option holder has the right to buy or sell the underlying spread.
+- **Time to expiry** — The fraction of a year remaining until the option's expiration date, varying by delivery period.
+- **Mark-to-market (M2M) price** — The current fair value per unit of the option position computed from prevailing market inputs.
+- **Unrealised P&L** — The gain or loss on open option positions reflecting changes in M2M value since trade inception.
+- **Realised P&L** — The cumulative cash profit or loss locked in from closed or settled portions of the option position.
+- **Total P&L** — The sum of unrealised and realised P&L representing the overall economic result of the option position.
+- **Delta (gas leg)** — The sensitivity of the option value to a unit change in the gas underlying price.
+- **Delta (power leg)** — The sensitivity of the option value to a unit change in the power underlying price.
+- **Gamma** — The second-order sensitivity of the option value to changes in the underlying commodity price(s).
+- **Vega** — The sensitivity of the option value to a unit change in implied volatility of the underlying(s).
+- **Theta** — The rate of change of option value with respect to the passage of time, representing time decay.
+- **Rho** — The sensitivity of option value to a change in the risk-free interest rate.
+- **Nominal volume** — The total quantity of the commodity underlying the option contract expressed in MWh or equivalent units.
+- **Delivery period (monthly)** — The forward calendar month to which the option contract relates, determining the relevant forward price input.
+- **Base vs Peak commodity segmentation** — The distinction between flat (baseload) and on-peak delivery hour profiles used to price and book energy options.
+- **Interest rate discounting** — The application of a risk-free rate to discount expected option payoffs to present value.
+- **Spread option (spark spread call)** — An option whose payoff depends on the differential between two underlying energy prices, here power and gas.
+- **Implied volatility** — The market-implied standard deviation of returns for each underlying leg used in option pricing.
+- **Correlation parameter** — The assumed linear dependence between the two underlying price processes entering a two-factor spread option model.
+- **Risk-free interest rate** — The continuously compounded rate used for discounting expected option payoffs to present value.
+- **Peak commodity flag** — A product classification indicating the option applies to on-peak delivery hours rather than baseload.
+- **Front-month rolling** — The periodic reassignment of the prompt delivery month as the near-term contract approaches expiry.
+- **Trade price (IC)** — The internal or inter-company price at which the deal was originally transacted, used as the cost basis for P&L.
+- **Index option on power** — A call or put option whose payoff depends on a power price index, here written on monthly peak electricity delivery.
+- **Two-underlying (spread) option model** — Option pricing framework using two correlated underlyings (gas and power) and their respective volatilities to value the contract.
+- **Implied correlation** — The correlation parameter between the two underlying commodity prices embedded in the option pricing model.
+- **M2M (mark-to-market) price** — The fair value of an option position computed daily using current market inputs and the pricing model.
+- **Delta (gas)** — The sensitivity of the option value to a unit change in the gas underlying price.
+- **Delta (power)** — The sensitivity of the option value to a unit change in the power underlying price.
+- **Peak commodity** — A power delivery product covering only peak hours within a delivery period, as opposed to baseload.
+- **Trade price vs M2M price** — The comparison between the original transaction price and the current fair-value price used to derive unrealised P&L.
+- **Interest rate discounting in option pricing** — Application of a continuously compounded risk-free rate to discount expected option payoffs to present value.
+- **Clean Dark Spread (CDS) option** — Option on the margin of a coal-fired generator net of fuel and carbon costs, traded on NL and FR baseload power.
+- **Clean Spark Spread (CSS) option** — Option on the margin of a gas-fired generator net of gas and carbon costs, applied here to NL peak power versus TTF.
+- **Historical volatility** — Realised price volatility computed from time-series of energy commodity prices for model calibration and comparison.
+- **Correlation sensitivity** — Sensitivity of spread option value to the assumed price correlation between the constituent commodity legs.
+- **Delta (option Greek)** — First-order sensitivity of option value to the underlying forward price, used for hedging energy derivatives.
+- **Gamma (option Greek)** — Second-order sensitivity of option value to the underlying forward price, indicating convexity of the position.
+- **Theta (option Greek)** — Rate of change of option value with respect to the passage of time, representing daily time-decay of the portfolio.
+- **Vega (option Greek)** — Sensitivity of option value to changes in implied volatility, used to manage volatility exposure in energy books.
+- **Mark-to-market (MTM) valuation** — Daily revaluation of derivative positions at current forward prices to produce a fair-value P&L figure.
+- **Close-of-business (COB) P&L** — End-of-day profit-and-loss snapshot capturing value changes across the trading book for a single business day.
+- **European call option on energy forwards** — Vanilla call option giving the right to buy an energy forward at a fixed strike, priced under lognormal Black-76 framework.
+- **Peak vs base load distinction** — Differentiation between power contracts covering only on-peak hours and those covering all hours, relevant to NL and FR markets.
+- **Coal (API2) price** — Northwest European coal benchmark price used as the fuel-cost leg in dark-spread option pricing.
+- **TTF gas price** — Dutch Title Transfer Facility natural gas forward price used as the fuel-cost leg in spark-spread option pricing.
+- **EUA (EU Allowance) carbon price** — EU Emissions Trading System allowance price incorporated into clean spread calculations to account for CO2 cost.
+- **Basket option / spread option decomposition** — Technique to convert a multi-commodity spread option into equivalent single-asset basket formulations for pricing.
+- **Brent crude oil spread** — Oil-to-power price relationship tracked as a cross-commodity spread for Italian or broader European market positions.
+- **Term management workbook** — Structured spreadsheet framework for daily Greeks calculation, hedge tracking, and P&L attribution across a derivatives book.
+- **Option pricing report fields** — Tabular output columns from a pricing engine including strike, forward, volatility, time-to-expiry, greeks, and MTM values per contract leg.
+
+## Methods
+- Two-factor spread option pricing (Margrabe-type model)
+- Daily Greeks computation (delta, gamma, vega, theta, rho)
+- Mark-to-market valuation of commodity options
+- P&L decomposition (unrealised vs realised)
+- Per-delivery-period risk aggregation
+- Correlation-adjusted volatility blending
+- Two-factor spread option pricing (Margrabe-style)
+- Daily mark-to-market valuation
+- Greek computation (delta, gamma, vega, theta, rho)
+- P&L decomposition into unrealised and realised components
+- Time-to-expiry calculation on a business-day basis
+- Position report generation across a forward curve of delivery months
+- Two-factor option pricing (spread/index model)
+- Black-type closed-form option valuation
+- Daily mark-to-market revaluation
+- Correlation-adjusted pricing
+- Forward curve bucketing by delivery month
+- Black-76 lognormal option pricing
+- Spread option valuation (Margrabe-type / basket decomposition)
+- Historical volatility estimation from high-frequency price data
+- Greeks computation (delta, gamma, theta, vega)
+- Correlation sensitivity analysis
+- Daily COB P&L attribution
+- Forward curve construction from market data
+- Hedge ratio calculation and delta hedging
+- Intraday live mark-to-market updating
+
+## Implied prerequisites
+- Black-Scholes option pricing theory
+- Forward curve construction for electricity and gas
+- Commodity option Greeks interpretation
+- Energy market product structures (baseload, peak)
+- Present value and discounting mechanics
+- Spread option pricing (Margrabe formula or Kirk approximation)
+- Energy commodity market conventions (peak/off-peak, delivery months)
+- Options Greeks definitions and interpretation
+- Discount factor and present value calculations
+- Energy trading risk management systems
+- Commodity derivatives fundamentals
+- Energy market product structures (peak vs baseload)
+- Risk sensitivities (Greeks)
+- Interest rate discounting
+- Correlation in multi-asset models
+- P&L attribution (realised vs unrealised)
+- Black-Scholes / Black-76 option pricing theory
+- Energy commodity markets (power, gas, coal, carbon)
+- Forward and futures curve mechanics
+- Option Greeks interpretation and use
+- Spread and basket option theory
+- European electricity market structure (NL, FR, IT)
+- P&L accounting for derivatives books
+- Spreadsheet-based quantitative modelling

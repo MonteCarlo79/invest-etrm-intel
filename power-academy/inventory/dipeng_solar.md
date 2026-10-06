@@ -1,0 +1,140 @@
+# dipeng/Solar
+
+- id: `dipeng_solar` · class: practice · type: folder
+- topic: UK Solar PV Power Purchase Agreements and Green Power Valuation · level: intermediate · market: GB · year: 2016
+- worked examples: True · code: True
+
+## Concepts
+- **Power Purchase Agreement (PPA)** — A contract between a renewable generator and an offtaker specifying the price and terms under which generated electricity and associated benefits are sold.
+- **Market Benchmark Price (MBP)** — A composite reference price summing wholesale power, ROCs, REGOs and embedded benefits to represent the full achievable market value for green power.
+- **Renewable Obligation Certificate (ROC)** — A tradeable green certificate issued per MWh of eligible renewable generation, with a banding multiplier varying by technology, used to demonstrate compliance with the Renewable Obligation.
+- **ROC Obligation Level** — The annual quantity of ROCs suppliers must surrender per MWh of supply, set by BEIS, which drives ROC market value through the buy-out price and recycle mechanism.
+- **ROC Recycle Value** — The share of the buy-out fund redistributed to ROC holders in proportion to certificates surrendered, forming part of the total ROC value received by generators.
+- **Feed-in Tariff (FiT) Export Rate** — An administered per-MWh payment available to small-scale generators for electricity exported to the grid, as an alternative to a commercial PPA.
+- **Contract for Difference (CfD)** — A UK government support mechanism paying generators the difference between a strike price and a market reference price, requiring a separate offtake PPA for the physical power.
+- **CfD Market Reference Price (MRP)** — The benchmark market price used to calculate CfD top-up or clawback payments, against which PPA offtaker discounts are applied.
+- **Value Retention** — The percentage of the Market Benchmark Price actually received by the generator after offtaker discounts and fees, varying by route-to-market and contract length.
+- **Renewable Energy Guarantee of Origin (REGO)** — A certificate proving that electricity was generated from a renewable source, tradeable separately and carrying a small incremental value in PPA negotiations.
+- **Embedded Benefits** — Revenue streams or avoided costs accruing to distribution-connected generators including avoided TNUoS, BSUoS, GDUoS charges and transmission and distribution loss savings.
+- **Transmission Network Use of System charge (TNUoS)** — A charge levied on transmission-connected parties for use of the high-voltage network, which embedded generators can avoid or receive a credit for, including via the Triad mechanism.
+- **Balancing Services Use of System charge (BSUoS)** — A charge reflecting the cost of balancing the electricity system, which embedded generators can partially avoid and share with offtakers as an embedded benefit.
+- **Generator Distribution Use of System charge (GDUoS)** — A credit paid to generators connected to the distribution network that offsets distribution network costs, dependent on voltage connection level and intermittency.
+- **Transmission and Distribution Losses** — The physical energy lost in transporting electricity across networks, valued as an embedded benefit for distribution-connected generators who avoid contributing to these losses.
+- **Triad Benefit** — An embedded benefit arising from a generator's ability to reduce net demand during the three half-hour settlement periods of highest system demand, reducing TNUoS liability.
+- **Imbalance Risk** — The financial exposure arising when a party's metered generation or consumption deviates from its contracted position, settled at the cash-out price in the Balancing Mechanism.
+- **Intraday Extrinsic Value** — Additional value capturable through intraday trading of renewable output by re-optimising positions as generation forecasts improve closer to delivery.
+- **Seasonal Time of Day (STOD) Pricing** — A tariff structure differentiating electricity prices by time of day and season to reflect varying demand and supply costs across peak, off-peak and night periods.
+- **e-POWER Auction** — An NFPA-run competitive auction mechanism for short-term renewable PPAs where generators tender their output and embedded benefits to multiple offtakers simultaneously.
+- **Flexible PPA** — A power purchase agreement where the generator's output is priced against a floating market index rather than a fixed price, exposing both parties to market price movements.
+- **Fixed Price PPA** — A power purchase agreement locking in a single agreed price for electricity for the contract term, eliminating market price risk for the generator.
+- **Corporate PPA** — A long-term direct electricity supply agreement between a renewable generator and a corporate end-user, often structured with sleeving through a licensed supplier.
+- **Sleeving** — An arrangement whereby a licensed supplier intermediates between a generator and a corporate buyer to manage balancing, metering and settlement obligations.
+- **Backwardation** — A market structure in which forward prices for seasonal power contracts decline for delivery periods further into the future.
+- **Financial Commitment Milestone (CfD)** — A contractual deadline by which a CfD-supported project must demonstrate financial close, failing which the Low Carbon Contracts Company may terminate the agreement.
+- **CMP 264 / CMP 265** — Proposed code modifications to transmission charging arrangements that would limit or remove the TNUoS embedded benefit for new embedded generators from specified dates.
+- **Generation Forecasting Accuracy** — The precision with which a generator or third-party service predicts output ahead of delivery, directly determining the size of imbalance costs and intraday trading value.
+- **ROC Compliance Period** — The annual April-to-March period within which ROCs must be surrendered to meet supplier obligations, with surplus ROCs bankable into future periods.
+- **Day-ahead index pricing** — Electricity priced as a percentage of the N2EX hourly day-ahead market index, transferring short-run price exposure to the offtaker.
+- **Fixed-price PPA** — Electricity sold at a locked-in £/MWh tariff referenced to seasonal baseload forward contract settlement prices for the contract term.
+- **ROC Buyout Price** — The regulated price at which suppliers can discharge their Renewables Obligation in lieu of surrendering ROCs, forming the floor of ROC market value.
+- **Generator Distribution Use of System (GDUoS) Benefit** — A credit paid by distribution network operators to generators that offset distribution network costs by injecting power locally.
+- **Triad Avoidance** — Revenue arising from a generator's ability to reduce a supplier's exposure to the three half-hour demand peaks used to set transmission demand charges.
+- **Bankability requirements** — Contractual terms required by project finance lenders to make a PPA acceptable as security, including take-or-pay, investment-grade counterparty and direct agreement provisions.
+- **Investment-grade counterparty credit** — The requirement that the offtaker in a PPA holds an investment-grade credit rating or is supported by a rated parent entity to satisfy lender requirements.
+- **Direct Agreement** — A tripartite contract between lenders, the generator and the offtaker giving lenders step-in rights over the PPA in an enforcement scenario.
+- **Non-recourse project finance** — Debt secured only on project assets and cash flows, without recourse to the sponsor's balance sheet, imposing strict PPA structural requirements.
+- **Feed-in Tariff (FiT)** — A UK government scheme guaranteeing a fixed payment per MWh to small-scale renewable generators, applicable here to anaerobic digestion projects.
+- **SDE+ subsidy (Netherlands)** — The Dutch renewable energy production incentive that tops up market revenue to a reference price, with the PPA required to mirror its price index.
+- **APX peak price reference** — The annual average APX day-ahead peak price used as the market electricity price reference within the Dutch SDE+ framework.
+- **Guarantee of Origin (GoO)** — A European certificate confirming renewable origin of one MWh of electricity, analogous to REGOs, priced separately in Dutch PPA structures.
+- **Price floor** — A minimum guaranteed offtake price protecting project revenue against sustained low wholesale market prices, viewed favourably by lenders.
+- **Negative price handling** — PPA provisions determining whether the generator is paid, curtailed or compensated during periods when wholesale market prices fall below zero.
+- **Capacity Market Supplier Levy embedded benefit** — An embedded benefit representing the share of capacity market supplier levy savings that embedded generators can negotiate with their offtaker.
+- **Solar irradiance and wind forecast interaction** — The meteorological dependency whereby errors in wind speed forecasts propagate into solar radiation forecast errors through cloud-cover dynamics.
+- **Half-hourly (HH) settlement data** — Metered generation data at 30-minute resolution used for settlement, yield assessment and PPA pricing evaluation.
+- **N2EX index** — The Nord Pool day-ahead power exchange operating in Great Britain, providing the reference price for index-linked PPA structures.
+- **REMiT reporting obligation** — EU regulation requiring market participants with assets above 10 MW to report wholesale energy transactions and fundamental data to regulators.
+- **East-west panel orientation** — A solar panel mounting configuration that increases capacity per hectare and flattens the daily generation profile relative to south-facing arrays.
+- **Full Load Hours (FLH)** — An annual yield metric expressing total energy output as equivalent hours of operation at rated capacity, used for P50 yield assessment.
+- **P50 yield assessment** — An independent energy yield estimate with a 50% probability of exceedance, used as the base-case production assumption in project finance.
+- **Renewables Obligation Certificate (ROC)** — UK subsidy instrument entitling solar generators to tradeable certificates per MWh of eligible output.
+- **ROC buyout price and recycle fund** — Regulatory mechanism setting the floor price for ROCs and redistributing buyout fund proceeds to obligated suppliers.
+- **ROC supply-demand balance** — Modelling framework projecting the ratio of ROCs issued to obligation demand to determine market clearing price.
+- **Imbalance exposure** — Revenue risk arising from difference between metered generation and contracted volume settled at system imbalance price.
+- **Half-hourly (HH) generation data** — Granular settlement-period output records used to calibrate solar generation profiles and imbalance calculations.
+- **Solar generation forecasting** — Statistical or physical modelling of site-level PV output for use in contract pricing and hedging.
+- **Hindcast analysis** — Back-testing of generation or price models against historical actuals to validate forecast accuracy.
+- **Potential Future Exposure (PFE)** — Forward-looking credit risk metric representing the distribution of mark-to-market exposure at a given confidence level over time.
+- **Cashflow and working capital analysis** — Project-level modelling of periodic cash inflows and outflows to assess liquidity and funding requirements.
+- **Forward power price curve** — Market-implied or model-derived term structure of electricity prices used to value future generation revenues.
+- **Value at Risk (VaR) for ROC revenue** — Statistical measure of downside exposure in ROC price income under adverse market scenarios.
+- **SDE+ subsidy (NL)** — Dutch feed-in premium scheme supplementing renewable generators' revenue up to a cap price per MWh.
+- **Installed capacity tracking** — Monitoring of cumulative deployed PV capacity to inform supply-side modelling and subsidy regime projections.
+- **Return on credit model** — Framework for evaluating risk-adjusted return on capital deployed in counterparty credit exposures under energy contracts.
+- **N2EX day-ahead price** — GB day-ahead auction price on the N2EX exchange used as a reference for power settlement and imbalance comparison.
+- **RPI escalation** — Inflation indexation applied to contract prices or subsidy values using the Retail Price Index.
+- **Multi-site portfolio aggregation** — Consolidation of generation, imbalance, and revenue data across multiple solar farm sites for portfolio-level risk and pricing.
+- **Tenor structuring (1-year, 2-year, 5-year, 10-year)** — Selection of contract or modelling horizon affecting price risk, subsidy overlap, and financing considerations.
+
+## Methods
+- Seasonal forward price benchmarking
+- Market Benchmark Price construction (power + ROC + REGO + embedded benefits)
+- Value retention estimation by route-to-market
+- ROC buy-out and recycle value forecasting
+- Embedded benefit quantification by technology and connection voltage
+- Competitive PPA tender and bid evaluation
+- Case study revenue modelling by technology and location
+- Intraday trading value assessment
+- Day-ahead N2EX index pricing with sharing percentage
+- STOD tariff pricing by voltage connection level
+- Competitive RFP tender process for PPA offtake
+- Index-linked pricing with percentage discount to market benchmark
+- Fixed-price tariff referencing seasonal baseload forward settlement prices
+- Subsequent price-fixing option within index-linked PPA
+- Portfolio batching and volume-tiered pricing evaluation
+- Credit support sizing (months of revenue coverage)
+- Independent yield assessment (P50, annual degradation)
+- Broker screen transparency methodology for price fixing
+- SDE+ subsidy mirroring in PPA price structure
+- Advance payment and monthly settlement reconciliation
+- Half-hourly metered generation analysis
+- Solar generation hindcasting and backtesting
+- Imbalance cost calculation (metered vs contracted volume)
+- Forward price curve construction
+- ROC supply-demand balance modelling
+- Discounted cashflow (DCF) project economics
+- Potential Future Exposure (PFE) simulation
+- Value at Risk (VaR) scenario analysis
+- Working capital and liquidity modelling
+- Multi-site portfolio aggregation
+- Statistical regression/time-series fitting for generation forecasts
+- Python scripting for imbalance calculations
+
+## Implied prerequisites
+- UK electricity market settlement and balancing mechanics
+- Renewable Obligation and ROC banding framework
+- Feed-in Tariff scheme structure
+- Contracts for Difference scheme structure
+- Distribution network charging methodology
+- Transmission network charging and Triad mechanism
+- Wholesale power forward curve construction
+- Basic commodity price drivers (coal, gas)
+- UK grid connection voltage classifications
+- GB electricity market structure and settlement (BSC)
+- Renewables Obligation mechanism
+- Forward power market conventions (seasonal baseload contracts)
+- Project finance fundamentals and lender requirements
+- Transmission and distribution network charging regimes (TNUoS, DUoS)
+- Capacity Market mechanics
+- Dutch SDE+ renewable subsidy framework
+- APX/N2EX market operations
+- Basic meteorology for solar and wind resource assessment
+- Corporate credit ratings and counterparty risk
+- GB electricity market settlement mechanics (BM, imbalance)
+- UK renewables subsidy regime (ROCs, CfD)
+- Solar PV generation physics and capacity factor concepts
+- Power derivatives and forward curve construction
+- Project finance and discounted cashflow analysis
+- Counterparty credit risk fundamentals
+- Statistical time-series analysis
+- Python / Excel-based quantitative modelling

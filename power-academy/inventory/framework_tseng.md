@@ -1,0 +1,92 @@
+# framework TSENG
+
+- id: `framework_tseng` · class: library · type: pdf
+- topic: Generation asset valuation using two-factor price lattices and real options · level: advanced · market: mixed · year: 2007
+- worked examples: True · code: False
+
+## Concepts
+- **Real options for power plant valuation** — Treats the hourly commit/decommit decision of a generating unit as an American-type option exercised to maximise expected profit.
+- **Spark spread** — Defines the net revenue from running a generator as electricity price minus heat-rate-weighted fuel price, framing plant operation as a spread option.
+- **Two-factor correlated Itô price process** — Models electricity and fuel prices as two correlated continuous-time diffusion processes with general drift and constant volatility.
+- **Mean-reverting (MR) process** — Specifies a stochastic process whose drift is Lipschitz-continuous, monotonically decreasing, and pushes the process back toward a long-run level.
+- **Trinomial price lattice** — Discretises an Itô process onto a recombining three-branch lattice that matches local mean and variance at each node.
+- **Two-factor trinomial lattice** — Extends the one-factor trinomial lattice to two correlated processes by branching each node into nine successor nodes with joint branching probabilities.
+- **Lattice feasibility** — Requires that valid (non-negative, summing-to-one) branching probabilities exist at every node and every stage of the lattice.
+- **Lattice compactness** — Property that the set of reachable lattice nodes remains bounded in size as the number of stages grows, enabled here by mean-reversion.
+- **Lattice convergence** — Guarantees that the discrete joint distribution represented by the lattice approaches the true continuous distribution as the time-step tends to zero.
+- **Decoupling transformation** — Linear change of variables that renders two correlated Itô processes into two uncorrelated processes, enabling independent one-factor lattice construction.
+- **Branching probability selection via quadratic programme (QP)** — Chooses the nine joint branching probabilities at each node by minimising the squared deviation from the uncorrelated product probabilities, subject to moment-matching constraints.
+- **Hull–White branching probability method** — Parameterises the correlation adjustment to the 3×3 probability matrix by a single scalar, as proposed by Hull and White (1994).
+- **Lattice cell-size parameter (c)** — Constant scaling the node spacing relative to volatility and time-step, governing the trade-off between moment-matching quality and lattice feasibility.
+- **Correlation feasibility bound ρ_max** — Derived upper bound on inter-process correlation below which the two-factor trinomial lattice is guaranteed feasible for any node and any stage.
+- **Stochastic dynamic programming (SDP) for unit commitment** — Backward-recursive value function over the price lattice and unit commitment state, embedding minimum up/downtime and startup/shutdown cost constraints.
+- **Unit commitment state space** — Encodes startup, normal-online, shutdown, and offline phases with minimum uptime/downtime constraints into an integer state variable.
+- **Decision lead time constraint** — Requires that commit and decommit decisions be made a fixed number of hours before the corresponding operational state takes effect.
+- **Variable heat rate** — Represents the fuel consumption per unit of electricity output as a function of generation level, affecting optimal dispatch and profit calculation.
+- **Startup and shutdown costs** — One-time costs incurred at state transitions when a unit is brought online or taken offline, incorporated into the SDP transition cost function.
+- **Optimal dispatch under price uncertainty** — Determines the generation level that maximises the spark-spread profit for a unit in the normal-online state given revealed electricity and fuel prices.
+- **Risk-neutral vs. actual price process** — Distinguishes valuation under objective probability measure (actual process) from risk-neutral measure, with discussion of when forward-curve adjustments are needed.
+- **Weak convergence of discrete approximations** — Invokes Kushner's theorem to establish that the trinomial lattice distribution converges weakly to the underlying Itô process as the number of stages grows.
+- **Moment-matching for lattice construction** — Designs lattice branching probabilities to reproduce specified conditional moments (mean, variance, cross-moment) of the joint price distribution.
+- **Sensitivity analysis of plant value** — Examines how the computed power plant value changes with respect to variations in price process parameters such as volatility, mean-reversion speed, and correlation.
+- **Two-factor price lattice** — A discrete recombining lattice structure that jointly represents two correlated stochastic price processes for use in dynamic programming valuation.
+- **Geometric mean reversion (GMR) process** — A continuous-time lognormal price process with mean-reverting drift, used to model electricity and fuel spot prices.
+- **Branching probabilities** — Transition probabilities assigned to lattice branches so that local moments of the discrete chain match those of the underlying diffusion.
+- **Branching factor** — An integer index that determines which of the three successor nodes a lattice branch points to at each time step.
+- **Lattice cell size parameters (c1, c2)** — Scaling constants that set the spatial spacing of the lattice grid and control the maximum representable price correlation.
+- **Optimization-based lattice calibration** — A derivative-free optimization procedure that selects cell size parameters to minimise the distance between the discrete lattice distribution and the target continuous density.
+- **Moment matching** — A method of choosing branching probabilities by equating the first through fourth moments of the discrete distribution to those of the target diffusion.
+- **Mean reversion property (MR property)** — A drift condition under which the one-factor lattice size remains bounded regardless of the number of time steps.
+- **Generation asset valuation** — The determination of the economic value of a power plant by optimising dispatch decisions over a stochastic price lattice subject to physical operating constraints.
+- **Unit commitment constraints** — Minimum uptime and downtime restrictions on a generating unit that introduce path-dependence into the dispatch optimisation.
+- **Ramp constraints** — Limits on the rate of change of a generator's output between consecutive time periods.
+- **Heat-rate function** — A convex function mapping generator output to fuel consumption, used to compute variable operating costs at each lattice node.
+- **Stochastic dynamic programming (SDP)** — A backward-induction optimisation over the price lattice that computes the expected value of optimal future dispatch decisions.
+- **Price correlation constraint** — A feasibility restriction on the lattice that caps the maximum representable instantaneous correlation between two price processes as a function of the cell size parameters.
+- **Bivariate normal distribution fit** — The use of the exact bivariate normal density as a benchmark against which the lattice's discrete joint distribution is evaluated.
+- **Time-dependent drift and volatility** — An extension of the lattice framework allowing drift and diffusion coefficients to vary by hour, accommodating peak/off-peak seasonality.
+- **Forward-curve calibration for long-term valuation** — A procedure that sets the time-varying mean level of the mean-reversion process to reproduce observed forward price curves over multi-year horizons.
+
+## Methods
+- Trinomial lattice construction for Itô processes
+- Two-factor 3×3 branching lattice construction
+- Linear transformation / decoupling of correlated Wiener processes
+- Quadratic programming for branching probability selection
+- Stochastic dynamic programming (backward recursion)
+- Moment matching (mean and variance)
+- LP-based feasibility analysis (LP P1)
+- Lagrangian optimality conditions for QP
+- Weak convergence analysis (Kushner 1984)
+- Monte Carlo simulation (as comparison benchmark)
+- Sensitivity analysis
+- Bivariate normal distribution evaluation (Drezner 1978 approximation)
+- Nelder-Mead simplex optimisation
+- Maximum likelihood estimation
+- Backward dynamic programming on lattice
+- Least-squares distribution fitting
+- Convergence analysis via local-moment conditions
+- Monte Carlo simulation (benchmark comparison)
+- Bivariate normal integral evaluation
+- Lattice size bounding via mean-reversion property
+
+## Implied prerequisites
+- Stochastic calculus and Itô processes
+- Wiener processes and Brownian motion
+- Dynamic programming and Bellman equations
+- Linear programming and duality
+- Quadratic programming
+- Probability theory and conditional expectations
+- Bivariate normal distribution
+- Financial option pricing theory (Black-Scholes, Margrabe exchange option)
+- Unit commitment problem formulation
+- Energy market structure and spot markets
+- Numerical methods for stochastic processes
+- Weak convergence of stochastic processes
+- Stochastic differential equations and Ito calculus
+- Ornstein-Uhlenbeck and mean-reverting processes
+- Discrete-time Markov chains
+- Bivariate normal distribution theory
+- Option pricing and real options concepts
+- Unit commitment and economic dispatch fundamentals
+- Electricity and natural gas market structure (PJM)
+- Numerical optimisation methods

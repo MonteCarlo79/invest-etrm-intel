@@ -1,0 +1,163 @@
+# dipeng/battery
+
+- id: `dipeng_battery` · class: practice · type: folder
+- topic: Battery energy storage: technology, valuation, grid services and testing · level: intermediate · market: GB, US, mixed · year: 2015
+- worked examples: True · code: False
+
+## Concepts
+- **Battery energy storage system (BESS)** — Modular electrochemical storage combining cells, power conversion and control to import/export power from a grid connection.
+- **Power Conversion System (PCS) / inverter** — Power-electronic device that converts DC energy stored in batteries to AC power suitable for grid injection.
+- **State of charge (SoC)** — Instantaneous energy level of a battery expressed as a fraction of its total capacity, governing available discharge duration.
+- **Round-trip efficiency (RTE)** — Ratio of energy delivered on discharge to energy consumed on charge, determining net energy loss per storage cycle.
+- **Cycle life** — Total number of full charge/discharge cycles a battery can sustain before capacity degrades to an end-of-life threshold.
+- **Storage duration** — Hours over which a fully charged storage device can discharge at rated power, linking energy capacity to power rating.
+- **Peak shaving** — Primary network application where storage discharges during demand peaks to reduce load on a constrained circuit below its security rating.
+- **N-1 network security** — Planning criterion requiring the network to remain within rated limits following loss of any single circuit or transformer.
+- **Firm Frequency Response (FFR)** — Contracted, continuously proportional modulation of active power in response to real-time frequency deviation from 50 Hz.
+- **Dynamic frequency response** — Continuous, proportional MW adjustment delivered within seconds of a frequency deviation to manage second-by-second system balance.
+- **Static (non-dynamic) frequency response** — Discrete full-power step response triggered automatically when system frequency crosses a pre-agreed threshold.
+- **Frequency Control by Demand Management (FCDM)** — Demand interruption service that activates automatically via under-frequency relay to arrest low-frequency events.
+- **Demand Side Response (DSR)** — Deliberate modification of an end-user's metered consumption in response to an external signal to provide grid balancing services.
+- **Virtual power plant (VPP)** — Aggregation of distributed storage or demand assets controlled in coordination to appear as a single dispatchable resource to the system operator.
+- **Short-Term Operating Reserve (STOR)** — Contracted service providing a full-power export from storage triggered by the system operator to cover transmission outages.
+- **Energy arbitrage (time shifting)** — Revenue strategy of charging storage during low-price periods and discharging during high-price periods to capture price spreads.
+- **Ancillary services revenue** — Payments received for providing frequency regulation, reserve or other balancing services that complement energy arbitrage income.
+- **Capex break-even ($/kW or $/kWh)** — Maximum installed cost at which a storage project achieves zero NPV given projected revenues from energy and ancillary services.
+- **NPV / IRR project valuation** — Discounted cash-flow metrics used to assess whether projected storage revenues justify capital expenditure under given market conditions.
+- **On-peak / off-peak price spread** — Difference between high-demand and low-demand wholesale electricity prices that determines the theoretical arbitrage value available to storage.
+- **Capacity payment** — Fixed periodic payment received by a storage asset for being available to generate, equivalent to a boost in effective energy price.
+- **Levelized cost of storage ($/kWh/cycle)** — All-in annualised cost of providing one kWh of discharged energy over the asset lifetime, used to compare storage technologies.
+- **Sodium-sulphur (NaS) battery** — High-temperature electrochemical storage technology characterised by long duration (≈7.5 h), moderate efficiency and high capital cost per kW.
+- **Lithium-ion battery** — Electrochemical storage technology offering high efficiency and short duration (≈1 h) with capital costs stated per kWh of usable capacity.
+- **Flow battery (zinc-bromide)** — Electrochemical storage technology with energy stored in liquid electrolytes, offering medium duration and lower round-trip efficiency than lithium-ion.
+- **Forecasting, Optimisation and Scheduling System (FOSS)** — Software layer that forecasts network demand, schedules commercial services and communicates a suggested dispatch plan to the on-site battery manager.
+- **Battery Energy Storage System Manager (BESSM)** — On-site control system that executes scheduled services, responds to real-time network conditions and manages state of charge across battery arrays.
+- **Enhanced Frequency Control Capability (EFCC)** — NIC-funded innovation project testing battery storage paired with solar PV to provide enhanced frequency response to the GB transmission system.
+- **Network Innovation Competition (NIC) funding** — Ofgem-administered mechanism providing ring-fenced consumer funding for electricity network innovation projects subject to cost-benefit scrutiny.
+- **Cost-benefit analysis (CBA) for storage innovation** — Quantitative appraisal monetising learning benefits and consumer costs of a funded storage trial to justify public expenditure.
+- **Solar PV–battery hybrid** — Co-located pairing of photovoltaic generation with battery storage to smooth ramp events and provide frequency response services.
+- **Proportionality of frequency response** — Requirement that a provider's MW output change be linearly proportional to the deviation of system frequency from 50 Hz.
+- **Response delay (K)** — End-to-end time from frequency deviation detection to full MW delivery by the service provider, typically no more than two seconds.
+- **Frequency response testing protocol** — Structured sequence of injected frequency signals and hold periods used to demonstrate speed, proportionality and sustainability of a provider's response.
+- **Tolling** — Fixed daily import/export schedule contracted at full rated power over a defined period, providing predictable utilisation of storage capacity.
+- **Market structure sensitivity (storage economics)** — Variation in storage project break-even capex across ISO regions driven by differences in energy spreads, ancillary service rates and capacity mechanisms.
+- **Static Frequency Response** — A grid service triggered at a defined frequency threshold and sustained continuously for a bilaterally agreed period regardless of subsequent frequency movements.
+- **Enhanced Frequency Response (EFR)** — A fast-acting GB ancillary service providing synthetic inertia or pre-fault frequency control within a sub-second timescale, procured via competitive tender.
+- **System Inertia** — The resistance of grid frequency to rapid change, historically provided by synchronous thermal plant and diminishing as non-synchronous renewables displace conventional generation.
+- **Rate of Change of Frequency (RoCoF)** — The speed at which system frequency deviates following a generation-demand imbalance event, which increases as system inertia falls.
+- **State of Charge (SoC) Management** — The operational practice of maintaining battery energy levels within bounds to ensure continuous availability of frequency response services.
+- **Frequency Deadband** — A frequency range around 50 Hz within which no mandatory response is triggered, used to facilitate storage state-of-charge management.
+- **Delivery Saturation** — The requirement for full contracted MW delivery to be achieved within a specified frequency deviation range, typically ±0.2–0.3 Hz from nominal.
+- **Performance Monitoring and Underperformance Deduction** — A contractual mechanism calculating provider shortfall as actual versus contracted response, deducting fees across the affected settlement periods.
+- **Revenue Layering** — The stacking of multiple income streams (EFR, FFR, TRIAD, capacity market, arbitrage) across a single battery asset to improve project economics.
+- **TRIAD Avoidance** — An embedded benefit accruing to demand-side or storage assets that reduce consumption during the three half-hours of highest system demand, lowering TNUoS charges.
+- **Capacity Market** — A GB mechanism awarding multi-year payments to assets that commit to deliver capacity during stress events, providing an additional revenue stream for storage.
+- **Aggregation Growth Model** — A service provision structure where a portfolio MW level grows over time as additional assets join, requiring agreed re-testing protocols with the TSO.
+- **Monitoring and Control System (MCS)** — A wide-area technology platform using phasor measurement units to detect regional frequency and RoCoF and dispatch proportionate fast response from diverse resources.
+- **Phasor Measurement Unit (PMU)** — A device measuring voltage and current phasors at high temporal resolution to provide accurate regional frequency and RoCoF data for grid control.
+- **Synthetic Inertia** — Emulated inertial response provided by power-electronic-interfaced resources replicating the frequency-stabilising behaviour of synchronous rotating machines.
+- **Battery Utilisation Rate** — The proportion of time or energy throughput for which a battery asset is actively delivering a contracted frequency response service.
+- **Connection Approach and Embedded Benefits** — The choice between transmission and distribution connection, determining applicable network charges (TNUoS, GDUoS, BSUoS) and access to benefits such as TRIAD reduction.
+- **Battery Storage CAPEX and Economics** — The capital expenditure profile and sensitivity analysis underpinning the business case for grid-scale battery projects, incorporating technology cost forecasts.
+- **Technical Readiness Level (TRL)** — A European Commission scale used by National Grid to screen EFR tender submissions for deployment readiness, requiring TRL 7 or above.
+- **Tender Assessment and Value Ratio** — The process of evaluating EFR bids against the avoided cost of alternative frequency response procurement, using a stated 2:1 value ratio versus existing PSH services at certain periods.
+- **Frequency Response** — Active power adjustment by generators or loads to arrest and correct frequency deviations after a system event.
+- **Largest Infeed Loss** — The dimensioning contingency for frequency response procurement, representing the sudden loss of the largest single generation or demand source on the system.
+- **Non-synchronous Generation** — Generation connected via power electronics (wind, solar PV, HVDC) that contributes no natural inertia to the AC system.
+- **Rapid Response** — Frequency response activated within milliseconds of a disturbance, enabling a smaller volume of resource to replace larger volumes of slower conventional response.
+- **Wide-Area Measurement (PMU/Phasor)** — Synchronised phasor measurements across geographically dispersed grid nodes used to detect disturbances and measure frequency and RoCoF with high resolution.
+- **Demand-Side Response (DSR)** — Voluntary or automated curtailment or shifting of industrial and commercial electricity consumption to provide grid balancing services.
+- **Battery Energy Storage** — Grid-connected battery systems capable of injecting or absorbing power within milliseconds to provide frequency regulation and virtual inertia.
+- **Virtual Inertia** — Synthetic inertia emulated by power-electronic-interfaced storage or generation to slow RoCoF in the absence of synchronous rotating mass.
+- **df/dt Control vs Absolute Frequency Control** — Two trigger philosophies for response dispatch: reacting to the rate of frequency change versus reacting to a threshold frequency level.
+- **Balancing Services Use of System (BSUoS)** — A daily flat tariff charged to generators and suppliers that recovers National Grid's real-time balancing costs including frequency control.
+- **Must-Run Constraints** — Obligations to keep synchronous thermal units online to maintain inertia levels, incurring out-of-merit dispatch costs.
+- **Response Scheduling** — Forward planning of the mix and volume of frequency response services procured to balance cost, carbon and security requirements.
+- **Low Part Load Operation** — Running thermal generators at output levels well below rated capacity to hold headroom for frequency response, at a thermal efficiency and cost penalty.
+- **PV Power Plant Grid Support** — Operating photovoltaic plants below maximum power point or using inverter reserves to deliver reactive power and fast active-power frequency response.
+- **RoCoF Relay Settings** — Protection relay thresholds that trip embedded generators when RoCoF exceeds a set value, creating cascading disconnection risk under low-inertia conditions.
+- **Cost-Benefit Analysis of Frequency Response Options** — Quantitative comparison of annual costs of conventional frequency management alternatives against the EFCC approach to justify innovation investment.
+- **Wide-area monitoring and control** — Use of geographically distributed measurements to coordinate control actions across an entire transmission system.
+- **Event detection algorithm** — Software logic that distinguishes genuine frequency events from disturbances to trigger appropriate control responses.
+- **Resource allocation algorithm** — An optimisation routine that selects and schedules available response providers based on capability and cost.
+- **Technology Readiness Level (TRL)** — A scale used to assess the maturity of a technology from concept through to full commercial deployment.
+- **Balancing Services** — Ancillary services procured by the system operator to maintain real-time supply-demand balance, including frequency response products.
+- **Balancing and Settlement Code (BSC)** — The regulatory code governing electricity balancing and settlement arrangements in Great Britain.
+- **Wind curtailment avoidance** — Reduction in the volume of wind generation that must be constrained off during low-demand periods through better frequency management.
+- **Cost-benefit analysis (CBA)** — Quantitative comparison of project costs against projected financial and carbon savings from improved frequency response procurement.
+
+## Methods
+- NPV and IRR cash-flow modelling
+- Sensitivity / tornado analysis on storage project economics
+- On-peak / off-peak price spread calculation
+- Levelized cost of storage calculation
+- Frequency response testing schedules (dynamic and static)
+- Demand forecasting for network security scheduling
+- State-of-charge management across battery arrays
+- Cost-benefit analysis of innovation funding
+- Forward pricing curve analysis (SENA curves)
+- Frequency response compliance testing (static and dynamic test sequences)
+- Cost-benefit analysis of frequency response under future inertia scenarios
+- Sensitivity analysis on EFR payment and battery utilisation
+- Hardware-in-the-loop (HiL) simulation using RTDS
+- Phasor measurement and wide-area frequency monitoring
+- RoCoF-proportional response dispatch optimisation
+- Portfolio aggregation modelling
+- Second-by-second frequency data analysis for SoC management
+- Competitive tender assessment against avoided-cost baseline
+- Real-time wide-area disturbance detection and classification
+- Phasor measurement unit (PMU) signal processing
+- Hardware-in-the-loop (HIL) power system simulation
+- Real-time digital simulation (RTDS)
+- Technology trial and demonstration on live transmission system
+- Cost-benefit analysis and scenario modelling
+- Response capability characterisation across multiple technology types
+- Coordinated multi-resource dispatch optimisation
+- Carbon savings estimation under Gone Green and Slow Progression scenarios
+- Wide-area frequency monitoring using PMUs
+- RoCoF-proportional resource dispatch
+- Event detection algorithm development
+- Resource allocation optimisation
+- Hardware-in-the-loop testing at PNDC
+- Demand side response trials
+- Battery storage trials
+- PV plant frequency response trials
+- Wind farm frequency response trials
+- CCGT frequency response trials
+- Representative network model development and validation
+- Cost-benefit analysis
+- Risk register and contingency planning
+
+## Implied prerequisites
+- Basic power system operation and AC/DC fundamentals
+- Wholesale electricity market structure and pricing
+- Discounted cash-flow analysis
+- Grid frequency regulation principles
+- Battery electrochemistry fundamentals
+- UK Grid Code awareness
+- Ofgem regulatory framework basics
+- Power system frequency dynamics and swing equation
+- GB electricity market structure (BSC, BM, ancillary services)
+- Battery electrochemistry and cycle-life degradation
+- Grid code and balancing services framework
+- Network charges (TNUoS, GDUoS, BSUoS)
+- Renewable generation technologies (wind, solar PV)
+- Control systems fundamentals
+- Imbalance settlement and balancing mechanism
+- AC power system dynamics and swing equation
+- Frequency regulation principles and governor response
+- Power electronics and inverter control
+- Phasor measurement and synchrophasor standards
+- Electricity market structure and balancing mechanism (GB)
+- Grid Code and Distribution Code requirements
+- Battery storage technology fundamentals
+- Demand-side management and aggregation
+- Renewable energy integration basics
+- Power systems frequency dynamics
+- Synchronous machine inertia
+- Ancillary services market design
+- Phasor measurement and synchrophasor technology
+- Optimisation methods for power systems
+- Real-time simulation techniques
+- Demand-side flexibility concepts
+- Regulatory framework for GB electricity markets

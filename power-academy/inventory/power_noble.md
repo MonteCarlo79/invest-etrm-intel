@@ -1,0 +1,156 @@
+# power/Noble
+
+- id: `power_noble` · class: practice · type: folder
+- topic: Energy book acquisition: European power and gas portfolio novation and valuation · level: advanced · market: EU · year: 2016
+- worked examples: False · code: False
+
+## Concepts
+- **Book novation** — Transfer of rights and obligations under OTC power and gas contracts from one trading entity to another via trilateral novation agreements.
+- **Total Return Swap (TRS)** — Bilateral instrument used to transfer market and credit risk of OTC positions to the purchaser ahead of formal novation completion.
+- **Mirror transaction** — Back-to-back trade entered between seller and buyer replicating a confidential counterpart position to transfer market risk while counterparty identity remains undisclosed.
+- **Mark-to-market (MTM) valuation** — Present-value pricing of OTC and exchange-listed power and gas positions in the currency of the underlying commodity as of a specified valuation date.
+- **Funding and capital charges** — Balance-sheet, execution, and capital costs assessed by a potential acquirer on top of MTM value when pricing a portfolio acquisition bid.
+- **Credit risk transfer** — Mechanism by which counterparty credit exposure associated with OTC transactions migrates from seller to buyer, including treatment of CSA and netting.
+- **Exchange position transfer** — Process for moving listed futures and options on EEX, ICE, CME, and Nordpool to the purchaser, including settlement-price reference and longstop provisions.
+- **Indicative bid process** — Structured competitive auction procedure for acquiring an energy trading book, covering bid submission requirements, valuation assumptions, and selection criteria.
+- **Base Consideration** — Agreed net purchase price for the portfolio, constituted by MTM valuations plus fees and charges across EUR, GBP, and USD denominations.
+- **Confidential counterpart** — A counterparty whose identity has not been consented for disclosure to the bidder, requiring mirror trades until novation is achieved.
+- **Novation consideration mechanics** — Fee structures including non-deferred, deferred, and bonus novation payments tied to the proportion and timing of successfully novated trades.
+- **Principal component analysis (PCA) for gas swing** — Statistical technique applied to gas price dynamics to reduce dimensionality for valuing swing and seasonal optionality.
+- **Summer/winter optionality** — Seasonal spread options embedded in gas and power contracts capturing the value of storage or flexible supply between summer injection and winter withdrawal periods.
+- **Credit exposure netting** — Reduction of gross counterparty credit exposure by offsetting positive and negative MTM values across trades under the same master agreement.
+- **Reference Market-maker quotation** — Market quotation mechanism using multiple broker quotes to determine replacement transaction amounts for early-terminated or novated contracts.
+- **Novation** — Legal substitution of one counterparty for another in an existing derivatives or energy contract, transferring all rights and obligations.
+- **DCT Payment Amount** — Mark-to-market compensation calculated and agreed between parties for disclosed confidential transactions being novated, covering residual value transfer.
+- **Average Replacement Transaction Amount** — Fallback valuation mechanism averaging each party's independent replacement cost estimates when bilateral agreement on termination or novation value fails.
+- **Novation Costs and Novation Benefits** — Incremental or reduced costs to the Purchaser arising from capital, credit, and funding charge differences when a transaction novates to a third party rather than directly to the Purchaser.
+- **Transfer Long Stop Date** — Contractual deadline by which all counterpart transaction novations must be completed, after which alternative disposition rights (termination or third-party transfer) are triggered.
+- **Deferred Novation Consideration** — Contingent cash payment from Noble to the Purchaser triggered upon completion of all priority counterpart novations within the prescribed timeline.
+- **Bonus Deferred Novation Consideration** — Time-incentive payment scaled as a percentage of the administration fee rewarding faster completion of all novations within 30, 60, or 90 calendar days.
+- **Exchange Transaction** — Centrally cleared or exchange-listed derivative position being transferred from Noble to the Purchaser via exchange transfer procedures and clearing member mechanics.
+- **Deemed Mirror Exchange Transaction** — Synthetic bilateral replication automatically created when an exchange transaction fails to transfer by the effective date deadline.
+- **Credit Support Arrangement** — Collateral or guarantee mechanism supporting a counterpart transaction, which the Purchaser must replicate on a like-for-like basis as a condition of novation.
+- **Counterpart Master Agreement** — Governing ISDA, EFET, or equivalent framework agreement between Noble and a counterpart under which individual transactions are documented.
+- **Termination Amount** — Bilaterally agreed or market-quoted sum payable upon early termination of a total return swap or mirror transaction when novation cannot be completed.
+- **Relevant Event** — Breach, force majeure, or default occurring under a counterpart transaction that may trigger termination rights and corresponding TRS close-out mechanics.
+- **Priority Counterpart** — Designated subset of counterparties whose novations must be pursued first and tracked most actively to qualify for deferred novation consideration payments.
+- **CT Event** — Defined trigger under a total return swap that activates upon termination of the underlying counterpart transaction, determining the close-out payment mechanics.
+- **Limitation of Liability Thresholds** — Contractual caps and de minimis baskets (individual USD 500k, aggregate USD 2m, maximum USD 10m) constraining Noble's exposure to warranty and representation claims.
+- **Market Quotation Determination** — Structured fallback procedure for deriving an average replacement transaction amount when parties cannot agree a termination or novation value bilaterally.
+- **Counterpart Transaction** — An existing energy derivative or physical trade between the transferor and a third-party counterpart whose economics are synthetically transferred via the TRS.
+- **Additional Termination Event (ATE)** — A contractually defined trigger, here the TRS Counterpart ATE, that causes early termination of affected separated TRS transactions without affecting other transactions under the master agreement.
+- **Separated TRS Transaction** — A notional sub-transaction of the TRS corresponding one-to-one with a single counterpart transaction, used to ring-fence termination events.
+- **Portfolio Partial Recovery Amount** — A formula-derived figure capping the transferee's share of recoveries from a defaulting counterpart, accounting for netting, collateral and other transactions.
+- **Maximum Loss** — The ceiling on the transferee's loss from a subsequent CT event, calculated as the unrecovered amount assuming no further cash receipts from the counterpart after the deemed termination date.
+- **Netting Arrangement** — A contractual or legal right to set off mutual obligations between the transferor and a counterpart, applied before computing CT event payment and recovery amounts.
+- **Market Risk Retention** — The principle that the transferee bears the price and valuation risk of the counterpart transactions regardless of counterpart credit events.
+- **Imbalance Charges** — Costs arising from failures in nomination, scheduling or delivery under energy market rules, allocated to the party whose act or omission caused the failure.
+- **EMIR Reporting Obligation** — EU regulatory requirement to report OTC derivative transactions to a trade repository, cited as a permitted exception to confidentiality.
+- **Dodd-Frank CFTC Reporting** — US regulatory requirement to report swap transactions to a swap data repository, with the transferee designated as the reporting party.
+- **TUPE** — UK Transfer of Undertakings (Protection of Employment) Regulations, addressed to confirm that employment contracts do not automatically transfer to the purchaser.
+- **FX Hedging Transaction** — A foreign exchange derivative entered alongside the TRS to manage currency exposure arising from counterpart transactions denominated in multiple currencies.
+- **Deemed Termination Date** — A contractually assumed date on which a counterpart transaction is treated as having terminated for the purpose of calculating the maximum loss under the TRS.
+- **Economic Sanctions Compliance** — Obligations preventing any party from taking actions that would cause another party to violate applicable UK, EU, UN or US sanctions regimes.
+- **Gross-up for Withholding Tax** — The obligation of the paying party to increase payments so that the recipient receives the full contractual amount net of any mandatory tax deductions.
+- **Counterpart Unpaid Amount** — An amount due from a counterpart to the transferor that remains unpaid, triggering a compensating payment obligation from the transferee to the transferor under the TRS.
+- **Total Return Swap (TRS) Confirmation** — A bilateral contract transferring economic exposure of an underlying energy trading book from seller to purchaser via swap mechanics.
+- **Confidential Transaction** — An OTC energy trade where the counterparty identity is withheld from the purchaser until post-signing consent is obtained.
+- **Disclosed Counterpart Transaction (DCT)** — A previously confidential trade whose counterparty identity has been disclosed, triggering a separate credit risk pricing and payment process.
+- **Novation Agreement** — A trilateral agreement transferring a trade from the seller to the purchaser with counterparty consent, extinguishing the original contract.
+- **Sleeve Process** — An interim arrangement where the seller continues to hold a trade on behalf of the purchaser when direct novation is not immediately achievable.
+- **Termination Process** — A mechanism to close out a counterpart transaction when novation cannot be completed, capping the purchaser's residual credit exposure.
+- **Market Risk Transfer** — The passage of exposure to changes in marked-to-market value of the book from seller to purchaser from the effective date.
+- **Novation Consideration (Non-Deferred and Deferred)** — Fee payments from seller to purchaser tied to the administration cost of novating priority counterpart trades, split across the effective date and a completion milestone.
+- **Bonus Novation Consideration** — An incentive payment to the purchaser scaled to the speed of completing all novations within 30, 60, or 90 calendar days.
+- **Early Termination Date** — A contractually designated date on which close-out netting is triggered under the master agreement following a termination event or event of default.
+- **Force Majeure Release** — A provision releasing rather than merely suspending the swap seller's performance obligations where force majeure prevents delivery under a counterpart transaction.
+- **VAT Treatment on TRS Payments** — A clarification that referenced payment amounts are VAT-exclusive and that VAT is payable additionally where the payment constitutes consideration for a taxable supply.
+- **Withholding Tax Gross-Up** — An obligation on the payer to increase payments so the recipient receives the same net amount as if no withholding were required, with a reimbursement mechanism where the recipient recovers tax credits.
+- **FATCA Carve-Out** — An exclusion of FATCA-mandated withholdings from the general gross-up obligation under the TRS confirmation.
+- **Transaction Reporting Consent** — A standing, post-termination consent permitting disclosure of trade and counterparty data to regulators, trade repositories, and affiliates in compliance with reporting mandates.
+- **Live Price Mechanism** — A real-time pricing process on the effective date through which the purchaser submits a final bid for the book based on current market levels.
+- **Know Your Customer (KYC) Requirement** — A pre-condition requiring the purchaser to complete regulatory identity checks on disclosed counterparties before executing the sale.
+- **Credit Support Arrangements** — Collateral or margin agreements between seller and purchaser established where necessary to support obligations under the TRS.
+- **MTM Cap on Credit Exposure** — A mechanism limiting the purchaser's loss on an unnovated trade to the difference between mark-to-market value and collateral held at the point the seller declines to terminate.
+- **Nordic Baseload Forward Pricing** — Quarterly forward price data for Nordic baseload power used to value exchange and OTC positions in the transaction book.
+- **OTC Portfolio Mark-to-Market (MTM)** — The aggregate fair value of outstanding bilateral energy contracts, denominated in USD, as of a reference date.
+- **FX Risk in Energy Book** — Foreign exchange exposure arising from energy positions denominated in multiple currencies including GBP, EUR, and USD.
+
+## Methods
+- Competitive indicative bid process
+- MTM present-value calculation in commodity currency
+- Total Return Swap structuring
+- Mirror trade construction
+- PCA-based gas swing model
+- Seasonal (summer/winter) option valuation
+- Netting and credit exposure calculation
+- Market quotation averaging (high-low exclusion)
+- FX conversion using reference price sources
+- Exchange settlement-price referencing for position transfer
+- Mark-to-market valuation of derivative positions
+- Replacement cost / market quotation averaging
+- Tiered contingent payment structuring
+- Credit charge and capital charge quantification for novation cost assessment
+- Know-your-customer and internal credit approval gating
+- Exchange transfer and clearing member mechanics
+- Contractual liability cap and basket structuring
+- Total return swap structuring
+- Close-out netting calculation
+- Portfolio partial recovery formula (min(A, A×(Recovery+abs(min(0,B)))/(A+max(0,B))))
+- Maximum loss cap calculation
+- Collateral valuation under credit support arrangements
+- Currency conversion for cross-currency payments
+- Iterative recalculation of recovery amounts on new information
+- Early termination amount determination under ISDA Section 6
+- Total return swap structuring for book transfer
+- Live mark-to-market pricing at effective date
+- Tiered novation consideration and incentive fee design
+- Credit risk allocation via novation timing
+- Market risk transfer via mirror transaction overlay
+- Deemed Mirror Exchange Transaction creation and termination
+- Sleeve and termination fallback mechanisms
+- MTM and collateral-based credit exposure capping
+- VAT-exclusive payment referencing with gross-up
+- Withholding tax gross-up and credit reimbursement calculation
+- Regulatory transaction reporting under EMIR/equivalent
+
+## Implied prerequisites
+- OTC derivatives documentation (ISDA, EFET)
+- Futures and options market mechanics
+- Energy commodity market structure (power and gas)
+- Credit support annexes and collateral management
+- Option pricing theory
+- Present value and discounting
+- Principal component analysis
+- Counterparty credit risk concepts
+- Regulatory frameworks (EMIR, MiFID)
+- Foreign exchange risk management
+- ISDA Master Agreement architecture
+- EFET General Agreement (power and gas)
+- Derivative close-out netting
+- Central clearing and margin mechanics
+- Energy commodity derivatives (power and gas)
+- Counterparty credit risk
+- VAT treatment of financial services (EU VAT Directive 2006/112/EC)
+- ISDA Master Agreement (1992 and 2002 versions)
+- EFET General Agreement for commodity derivatives
+- OTC derivatives documentation and confirmations
+- Close-out netting and set-off under English law
+- Energy commodity delivery and nomination mechanics
+- EU EMIR trade reporting
+- US Dodd-Frank swap reporting (Parts 43 and 45 CFTC)
+- UK TUPE regulations
+- VAT treatment of financial transactions
+- English contract law and jurisdiction
+- ISDA Master Agreement and schedule negotiation
+- EFET General Agreement for Commodity Contracts
+- Energy OTC derivatives pricing and valuation
+- Exchange-cleared derivatives and clearing member mechanics
+- Novation mechanics and counterparty consent processes
+- Credit risk management in energy trading
+- Marked-to-market accounting for trading books
+- VAT treatment of financial and commodity transactions
+- Withholding tax and gross-up mechanics
+- FATCA compliance framework
+- EMIR and trade reporting obligations
+- Know Your Customer (KYC) and AML obligations

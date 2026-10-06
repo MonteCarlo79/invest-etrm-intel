@@ -26,7 +26,7 @@ def outline_source(client, model, entry, text) -> dict:
     merged, seen = None, set()
     for ch in chunks:
         part = call_json(client, model, SYSTEM_PROMPT,
-                         f"Source title: {entry.title}\n\n{ch}", max_tokens=2000)
+                         f"Source title: {entry.title}\n\n{ch}", max_tokens=4000)
         if merged is None:
             merged = {k: part.get(k) for k in ("topic", "level", "market", "year")}
             merged.update(concepts=[], methods=[], implied_prerequisites=[],

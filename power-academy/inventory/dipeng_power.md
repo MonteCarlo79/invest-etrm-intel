@@ -1,0 +1,164 @@
+# dipeng/Power
+
+- id: `dipeng_power` · class: practice · type: folder
+- topic: European power plant tolling, CCGT valuation, and energy market fundamentals · level: advanced · market: EU · year: 2017
+- worked examples: True · code: True
+
+## Concepts
+- **Delta Hedging for Power Tolling** — Dynamic replication of a CCGT tolling option by trading daily Greeks derived from a tolling model against forward prices.
+- **Back-Testing Methodology** — Framework for evaluating a service provider's hedging performance by replaying historical forward prices through a tolling model.
+- **Tolling Model** — Valuation model that converts commodity forward curves and plant parameters into Greeks and intrinsic value for a CCGT.
+- **Daily Greeks** — Sensitivities of CCGT option value to power, gas and carbon prices computed daily for each tradable tenor.
+- **Clean Dark Spread (CDS)** — Margin of a coal-fired plant after deducting fuel and carbon costs from electricity revenue.
+- **Clean Spark Spread (CSS)** — Margin of a gas-fired plant after deducting gas fuel and carbon costs from electricity revenue.
+- **CCGT Plant Parameters** — Technical inputs—efficiency, availability, variable O&M, start-up costs—used to define the economic boundaries of a gas turbine tolling option.
+- **Intra-Month Volatility** — Short-dated implied volatility calibrated to value within-month optionality on power and gas prices.
+- **Correlation (Power–Gas)** — Statistical dependency between power and gas prices used as an input to spread option pricing.
+- **Merit Order** — Stack ranking of generation technologies by short-run marginal cost determining dispatch sequence and market clearing price.
+- **Capacity Market Mechanism** — Regulatory framework that remunerates generation capacity availability to ensure security of supply and incentivise new build.
+- **Missing Money Problem** — Shortfall between a plant's energy margin and ancillary revenues relative to its fixed and capital costs, which capacity payments are designed to bridge.
+- **EU Emissions Trading Scheme (EU ETS)** — Cap-and-trade carbon market whose price (EUA) feeds into generation marginal costs and clean spread valuations.
+- **Market Stability Reserve (MSR)** — EU policy mechanism designed to withdraw surplus allowances from the ETS to support the carbon price.
+- **Ancillary Services** — Grid-stability services (primary, secondary, tertiary reserve) procured by RTE for which flexible generators receive additional revenues.
+- **Extrinsic Value of a Tolling Option** — Time value component of a CCGT spread option arising from commodity price volatility beyond the intrinsic spark spread.
+- **Forward Curve Construction** — Assembly of daily forward price curves for power, gas and carbon across multiple tenors for use in hedging and valuation.
+- **Liquidity Adjustment** — Correction applied to theoretical hedge prices to account for bid-offer spreads and limited tradable volume in forward markets.
+- **De-rated Capacity** — Effective generation capacity after applying availability and de-rating factors, used to assess reserve margin adequacy.
+- **Contract for Difference (CfD) for New Build** — Seven-year capacity contract structure in the French market that guarantees a reference capacity price for new-entrant generators.
+- **EBITDA and Cash Flow Projection** — Financial forecasting of plant earnings and cash flows incorporating energy margin, capacity payments and O&M costs.
+- **Thermal Sensitivity of Demand** — Responsiveness of electricity consumption to temperature, particularly acute in France due to widespread electric heating.
+- **Baseload power price projection** — Forward-looking wholesale electricity price forecast driven by fuel costs, carbon prices, capacity mix, and merit-order dynamics.
+- **Capacity market (CM) payment** — A €/kW revenue stream paid to generators for certified available capacity to meet security-of-supply obligations.
+- **Nuclear decommissioning impact** — The effect of progressive retirement of nuclear capacity on merit-order positioning and wholesale price uplift for thermal plants.
+- **Renewable intermittency and backup requirement** — The need for flexible dispatchable capacity to complement variable wind and solar generation and maintain system reliability.
+- **EU ETS carbon price** — The price of EU Allowances under the cap-and-trade scheme that adds a carbon cost to fossil-fuel generation and influences merit order.
+- **Merit order dispatch** — The economic ranking of generating units by marginal cost that determines which plants are called on to produce at any given demand level.
+- **IEA WEO scenarios** — Three long-run commodity and energy-policy pathways (New Policies, Current Policies, 450) used as anchors for gas, coal, and carbon price projections.
+- **Capacity factor / load factor** — The ratio of actual energy output to maximum possible output, used to measure plant utilisation.
+- **Equivalent Operating Hours (EOH)** — A wear-normalised measure of turbine running time that determines maintenance inspection intervals and contract milestones.
+- **Long-Term Service Agreement (LTSA)** — A reduced-scope maintenance contract option that replaces the full O&M agreement after a major inspection milestone, lowering fixed fees.
+- **Ancillary services revenue** — Income earned by providing frequency response and voltage regulation to the transmission system operator.
+- **Achieved power price** — The blended electricity price actually realised by a plant after hedging, optimisation, and market access decisions.
+- **Gross margin** — Plant-level revenue minus variable fuel, carbon, and variable tax costs, representing the contribution before fixed costs.
+- **EBITDA** — Earnings before interest, taxes, depreciation, and amortisation, used as a cash-flow proxy for plant-level financial performance.
+- **French Capacity Market (mécanisme de capacité)** — A certificate-based system obliging electricity suppliers to hold certified capacity proportional to their customers' peak consumption.
+- **Peak demand thermal sensitivity** — The amplification of electricity demand during cold weather driven by France's large stock of electric heating, creating extreme peak-to-baseload ratios.
+- **Nuclear unplanned outages** — Sudden loss of nuclear generation due to safety inspections or component failures that tightens supply and sharply raises spot prices.
+- **Infra-marginal rent** — The surplus earned by low-marginal-cost generators when the market-clearing price is set by higher-cost marginal plant.
+- **Decennial Visit (VD4)** — The fourth ten-yearly safety inspection for French nuclear reactors, used here as the regulatory threshold determining plant life extension or closure.
+- **PPE (Programmation Pluriannuelle de l'Énergie)** — France's multi-year energy programme setting renewable and nuclear capacity targets used as the basis for installed-capacity scenario modelling.
+- **Heat Recovery Steam Generator (HRSG)** — A boiler that recovers exhaust heat from the gas turbine to produce steam driving the steam turbine in a combined-cycle configuration.
+- **Distributed Control System (DCS)** — The plant automation and monitoring platform that centralises real-time operational control and historical data logging.
+- **Extrinsic (optionality) value of a power plant** — The additional value a CCGT captures by exercising its hourly run/no-run option only when the spark spread is positive, asymmetrically benefiting from favourable price scenarios.
+- **Tolling agreement** — A contractual arrangement under which a toller pays a fixed fee to a plant owner in exchange for the right to control plant dispatch and receive the electricity output against supplying fuel.
+- **Capacity market / capacity certificates** — A remuneration mechanism obligating certified capacity providers to deliver energy when called, generating a steady revenue stream from periodic capacity auctions.
+- **Hot Gas Path Inspection (HGPI) / Major inspection cycle** — Scheduled maintenance events triggered at defined EOH thresholds requiring plant shutdown and causing planned outage periods that affect availability and capital expenditure.
+- **Long Term Service Agreement (LTSA) vs. full O&M contract** — Alternative maintenance contracting structures with different scope-of-work coverage and fixed cost profiles, with LTSA potentially offering lower fixed costs after a major inspection trigger.
+- **Plant heat rate and degradation** — The thermal efficiency of a CCGT expressed in HHV terms, which declines with cumulative operating hours and resets partially after major inspections, affecting fuel cost calculations.
+- **Virtual Power Plant (VPP) / daily call option structure** — A financial derivative giving the holder the right to nominate physical output from a specific plant each day against a strike price indexed to gas and carbon costs.
+- **Frequency containment reserve / automatic frequency restoration reserve** — System services in which generators provide rapid active power response to contain or restore grid frequency, remunerated separately from energy sales.
+- **PEG Nord day-ahead gas price** — The French natural gas hub reference price used to mark gas fuel costs in spark spread calculations and tolling fee strike price formulas.
+- **EUA (EU Allowance) carbon price** — The price of EU Emissions Trading Scheme Phase 3 daily futures, used to calculate the carbon cost component of the clean spark spread and plant variable costs.
+- **Achieved electricity price** — The blended power price a merchant CCGT realises, incorporating both intrinsic day-ahead market value and extrinsic optionality value from selective dispatch.
+- **Unlevered free cash flow (UFCF)** — Pre-tax operating cash flow after capex and working capital movements, used as the primary cash flow metric for enterprise valuation of the generating assets.
+- **EBITDA margin for merchant generation** — EBITDA as a proportion of revenues, summarising the profitability left after fuel, carbon, variable O&M, fixed costs, and HQ expenses.
+- **Days Sales Outstanding (DSO) / Days Payables Outstanding (DPO)** — Working capital efficiency metrics measuring average collection and payment periods, used to model intra-year cash flow timing for the generating assets.
+- **Load factor** — The ratio of actual net energy output to maximum possible output over a period, reflecting dispatch intensity driven by spark spread economics and plant availability.
+- **Forced outage rate** — The probability that a generating unit is unexpectedly unavailable, used to adjust availability assumptions and capacity credit calculations.
+- **Energy Manager role in tolling** — The party responsible for plant programming, balancing, gas shipping, ancillary service participation, and capacity certificate sales on behalf of the plant owner and co-tollers.
+- **Capacity premium mechanism** — A regulated payment per MW of available capacity, funded via CSPE and contracted through EDF, designed to remunerate firm generation adequacy in the absence of a fully operational capacity market.
+- **Pacte Electrique Breton (PEB)** — A regional energy agreement structuring demand-side management, renewable development, and supply security obligations specific to the Brittany electrical peninsula.
+- **Competitive tender for new generation capacity** — A state-organised procurement process by CRE to award a long-term capacity contract to a new CCGT plant meeting technical, environmental, and economic criteria.
+- **EPC contract** — A fixed-price engineering, procurement, and construction contract allocating construction cost and schedule risk to the contractor (Siemens).
+- **Project finance debt-to-equity structure** — A 70:30 leveraged financing structure for a special-purpose vehicle, where senior lenders hold loan agreements secured against project cash flows and contracts.
+- **DSRA (Debt Service Reserve Account)** — A liquidity reserve funded at financial close to cover a defined number of debt service periods in the event of cash flow shortfall.
+- **EBITDA margin for a merchant/capacity plant** — The ratio of EBITDA to total revenues used to assess operating profitability of a power plant across its contracted and merchant revenue streams over time.
+- **State aid compatibility — Altmark criteria and SGEI** — The EU legal framework assessing whether a capacity premium paid to a new generator constitutes permissible state aid under the Altmark case law or Service of General Economic Interest classification.
+- **CSPE (Contribution to Public Service of Electricity)** — A French levy on electricity consumers used to fund public service obligations including capacity premiums paid to contracted generators.
+- **Interconnector import constraint** — A scenario assumption that cross-border electricity imports are unavailable during winter months, used to stress-test seasonal price formation in a power dispatch model.
+- **CCGT dispatch efficiency** — The thermal conversion efficiency (LHV basis) of a combined-cycle gas turbine that determines its position in the merit order relative to competing generation technologies.
+- **Merit order stack modelling** — A bottom-up representation of generation capacity ranked by short-run marginal cost used to determine the market-clearing power price at each hour.
+- **Nuclear lifespan assumption** — A scenario parameter governing the retirement schedule of existing nuclear capacity, which substantially affects power price trajectories and the need for new firm capacity.
+- **Day-ahead power price forecasting** — The modelling of hourly clearing prices in the day-ahead electricity auction using fundamental supply-demand inputs validated against historical outturn prices.
+- **Imbalance cost calculation** — The quantification of settlement charges arising from deviations between contracted and metered positions in short-term balancing markets.
+- **Clean spark spread** — The margin of a gas-fired generator calculated as the power price minus gas cost and CO2 cost, used to assess plant profitability and hedging strategy.
+- **Forward curve management** — The active rolling of hedges along the forward curve for power and gas positions, tracking mark-to-market value and Greeks across tenors.
+- **Locational spread option** — An option on the price differential between two delivery locations or bidding zones, valued using spread option methodology.
+- **O&M and LTSA contracts** — Long-term service and operations-and-maintenance agreements that fix or cap operating expenditure, reducing cost uncertainty for project lenders.
+
+## Methods
+- Tolling model greeks computation
+- Daily delta hedging simulation
+- Back-testing against historical forward prices
+- Spread option pricing
+- Forward curve construction (power, gas, EUA)
+- Historical volatility estimation
+- Historical correlation estimation
+- Merit order dispatch modelling
+- DCF / EBITDA financial projection
+- Capacity payment 'missing money' calculation
+- WACC-based new-entrant cost analysis
+- Fundamental power market modelling
+- Merit-order dispatch simulation
+- Capacity margin analysis
+- Scenario analysis (IEA WEO New Policies / Current Policies / 450)
+- Forward curve and analyst consensus for near-term commodity prices
+- Long-run marginal cost new-build benchmarking
+- Plant-level financial projection (revenue, gross margin, EBITDA)
+- Degradation and efficiency modelling
+- EOH-based maintenance scheduling
+- Capacity market price forecasting
+- Discounted cash flow (DCF) / pre-tax UFCF valuation
+- Hourly spark spread dispatch modelling
+- Heat rate degradation curve application
+- Capacity auction price scenario analysis
+- Working capital modelling (DSO/DPO)
+- Revenue decomposition (electricity, capacity, ancillary services)
+- Gross margin and EBITDA waterfall construction
+- Tolling fee structuring and strike price indexation
+- Sensitivity analysis on availability and load factor
+- Fundamental power market dispatch modelling (EPSI/stack-based)
+- Scenario analysis (ENTSO-E Constrained Progress vs National Green Transition)
+- Historical price validation with correlation coefficient benchmarking
+- Discounted cash flow / project finance modelling
+- Debt sizing and debt service reserve account calculation
+- Forward curve construction and term management
+- Imbalance cost simulation (Python scripts)
+- Clean spark spread computation
+- Spread option valuation
+- Sensitivity analysis on nuclear retirement and import constraints
+
+## Implied prerequisites
+- Options pricing theory
+- Commodity forward markets
+- Power market structure and dispatch
+- EU carbon market mechanics
+- Gas market hubs and pricing (TTF, PEG Nord, Zeebrugge)
+- CCGT thermodynamics and plant economics
+- Financial modelling and DCF analysis
+- Regulatory frameworks for electricity markets
+- Electricity market microstructure
+- Thermal generation economics and cost components
+- Carbon markets and EU ETS mechanics
+- Natural gas pricing and indexation
+- Combined-cycle gas turbine technology basics
+- Financial statement analysis (P&L, EBITDA)
+- Energy policy and regulatory frameworks (French and EU)
+- Hedging and commodity derivatives fundamentals
+- Security of supply and capacity adequacy concepts
+- Power market fundamentals (energy-only vs. capacity markets)
+- Gas and carbon commodity markets
+- CCGT plant thermodynamics and operational constraints
+- Derivative pricing basics (call options, strike prices)
+- Corporate financial modelling (P&L, cash flow, working capital)
+- EU Emissions Trading Scheme mechanics
+- French electricity market structure (EPEX, RTE, GRTgaz)
+- M&A transaction process and due diligence
+- Electricity market structure and price formation
+- Gas and power commodity markets
+- Project finance fundamentals
+- EU energy regulation and state aid law
+- Financial derivatives and options pricing
+- Time-series econometrics and correlation analysis
+- Merit order and short-run marginal cost concepts
+- Capacity market design

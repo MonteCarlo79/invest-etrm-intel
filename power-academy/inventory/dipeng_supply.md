@@ -1,0 +1,114 @@
+# dipeng/Supply
+
+- id: `dipeng_supply` · class: practice · type: folder
+- topic: Corporate renewable electricity procurement and PPA structuring · level: intermediate · market: mixed · year: 2017
+- worked examples: True · code: True
+
+## Concepts
+- **Power Purchase Agreement (PPA)** — Long-term contract between a renewable energy generator and a buyer specifying volume, price, and delivery terms for electricity.
+- **Guarantee of Origin (GoO / GvO)** — Tradeable certificate attesting that a specified quantity of electricity was generated from a renewable source.
+- **Additionaliteit (Additionality)** — Requirement that procured renewable electricity or GoOs originate from generation capacity newly built as a result of the procurement commitment.
+- **Uurmatching (Hourly matching)** — Alignment of renewable electricity generation with consumption on an hour-by-hour basis rather than on an annual volume basis.
+- **Balancing Responsible Party / Programme Responsible Party (PRP)** — Party responsible for nominating generation schedules and managing imbalance between contracted and actual electricity volumes in the grid.
+- **Baseload block delivery** — Conversion of a variable wind-generation profile into a flat (baseload) volume block by a PRP, simplifying portfolio integration for the supplier.
+- **Imbalance risk** — Financial exposure arising from deviations between forecast and actual electricity consumption or generation settled against the spot market.
+- **APX / EPEX spot market** — Day-ahead and intraday power exchange serving as the settlement reference for uncontracted electricity volumes.
+- **ENDEX (TTF/power forward market)** — Forward market used to fix electricity prices ahead of the delivery year, contrasted with spot procurement.
+- **SDE+ subsidy (Stimulering Duurzame Energieproductie)** — Dutch feed-in premium scheme providing a floor price for renewable electricity producers, with an associated correction mechanism affecting GoO pricing.
+- **CertiQ** — Dutch registry operator for Guarantees of Origin where GoOs are issued, transferred, and cancelled on behalf of producers and end-users.
+- **Market-to-market (MtM) exposure** — Mark-to-market valuation of open forward positions representing the current gain or loss if positions were closed at prevailing market prices.
+- **Supply chain financing** — Financing arrangement allowing extended buyer payment terms while suppliers receive early payment via a third-party financier at a defined interest rate.
+- **Full supply agreement** — Contract under which a single supplier is responsible for meeting the entire electricity demand of specified sites including balancing and ancillary services.
+- **GoO unbundled supply (Part B)** — Procurement of Guarantees of Origin separately from physical electricity delivery, used to green sites without a dedicated grid connection.
+- **Sleeving** — Intermediary service in which a supplier absorbs renewable generation into its portfolio and delivers equivalent volume to the off-taker under a standard supply contract.
+- **European Renewable Energy Directive** — EU regulatory framework setting renewable energy targets and defining rules for Guarantees of Origin and renewable electricity claims.
+- **Market coupling** — Integration of adjacent power spot markets enabling cross-border capacity allocation and price convergence, relevant to GoO geography eligibility.
+- **Capacity factor** — Ratio of actual electricity output to maximum possible output over a period, used to estimate annual PPA volume from wind parks.
+- **Tender / RFP process** — Structured competitive procurement procedure through which a corporate buyer solicits and evaluates supplier proposals for a long-term energy contract.
+- **Guarantee of Origin (GoO)** — Tradeable certificate attesting that a specified quantity of electricity was generated from a renewable source, used to substantiate green claims.
+- **Full supply contract** — Electricity supply arrangement under which the supplier covers all consumption at a site, including balancing and program responsibility.
+- **Program responsibility** — Obligation to maintain a balanced electricity portfolio on behalf of a market participant, transferred here from buyer to supplier.
+- **Baseload block** — Fixed-volume flat electricity product covering every hour of a defined period, purchased on forward markets or via supplier quote.
+- **APX/EPEX spot price** — Volume-weighted average of hourly day-ahead auction prices on the Dutch or Belgian power exchange used to settle residual consumption.
+- **Volume-weighted average price** — Price benchmark calculated by weighting each traded price by its associated volume, applied here to baseload fixations.
+- **Supplier fee** — Fixed all-inclusive charge in €/MWh covering balancing, program responsibility, invoicing and other supply services.
+- **Hourly matching** — Approach to renewable electricity procurement that aligns GoO cancellation or generation with actual consumption on an hour-by-hour basis.
+- **Additionality** — Requirement that renewable electricity projects qualify only if their first generation occurs within the term of the supply agreement.
+- **CertiQ / VREG registry** — National registries in the Netherlands and Belgium respectively where GoOs are issued, transferred and cancelled on behalf of end users.
+- **Regulated contributions (green and CHP certificates)** — Mandatory levies in Belgium related to groenestroomcertificaten and warmtekrachtcertificaten that suppliers pass through transparently to buyers.
+- **Net losses (Elia)** — Transmission losses charged by the Belgian TSO Elia that are invoiced separately as a regulated cost item.
+- **EAN code** — Unique identifier for an electricity connection point used to define the scope of individual supply agreements.
+- **Supply Chain Financing (Global Confirming)** — Third-party bank facility that allows suppliers to receive early payment against approved invoices at a cost linked to the buyer's credit rating.
+- **PPA portfolio integration** — Mechanism by which wind-park output delivered by a program responsible party is merged into a supplier's retail portfolio and allocated across buyer sites.
+- **RE100 commitment** — Corporate pledge to source 100% of electricity consumption from renewable sources, used here to define procurement targets and timelines.
+- **Framework Agreement** — Master contract governing overarching terms between buyer and supplier, under which individual site supply agreements are concluded.
+- **Power Export Purchase and Sales Agreement (PEPSA)** — Contract governing the sale of surplus electricity exported from an embedded CHP generator to a licensed supplier.
+- **Power Import Purchase and Sales Agreement (PIPSA)** — Contract governing the purchase of electricity imported from the grid to meet on-site demand.
+- **Embedded Generation** — Generation connected to the distribution network rather than the transmission system, giving rise to avoided network charges and other financial benefits.
+- **Embedded Benefits** — Financial savings accruing to a supplier from hosting a generator on the distribution network, including avoided DUoS and TNUoS charges.
+- **Triad Avoidance** — Revenue or cost savings arising from generating during the three half-hours of highest system demand used to set TNUoS demand charges.
+- **Generator Distribution Use of System Charges (GDUoS)** — Charges (positive or negative) levied on generators connected to the distribution network, reflecting locational network costs.
+- **Distribution Use of System Charges (DUoS)** — Charges paid by suppliers and consumers for use of the electricity distribution network.
+- **Balancing Services Use of System (BSUoS) Charges** — Transmission-level charges recovered by National Grid for balancing the system, potentially avoided by embedded generators.
+- **Combined Heat and Power (CHP) Plant** — Co-generation facility producing both electrical power and useful heat, here fuelled by LNG boil-off gas.
+- **Good Quality CHP Status** — CHPQA designation qualifying a plant for Climate Change Levy exemptions and other regulatory benefits.
+- **Climate Change Levy (CCL) Directed Utility Status** — Regulatory classification allowing an entity to account for CCL on behalf of itself and sub-customers.
+- **Day-Ahead and Within-Day Nominations** — Processes by which a generator or consumer notifies the supplier of expected export or import volumes for scheduling and pricing.
+- **Imbalance / Balancing Exposure** — Financial risk arising when actual metered generation or consumption differs from nominated volumes under the BSC settlement regime.
+- **Maximum Import/Export Capacity (MIC/MEC)** — Contractual limits on the volume of power that can be imported or exported through a grid connection, set seasonally.
+- **Meter Point Administration Number (MPAN)** — Unique identifier for an electricity supply point used in registration and settlement systems.
+- **Supply Meter Registration Service (SMRS)** — Industry system in which suppliers register metering points for settlement purposes.
+- **EU Emissions Trading Scheme (EU-ETS) Participation** — Regulatory obligation for large emitters to hold and surrender carbon allowances for CO2 emissions.
+- **Credit Support in Power Supply Contracts** — Collateral or guarantee arrangements required between counterparties to mitigate payment default risk.
+- **Demand-Side Management (DSM)** — Flexible adjustment of electricity consumption or generation in response to grid signals or price incentives.
+- **Imbalance Price and Settlement** — BSC mechanism determining the cash-out price for energy deviations between contracted and metered volumes.
+- **Collar / Floor / Option Structures for Power Price Risk** — Derivative instruments used to bound or floor the effective price received for generated electricity.
+- **Portfolio Balancing and Return on Credit** — Assessment of how aggregating multiple generation or demand assets reduces net imbalance exposure and improves credit efficiency.
+
+## Methods
+- Market consultation (structured supplier survey)
+- Request for Proposal (RFP) with Q&A process
+- Scenario analysis (capacity factor bandwidth)
+- Forward procurement (click strategy on ENDEX)
+- Spot settlement (APX/EPEX reference pricing)
+- GoO cancellation accounting via CertiQ end-user account
+- Mark-to-market clause structuring
+- Credit rating trigger mechanism
+- Competitive tender / request for proposal process
+- Volume-weighted average price calculation for baseload fixations
+- Monthly baseload block scheduling from PPA output
+- Proportional GoO allocation across sites by consumption share
+- Spot-price settlement of residual consumption (APX/EPEX hourly)
+- Multi-part lot structure allowing separate or combined award
+- Scenario analysis (CHP-on vs re-liquefaction plant operational)
+- Half-hourly operational data time-series analysis
+- Embedded benefit quantification
+- Triad period identification and payment calculation
+- GDUoS charge allocation modelling
+- Day-ahead and within-day nomination pricing
+- Imbalance cost calculation
+- Option and collar valuation
+- Return-on-credit modelling
+- Portfolio aggregation of imbalance positions
+- Proforma invoice construction with supporting metering data
+
+## Implied prerequisites
+- Basic electricity market structure (wholesale, balancing, retail)
+- Renewable energy certificate mechanisms
+- Forward and spot market mechanics
+- Corporate procurement and contract law basics
+- Dutch and Belgian electricity regulatory frameworks
+- Imbalance settlement principles
+- Basic electricity market structure (generation, transmission, retail)
+- Understanding of day-ahead and forward power markets
+- Familiarity with European renewable energy certificate schemes
+- Concept of balancing and imbalance settlement
+- Corporate energy procurement fundamentals
+- GB electricity market structure (BSC, CUSC, DNO/TNO roles)
+- Half-hourly settlement and metering
+- Supply licensing regime (Ofgem)
+- TNUoS and DUoS charging methodologies
+- Climate Change Levy regulatory framework
+- Basic derivatives and options pricing
+- Energy contract law fundamentals
+- CHP and embedded generation technology basics

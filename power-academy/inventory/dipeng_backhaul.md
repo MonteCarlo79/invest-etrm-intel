@@ -1,0 +1,170 @@
+# dipeng/Backhaul
+
+- id: `dipeng_backhaul` · class: practice · type: folder
+- topic: Gas backhaul pipeline project: FEED progress, commercial agreements, and NTS transportation · level: advanced · market: GB · year: 2015
+- worked examples: False · code: False
+
+## Concepts
+- **Backhaul gas transport** — Reverse flow of gas from the National Transmission System into an upstream processing facility, requiring compressor upgrades and new connection infrastructure.
+- **Front End Engineering Design (FEED)** — Pre-investment engineering phase that scopes, costs, and de-risks a capital project before a Final Investment Decision.
+- **Decision Gate 4 (DG4)** — Stage-gate milestone at which a project seeks board-level sanction to proceed to execution, here linked to a probabilistic schedule with P50 reference.
+- **Final Investment Decision (FID)** — Formal commitment to fund and execute a capital project, here contingent on partner alignment and review milestones.
+- **National Transmission System (NTS) connection** — Physical and regulatory interface between an upstream gas processing site and the UK high-pressure gas transmission network, requiring Ofgem licence approval.
+- **Ofgem NTS licence approval** — Regulatory process, including public consultation, required before a new NTS connection point can receive first gas, with a minimum 90-day statutory window.
+- **CARM dispensation** — Waiver of standard industry commercial agreement requirements where National Grid has limited ability to renegotiate terms.
+- **EPC/EPCM contracting** — Engineering, Procurement, Construction and Management contract structure used to deliver capital projects, here tendered to verify FEED deliverables.
+- **Probabilistic project scheduling (P50)** — Schedule expressed in probability terms where P50 represents the date with a 50% likelihood of on-time delivery, used to quantify acceleration opportunities.
+- **CAPEX and OPEX cost estimation** — Separation of capital expenditure on long-lead items and plant construction from operating expenditure on engineering services and inspections, tracked against latest estimates.
+- **Long Lead Items (LLI)** — Equipment with extended procurement timelines—here a depletion compressor—whose delivery schedule drives overall project cost phasing.
+- **HAZOP and HAZID** — Structured safety review techniques (Hazard and Operability Study; Hazard Identification) applied during FEED to identify process and facility risks.
+- **SIL (Safety Integrity Level) review** — Formal assessment of safety instrumented functions to confirm whether existing relief valves and control systems meet required integrity levels.
+- **Design simplification / value engineering** — Systematic reduction of scope complexity during FEED to lower civil, mechanical, and electrical costs without compromising safety or operability.
+- **SEGAL transportation, processing and fractionation agreement** — Contractual framework under which SEGAL Owners (Shell and Esso) provide wet gas reception, NGL extraction, fractionation, and product redelivery services to affiliated shippers.
+- **Shipper Gas entry specification** — Quality parameters that wet gas delivered at the NTS/SEGAL entry point must meet, with operator rights to reject off-specification gas.
+- **NGL allocation procedure** — Methodology for attributing extracted natural gas liquids (ethane, propane, butane, natural gasoline) to individual shippers on a component-mass basis.
+- **Called Volume notification** — Day-ahead and intra-day process by which the SEGAL Operator instructs shippers on the quantity of gas required at the entry point.
+- **Individual Commercial Agreement (ICA)** — Confidential bilateral agreement between each SEGAL Owner and its affiliated shipper setting price and payment terms separate from the main transportation agreement.
+- **Emissions Trading Costs and Regulatory Charges pass-through** — Mechanism for apportioning Phase III EU ETS costs and post-effective-date regulatory compliance costs to shippers in proportion to their gas deliveries.
+- **Capacity Reduction and Total Emergency Shutdown provisions** — Contractual definitions and notification obligations triggered when the SEGAL System cannot accept its booked NGL throughput, in whole or in part.
+- **Force Majeure** — Contractual clause excusing performance obligations when events outside a party's control prevent delivery or receipt of gas or NGLs.
+- **Consequential Loss exclusion** — Mutual waiver of indirect and specified direct losses—including loss of production, profit, and revenue—regardless of the cause or legal basis of the claim.
+- **Wilful Misconduct standard** — Liability carve-out that preserves claims only for intentional or reckless disregard of good practice by senior managerial personnel, excluding good-faith errors.
+- **Reasonable and Prudent Operator standard** — Performance benchmark requiring the skill, diligence, and foresight expected of an experienced operator in similar circumstances, used to qualify SEGAL Owners' service obligations.
+- **Anti-Bribery compliance** — Contractual obligation on all parties to comply with applicable anti-bribery laws in the performance of the transportation and fractionation agreement.
+- **Integrity inspection programme** — Structured examination of retained offshore and onshore equipment—vessels, piping, structural steelwork, valves—to identify defects before commitment to reuse in the project.
+- **Regulatory Charges Apportionment** — Pro-rata allocation of pipeline regulatory costs between shippers and owners based on volumetric usage of relevant system segments.
+- **Emissions Trading Cost Allocation** — Method for dividing emissions-related costs among parties in proportion to their utilisation of the SEGAL System.
+- **Percentage Interest Share** — Each shipper's fractional entitlement to products and proportional liability for costs, used as the primary allocation key throughout the agreement.
+- **Self-Balancing Field Treatment** — Convention whereby the shipper gas stream is treated as originating from a self-balancing field for allocation procedure purposes.
+- **Off-Specification Gas Liability Cap** — Ceiling on shipper indemnity for claims arising from delivery of off-specification gas, linked to amounts recoverable under the Uniform Network Code.
+- **Consequential Loss Knock-for-Knock Indemnity** — Mutual exclusion of consequential loss claims between shipper group and SEGAL group except in cases of wilful misconduct.
+- **Performance Assurance and Suspension** — Mechanism enabling SEGAL owners to demand security, suspend service or terminate in respect of a shipper whose financial standing is in doubt.
+- **Expert Determination** — Dispute resolution pathway for specific contractual disagreements (e.g. cost shares, allocation deficiencies) referred to an independent expert rather than courts.
+- **Payment Default Interest** — Compounded interest charged at LIBOR plus specified margins on overdue amounts, with a higher rate for expert-determined disputes.
+- **Divided Rights Service** — Future operational regime under which shippers receive separate capacity rights, subject to a transition process and DR Date notification.
+- **Coriolis Mass Flow Measurement** — Fiscal-standard instrumentation using coriolis meters and master meter systems to record continuous NGL stream mass flow at the entry point.
+- **Gas Chromatograph Compositional Analysis** — Online continuous analysis of the NGL stream to determine daily component and total mass for allocation and specification compliance.
+- **Contract Year Reconciliation** — End-of-year true-up comparing estimated to actual delivery quantities to correct interim cost apportionment calculations.
+- **Contracts (Rights of Third Parties) Act 1999 Application** — Extension of indemnity and liability relief to non-party group members subject to defined conditions of acceptance.
+- **Uniform Network Code (UNC) Interface** — Regulatory framework governing NTS entry capacity booking and the reference point for capping off-specification indemnity amounts.
+- **Conditions Precedent** — Contractual requirements (including execution of ancillary agreements and commissioning confirmation) that must be satisfied before the agreement becomes operative.
+- **Coriolis meter density measurement** — Physical measurement of NGL stream density in kg/m³ using a coriolis meter for mass flow computation.
+- **Remote Telemetry Unit (RTU) protocol** — Standardised protocol for transmitting measurement data from field instrumentation to a central control system.
+- **Continuous vs continual measurement** — Distinction between instantaneously available signals and signals produced after a complete sampling/analysis cycle.
+- **Change-of-state/value exception reporting** — Telemetry transmission method that sends data only when a value changes, within defined latency limits.
+- **Fiscal Standard Measurement** — Metering accepted by DECC for reporting exported or imported hydrocarbon quantities to a defined accuracy standard.
+- **Deemed Landed Component Mass** — Component mass attributed to a field at the St Fergus entry point and used as the basis for downstream allocation.
+- **Deemed Component Transient NGL Mass (DCTNM)** — Difference between aggregate component masses at the NGL pipeline inlet and those delivered to Mossmorran disposal points, representing pipeline inventory change.
+- **Self Balancing Field** — A field that bears its own proportional share of transient NGL masses rather than passing that share to system balancing fields.
+- **System Balancing Field** — Designated fields that absorb residual transient NGL masses not borne by self balancing fields.
+- **Component Mass allocation** — Pro-rata assignment of each hydrocarbon component at Mossmorran disposal points to individual fields based on inlet availability.
+- **Rundown Quantity** — Total mass of a product delivered to a Mossmorran disposal point in a given period, allocated across fields and participants.
+- **Product Entitlement** — Each participant's ownership share of a product computed daily as opening stock plus rundown quantity plus/minus transfers minus liftings.
+- **Closing Stock / Opening Stock** — Daily product stock position for each participant per field, carried forward as the next day's opening stock.
+- **Participant Product Percentage** — A field-operator-notified percentage defining a participant's share of a product's rundown quantity for a given month.
+- **Stock Transfer** — Agreed transfer of product ownership between participants at their joint request, without a physical cargo movement.
+- **Product Lifting Programme** — Monthly schedule of vessel names, loading date ranges and cargo sizes issued by the Braefoot Bay shipping coordinator.
+- **Overlift / underlift balancing** — Mechanism adjusting a participant's monthly entitlement to account for cumulative over- or under-lifting in prior months.
+- **Allocation Programme** — Operator-run batch computer system that allocates component masses to fields and calculates participant product entitlements.
+- **Mossmorran mass balance** — Component-by-component reconciliation ensuring all NGL masses entering the Mossmorran system equal those leaving via disposal points plus inventory change.
+- **Fee in kind tariff allocation** — Mechanism by which certain product or component quantities are allocated to the system owners as tariff payment rather than cash.
+- **Special Flaring** — Flaring attributed to specific fields with LPG uplift difficulties and separately allocated to those fields rather than shared system-wide.
+- **Gas chromatographic composition analysis** — Measurement of hydrocarbon component fractions in NGL or gas streams to IP.345 standard for use in mass allocation.
+- **Expert determination procedure** — Contractual dispute resolution mechanism using an independent technical expert whose written decision is final and binding.
+- **NGL entry specification** — Quality requirements (sulphur species, water, methanol, composition, vapour pressure, particulates) that shipper gas must meet at the entry point.
+- **Sales Gas / product redelivery specification** — Quality standards that commingled redelivered gas or fractionated products must satisfy at the respective redelivery points.
+- **Average Cargo Size** — Minimum average parcel volume that a Category A participant must achieve per seasonal period when proposing vessel liftings.
+- **Category A and Category B Participants** — Participant classifications that determine different lifting scheduling rules and compliance obligations.
+- **Overlift and Underlift** — Deviations from a participant's scheduled entitlement volume, permitted only by agreement of the Balancing and Scheduling Committee to maintain storage balances.
+- **Notice of Readiness (NOR)** — Formal vessel notification that triggers the commencement of laytime counting for loading operations.
+- **Laytime and Demurrage** — Standard 36-hour loading time allowance and the rate payable by the terminal operator when loading exceeds that allowance.
+- **Demurrage Rate Determination** — Mechanism for setting demurrage rates using the London Tankers Brokers Panel for condensate and independent LPG brokers for LPG vessels.
+- **Worldscale** — Published international freight rate scale used to derive demurrage rates for condensate part-cargo vessels.
+- **Minimum Loading Rate** — Vessel-size-dependent minimum throughput rate required at berth, non-compliance with which can result in vessel expulsion.
+- **Balancing and Scheduling Committee (BSC)** — Governance body with sole authority to determine workability of lifting programmes and allocate berth time.
+- **Storage Balance Management** — Operational constraint requiring lifting proposals to neither exceed nor fall below levels needed to maintain adequate terminal ullage.
+- **Default Disposal Rights** — Shell's right to lift and sell a defaulting participant's product at best obtainable price, net of costs plus a 1% handling fee.
+- **Connected System Exit Point (CSEP)** — The point on the National Transmission System at which a connected offtake system (e.g. SEGAL) receives gas from the NTS.
+- **NTS Exit (Flat) Capacity** — Reserved transportation capacity at a CSEP entitling a user to offtake gas from the National Transmission System.
+- **System Capacity Transfer** — Transfer of NTS exit capacity entitlements between users at a CSEP under Network Code rules.
+- **Network Code Ancillary Agreement** — Contractual document subordinate to the Uniform Network Code governing site-specific exit arrangements at a CSEP.
+- **Accession Agreement** — Mechanism by which a new user joins an existing CSEP Ancillary Agreement and acquires CSEP user status.
+- **SEGAL System** — The integrated pipeline, processing, fractionation and marine loading infrastructure linking North Sea platforms to St. Fergus, Mossmorran and Braefoot Bay.
+- **FLAGS Pipeline** — Far North Liquids and Associated Gas System, a 36-inch trunkline from the Brent B platform to St. Fergus used to transport gas and NGLs.
+- **Accompanying Administrative Document (AAD)** — HM Customs and Excise document required to accompany excise goods in transit, non-return of which can trigger duty liability.
+- **Three-Day Date Range** — Agreed arrival window for a nominated vessel within which NOR and laytime rules apply as standard.
+
+## Methods
+- Probabilistic schedule analysis (P50/deterministic comparison)
+- Earned value measurement (% earned vs % plan)
+- Risk matrix assessment
+- HAZOP / HAZID structured review
+- SIL review
+- LOPA (Layers of Protection Analysis)
+- Pipe stress analysis
+- Rope-access inspection
+- Tender evaluation (safety, technical, commercial tracks)
+- NGL component-mass allocation
+- Producer Price Index (PPI) cost indexation
+- Accruals-basis cost accounting
+- Volumetric pro-rata cost apportionment
+- Estimated vs actual quantity reconciliation
+- Three-year capital expenditure spreading
+- Independent audit of allocation records
+- Expert determination procedure
+- Coriolis flow metering to ISO 10790
+- Online gas liquid chromatography
+- Continuous pressure, temperature and density measurement
+- LIBOR-based default interest compounding
+- Percentage interest share weighting
+- Coriolis metering for density and mass flow
+- Gas chromatography (IP.345) for component composition
+- Pro-rata component mass allocation
+- Batch allocation programme (Allocation Programme)
+- Fiscal standard measurement
+- RTU exception-reporting telemetry
+- Daily stock accounting (opening/closing stock formula)
+- Three-month average rundown for overlift allocation
+- Independent audit of allocation procedures
+- Expert determination for contractual disputes
+- Contractual scheduling rule-setting for cargo liftings
+- Seasonal average cargo size calculation
+- Laytime calculation
+- Demurrage rate benchmarking via broker panels
+- Worldscale rate application to part cargoes
+- Storage balance monitoring
+- NTS capacity registration and transfer under Network Code
+- Accession mechanics for multi-party agreements
+
+## Implied prerequisites
+- UK gas market structure and NTS regulation
+- Ofgem licensing framework
+- Upstream gas processing fundamentals (dehydration, NGL extraction, fractionation)
+- Project management stage-gate methodology
+- Process safety principles (HAZOP, SIL)
+- Contract law basics (conditions precedent, warranties, indemnities)
+- EU Emissions Trading Scheme mechanics
+- Hydrocarbon measurement and allocation
+- Natural gas liquids processing and fractionation
+- UK gas market structure and National Transmission System
+- Uniform Network Code provisions
+- Emissions trading scheme fundamentals
+- Fiscal metering standards (DECC/NMSAC requirements)
+- Joint venture and co-ownership agreements
+- English contract law and indemnity principles
+- Insolvency Act 1986 solvency tests
+- UK Bribery Act 2010 compliance
+- Hydrocarbon phase behaviour and NGL composition
+- Flow measurement principles (mass, volumetric, coriolis, turbine meters)
+- SCADA and telemetry fundamentals
+- Gas chromatography and sampling methods
+- Pipeline hydraulics and inventory (linepack) concepts
+- UK oil and gas fiscal measurement regulations (DECC/NSTA)
+- Contract law and dispute resolution basics
+- Commodity allocation and scheduling in midstream gas systems
+- Basic commodity trading and physical delivery concepts
+- LPG and NGL product characteristics
+- Marine charterparty fundamentals (laytime, demurrage, NOR)
+- UK gas transportation and Network Code framework
+- Upstream NGL infrastructure topology
+- HM Customs excise documentation for hydrocarbon movements

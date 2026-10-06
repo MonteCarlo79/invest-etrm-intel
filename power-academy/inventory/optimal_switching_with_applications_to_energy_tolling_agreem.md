@@ -1,0 +1,97 @@
+# Optimal_Switching_with_Applications_to_Energy_Tolling_Agreements
+
+- id: `optimal_switching_with_applications_to_energy_tolling_agreem` · class: library · type: pdf
+- topic: Optimal switching for energy tolling agreements via recursive optimal stopping and Monte Carlo regression · level: advanced · market: mixed · year: None
+- worked examples: True · code: False
+
+## Concepts
+- **Tolling agreement** — A temporary lease contract granting an agent operational control and dispatch rights over an energy asset such as a gas-fired power plant.
+- **Spark spread** — The margin between the electricity price and the cost of the gas required to produce it, representing the instantaneous profitability of running a generation unit.
+- **Heat rate** — The fuel-to-power conversion ratio of a generation unit, quantifying how many MMBtu of gas are needed to produce one MWh of electricity.
+- **Optimal switching** — A stochastic control problem in which an agent selects the timing and direction of regime changes to maximise total expected reward net of switching costs over a finite horizon.
+- **Stochastic impulse control** — A continuous-time control framework in which the controller applies a sequence of discrete interventions, each incurring a cost, to a stochastically evolving state process.
+- **Recursive optimal stopping** — A reformulation of impulse or switching control as a nested sequence of single optimal stopping problems solved iteratively by induction on the number of remaining switches.
+- **Snell envelope** — The smallest càdlàg supermartingale dominating a reward process, characterising the value function of an optimal stopping problem and identifying the optimal stopping time.
+- **Value function** — The maximal conditional expected reward achievable from a given state, time, and operating regime under the optimal switching policy.
+- **Intervention operator** — An operator mapping current state and number of remaining switches to the best value obtainable by making an immediate regime change, net of switching costs.
+- **Switching boundary** — A free boundary in state-time space separating the continuation region (no switch optimal) from the exercise region (immediate switch optimal), analogous to the exercise boundary of an American option.
+- **Quasi-variational inequality (QVI)** — A system of partial differential inequalities characterising the value function of an impulse or switching control problem, comprising a PDE in the continuation region and an obstacle condition in the exercise region.
+- **Reflected backward stochastic differential equation (RBSDE)** — A BSDE augmented with a constraint that keeps the solution above a time-varying barrier, with a compensator process ensuring the solution touches the barrier as infrequently as possible.
+- **Viscosity solution** — A generalised notion of solution to a PDE or QVI that ensures existence and uniqueness without requiring classical differentiability, used here to characterise the switching value function.
+- **Dynamic programming principle** — The Bellman optimality property stating that the value function at any intermediate time equals the supremum over controls of the cumulative reward to that time plus the continuation value function.
+- **Hysteresis band** — The range of state values in which the operator neither switches on nor off because switching costs make the change sub-optimal, leading to investment inertia.
+- **Operational delay and time separation** — Constraints on the switching control requiring a minimum time interval between successive regime changes, modelling physical ramp-up and ramp-down requirements of power plants.
+- **Exponential Ornstein-Uhlenbeck process** — A mean-reverting log-normal diffusion used to model commodity prices, ensuring positivity while capturing the empirical stationarity observed in energy spreads.
+- **Sub-additive switching costs** — A triangle-inequality condition on transition costs that makes direct switches between any two regimes always at least as cheap as routing through an intermediate regime.
+- **Bermudan approximation** — The restriction of switching times to a discrete time grid, approximating the continuous-time American switching right and introducing a discretisation error of order sqrt(Δt).
+- **Longstaff-Schwartz (LS) regression scheme** — A least-squares Monte Carlo algorithm that updates optimal stopping times pathwise using regressed continuation values, avoiding direct storage of regressed quantities to reduce bias.
+- **Tsitsiklis-van Roy (TvR) regression scheme** — A Monte Carlo dynamic programming algorithm that directly replaces conditional expectations with their regression approximations at each time step, yielding a tractable but potentially biased estimator.
+- **Basis function projection** — The approximation of conditional expectation operators by projection onto a finite-dimensional function space spanned by chosen basis functions such as polynomials or exponentials.
+- **Discretisation error** — The approximation error introduced by applying the Euler scheme to the state SDE and restricting exercise to a discrete time grid, bounded in Lp norm at order sqrt(Δt).
+- **Projection error** — The error arising from replacing the true conditional expectation with its projection onto a finite basis, which accumulates across time steps and magnifies across switching layers.
+- **Monte Carlo sampling error** — The statistical error from using a finite number of simulated paths to estimate regression coefficients and value functions, expected to decay at rate O((Δt·N)^{-1/2}).
+- **Gronwall's inequality (discrete)** — A discrete-time stability lemma bounding cumulative errors in backward recursions by exponential growth in the remaining time, used throughout the convergence analysis.
+- **Real options** — The application of financial option theory to managerial flexibility in physical investment projects, including decisions to start, suspend, or abandon production under price uncertainty.
+- **Longstaff-Schwartz least-squares regression** — Simulation-based backward-induction algorithm that approximates conditional expectations via cross-sectional regression on basis functions to value the continuation region.
+- **Tsitsiklis-Van Roy regression** — Alternative Monte Carlo regression scheme for approximating value functions of American-style problems, noted for lower variance but higher bias than Longstaff-Schwartz.
+- **Reflected BSDE** — Backward stochastic differential equation with a reflection constraint, providing a probabilistic representation of the value functions in the optimal switching framework.
+- **Sampling error** — Error due to estimating regression coefficients from a finite number N of simulated Monte Carlo paths rather than the true distribution.
+- **Empirical truncation** — Analytical device applied to regression estimates to enforce a priori bounds on simulated value function values and prevent error blow-up.
+- **Quantization method** — Numerical scheme that approximates the continuous state process by an adaptive finite grid, pre-computing transition probabilities offline for use in dynamic programming.
+- **Markov chain approximation** — Method of replacing continuous state dynamics with a finite-state continuous-time Markov chain on a rectangular grid to enable exact backward recursion.
+- **Kernel regression** — Nonparametric conditional expectation estimator using k-nearest-neighbour weighted averages with a smooth kernel function in place of parametric basis functions.
+- **Strip of spread options** — Practitioner approximation valuing a generation asset as a sum of European spark-spread options at each delivery period, ignoring switching costs and hysteresis.
+- **Exhaustible resource management** — Extension of the optimal switching framework to mines or oilfields where cumulative production depletes a finite resource inventory over a finite licence horizon.
+- **Outage modelling** — Incorporation of random forced shutdowns via memoryless exponential inter-arrival times that modify the reward integral and recursive value function structure.
+- **Curse of dimensionality** — Exponential growth in grid size with state dimension that makes PDE and Markov chain methods computationally infeasible for problems with more than two or three state variables.
+- **Ornstein-Uhlenbeck process** — Mean-reverting continuous diffusion used to model commodity prices such as power, gas and oil exhibiting stationary stochastic behaviour.
+- **Operational delay** — Minimum time interval enforced between successive regime switches to reflect physical ramp-up or fuel-changeover constraints of a generation plant.
+- **Gronwall inequality** — Analytical tool used in convergence proofs to bound accumulated errors in recursive backward schemes by controlling error propagation across time steps.
+
+## Methods
+- Recursive optimal stopping decomposition of impulse control
+- Snell envelope construction via essential supremum
+- Reflected BSDE formulation
+- Quasi-variational inequality / verification theorem
+- Viscosity solution analysis
+- Euler discretisation of forward SDE
+- Backward dynamic programming on discrete time grid
+- Longstaff-Schwartz Monte Carlo regression (LS scheme)
+- Tsitsiklis-van Roy Monte Carlo regression (TvR scheme)
+- Least-squares regression for conditional expectation approximation
+- L2 projection onto finite basis function spaces
+- Induction on number of switches for convergence proofs
+- Discrete Gronwall lemma for error propagation bounds
+- Young's inequality for L2 error estimation
+- Polynomial, exponential, and call-payoff basis functions
+- Monte Carlo simulation with backward induction
+- Least-squares regression on basis functions (Longstaff-Schwartz)
+- Tsitsiklis-Van Roy regression
+- k-nearest-neighbour kernel regression
+- Finite-difference PDE solver for free-boundary QVI
+- Markov chain approximation
+- Optimal quantization
+- Lp-norm error analysis
+- A priori bound derivation
+- Downcrossing count approximation for switching costs
+
+## Implied prerequisites
+- Stochastic calculus and Itô diffusions
+- Optimal stopping theory
+- Backward stochastic differential equations
+- Markov processes and filtrations
+- Dynamic programming and Bellman equation
+- Monte Carlo simulation methods
+- Least-squares regression
+- Energy commodity markets and spark spread basics
+- American and Bermudan option pricing
+- Partial differential equations and free boundary problems
+- Measure-theoretic probability
+- Stochastic calculus and Itô's formula
+- Dynamic programming and Bellman principle
+- Monte Carlo methods for option pricing
+- American option valuation
+- Commodity price modelling
+- Partial differential equations and finite-difference methods
+- Linear regression and least-squares estimation
+- Functional analysis and Lp spaces

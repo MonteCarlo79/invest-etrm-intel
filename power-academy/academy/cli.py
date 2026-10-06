@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shutil
 import tarfile
 from datetime import date
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from . import coverage as cv
 from . import extract as ex
 from . import llm, outline as ol, registry as rg, syllabus as sy
+from . import authoring as auth
 from .column import editor as ed
 from .column import evidence as cev
 from .column import gates as cg
@@ -124,7 +126,7 @@ def cmd_bundle(a):
     out = ROOT / "bundle.tar.gz"
     with tarfile.open(out, "w:gz") as t:
         t.add(ROOT / "academy", arcname="power-academy/academy")
-        for d in ("cache", "sources", "glossary"):
+        for d in ("cache", "sources", "glossary", "concepts"):
             t.add(ROOT / d, arcname=f"power-academy/{d}")
     _s3().upload_file(str(out), a.bucket, f"{a.prefix}/bundle.tar.gz")
     print("uploaded", out.stat().st_size, "bytes")
@@ -140,10 +142,28 @@ def cmd_push_results(a):
 
 
 def cmd_pull_results(a):
+    """Pull results from S3. Concepts are pulled selectively: only *.zh.md
+    translations are written back — never the EN concept files, which are
+    authored locally (a blind extract would clobber them with stale cloud
+    copies; the 2026-10-05 stub-overwrite incident)."""
     out = ROOT / "results.tar.gz"
     _s3().download_file(a.bucket, f"{a.prefix}/results.tar.gz", str(out))
+    stage = Path("/tmp/pa_pull_results")
+    shutil.rmtree(stage, ignore_errors=True)
     with tarfile.open(out) as t:
-        t.extractall(ROOT)
+        t.extractall(stage)
+    for d in RESULT_DIRS:
+        src = stage / d
+        if not src.exists():
+            continue
+        if d == "concepts":
+            for zh in src.rglob("*.zh.md"):
+                dest = ROOT / "concepts" / zh.relative_to(src)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(zh, dest)
+        else:
+            shutil.copytree(src, ROOT / d, dirs_exist_ok=True)
+    print("pulled (concepts: *.zh.md only)")
 
 
 def _engine():
@@ -250,6 +270,18 @@ def main(argv=None):
         if name in ("evidence", "verify", "gates", "render"):
             s.add_argument("article")
         s.set_defaults(fn=fn)
+    con = sub.add_parser("concept").add_subparsers(dest="sub2", required=True)
+    pk = con.add_parser("pack")
+    pk.add_argument("concept_id")
+    pk.set_defaults(fn=lambda a: print(auth.build_pack(ROOT, a.concept_id)))
+    ss = con.add_parser("set-status")
+    ss.add_argument("concept_id")
+    ss.add_argument("status", choices=["stub", "drafted", "reviewed", "published"])
+    ss.set_defaults(fn=lambda a: auth.set_status(ROOT, a.concept_id, a.status))
+    tr = con.add_parser("translate")
+    tr.add_argument("concept_id")
+    tr.set_defaults(fn=lambda a: print(auth.translate_concept(
+        ROOT, a.concept_id, _client(), os.environ.get("ACADEMY_EDITOR_MODEL", OUTLINE_MODEL))))
     a = p.parse_args(argv)
     a.fn(a)
 

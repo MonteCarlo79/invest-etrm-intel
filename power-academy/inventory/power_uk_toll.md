@@ -1,0 +1,119 @@
+# power/UK Toll
+
+- id: `power_uk_toll` · class: practice · type: folder
+- topic: UK Gas-Fired Power Tolling Agreements · level: intermediate · market: GB · year: None
+- worked examples: True · code: False
+
+## Concepts
+- **Virtual Tolling Arrangement** — A financial structure giving the buyer the right to receive power in exchange for a fixed fee and variable commodity costs without owning the physical plant.
+- **Physical Tolling PPA** — A contractual arrangement transferring commodity price risk to an off-taker who dispatches a power plant and pays availability-based and variable operating charges.
+- **Clean Spark Spread** — The margin earned by a gas generator after deducting gas fuel costs and carbon costs from the power price.
+- **Fixed Tolling Fee** — A monthly option premium paid by the buyer to the seller to compensate for granting dispatch rights over the plant.
+- **Contract Efficiency** — The heat-rate-derived ratio used to convert gas input volumes to power output volumes for settlement and carbon cost calculations.
+- **Power Shape Nomination** — The buyer's daily election of a baseload, peak or extended-peak delivery profile within specified nomination deadlines.
+- **Start Cost** — A per-MWh charge applied on delivery days when the plant transitions from zero to full capacity, covering the fixed cost of a single plant start.
+- **Variable Operating Cost** — A per-MWh charge covering incremental operating and maintenance costs incurred when the plant generates.
+- **Carbon Price Floor (CPF)** — The UK policy mechanism setting a minimum total carbon price for power generators by adding a Carbon Price Support rate to the EU ETS price.
+- **Carbon Price Support (CPS) Rate** — The UK-only climate change levy surcharge on fossil fuels used in electricity generation, expressed per kWh of gas, that tops up the EU ETS carbon price.
+- **EUA Reference Price** — The ICE Futures Europe settlement price for December-delivery EU Allowances used to calculate daily carbon costs in the tolling contract.
+- **Power Carbon Intensity** — The CO2 emissions per MWh of electricity output, derived by dividing the fuel carbon factor by the contract efficiency.
+- **Availability-Based Payment** — A capacity payment made to the plant owner whenever the plant is technically capable of generating, regardless of whether it actually runs.
+- **EOH/Start Ratio** — The ratio of equivalent operating hours to number of starts used to track maintenance liability and determine whether an EOH restoration payment is owed.
+- **Equivalent Operating Hours (EOH)** — A weighted measure of turbine wear that combines actual running hours with a start-equivalent hour allowance to schedule major overhauls.
+- **EOH Restoration Payment** — A compensatory payment from off-taker to plant owner when the dispatch regime consumes starts faster than EOH, triggering an early overhaul.
+- **Availability Payment Sculpting** — The permitted seasonal redistribution of annual availability payments across settlement periods to reflect expected market value.
+- **GTMA Settlement** — The Grid Trade Master Agreement framework governing physical electricity trade notifications and monthly financial settlement in GB.
+- **NBP Gas Delivery** — The physical delivery of natural gas at the UK National Balancing Point under NBP15 transaction terms as the fuel leg of the tolling arrangement.
+- **Line Pack Storage** — The use of pressurised gas held within the station pipeline as short-term on-site fuel storage to provide dispatch flexibility.
+- **Balancing Mechanism (BM) Participation** — The plant's ability to submit bids and offers to National Grid's real-time market, with associated revenues accruing to the off-taker.
+- **Capacity Market Contract** — A GB government auction instrument guaranteeing annual payments to a plant for being available, retained by the plant owner outside the tolling arrangement.
+- **Power Curve Extrapolation** — The forward-curve extension methodology applied beyond the liquid market horizon using seasonal ratio assumptions to value long-dated tolling positions.
+- **Change in Law Provision** — A contractual clause allocating risk between parties when regulatory changes such as CPS rate revisions alter the economics of the tolling agreement.
+- **Long-Term Maintenance Agreement (LTMA)** — A service contract with the original equipment manufacturer covering scheduled overhauls and life-extension work on gas and steam turbines.
+- **Tolling Power Purchase Agreement (Tolling PPA)** — A contractual structure whereby a plant operator provides generation capacity to an off-taker who controls dispatch and bears fuel and power price risk.
+- **Availability Payment** — A fixed periodic fee paid to the plant operator for making generation capacity available, independent of actual output.
+- **Capacity Market Unit (CMU)** — A discrete unit of generation, demand-side response or interconnection capacity registered to participate in the GB Capacity Market auction.
+- **T-4 Capacity Auction** — A GB Capacity Market auction held four years ahead of the delivery year to procure sufficient capacity to meet a reliability standard.
+- **Clearing Price** — The single auction price at which capacity supply meets the demand curve, paid uniformly to all successful bidders.
+- **De-rated Capacity** — A technology-specific downward adjustment to nameplate capacity reflecting expected availability during system stress events.
+- **Net Welfare Algorithm** — The rule-based procedure used to determine whether to include the marginal unit when supply and demand do not intersect exactly, balancing welfare gain against incremental cost.
+- **Capacity Agreement Duration** — The number of delivery years over which a capacity payment obligation and revenue entitlement run, with longer terms available to new-build and refurbishing plant.
+- **Financial Commitment Milestone** — A requirement for new-build capacity providers to demonstrate sufficient capital expenditure or binding financial commitments within 18 months of auction results.
+- **Substantial Completion Milestone** — The threshold of operational generating capacity a new-build or refurbishing CMU must reach before becoming eligible for capacity payments during a delivery year.
+- **Demand-Side Response (DSR)** — Reduction or shifting of electricity consumption by end users in response to system signals, eligible as a capacity resource in the GB Capacity Market.
+- **Ancillary Services** — System-support services including frequency response (primary, secondary, high) and reactive power provision contracted by National Grid from generators.
+- **Maximum Export Limit (MEL)** — The maximum MW a generating unit declares it can export at any point, submitted to National Grid for balancing purposes.
+- **Balancing Mechanism (BM)** — The near-real-time market operated by National Grid in which generators submit bid and offer prices to balance supply and demand within the gate closure period.
+- **Ramp Rate** — The rate in MW per minute at which a generating unit can increase or decrease its output, determining start-up time and minimum on-load duration.
+- **Plant Availability** — The fraction of time a generating unit is technically capable of producing at declared capacity, tracked monthly as a performance metric.
+- **REMIT Notification** — Mandatory disclosure of inside information about generation capacity changes under the EU Regulation on wholesale Energy Market Integrity and Transparency.
+- **CPI Indexation** — Annual adjustment of capacity payment values using the Consumer Price Index to preserve real-terms revenue across the delivery period.
+- **Termination Notice** — A formal written notice issued by the Delivery Body to a capacity provider specifying grounds for and timing of Capacity Agreement termination.
+- **Gas Tolling Agreement (GTA)** — A long-term indexed contract under which a toller pays a capacity charge per available MWh and assumes all market-side risks (fuel, power, emissions, imbalance) while the generator holds availability risk.
+- **Investment-Grade Revenue (IGR) Guarantee** — A parent-company guarantee structure that makes the preferred return on invested capital date-certain and sum-certain over an investment term in lieu of direct market exposure.
+- **Capacity Remuneration Payment (CRP)** — A long-term government-backed capacity market revenue stream that reduces the minimum margin required from wholesale markets, de-risking project cash flows.
+- **Clean Spark Spread (CSS)** — The margin available to a gas-fired generator after deducting gas fuel costs and carbon costs from the wholesale power price, used to value and hedge generation assets.
+- **Tolling Availability Charge** — A fixed payment per available MWh made by the toller to the generator, sized to cover all anticipated fixed and variable operational costs regardless of dispatch.
+- **Special Purpose Vehicle (SPV) Equity Structure** — The allocation of project equity between a pension-fund all-equity investor and an operational counterparty as consideration for guarantee or tolling obligations.
+- **CCGT Flexibility Parameters** — Technical operating characteristics of a combined-cycle gas turbine including ramp rates, minimum stable generation, start times, heat rates at part load and annual start limits.
+- **Generator Imbalance Risk** — The exposure to settlement penalties arising when nominated generation differs from actual generation, and its contractual allocation between generator and toller under a GTA.
+- **EU ETS and CPF Interaction** — The relationship between the EU-wide hard cap on CO2 emissions and the UK-only carbon price top-up, whereby capping the CPF does not alter the EU ETS emissions ceiling.
+- **Loss of Load Expectation (LOLE) Capacity Standard** — The UK regulatory reliability criterion (3 hours per year) that underpins scarcity rents and justifies the capacity market as a complement to energy-only market signals.
+- **Scarcity Rent** — The price premium above short-run marginal cost that emerges during tight system conditions and provides additional revenue to peaking and flexible generation plant.
+- **Cashflow Waterfall** — The priority ordering of project revenue distribution—investor preferred return first, then management service charges, then residual profit sharing—used to structure project-finance SPVs.
+- **Baseload Dark Spread** — The margin available to a coal-fired generator after deducting coal fuel and carbon costs from the wholesale baseload power price, used as a benchmark for thermal asset value.
+
+## Methods
+- Contract price decomposition (carbon + start + variable costs)
+- Heat-rate-based gas volume calculation from power shape nominations
+- Carbon cost pass-through formula using EUA futures and ECB FX fix
+- EOH/start ratio tracking for restoration payment calculation
+- Availability payment sculpting across settlement periods
+- Forward curve construction and seasonal extrapolation for half-hourly power prices
+- Sensitivity analysis on CPS rate scenarios
+- Auction demand curve construction
+- Net Welfare Algorithm for marginal unit determination
+- Availability payment sculpting with weighting constraints
+- De-rating factor application to nameplate capacity
+- CPI indexation of capacity payments
+- Historical availability analysis
+- Ramp-up/ramp-down curve specification
+- Frequency response capability assessment
+- Reactive power capability assessment
+- Spark spread and dark spread curve analysis
+- Clean spark spread (CSS) term management modelling in Excel/VBA
+- Hourly dispatch modelling with heat-rate and carbon cost inputs
+- Forward curve construction for power, gas (NBP), CO2 and FX
+- Implied volatility marking and vol skew analysis
+- Option valuation on power and gas
+- Project IRR and cashflow waterfall modelling
+- Capacity charge sizing from fixed and variable cost build-up
+- Tolling termination payment formula design
+- Sensitivity analysis on CPF trajectory and exchequer impact
+
+## Implied prerequisites
+- GB electricity market structure (BM, balancing, settlement)
+- EU Emissions Trading System mechanics
+- Gas market fundamentals and NBP conventions
+- CCGT thermodynamics and heat rate concepts
+- Spark spread option valuation basics
+- Forward curve construction for power and gas
+- GTMA and NBP15 documentation frameworks
+- UK Climate Change Levy and energy taxation
+- Electricity market fundamentals
+- UK power market structure and regulation
+- Auction theory basics
+- Contract structures in energy markets
+- Balancing Mechanism and grid code familiarity
+- Carbon pricing mechanisms
+- Generator technical characteristics (CCGT operations)
+- Electricity market fundamentals (dispatch, merit order)
+- Gas market fundamentals (NBP pricing, hub conventions)
+- Carbon markets (EU ETS mechanics)
+- UK capacity market rules
+- Project finance and SPV structuring
+- Options pricing theory
+- Forward curve construction
+- UK tax treatment of energy commodities (CCL, fuel duty)
+- REMIT and MiFID compliance basics
+- Excel financial modelling
