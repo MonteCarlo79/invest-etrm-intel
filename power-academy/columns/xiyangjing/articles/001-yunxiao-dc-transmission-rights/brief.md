@@ -1,7 +1,7 @@
 ---
 id: 001-yunxiao-dc-transmission-rights
 byline: pen_name
-status: briefed
+status: approved
 thesis: 云霄直流输电权交易方案(试行)是中国首个跨网通道输电权产品；用欧洲 LTTR(JAO 拍卖)与美国 FTR 的二十年经验看，其定价本质是闽粤两端现货价差的期权条，合理估值=期望价差−阻塞风险溢价，方案的关键设计选择(拍卖形式/品种/限价/结算)决定了这个价格能否被发现。
 western: {concept_ids: [spread_option_pricing_models, intrinsic_vs_extrinsic_value], markets: [EU, US]}
 china: {provinces: [福建, 广东], topics: [输电权, 跨区通道, 现货, 中长期]}
