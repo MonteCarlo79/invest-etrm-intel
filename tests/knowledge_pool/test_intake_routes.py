@@ -49,15 +49,17 @@ def test_memory_note_insert_then_update(monkeypatch):
 
 
 def test_rate_writers_skip_confirmed(monkeypatch):
-    # existing confirmed row → skipped, no INSERT
-    conn = _FakeConn(results=[("confirmed",)])
+    # skip-guard uses SELECT EXISTS(... status IN ('confirmed','superseded')) —
+    # deterministic even when a confirmed row and a draft twin (different
+    # source_file) coexist under the same natural key; fetchone → (bool,).
+    conn = _FakeConn(results=[(True,)])        # confirmed/superseded exists → skipped, no INSERT
     _patch_conn(monkeypatch, conn)
     assert ir.write_capcomp_draft(province="山东", effective_date="2026-01-01",
                                   cap_comp_yuan_kw=0.0705, peak_duration_hours=2,
                                   source="intake:test") == "skipped"
     assert not [s for s, _ in conn.log if "INSERT INTO marketdata.province_cap_comp" in s]
-    # existing draft row → re-written (upsert)
-    conn2 = _FakeConn(results=[("draft",)])
+    # no confirmed/superseded row → re-written (upsert)
+    conn2 = _FakeConn(results=[(False,)])
     _patch_conn(monkeypatch, conn2)
     assert ir.write_capcomp_draft(province="山东", effective_date="2026-01-01",
                                   cap_comp_yuan_kw=0.08, peak_duration_hours=2,
@@ -65,14 +67,15 @@ def test_rate_writers_skip_confirmed(monkeypatch):
 
 
 def test_ancillary_draft_written_and_skipped(monkeypatch):
-    conn = _FakeConn(results=[None])
+    conn = _FakeConn(results=[(False,)])
     _patch_conn(monkeypatch, conn)
     assert ir.write_ancillary_draft(province="新疆", month="2026-06-01",
                                     metric="调频补偿费用_独立储能", amount_yuan=5349900.0,
                                     source_file="intake:六月结算") == "written"
     ins = [p for s, p in conn.log if "INSERT INTO marketdata.province_ancillary_revenue" in s][0]
     assert ins[5] == "draft"
-    conn2 = _FakeConn(results=[("superseded",)])
+    # EXISTS guard: True even if only a draft twin would match a naive LIMIT 1
+    conn2 = _FakeConn(results=[(True,)])
     _patch_conn(monkeypatch, conn2)
     assert ir.write_ancillary_draft(province="新疆", month="2026-06-01",
                                     metric="m", amount_yuan=1.0, source_file="x") == "skipped"

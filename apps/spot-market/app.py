@@ -4022,19 +4022,23 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                         except Exception as _e:
                             _pages.append(_IntakePage(filename=_f.name, data=_b,
                                                       kind="text", error=str(_e)))
-                with st.spinner("Claude reading…"):
-                    try:
-                        st.session_state["intake_proposal"] = _ib_extract(
-                            _pages, api_key=_api_key_ib)
-                        st.session_state.pop("intake_route_outcomes", None)
-                        st.session_state.pop("intake_last_commit", None)
-                        for _k in [k for k in list(st.session_state)
-                                   if k.startswith(("intake_title", "intake_province",
-                                                    "intake_category", "intake_summary",
-                                                    "intake_route_on_", "intake_route_txt_"))]:
-                            del st.session_state[_k]
-                    except Exception as _e:
-                        st.error(_t("intake_extract_fail", err=_e))
+                _failed_pages = [p.filename for p in _pages if p.error]
+                if _failed_pages:
+                    st.warning(f"{len(_failed_pages)} 个文件解析失败（已跳过）：" + "、".join(_failed_pages))
+                if any(not p.error for p in _pages):   # skip extract when ALL failed
+                    with st.spinner("Claude reading…"):
+                        try:
+                            st.session_state["intake_proposal"] = _ib_extract(
+                                _pages, api_key=_api_key_ib)
+                            st.session_state.pop("intake_route_outcomes", None)
+                            st.session_state.pop("intake_last_commit", None)
+                            for _k in [k for k in list(st.session_state)
+                                       if k.startswith(("intake_title", "intake_province",
+                                                        "intake_category", "intake_summary",
+                                                        "intake_route_on_", "intake_route_txt_"))]:
+                                del st.session_state[_k]
+                        except Exception as _e:
+                            st.error(_t("intake_extract_fail", err=_e))
 
             _prop = st.session_state.get("intake_proposal")
             if _prop:

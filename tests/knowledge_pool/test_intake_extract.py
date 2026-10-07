@@ -75,6 +75,14 @@ def test_extract_batch_text_pages_skip_vision():
     assert "政策全文" in content[-1]["text"]           # text pages inlined in prompt
 
 
+def test_extract_batch_page_no_null_falls_back_to_cursor():
+    canned = dict(_CANNED, pages=[{"page_no": None, "text": "空页码转录"}])
+    client = _FakeClient(json.dumps(canned, ensure_ascii=False))
+    pages = [Page(filename="IMG_1.jpg", data=b"\xff\xd8img1", kind="image")]
+    prop = extract_batch(pages, api_key="k", _client=client)   # must not raise TypeError
+    assert prop.pages == [(1, "空页码转录")]                   # cursor fallback = 1
+
+
 def test_prompt_carries_metric_vocabulary():
     from services.knowledge_pool.intake_extract import _PROMPT_TMPL
     for token in ("registry_gw", "installed_new_storage_gw", "planning_gap_gw",

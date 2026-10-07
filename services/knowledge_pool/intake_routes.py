@@ -101,10 +101,14 @@ def _write_rate_draft(*, table: str, key_cols: dict, conflict_target: str,
     where = " AND ".join(f"{c} = %s" for c in key_cols)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT status FROM {table} WHERE {where} LIMIT 1",
+            # EXISTS over the natural key is deterministic even when a confirmed
+            # row and a draft twin (different source_file) coexist — a plain
+            # "SELECT status ... LIMIT 1" has no ORDER BY and could return the
+            # draft, letting the upsert overwrite the confirmed amount.
+            cur.execute(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE {where} "
+                        f"AND status IN ('confirmed','superseded'))",
                         tuple(key_cols.values()))
-            row = cur.fetchone()
-            if row and row[0] in ("confirmed", "superseded"):
+            if cur.fetchone()[0]:
                 return "skipped"
             cols = ", ".join(payload)
             ph = ", ".join(["%s"] * len(payload))

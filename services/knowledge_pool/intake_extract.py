@@ -164,7 +164,7 @@ def extract_batch(pages: list[Page], api_key: str, *, _client=None) -> IntakePro
         if first is None:
             first = data
         for p in data.get("pages") or []:
-            merged_pages.append((int(p.get("page_no", page_cursor)), str(p.get("text", ""))))
+            merged_pages.append((int(p.get("page_no") or page_cursor), str(p.get("text", ""))))
             page_cursor = max(page_cursor + 1, merged_pages[-1][0] + 1)
         merged_routes.extend(_routes_from(data))
 
