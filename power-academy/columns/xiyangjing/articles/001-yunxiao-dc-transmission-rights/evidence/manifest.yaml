@@ -6,6 +6,13 @@ entries:
   retrieved_at: '2026-10-06'
   license: public
   sha256: df4d52ff7238f06de3c59a352e5756f4e1f0044f36d2291592a3a988c0995d2a
+- id: e_yunxiao_scheme
+  kind: policy_excerpt
+  source: 云霄直流输电权市场化交易方案（暂行）PDF
+  query: 'owner-provided PDF, 5pp; key numbers: floor 25.6, cap 100 元/MWh'
+  retrieved_at: '2026-10-07'
+  license: public
+  sha256: f716735135f444c7e846710700deaa352ca11a7c096612ecd1d3910bd49512a3
 - id: e_fj_send_price
   kind: data
   source: staging.spot_interprov_flow
