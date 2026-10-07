@@ -32,7 +32,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 | asset_risk | `bess-asset-risk` | v84 | 86 | 2026-09-23 | this session: merchant-exposure tile |
 | data-ingestion (tt-api/enos) | `bess-data-ingestion` | v20260927 (575657c91df8) | :latest-driven | 2026-09-27 | this session: schema-variant frame guard (SheYang KeyError) |
 | mengxi-reconcile (md_* ingestion) | `bess-mengxi-ingestion` | v20 | 21 | 2026-09-10 | this session: null-key row drop guard; launcher lambda pins td:21 |
-| spot-market | `bess-spot-markets` | v46 | 145 | ~2026-09-26 | per CLAUDE.md snapshot |
+| spot-market | `bess-spot-markets` | **v47** (92246d98d187) | **147** | 2026-10-07 | this session: Intel Intake tab + get_storage_pipeline + intake backend (live td was v45; manifest row was stale) |
 | portal | `bess-platform-portal` | v13 | 70 | ~2026-09-26 | per CLAUDE.md snapshot |
 | gb-market | `bess-gb-market` | v107 | 30 | 2026-09-20 | parallel session: modo question rotation |
 | lingfeng-ingest | `lingfeng-ingest` | **v10** (3f1d025fb50e) | **12** | 2026-10-06 | this session: residual-quantile forecast bands in capture pipeline + column_to_matrix KeyError guard |
@@ -76,3 +76,4 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
   images; use the jq-swap protocol.
 - **The `terraform.tfvars` image tags lag reality** (e.g. said v56 while v83 was
   live). Manifest above is fresher; live td is freshest.
+- 2026-10-07 — `bess-platform-spot-markets:147` ← `bess-spot-markets:v47` (92246d98d187); Market Intel Intake (spec/plan 2026-10-06): new 🧠 情报录入 tab in KB expander (batch upload → one vision call → review panel → commit), taxonomy +3 categories (market_intel/capacity_pipeline/ancillary_market), spot_knowledge_docs.province column, ingest_document_batch (order-independent dedup hash), intake_extract (max_tokens 16384 + metric vocabulary after fixture-surfaced defects), intake_routes (pipeline table marketdata.province_storage_pipeline + rate-draft writers with confirmed-row skip guards), get_storage_pipeline Strategist tool. jq-swap from live tdArn :145 (13 env preserved; a stale :146 existed, never deployed); NO terraform (parallel-session tf edits in tree). Live td was v45 — manifest row "v46" was a stale snapshot. 39/39 KB tests (this session).
