@@ -34,6 +34,8 @@ PROVINCES = {
     "gansu": {"label": "甘肃", "extent": (92.0, 109.5, 32.0, 43.0)},
     "shandong": {"label": "山东", "extent": (114.5, 122.8, 34.3, 38.5), "schematic": True},
     "shaanxi": {"label": "陕西", "extent": (105.4, 111.3, 31.6, 39.6), "schematic": True},
+    "jinan": {"label": "冀南", "extent": (112.8, 118.8, 35.8, 39.2)},
+    "jibei": {"label": "冀北", "extent": (113.5, 120.2, 39.0, 43.2)},
     "heilongjiang": {"label": "黑龙江", "extent": (121.0, 135.5, 43.0, 53.8), "pending": True},
 }
 
@@ -302,6 +304,43 @@ def build_shaanxi(db):
             "channels": SX_CHANNELS}
 
 
+JN_500 = ["保定", "邢台", "黄骅", "潞城"]
+
+JB_500 = ["张家口", "廊坊", "康保", "尚义", "解放", "白土窑", "沽源", "千松坝",
+          "御道口", "金山岭", "承德", "宽城", "太平", "姜家营", "张南", "万全",
+          "张北", "木兰", "隆城", "阜康换流站", "坝上"]
+
+
+def build_jinan(db):
+    cfg = PROVINCES["jinan"]
+    subs = load_substations(db, cfg["extent"])
+    by_norm = {norm_name(s["name"]): s for s in subs.values()}
+    match = []
+    for v in JN_500:
+        st, hit = match_one(v, by_norm, city_prefix=False)
+        match.append({"vision": v, "status": st,
+                      "oim_name": hit["name"] if hit else None,
+                      "voltages": hit["voltages"] if hit else None})
+    return {"stations": _stations_payload(subs),
+            "lines": load_lines(db, cfg["extent"]),
+            "match": match, "adjacency": []}
+
+
+def build_jibei(db):
+    cfg = PROVINCES["jibei"]
+    subs = load_substations(db, cfg["extent"])
+    by_norm = {norm_name(s["name"]): s for s in subs.values()}
+    match = []
+    for v in JB_500:
+        st, hit = match_one(v, by_norm, city_prefix=False)
+        match.append({"vision": v, "status": st,
+                      "oim_name": hit["name"] if hit else None,
+                      "voltages": hit["voltages"] if hit else None})
+    return {"stations": _stations_payload(subs),
+            "lines": load_lines(db, cfg["extent"]),
+            "match": match, "adjacency": []}
+
+
 def main() -> None:
     db = sqlite3.connect(GPKG)
     db.row_factory = sqlite3.Row
@@ -314,6 +353,8 @@ def main() -> None:
     out["provinces"]["gansu"] = {**PROVINCES["gansu"], **build_gansu(db)}
     out["provinces"]["shandong"] = {**PROVINCES["shandong"], **build_shandong(db)}
     out["provinces"]["shaanxi"] = {**PROVINCES["shaanxi"], **build_shaanxi(db)}
+    out["provinces"]["jinan"] = {**PROVINCES["jinan"], **build_jinan(db)}
+    out["provinces"]["jibei"] = {**PROVINCES["jibei"], **build_jibei(db)}
     out["provinces"]["heilongjiang"] = PROVINCES["heilongjiang"]
     for k, p in out["provinces"].items():
         if "match" in p:

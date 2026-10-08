@@ -30,7 +30,8 @@ _SUFFIX_RE = re.compile(r"(\d+千伏)?(升压站|开关站|变电站|换流站|�
 _PREFIX_RE = re.compile(r"^(±?\d+kV|\d+千伏)")
 
 # vision-map abbreviations -> full OIM names
-ALIASES = {"包北": "包头北", "塔拉": "塔拉", "乌海": "乌海"}
+ALIASES = {"包北": "包头北", "塔拉": "塔拉", "乌海": "乌海",
+           "保定": "雄安"}
 
 
 def norm_name(name: str) -> str:
