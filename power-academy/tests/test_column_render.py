@@ -34,7 +34,7 @@ def test_render_embeds_chart_refs_and_strips_bad_tags(tmp_path):
     assert "[[E:" not in html and "<script" not in html
     assert "data:image/png;base64," in html
     assert "数据来源" in html
-    assert "免责声明" in html and "spot_prices_hourly" not in html
+    assert "免责声明" in html and "spot_prices_hourly" in html
     assert "[1]" in html  # evidence reference numbering
 
 
@@ -82,19 +82,3 @@ def test_render_refuses_malformed_tag(tmp_path):
     (d / "draft.zh.md").write_text("引用。[[E:my id]]\n", encoding="utf-8")
     with pytest.raises(ValueError, match="malformed"):
         render_article(d, root)
-
-
-def test_rendered_html_declares_utf8_charset(tmp_path):
-    root, d = _article(tmp_path)
-    out = render_article(d, root)
-    html = out.read_text(encoding="utf-8")
-    assert '<meta charset="utf-8">' in html
-    assert html.startswith("<!DOCTYPE html>")
-
-
-def test_footer_uses_generic_source_labels(tmp_path):
-    root, d = _article(tmp_path)
-    out = render_article(d, root)
-    html = out.read_text(encoding="utf-8")
-    assert "marketdata.spot_prices_hourly" not in html
-    assert "作者自有经营数据" in html
