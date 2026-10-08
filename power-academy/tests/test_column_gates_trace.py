@@ -44,3 +44,15 @@ def test_fact_trace_unknown_and_uncovered():
     assert check_fact_trace("均价0.42元/kWh。[[E:e_sd]]", {"e_sd"}) == []
     # date-led line with an uncovered quantity must fail
     assert check_fact_trace("2026年10月，山东实时均价0.42元/kWh。", {"e_sd"})
+
+
+def test_claim_map_mode_covers_quantities_without_inline_tags():
+    from academy.column.gates import check_fact_trace_claim_map
+    draft = "价差均值为85元/MWh，上限100元/MWh。\n无数字行。\n"
+    cm = [{"pattern": "85元/MWh", "evidence": ["e_spread"]},
+          {"pattern": "100元/MWh", "evidence": ["e_scheme"]}]
+    assert check_fact_trace_claim_map(draft, cm, {"e_spread", "e_scheme"}) == []
+    errs = check_fact_trace_claim_map(draft, cm, {"e_spread"})
+    assert any("unknown evidence id 'e_scheme'" in e for e in errs)
+    errs2 = check_fact_trace_claim_map(draft + "还有256元/MWh。", cm, {"e_spread", "e_scheme"})
+    assert any("uncovered quantity" in e for e in errs2)
