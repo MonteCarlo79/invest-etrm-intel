@@ -82,3 +82,11 @@ def test_render_refuses_malformed_tag(tmp_path):
     (d / "draft.zh.md").write_text("引用。[[E:my id]]\n", encoding="utf-8")
     with pytest.raises(ValueError, match="malformed"):
         render_article(d, root)
+
+
+def test_rendered_html_declares_utf8_charset(tmp_path):
+    root, d = _article(tmp_path)
+    out = render_article(d, root)
+    html = out.read_text(encoding="utf-8")
+    assert '<meta charset="utf-8">' in html
+    assert html.startswith("<!DOCTYPE html>")

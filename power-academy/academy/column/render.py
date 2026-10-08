@@ -79,5 +79,11 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
               "观点为作者分析，不代表任何机构。</p><p>" + disclaimer + "</p></section>")
     out = article_dir / "out" / (article_dir.name + ".html")
     out.parent.mkdir(exist_ok=True)
-    out.write_text(f"<style>{CSS}</style><section>{html}</section>{foot}", encoding="utf-8")
+    doc = ("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n"
+           "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+           f"<title>{article_dir.name}</title>\n"
+           "</head>\n<body>\n"
+           f"<style>{CSS}</style><section>{html}</section>{foot}"
+           "\n</body>\n</html>\n")
+    out.write_text(doc, encoding="utf-8")
     return out
