@@ -70,7 +70,16 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
     html = markdown.markdown(body, extensions=["tables"])
     html = _sanitize(html)
 
-    src_lines = [f"[{i+1}] {e.get('source','')}（{e.get('retrieved_at','')}获取）"
+    GENERIC_SOURCE = {"policy_excerpt": "公开政策文件", "western_fact": "公开文献",
+                      "chart": "作者测算", "data_own": "作者自有经营数据",
+                      "data_public": "公开市场数据", "data_licensed_restricted": "授权市场数据"}
+
+    def _generic(e):
+        if e.get("kind") != "data":
+            return GENERIC_SOURCE[e.get("kind", "data_public")]
+        return GENERIC_SOURCE["data_" + e.get("license", "public")]
+
+    src_lines = [f"[{i+1}] {_generic(e)}（{e.get('retrieved_at','')}获取）"
                  for i, e in enumerate(refs)]
     disclaimer = (column_root / "style" / "disclaimer.md").read_text(encoding="utf-8").strip()
     foot = ("<section class='foot'><hr/><p><strong>数据来源与口径</strong><br/>"
