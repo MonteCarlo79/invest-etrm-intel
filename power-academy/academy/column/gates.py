@@ -93,8 +93,11 @@ def run_gates(article_dir: Path, column_root: Path) -> dict:
     excerpts = {p.stem: p.read_text(encoding="utf-8")
                 for p in (article_dir / "evidence" / "excerpts").glob("*.md")}
 
+    claim_map = load_claim_map(article_dir)
+    fact_errs = (check_fact_trace_claim_map(draft, claim_map, ids) if claim_map
+                 else check_fact_trace(draft, ids))
     results = {
-        "fact_trace": check_fact_trace(draft, ids),
+        "fact_trace": fact_errs,
         "license": check_license(draft, entries),
         "confidentiality": check_blocklist({"draft": draft, **excerpts}, names),
         "compliance": check_compliance(draft, patterns),
@@ -113,3 +116,25 @@ def run_gates(article_dir: Path, column_root: Path) -> dict:
     _, post = rest.split(AUTO_END, 1)
     gpath.write_text(pre + "\n".join(lines) + post, encoding="utf-8")
     return summary
+
+
+def load_claim_map(article_dir) -> list | None:
+    """Optional evidence/claim_map.yaml: [{pattern, evidence:[ids]}] for tag-free manuscripts."""
+    path = Path(article_dir) / "evidence" / "claim_map.yaml"
+    if not path.exists():
+        return None
+    return load_yaml(path).get("claims") or []
+
+
+def check_fact_trace_claim_map(draft: str, claim_map: list, manifest_ids: set) -> list:
+    errs = []
+    for c in claim_map:
+        for eid in c.get("evidence", []):
+            if eid not in manifest_ids:
+                errs.append(f"claim '{c['pattern'][:30]}': unknown evidence id '{eid}'")
+        if c["pattern"] not in draft:
+            errs.append(f"claim pattern not found in draft: '{c['pattern'][:40]}'")
+    for n, line in number_lines(draft):
+        if not any(c["pattern"] in line for c in claim_map):
+            errs.append(f"line {n}: uncovered quantity: {line[:40]}")
+    return errs

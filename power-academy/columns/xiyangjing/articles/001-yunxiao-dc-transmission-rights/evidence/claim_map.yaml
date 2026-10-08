@@ -1,0 +1,33 @@
+# Claim → evidence map for 001-yunxiao-dc-transmission-rights
+# fact-trace gate: every quantity line in draft.zh.md must contain one of these patterns;
+# every evidence id must exist in evidence/manifest.yaml
+claims:
+  - {pattern: "自6月1日正式启动", evidence: [ndrc_734_notice]}
+  - {pattern: "把这1MWh电送到广东的权利", evidence: [e_yunxiao_scheme]}
+  - {pattern: "报价上下限", evidence: [e_yunxiao_scheme]}
+  - {pattern: "云霄直流的1MW容量，到底值多少钱", evidence: [e_yunxiao_scheme]}
+  - {pattern: "线损折价由购电方承担", evidence: [e_yunxiao_scheme]}
+  - {pattern: "419元/MWh", evidence: [e_gd_rt_prices]}
+  - {pattern: "450—620元/MWh", evidence: [e_fj_send_price]}
+  - {pattern: "334元/MWh", evidence: [e_fj_spot_jr]}
+  - {pattern: "174元/MWh", evidence: [e_fj_spot_jr]}
+  - {pattern: "火电约43%，水电约19%，核电约14%，太阳能约14%", evidence: [e_fj_capacity_2025]}
+  - {pattern: "维持在410元/MWh附近", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "共113天", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "+85元/MWh", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "+42元/MWh", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "73%的交易日", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "得到的就是85元/MWh", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "101元/MWh", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "16元/MWh", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "5月：+164元/MWh", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "7.3万元/MW·月", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "25.6元", evidence: [e_yunxiao_scheme]}
+  - {pattern: "规划利用小时数进行折算", evidence: [e_yunxiao_scheme]}
+  - {pattern: "最后一笔成交报价决定统一出清价格", evidence: [e_yunxiao_scheme]}
+  - {pattern: "100元", evidence: [e_yunxiao_scheme]}
+  - {pattern: "+256元/MWh", evidence: [e_fj_jr_gd_spread]}
+  - {pattern: "预留了调整机制", evidence: [e_yunxiao_scheme]}
+  - {pattern: "各50%的比例，冲抵两省容量电费", evidence: [e_yunxiao_scheme]}
+  - {pattern: "不超过富余容量的50%", evidence: [e_yunxiao_scheme]}
+  - {pattern: "关口设在送出侧", evidence: [e_yunxiao_scheme]}

@@ -53,7 +53,18 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
             refs.append(entries[tid])
         return f"<sup>[{seen[tid]}]</sup>"
 
-    body = TAG_RE.sub(tag_sub, draft)
+    from .gates import load_claim_map
+    claim_map = load_claim_map(article_dir)
+    if claim_map:
+        body = draft
+        seen_c = {}
+        for c in claim_map:
+            for eid in c.get("evidence", []):
+                if eid in entries and eid not in seen_c:
+                    seen_c[eid] = len(refs) + 1
+                    refs.append(entries[eid])
+    else:
+        body = TAG_RE.sub(tag_sub, draft)
 
     def chart_sub(m):
         cid = m.group(1)
@@ -65,7 +76,7 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
         return f'<img src="data:image/png;base64,{b64}" alt="{cid}"/>'
 
     body = CHART_REF_RE.sub(chart_sub, body)
-    if "[[E:" in body or "[[C:" in body:
+    if not claim_map and ("[[E:" in body or "[[C:" in body):
         raise ValueError("malformed or unconverted tag in draft")
     html = markdown.markdown(body, extensions=["tables"])
     html = _sanitize(html)
