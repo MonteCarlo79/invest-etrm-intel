@@ -45,6 +45,7 @@ PROVINCES = {
     "anhui": {"label": "安徽", "extent": (114.5, 120.0, 29.0, 34.5)},
     "zhejiang": {"label": "浙江", "extent": (118.0, 123.0, 27.0, 31.5)},
     "yunnan": {"label": "云南", "extent": (97.0, 106.5, 21.0, 29.5)},
+    "hubei": {"label": "湖北", "extent": (108.0, 116.5, 29.0, 33.5)},
 }
 
 # Guangxi 500kV nodes whose OIM presence should be tried in the generator
@@ -161,9 +162,12 @@ def build_guangxi(db):
     }
 
 
+# 蒙东 union: 2022 地理接线图 (vision) + 2024/2026 通道示意图 (dark map reads)
 MD_500 = ["荣泰", "海北", "兴隆", "岭东", "铝都", "巴林", "阿拉坦", "兴安",
           "科尔沁", "青山", "金沙", "红城", "巴彦托海", "伊敏换流站",
-          "扎鲁特", "开鲁", "通辽"]
+          "扎鲁特", "开鲁", "通辽", "恩和", "桃合木", "科右中", "玉山",
+          "紫城", "庆丰", "阿荣北", "珠日河", "大板", "连场", "赤峰",
+          "高林", "平川"]
 
 
 def build_mengdong(db):
@@ -186,11 +190,14 @@ def build_mengdong(db):
     }
 
 
+# 辽宁 union: earlier edition (39) + 2025/2026 架构图 png reads (plants 清河/庄河 dropped)
 LN_500 = ["川州", "阜新", "北宁", "鹤乡", "辽滨", "营口", "历林", "京诚",
           "北海", "南海", "辽中", "白清寨", "抚顺", "徐家", "程家", "张台",
           "辽阳", "鞍山", "唐家", "王石", "析木", "虎官", "丹东北", "黄海",
           "瓦房店", "登台", "金家", "南关岭", "大连湾", "甘井子", "玉华", "雁水",
-          "清河", "石岭", "东港", "龙王", "凤城", "冷家", "庄河"]
+          "石岭", "东港", "龙王", "凤城", "冷家",
+          "丰田", "燕南", "董家", "利州", "西泉", "永安", "蒲河", "沙岭",
+          "盛京", "沈东", "穆家", "宽邦", "徐大堡", "沙河营", "高岭", "渤海"]
 
 
 def build_liaoning(db):
@@ -307,9 +314,16 @@ def build_shandong(db):
 def build_shaanxi(db):
     cfg = PROVINCES["shaanxi"]
     subs = load_substations(db, cfg["extent"])
+    by_norm = {norm_name(s["name"]): s for s in subs.values()}
+    match = []
+    for v in SXS_750:
+        st, hit = match_one(v, by_norm, city_prefix=False)
+        match.append({"vision": v, "status": st,
+                      "oim_name": hit["name"] if hit else None,
+                      "voltages": hit["voltages"] if hit else None})
     return {"stations": _stations_payload(subs),
-            "lines": load_lines(db, cfg["extent"]),
-            "match": [], "adjacency": [],
+            "lines": load_lines(db, cfg["extent"], min_voltage=330000),
+            "match": match, "adjacency": [],
             "channels": SX_CHANNELS}
 
 
@@ -391,6 +405,16 @@ YN_500 = ["建塘", "太安", "金官", "桂中", "德茂", "永仁", "仁和", 
 SD_500 = ["日照", "济南南", "济南北", "潍坊东", "潍坊西", "淄博南", "淄博北",
           "莱芜", "泰安东", "泰安西", "枣庄", "德州", "滨州", "东营", "菏泽",
           "济宁", "烟台", "威海", "临沂", "青岛", "聊城", "王家", "沭河"]
+
+# 湖北 省间通道示意图 (2025 png + 2026 pdf — same schematic, merged read)
+HB_500 = ["龙泉", "团林", "江陵", "葛洲坝", "恩施", "荆门", "宜都", "奚贤",
+          "卧龙", "孝感", "武汉", "永兴", "黄石", "咸宁"]
+
+# 陕西 2543.png geographic map (750kV ◎ double-ring stations + red-line
+# junctions; magenta city labels are 政府所在地, NOT stations, per legend)
+SXS_750 = ["统万", "榆横", "神木", "府谷", "绥德", "朱家", "延安", "洛川",
+           "黄陵", "东塬", "西安", "信义", "罗敷", "乾县", "宝鸡", "雍城",
+           "汉中", "安康", "柞水", "商州", "鹿城", "龙泉", "郝家"]
 
 
 def _generic_build(db, key, station_list, min_voltage=500000, city_prefix=False):
@@ -479,6 +503,8 @@ def main() -> None:
                                     **_generic_build(db, "zhejiang", [])}
     out["provinces"]["yunnan"] = {**PROVINCES["yunnan"],
                                   **_generic_build(db, "yunnan", YN_500)}
+    out["provinces"]["hubei"] = {**PROVINCES["hubei"],
+                                 **_generic_build(db, "hubei", HB_500)}
     for k, p in out["provinces"].items():
         if "match" in p:
             p["counts"] = {
