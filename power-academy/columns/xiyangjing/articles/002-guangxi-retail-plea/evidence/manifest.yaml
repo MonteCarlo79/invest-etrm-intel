@@ -13,6 +13,13 @@ entries:
   retrieved_at: '2026-10-09'
   license: public
   sha256: 5162c23ff2b3f3942c8c778a66f3c7b265accdf9faeb69ad5ae19e8796f465b2
+- id: gx_interim_measures
+  kind: policy_excerpt
+  source: 桂电交易函〔2026〕134号（2026-05-13）零售结算/履约风险防控/保底售电暂行措施
+  query: 第十五/十六/十七条暂缓执行（保底延续）; 平价套餐=批发均价+4.224×0.5; 履约红警10→5个工作日; 标的2026年5-12月
+  retrieved_at: '2026-10-09'
+  license: public
+  sha256: 3a3f1c31b733a1d62e41f8fdb7f4cdbb8f6c7090e93a6cd159c25d8389c33383
 - id: gd_risk_rules
   kind: policy_excerpt
   source: 广东电力市场履约风险管理实施细则（征求意见稿）
