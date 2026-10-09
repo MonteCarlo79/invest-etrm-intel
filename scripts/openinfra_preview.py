@@ -31,7 +31,7 @@ _PREFIX_RE = re.compile(r"^(±?\d+kV|\d+千伏)")
 
 # vision-map abbreviations -> full OIM names
 ALIASES = {"包北": "包头北", "塔拉": "塔拉", "乌海": "乌海",
-           "保定": "雄安"}
+           "保定": "雄安", "黑换": "黑河"}
 
 
 def norm_name(name: str) -> str:
