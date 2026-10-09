@@ -1,0 +1,36 @@
+entries:
+- id: gx3_art16_36
+  kind: policy_excerpt
+  source: 广西电力市场零售结算管理办法（3.0版）第十五/十六/三十六条
+  query: owner-provided PDF, articles transcribed verbatim
+  retrieved_at: '2026-10-09'
+  license: public
+  sha256: 87b6d5d7c92321425f1e24a3ef5161207df36fcb74cfc1120b8d7587de8820e9
+- id: gx_price_notice
+  kind: policy_excerpt
+  source: 关于公布广西电力市场零售结算相关价格的通知（桂电交易函〔2026〕3号）
+  query: '广西电力交易中心 2026-01-06: 4.224 元/兆瓦时 批零价差均值'
+  retrieved_at: '2026-10-09'
+  license: public
+  sha256: 5162c23ff2b3f3942c8c778a66f3c7b265accdf9faeb69ad5ae19e8796f465b2
+- id: gd_risk_rules
+  kind: policy_excerpt
+  source: 广东电力市场履约风险管理实施细则（征求意见稿）
+  query: 初始信用额度公式(1分×系数6, 最低200万), 履约保险≤20%, 红色预警3个工作日补缴, 违约金偿付n=6个月
+  retrieved_at: '2026-10-09'
+  license: public
+  sha256: 0c03c59922bc07258f600068e41824db11079263f14cc469cb67d2b180a23d35
+- id: news_gx_plea
+  kind: news
+  source: 广西9家售电公司联名请示（owner-provided）
+  query: 2026-09-30 联名上书请求暂停9月电费结算；亏损数字来自企业请示，规模待官方核实
+  retrieved_at: '2026-10-09'
+  license: public
+  sha256: 085218b21ec95a16f6bb50d37df80e106ce0440bdb17b3d1b1923e6be485a576
+- id: gx_old_8li_rule
+  kind: owner_note
+  source: 原有8厘利润限制安排（2026年调整，作者市场经验注记）
+  query: owner domain note; 3.0版新机制折合上限8.448元/兆瓦时与之几乎持平
+  retrieved_at: '2026-10-09'
+  license: public
+  sha256: 2e62179fe974dbae4fa66f6268204c7423dc7109a5cdbb202bcb44b267213edd

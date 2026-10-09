@@ -82,7 +82,8 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
     html = _sanitize(html)
 
     GENERIC_SOURCE = {"policy_excerpt": "公开政策文件", "western_fact": "公开文献",
-                      "chart": "作者测算", "data_own": "作者自有经营数据",
+                      "chart": "作者测算", "news": "公开报道", "owner_note": "作者注记",
+                      "data_own": "作者自有经营数据",
                       "data_public": "公开市场数据", "data_licensed_restricted": "授权市场数据"}
 
     def _generic(e):
