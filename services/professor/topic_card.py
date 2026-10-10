@@ -164,6 +164,8 @@ def main() -> None:
         sys.exit("PGURL not set — export it from the main repo's config/.env "
                  "(RDS needs Astrill VPN off or AWS excluded)")
     engine = sa.create_engine(pg_url)
+    with engine.begin() as c:
+        c.execute(sa.text(DDL))
     ctx = gather(engine)
     logger.info("context: %d kb docs, %d recent titles, %d concepts",
                 len(ctx["kb_docs"]), len(ctx["recent_titles"]), len(ctx["concept_ids"]))
