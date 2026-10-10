@@ -190,3 +190,24 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Candidates: xiyangjing pilot article (pick topic from `columns/xiyangjing/topics/backlog.yaml`; workflow in its README), Phase 3 simulation games, or hermes international-feeds workstream (Timera/Modo/Montel/Cornwall/EnAppSys — needs hermes deploy confirmation).
 - Carry-forward: `/tmp/bess-pa` worktree kept (holds git-ignored `cache/` extracted source text reused by future phases). Incident lessons logged in ledgers: pull-results EN-overwrite (guard added — zh-only pull), forward-curve tautology, translate JSON fragility (now plain-markdown output).
 - Project memories written: `project_power_academy.md`, `project_xiyangjing_column.md`.
+
+## Session Summary, 2026-10-06 → 2026-10-10
+**Worked on:** 西洋镜看中国电力市场 (公众号 **胖橘花丈量电价**, 作者 **PJH**) — articles 001 and 002 end-to-end through the evidence-pack pipeline.
+
+**Completed:**
+- **001《输电权来了：云霄直流第一课》** — full cycle: evidence pack (8 entries incl. NDRC 734号文 + 方案全文), JR Fujian data rescue (LingFeng 福建 selector exports SHANXI content — broken at source), draft, three rounds of owner corrections (drop 2025 data, remove company name, Fujian disclosure nuance→access-scope), GPT 9-point revision (three-paradigm framing, 85/101/16 framework, net-spread formula), final owner version adopted. Identity locked: 胖橘花丈量电价/PJH. UTF-8 charset fix (mojibake), generic source footer (no internal identifiers), claim-map evidence mode invented (clean manuscript + auditable claims). Published to GitHub main.
+- **002《广西9家售电公司联名求救》** — all policy numbers verified against primary docs (桂电交易函〔2026〕3号 4.224→8.448 cap; 广西3.0版 第十六/三十六条; 广东细则 1分×系数6=6分/200万, ≤20%履约保险, 红色预警3日; 桂电交易函〔2026〕134号 May-13 suspension of all three sharing mechanisms + 平价套餐 4.224×0.5 uplift). Province conflation fixed (10→5 is Guangxi May, Guangdong is 3 days natively). Draft committed (e99e951), gates green, awaiting owner review + signoff for render.
+
+**In progress:** Article 002 final review + render + publish; 公众号 itself not yet launched publicly.
+
+**Decisions made:**
+- Claim-map mode (evidence/claim_map.yaml) is the default for public articles — manuscript stays clean, audit lives beside it; owner waives inline [[E:]] tags.
+- Footer shows only generic source categories (公开政策文件/作者自有经营数据/授权市场数据/公开报道/作者注记); no table names, doc ids, file paths, company names in public HTML.
+- Unverified numbers get cut, not softened ("由10缩短", "覆盖6个月" examples); owner domain notes registered as owner_note evidence class, honestly labeled.
+- Worktree lives at ~/bess-pa-wt (NEVER /tmp — macOS wipes on reboot, cost one article scaffold).
+
+**Next session:**
+- 002: owner signoff → render → push → publish 001 and 002 to 公众号.
+- LingFeng 福建 selector bug: decide whether to fix collector mapping or report to vendor; add zero-price monitoring rule to hermes data patrol (silent 2026 福建 zeros across prices+fundamentals).
+- 003 candidates: first 云霄 auction results (25.6/100 vs measured 85/101/16); retail-risk P2 ingestion (山东 PDF + contract schemas) still open from earlier queue.
+- Watch: parallel session's stale worktree keeps deleting newer files from main (3 clobber incidents this week) — restore via merge-tree when it happens.
