@@ -1,0 +1,75 @@
+claims:
+- pattern: 2026年9月30日
+  evidence:
+  - news_gx_plea
+- pattern: 累计亏损超过20亿元
+  evidence:
+  - news_gx_plea
+- pattern: 9月单月预计亏损超过10亿元
+  evidence:
+  - news_gx_plea
+- pattern: 全年亏损可能突破50亿元
+  evidence:
+  - news_gx_plea
+- pattern: 4.224元/兆瓦时
+  evidence:
+  - gx_price_notice
+- pattern: 8.448元/兆瓦时
+  evidence:
+  - gx_price_notice
+- pattern: 8.45厘
+  evidence:
+  - gx_price_notice
+- pattern: 2倍系数
+  evidence:
+  - gx3_art16_36
+- pattern: 90%
+  evidence:
+  - gx3_art16_36
+- pattern: 5个工作日内
+  evidence:
+  - gx3_art16_36
+- pattern: 6分钱
+  evidence:
+  - gd_risk_rules
+- pattern: 200万元
+  evidence:
+  - gd_risk_rules
+- pattern: 调整系数
+  evidence:
+  - gd_risk_rules
+- pattern: 20%
+  evidence:
+  - gd_risk_rules
+- pattern: 3个工作日
+  evidence:
+  - gd_risk_rules
+- pattern: 暂停全部市场交易权限
+  evidence:
+  - gd_risk_rules
+- pattern: 6个月
+  evidence:
+  - gd_risk_rules
+- pattern: 5月13日
+  evidence:
+  - gx_interim_measures
+- pattern: 暂缓执行
+  evidence:
+  - gx_interim_measures
+- pattern: 2026年5月至12月
+  evidence:
+  - gx_interim_measures
+- pattern: '2.112'
+  evidence:
+  - gx_interim_measures
+- pattern: 保底售电交易单元延续执行
+  evidence:
+  - gx_interim_measures
+- pattern: 5个工作日
+  evidence:
+  - gx3_art16_36
+  - gx_interim_measures
+  - gd_risk_rules
+- pattern: 2.112元/兆瓦时
+  evidence:
+  - gx_interim_measures
