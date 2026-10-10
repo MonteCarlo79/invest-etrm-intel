@@ -66,6 +66,8 @@ def _render_grid_map(engine, province: str, top_df: pd.DataFrame) -> None:
         return
 
     st.subheader(f"Grid map — {province} (500 kV+ backbone)")
+    _show_labels = st.checkbox("站名标注 (station labels)", value=True,
+                               key=f"nm_labels_{tag}")
     lon0, lat0 = _oim_center(tag)
     layers = []
     if lines:
@@ -95,6 +97,16 @@ def _render_grid_map(engine, province: str, top_df: pd.DataFrame) -> None:
                     get_fill_color=[255, 190, 0], get_radius=14000,
                     stroked=True, get_line_color=[120, 60, 0],
                     line_width_min_pixels=1.5, pickable=True))
+        # Chinese station-name labels for the 500 kV+ backbone stations
+        if _show_labels:
+            ldf = sdf[sdf["max_voltage"].fillna(0) >= 500000]
+            if not ldf.empty:
+                layers.append(pdk.Layer(
+                    "TextLayer", ldf, get_position=["lon", "lat"],
+                    get_text="name", get_size=12, get_color=[35, 35, 35],
+                    get_pixel_offset=[0, -10], font_family="sans-serif",
+                    get_text_anchor="'middle'", get_alignment_baseline="'bottom'",
+                    pickable=False))
     st.pydeck_chart(pdk.Deck(
         initial_view_state=pdk.ViewState(longitude=lon0, latitude=lat0, zoom=5.2),
         layers=layers, map_style=None,
