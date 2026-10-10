@@ -1,0 +1,19 @@
+claims:
+  - {pattern: "2.112", evidence: [gx_interim_measures]}
+  - {pattern: "4.224", evidence: [gx_price_notice]}
+  - {pattern: "r6", evidence: [gx_interim_measures]}
+  - {pattern: "0.5", evidence: [gx_interim_measures]}
+  - {pattern: "批发均价", evidence: [gx_interim_measures]}
+  - {pattern: "暂缓执行", evidence: [gx_interim_measures]}
+  - {pattern: "2026年5月至12月", evidence: [gx_interim_measures]}
+  - {pattern: "10%留在售电公司", evidence: [gx3_art16_36]}
+  - {pattern: "8.448", evidence: [gx_price_notice]}
+  - {pattern: "5个工作日", evidence: [gx3_art16_36]}
+  - {pattern: "服务费", evidence: [sd_linked_package]}
+  - {pattern: "分时参考价", evidence: [sd_linked_package]}
+  - {pattern: "仅能设置服务费标准", evidence: [sd_linked_package]}
+  - {pattern: "封顶", evidence: [sd_linked_package]}
+  - {pattern: "48小时冷静期", evidence: [sd_linked_package]}
+  - {pattern: "知情书", evidence: [sd_linked_package]}
+  - {pattern: "名单", evidence: [sd_linked_package]}
+  - {pattern: "2026年", evidence: [sd_linked_package, gx_interim_measures]}

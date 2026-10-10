@@ -856,3 +856,30 @@ variable "desired_count_retail_risk" {
   type        = number
   default     = 1
 }
+
+variable "image_professor_topic_card" {
+  description = "Docker image for the professor weekly topic card job"
+  type        = string
+  default     = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-professor-topic-card:v1"
+}
+
+variable "feishu_app_id" {
+  description = "Feishu app id for the topic card sender"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "feishu_app_secret" {
+  description = "Feishu app secret for the topic card sender"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "feishu_owner_open_id" {
+  description = "Feishu open_id of the topic card recipient (owner)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
