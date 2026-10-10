@@ -135,6 +135,11 @@ def main() -> int:
     dsn = os.environ.get("DB_DSN") or os.environ.get("PGURL")
     if not dsn:
         raise SystemExit("set DB_DSN or PGURL")
+    if dsn.startswith("postgresql://"):
+        try:
+            import psycopg  # noqa: F401 — v3 driver present, bare scheme fine
+        except ImportError:
+            dsn = "postgresql+psycopg2://" + dsn[len("postgresql://"):]
     engine = create_engine(dsn)
     with engine.begin() as conn:
         for stmt in DDL.split(";"):
