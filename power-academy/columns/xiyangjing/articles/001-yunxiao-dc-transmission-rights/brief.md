@@ -12,7 +12,7 @@ questions:
   - 与 JAO LTTR、PJM FTR 相比，方案在显性拍卖 vs 隐式分配、use-it-or-sell-it、金融 vs 物理权利上各选了什么？
   - 用价差分布给输电权定价：内在价值多少？期权(外在)价值多少？
 readers: [A, C]
-published_url: published on 胖橘花丈量电价 2026-10 (screenshot record IMG_4065)
+published_url: https://mp.weixin.qq.com/s/mEtz8KICNpvzTJGSwlF4ng
 ---
 
 云霄直流输电权市场化交易方案(试行)落地——连接福建(国网)与广东(南网)的跨网直流通道首次把通道容量变成可交易的金融权利。本文用欧洲长期输电权(JAO LTTR)与美国 FTR 的成熟机制做镜子：先解构方案的交易品种、拍卖与结算安排，再用闽粤现货价差的历史分布给出输电权的内在价值与期权价值估算，最后讨论为什么这个产品的成败不在交易本身，而在两端现货价差是否真实、可持续——以及它为中国电力衍生品市场打开的那道门。
