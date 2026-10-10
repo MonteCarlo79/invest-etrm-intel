@@ -132,7 +132,10 @@ def main() -> int:
 
     import os
     from sqlalchemy import create_engine, text
-    engine = create_engine(os.environ["DB_DSN"])
+    dsn = os.environ.get("DB_DSN") or os.environ.get("PGURL")
+    if not dsn:
+        raise SystemExit("set DB_DSN or PGURL")
+    engine = create_engine(dsn)
     with engine.begin() as conn:
         for stmt in DDL.split(";"):
             if stmt.strip():
