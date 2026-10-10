@@ -159,7 +159,10 @@ def main() -> None:
     ap.add_argument("--send", action="store_true")
     args = ap.parse_args()
 
-    pg_url = os.environ["PGURL"]
+    pg_url = os.environ.get("PGURL")
+    if not pg_url:
+        sys.exit("PGURL not set — export it from the main repo's config/.env "
+                 "(RDS needs Astrill VPN off or AWS excluded)")
     engine = sa.create_engine(pg_url)
     ctx = gather(engine)
     logger.info("context: %d kb docs, %d recent titles, %d concepts",
