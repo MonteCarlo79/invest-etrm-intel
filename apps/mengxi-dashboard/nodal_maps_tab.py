@@ -10,6 +10,7 @@ from datetime import date as _date
 
 import pandas as pd
 import plotly.express as px
+import pydeck as pdk
 import streamlit as st
 
 from services.mengxi_nodal.pf_results import (
@@ -18,9 +19,91 @@ from services.mengxi_nodal.pf_results import (
     get_latest_date as _nm_latest,
     get_pf_results as _nm_results,
 )
+from services.openinfra.map_data import (
+    extent_center as _oim_center,
+    get_line_paths as _oim_lines,
+    get_substations as _oim_subs,
+    tag_for_province as _oim_tag,
+)
 
 _PROVINCES = ["蒙西", "山西", "陕西", "湖南", "浙江", "云南", "贵州", "广东", "广西", "海南", "甘肃",
               "山东", "河北南网", "黑龙江", "辽宁", "湖北", "安徽", "江西"]
+
+# voltage class -> RGB for the grid underlay
+_VOLT_COLORS = [
+    (1000000, [120, 0, 0]),      # 1000 kV UHV
+    (750000, [200, 60, 0]),      # 750 kV
+    (500000, [210, 40, 40]),     # 500 kV
+    (330000, [230, 150, 40]),    # 330 kV
+    (0, [150, 150, 150]),
+]
+
+
+def _volt_rgb(v):
+    for floor, rgb in _VOLT_COLORS:
+        if (v or 0) >= floor:
+            return rgb
+    return _VOLT_COLORS[-1][1]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _grid_payload(_engine, tag: str):
+    subs = _oim_subs(_engine, tag)
+    lines = _oim_lines(_engine, tag)
+    return subs, lines
+
+
+def _render_grid_map(engine, province: str, top_df: pd.DataFrame) -> None:
+    """OpenInfraMap grid underlay: 500/750 kV lines + stations; exact-name
+    highlights for ranked PF nodes when they match a substation name."""
+    tag = _oim_tag(province)
+    if tag is None:
+        return
+    subs, lines = _grid_payload(engine, tag)
+    if subs.empty and not lines:
+        st.caption("Grid underlay not loaded for this province yet "
+                   "(staging.openinfra_* empty — run the OpenInfraMap extract task).")
+        return
+
+    st.subheader(f"Grid map — {province} (500 kV+ backbone)")
+    lon0, lat0 = _oim_center(tag)
+    layers = []
+    if lines:
+        line_data = [{"path": p["path"], "color": _volt_rgb(p["max_voltage"])}
+                     for p in lines]
+        layers.append(pdk.Layer(
+            "PathLayer", line_data, get_path="path", get_color="color",
+            get_width=2, width_min_pixels=1, width_max_pixels=3, pickable=False))
+    if not subs.empty:
+        sdf = subs.copy()
+        sdf["color"] = sdf["max_voltage"].map(_volt_rgb)
+        sdf["radius"] = sdf["max_voltage"].fillna(0).map(
+            lambda v: 9000 if v >= 750000 else (6000 if v >= 500000 else 3500))
+        layers.append(pdk.Layer(
+            "ScatterplotLayer", sdf, get_position=["lon", "lat"],
+            get_fill_color="color", get_radius="radius", stroked=True,
+            get_line_color=[30, 30, 30], line_width_min_pixels=0.5,
+            pickable=True, auto_highlight=True))
+        # ranked PF nodes whose name matches a station → gold highlight
+        ranked = set(top_df["node_name"]) if not top_df.empty else set()
+        if ranked:
+            hit = sdf[sdf["name"].map(
+                lambda n: any(r in n or n in r for r in ranked if len(r) >= 2))]
+            if not hit.empty:
+                layers.append(pdk.Layer(
+                    "ScatterplotLayer", hit, get_position=["lon", "lat"],
+                    get_fill_color=[255, 190, 0], get_radius=14000,
+                    stroked=True, get_line_color=[120, 60, 0],
+                    line_width_min_pixels=1.5, pickable=True))
+    st.pydeck_chart(pdk.Deck(
+        initial_view_state=pdk.ViewState(longitude=lon0, latitude=lat0, zoom=5.2),
+        layers=layers, map_style=None,
+        tooltip={"text": "{name}\n{voltages}"}))
+    st.caption(
+        f"{len(subs)} named stations · {len(lines)} line paths (≥330/500 kV) · "
+        "gold = ranked PF node matched to a station · "
+        "Grid geometry © OpenStreetMap contributors, ODbL (via OpenInfraMap).")
+
 
 
 def render(get_engine) -> None:
@@ -60,9 +143,13 @@ def render(get_engine) -> None:
     _k2.metric("days covered", _nm_df["data_date"].nunique())
     _k3.metric("data through", str(_nm_latest_d))
 
+    _nm_top_df = _nm_totals.head(_nm_top_n)
+
+    # ── Geographic grid underlay (OpenInfraMap staging, if loaded) ──────────
+    _render_grid_map(engine, _nm_province, _nm_top_df)
+
     # ── Ranked bar chart ────────────────────────────────────────────────────
     st.subheader("Ranked nodes by PF revenue / MW")
-    _nm_top_df = _nm_totals.head(_nm_top_n)
     _nm_bar = px.bar(
         _nm_top_df, x="node_name", y="rev_per_mw",
         labels={"node_name": "Node", "rev_per_mw": "Rev / MW (CNY)"},
