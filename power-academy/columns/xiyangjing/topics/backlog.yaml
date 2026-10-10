@@ -1,21 +1,49 @@
 topics:
-  - {working_title: 从英国 merit order 看山东现货价格形成, status: idea}
-  - {working_title: 从英国容量市场拍卖看中国容量电价机制, status: idea}
-  - {working_title: 德国负电价与山东现货的启示, status: idea}
-  - {working_title: 从 spark spread 看煤电成本传导与联动, status: idea}
-  - {working_title: 独立储能现货收益：capture rate 的中英对比, status: idea}
-  - {working_title: 售电公司风险管理：从 PaR 到偏差考核, status: idea}
-  - {working_title: 远期曲线与中长期合约定价, status: idea}
-  - {working_title: 从欧洲平衡机制看中国偏差结算, status: idea}
-  - {working_title: 节点电价 vs 分区电价：阻塞管理的国际经验, status: idea}
-  - {working_title: 电力期货缺位的对冲成本：从中外基差数据说起, status: idea}
-  - id: t-2026-10-10-dryrun-01
-    working_title: 平价零售套餐：2.112元/MWh背后的成本加成答案
-    status: chosen
-    chosen_at: 2026-10-10
-    hook: {source: 桂电交易函〔2026〕134号, item: 广西推出与批发价联动的平价零售套餐}
-    thesis_hypothesis: 广西把批零价差从"限制"改成"透明成本加成"（批发均价+4.224×0.5≈2.112元/MWh），实质宣告批零价差游戏的终结；这是比限价更成熟的零售定价范式，值得其他省份参照
-    western: {concept_ids: [ppa_structures_and_route_to_market], markets: [EU, GB]}
-    china: {provinces: [广西], topics: [售电, 零售套餐, 批零价差]}
-    evidence_candidates: [gx_interim_measures, gx_price_notice, gx3_art16_36, news_gx_plea]
-    notes: DRY RUN entry for the resume-handoff test (2026-10-10); all evidence already in repo from 002 work
+- working_title: 从英国 merit order 看山东现货价格形成
+  status: idea
+- working_title: 从英国容量市场拍卖看中国容量电价机制
+  status: idea
+- working_title: 德国负电价与山东现货的启示
+  status: idea
+- working_title: 从 spark spread 看煤电成本传导与联动
+  status: idea
+- working_title: 独立储能现货收益：capture rate 的中英对比
+  status: idea
+- working_title: 售电公司风险管理：从 PaR 到偏差考核
+  status: idea
+- working_title: 远期曲线与中长期合约定价
+  status: idea
+- working_title: 从欧洲平衡机制看中国偏差结算
+  status: idea
+- working_title: 节点电价 vs 分区电价：阻塞管理的国际经验
+  status: idea
+- working_title: 电力期货缺位的对冲成本：从中外基差数据说起
+  status: idea
+- id: t-2026-10-10-dryrun-01
+  working_title: 平价零售套餐：2.112元/MWh背后的成本加成答案
+  status: in_progress
+  chosen_at: 2026-10-10
+  hook:
+    source: 桂电交易函〔2026〕134号
+    item: 广西推出与批发价联动的平价零售套餐
+  thesis_hypothesis: 广西把批零价差从"限制"改成"透明成本加成"（批发均价+4.224×0.5≈2.112元/MWh），实质宣告批零价差游戏的终结；这是比限价更成熟的零售定价范式，值得其他省份参照
+  western:
+    concept_ids:
+    - ppa_structures_and_route_to_market
+    markets:
+    - EU
+    - GB
+  china:
+    provinces:
+    - 广西
+    topics:
+    - 售电
+    - 零售套餐
+    - 批零价差
+  evidence_candidates:
+  - gx_interim_measures
+  - gx_price_notice
+  - gx3_art16_36
+  - news_gx_plea
+  notes: DRY RUN entry for the resume-handoff test (2026-10-10); all evidence already
+    in repo from 002 work
