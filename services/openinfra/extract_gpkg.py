@@ -53,14 +53,20 @@ CREATE INDEX IF NOT EXISTS idx_oim_lines_extent ON staging.openinfra_lines (exte
 
 
 def _fetch_gpkg(src: str, workdir: str = "/tmp") -> str:
-    """Local path passthrough; s3://bucket/key downloaded via boto3."""
-    if not src.startswith("s3://"):
-        return src
-    import boto3
-    bucket, key = src[5:].split("/", 1)
-    dest = str(Path(workdir) / Path(key).name)
-    boto3.client("s3").download_file(bucket, key, dest)
-    return dest
+    """Local path passthrough; s3:// via boto3 (task role); https:// via urllib
+    (presigned URL fallback when the task role lacks bucket access)."""
+    if src.startswith("s3://"):
+        import boto3
+        bucket, key = src[5:].split("/", 1)
+        dest = str(Path(workdir) / Path(key).name)
+        boto3.client("s3").download_file(bucket, key, dest)
+        return dest
+    if src.startswith("http://") or src.startswith("https://"):
+        import urllib.request
+        dest = str(Path(workdir) / "CHN-download.gpkg")
+        urllib.request.urlretrieve(src, dest)
+        return dest
+    return src
 
 
 def extract_extent(db: sqlite3.Connection, tag: str, cfg: dict) -> tuple[list[dict], list[dict]]:
