@@ -25,15 +25,15 @@ DDL = """
 CREATE TABLE IF NOT EXISTS staging.openinfra_substations (
     oim_fid     BIGINT      NOT NULL,
     extent_tag  TEXT        NOT NULL,
+    geom_type   TEXT        NOT NULL,
     name        TEXT        NOT NULL,
     voltages    TEXT,
     max_voltage INTEGER,
     operator    TEXT,
     lon         DOUBLE PRECISION NOT NULL,
     lat         DOUBLE PRECISION NOT NULL,
-    geom_type   TEXT        NOT NULL,
     edition_tag TEXT        NOT NULL,
-    PRIMARY KEY (oim_fid, extent_tag)
+    PRIMARY KEY (oim_fid, extent_tag, geom_type)
 );
 CREATE INDEX IF NOT EXISTS idx_oim_subs_extent ON staging.openinfra_substations (extent_tag);
 
@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS staging.openinfra_lines (
     PRIMARY KEY (oim_fid, extent_tag, path_seq)
 );
 CREATE INDEX IF NOT EXISTS idx_oim_lines_extent ON staging.openinfra_lines (extent_tag);
+"""
+
+DROP = """
+DROP TABLE IF EXISTS staging.openinfra_substations;
+DROP TABLE IF EXISTS staging.openinfra_lines;
 """
 
 
@@ -112,6 +117,8 @@ def main() -> int:
     ap.add_argument("--extent", required=True, help="extent tag, or 'all'")
     ap.add_argument("--edition", required=True, help="edition tag, e.g. 2026-10")
     ap.add_argument("--dry-run", action="store_true", help="print counts, no DB write")
+    ap.add_argument("--recreate", action="store_true",
+                    help="drop and recreate the staging tables (PK/schema change)")
     args = ap.parse_args()
 
     path = _fetch_gpkg(args.gpkg)
@@ -142,6 +149,10 @@ def main() -> int:
             dsn = "postgresql+psycopg2://" + dsn[len("postgresql://"):]
     engine = create_engine(dsn)
     with engine.begin() as conn:
+        if args.recreate:
+            for stmt in DROP.split(";"):
+                if stmt.strip():
+                    conn.execute(text(stmt))
         for stmt in DDL.split(";"):
             if stmt.strip():
                 conn.execute(text(stmt))
