@@ -495,3 +495,20 @@ Root cause of the Aug 20→Sep 23 silent death: launchd-spawned /bin/bash gets "
 **Decomposition (probe-verified):** (1) 2026-02-08 realized −12,683 ¥/MWh — single outlier day, on a wild February (theo avg 875.6/day vs 100–200 elsewhere; series starts 2026-02-04, likely bad early data); (2) May 2026 model failure — realized −385/day for a month (worst day −33,188% capture) with small positive theo; (3) recovery Jul–Oct (+59/+19/+65/+93). Recent data is healthy; the aggregate is poisoned by Feb+May.
 
 **Lesson:** province-level realized outliers decompose into (a) data-era artifacts (check the era's prices first), (b) genuine model-month failures (leaderboard/model-selection problem), (c) one-off catastrophe days (verify against source before trusting).
+
+## 2026-10-07 — ECR push stalls + silent push failure (retail-risk v4)
+
+**Symptoms:** `docker push` of an ~875 MB layer repeatedly stalled on "Waiting" layers for 30+ min; one push reported exit 0 but the tag never landed in ECR (service then circuit-broke for hours on `CannotPullContainerError ... not found`).
+
+**Root causes (two distinct):**
+1. Docker Desktop concurrent uploads on a slow/flaky China→Singapore link deadlock each other. **Fix: `MaxConcurrentUploads: 1` (and downloads) in `~/Library/Group Containers/group.com.docker/settings-store.json`, restart Docker. Push then completed in ~90 s.**
+2. Trusting the push's exit code/`tail` output instead of verifying server-side. **Fix: always confirm with `aws ecr describe-images ... | grep <tag>` (or digest match) before registering a td against it.**
+
+**Related:** in-container `pip install` from tuna/aliyun mirrors through QEMU kept corrupting large wheel downloads (hash mismatch) — flaky network path, retry or switch mirror; `psycopg[binary]` itself was never the problem. Also: SQLAlchemy ≥2.0.38 made psycopg **v3** the default `postgresql://` driver — images must ship `psycopg[binary]` (or pin sqlalchemy<2.0.38); unpinned `sqlalchemy>=2.0` in requirements was the latent boot-crasher (v3 image "healthy" at the tg because streamlit stays up serving the exception page).
+
+## 2026-10-10 — OpenInfraMap extraction run-task: 3 failures before exit 0
+**Context:** one-shot ECS run-task of services/openinfra/extract_gpkg.py (gpkg→staging.openinfra_*).
+1. `KeyError: DB_DSN` — mengxi-dashboard td env uses `PGURL`, not `DB_DSN`. Fix: extractor falls back to PGURL.
+2. `ModuleNotFoundError: psycopg` — sqlalchemy 2.x maps bare `postgresql://` to psycopg v3; images ship psycopg2-binary only (same lesson as retail-risk v4). Fix: qualify to `postgresql+psycopg2://` when v3 absent. Do NOT pass DSN with inline password via --overrides env (classifier-flagged; use the td's own PGURL).
+3. `UniqueViolation (oim_fid, extent_tag)` — gpkg fid is unique PER TABLE; point and polygon tables share fid values (collision at guangdong). Fix: PK includes geom_type; `--recreate` flag drops+recreates staging for schema changes.
+Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping — prefer the image's own env (PGURL) and plain `python -m` commands over shell one-liners.
