@@ -25,7 +25,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 
 | Service | ECR repo | Current image | TD | Deployed | By / notes |
 |---|---|---|---|---|---|
-| mengxi-dashboard | `bess-mengxi-dashboard` | **v32** (390b1ec556b5) | **47** | 2026-10-10 | this session: OpenInfraMap grid underlay + psycopg[binary] hotfix (sqlalchemy>=2.0.38 default-driver flip broke bare postgresql:// app-wide); jq-swap td:46→47 |
+| mengxi-dashboard | `bess-mengxi-dashboard` | **v33** (7a1fe8a1192a) | **48** | 2026-10-10 | this session: OpenInfraMap grid underlay + Chinese station-name TextLayer labels (toggle 站名标注) + psycopg[binary]; jq-swap td:47→48 |
 | deal-structurer | `bess-platform-deal-structurer` | **v29** (27e9f57385f6) | **33** | 2026-09-25 | this session: screening NaN-node + SQL date-type fixes |
 | bess-map (Quant) | `bess-map` | **v76** (cedb86400d29) | **114** | 2026-10-04 | this session: NaN-filter annual_real (arbitrage bars no longer vanish on warmup/forecast-hole days) |
 | hermes | `bess-platform-hermes` | (latest hand-injected) | **185** | 2026-09-30 | this session: ancillary dedup patch (skip confirmed/superseded); 31 env vars |
@@ -81,3 +81,4 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-10-10 — `bess-platform-mengxi-dashboard:45` ← `bess-mengxi-dashboard:v30` (88180f470927); OpenInfraMap integration: Nodal Maps tab Grid-map section (pydeck underlay from staging.openinfra_*), services/openinfra extractor (gpkg→staging, PGURL+psycopg2-qualify fixes in v30), gpkg uploaded to s3://bess-uploader-data-chen-singp-2026/openinfra/CHN-2026-10.gpkg. jq-swap td:44→45 (ignore_changes service, terraform could not flip; tfvars broken by parallel session's line-160 paste at apply time) (this session).
 - 2026-10-10 — `bess-platform-mengxi-dashboard:46` ← `bess-mengxi-dashboard:v31` (d23d1c47d868); substation PK (oim_fid, extent_tag, geom_type) — gpkg fid is unique per-table only, point/polygon collide (td:45 extract UniqueViolation at guangdong); extraction re-run with --recreate. td:45 superseded same hour (this session).
 - 2026-10-10 — `bess-platform-mengxi-dashboard:47` ← `bess-mengxi-dashboard:v32` (390b1ec556b5); hotfix — image ships `psycopg[binary]` (today's rebuilds pulled sqlalchemy>=2.0.38 → bare postgresql:// resolves to psycopg v3 → ModuleNotFoundError app-wide; same as retail-risk v4). jq-swap td:46→47, rollout + bare-PGURL engine probe verified (this session).
+- 2026-10-10 — `bess-platform-mengxi-dashboard:48` ← `bess-mengxi-dashboard:v33` (7a1fe8a1192a); Chinese station-name labels (TextLayer, 500kV+ stations) + 站名标注 toggle on the Grid-map section, per user feedback comparing with the offline preview map. jq-swap td:47→48 (this session).
