@@ -14,3 +14,4 @@ numpy-financial>=1.0
 pypsa>=0.28
 pulp>=2.7
 pydeck>=0.8
+psycopg[binary]>=3.1
