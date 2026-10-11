@@ -3,73 +3,98 @@
 deck.gl/pydeck's TextLayer is broken against CJK (and even ASCII) in the
 bundled deck.gl 9.3 stack (instanceIconDefs init error), so the map ships as a
 plain HTML5-canvas component — same rendering approach as the offline preview
-page (preview_mp.html), which handles Chinese labels, greedy label placement,
-wheel-zoom and drag-pan entirely client-side (no per-rerun deck re-serialization).
+page (preview_mp.html): match-semantics coloring (green = 网架图 station),
+short Chinese labels only for matched + PF-ranked stations, greedy label
+placement, wheel-zoom and drag-pan, all client-side.
 """
 from __future__ import annotations
 
 import json
 
-# voltage class -> CSS color (mirrors the former pydeck palette)
-_VOLT_CSS = [
-    (1000000, "#780000"),
-    (750000, "#c83c00"),
-    (500000, "#d22828"),
-    (330000, "#e69628"),
-    (0, "#969696"),
-]
+from services.openinfra.match import match_vision
+from services.openinfra.vision_lists import VISION_LISTS
 
 
-def _css(v):
-    for floor, c in _VOLT_CSS:
-        if (v or 0) >= floor:
-            return c
-    return _VOLT_CSS[-1][1]
+def _line_style(name: str, max_voltage) -> tuple[str, float, bool]:
+    """-> (css color, width, dashed). DC (换流/直流) purple dashed; else
+    steel-blue shades by voltage class, matching the preview page."""
+    if name and ("换流" in name or "直流" in name):
+        return "#7a4fc9", 1.6, True
+    v = max_voltage or 0
+    if v >= 1000000:
+        return "#16304f", 2.4, False
+    if v >= 750000:
+        return "#2c4a73", 2.0, False
+    if v >= 500000:
+        return "#5b7f96", 1.3, False
+    return "#9db3c0", 1.0, False
 
 
-def build_grid_map_html(subs, lines, extent, ranked_names, max_pts: int = 60) -> str:
+def build_grid_map_html(subs, lines, extent, ranked_names, extent_tag: str,
+                        max_pts: int = 60) -> tuple[str, dict]:
     """subs: DataFrame(name, max_voltage, lon, lat); lines: [{max_voltage, path}];
-    extent: (lon_min, lon_max, lat_min, lat_max); ranked_names: PF node names to
-    highlight in gold when a station name matches."""
+    ranked_names: PF node names to highlight in gold when a station matches.
+    Returns (html, counts) where counts = {ok, collapsed, missing}."""
     def _ds(path):
         if len(path) <= max_pts:
             return path
         step = len(path) / max_pts
         return [path[int(i * step)] for i in range(max_pts)]
 
+    matched = match_vision(VISION_LISTS.get(extent_tag, []), subs)
+    vision_total = len(VISION_LISTS.get(extent_tag, []))
+    counts = {
+        "ok": sum(1 for m in matched.values() if m["status"] == "OK"),
+        "collapsed": sum(1 for m in matched.values() if m["status"] == "COLLAPSED"),
+        "missing": vision_total - len(matched),
+    }
+
     ranked = [r for r in ranked_names if len(r) >= 2]
     stations = []
     for r in subs.itertuples():
         name = r.name
         gold = any(q in name or name in q for q in ranked)
+        m = matched.get(name)
         mv = r.max_voltage
         mv = int(mv) if mv == mv and mv is not None else 0  # NaN-safe
+        if gold:
+            kind = "gold"
+        elif m and m["status"] == "OK":
+            kind = "ok"
+        elif m:
+            kind = "collapsed"
+        else:
+            kind = "other"
         stations.append({"n": name, "x": round(r.lon, 5), "y": round(r.lat, 5),
-                         "v": mv, "g": bool(gold)})
-    line_data = [{"c": _css(p["max_voltage"]), "w": 2.2 if (p["max_voltage"] or 0) >= 750000 else 1.4,
-                  "p": [[round(x, 4), round(y, 4)] for x, y in _ds(p["path"])]}
-                 for p in lines]
+                         "v": mv, "k": kind,
+                         "lbl": (m["vision"] if m else name)})
+    line_data = []
+    for p in lines:
+        css, w, dash = _line_style(p.get("name", ""), p["max_voltage"])
+        line_data.append({"c": css, "w": w, "d": dash,
+                          "p": [[round(x, 4), round(y, 4)] for x, y in _ds(p["path"])]})
     payload = {"ext": list(extent), "lines": line_data, "subs": stations}
     data_js = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-
-    return _TEMPLATE.replace("__DATA__", data_js)
+    return _TEMPLATE.replace("__DATA__", data_js), counts
 
 
 _TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   html,body{margin:0;padding:0;background:#f2f1ea;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
-  #bar{display:flex;align-items:center;gap:14px;padding:4px 8px;font-size:12px;color:#444}
+  #bar{display:flex;align-items:center;gap:12px;padding:4px 8px;font-size:12px;color:#444;flex-wrap:wrap}
   #cv{display:block;width:100%;cursor:grab}
   .lg{display:inline-flex;align-items:center;gap:4px}
   .sw{width:16px;height:3px;display:inline-block}
 </style></head><body>
 <div id="bar">
   <label><input type="checkbox" id="lbl" checked> 站名标注</label>
-  <span class="lg"><span class="sw" style="background:#780000"></span>1000kV</span>
-  <span class="lg"><span class="sw" style="background:#c83c00"></span>750kV</span>
-  <span class="lg"><span class="sw" style="background:#d22828"></span>500kV</span>
-  <span class="lg"><span class="sw" style="background:#e69628"></span>330kV</span>
-  <span style="color:#b8860b">●</span><span style="font-size:12px;color:#666">PF排名匹配</span>
+  <span class="lg"><span class="sw" style="background:#5b7f96"></span>500kV线路</span>
+  <span class="lg"><span class="sw" style="background:#2c4a73"></span>750kV+线路</span>
+  <span class="lg"><span class="sw" style="background:#7a4fc9"></span>直流</span>
+  <span style="color:#2e8b57">●</span><span style="font-size:12px;color:#666">网架图站(匹配)</span>
+  <span style="color:#b8a02e">●</span><span style="font-size:12px;color:#666">归并</span>
+  <span style="color:#8a8f98">●</span><span style="font-size:12px;color:#666">其他命名站</span>
+  <span style="color:#ffc300">●</span><span style="font-size:12px;color:#666">PF排名匹配</span>
   <span style="margin-left:auto;color:#999">滚轮缩放 · 拖拽平移 · 双击复位</span>
 </div>
 <canvas id="cv"></canvas>
@@ -77,6 +102,7 @@ _TEMPLATE = """<!DOCTYPE html>
 const D = __DATA__;
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const [x0,x1,y0,y1] = D.ext;
+const KIND_COLOR = {ok:'#2e8b57', collapsed:'#b8a02e', other:'#8a8f98', gold:'#ffc300'};
 let W,H,scale,ox,oy;
 function fit(){
   const r = cv.parentElement.getBoundingClientRect();
@@ -91,7 +117,8 @@ function draw(){
   ctx.fillStyle = '#f2f1ea'; ctx.fillRect(0,0,W,H);
   ctx.lineCap='round';
   for(const L of D.lines){
-    ctx.strokeStyle = L.c; ctx.lineWidth = L.w; ctx.beginPath();
+    ctx.strokeStyle = L.c; ctx.lineWidth = L.w;
+    ctx.setLineDash(L.d?[6,4]:[]); ctx.beginPath();
     let started=false;
     for(const [x,y] of L.p){
       const [a,b]=px(x,y);
@@ -99,34 +126,37 @@ function draw(){
     }
     ctx.stroke();
   }
+  ctx.setLineDash([]);
   for(const s of D.subs){
     const [a,b]=px(s.x,s.y);
-    const r = s.g?7:(s.v>=750000?4.5:(s.v>=500000?3.2:2.2));
+    if(a<-10||a>W+10||b<-10||b>H+10) continue;
+    const r = s.k==='gold'?6.5:(s.k==='ok'?4:(s.k==='collapsed'?3.4:2.4));
     ctx.beginPath(); ctx.arc(a,b,r,0,6.284);
-    ctx.fillStyle = s.g?'#ffc300':(s.v>=750000?'#c83c00':(s.v>=500000?'#d22828':(s.v>=330000?'#e69628':'#969696')));
+    ctx.fillStyle = KIND_COLOR[s.k];
     ctx.fill(); ctx.lineWidth=1; ctx.strokeStyle='#2b2b2b'; ctx.stroke();
   }
   if(document.getElementById('lbl').checked){
     const zoomK = Math.max(0.45, Math.min(2.2, scale/60));
-    const budget = Math.floor(60 * zoomK * 1.6);
+    const budget = Math.floor(80 * zoomK * 1.6);
     const placed = [];
-    ctx.font = '11px sans-serif'; ctx.textAlign='center';
-    const cand = D.subs.filter(s=>s.v>=500000).sort((a,b)=>b.v-a.v);
+    ctx.font = '12px sans-serif'; ctx.textAlign='center';
+    const cand = D.subs.filter(s=>s.k==='gold'||s.k==='ok'||s.k==='collapsed')
+                       .sort((a,b)=>(a.k==='gold'?-1:0)-(b.k==='gold'?-1:0) || b.v-a.v);
     let n=0;
     for(const s of cand){
       if(n>=budget) break;
       const [a,b]=px(s.x,s.y);
       if(a<0||a>W||b<0||b>H) continue;
-      const w = ctx.measureText(s.n).width;
-      const box = [a-w/2-2, b-16, a+w/2+2, b-4];
+      const w = ctx.measureText(s.lbl).width;
+      const box = [a-w/2-2, b-17, a+w/2+2, b-4];
       let hit=false;
       for(const q of placed){ if(!(box[2]<q[0]||box[0]>q[2]||box[3]<q[1]||box[1]>q[3])){hit=true;break;} }
       if(hit) continue;
       placed.push(box); n++;
-      ctx.fillStyle='rgba(242,241,234,0.75)';
+      ctx.fillStyle='rgba(242,241,234,0.78)';
       ctx.fillRect(box[0],box[1],box[2]-box[0],box[3]-box[1]);
-      ctx.fillStyle = s.g?'#8a5a00':'#232323';
-      ctx.fillText(s.n,a,b-5);
+      ctx.fillStyle = s.k==='gold'?'#8a5a00':(s.k==='ok'?'#1d5c38':(s.k==='collapsed'?'#7a6520':'#555'));
+      ctx.fillText(s.lbl,a,b-5);
     }
   }
 }

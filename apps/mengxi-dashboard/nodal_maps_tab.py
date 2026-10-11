@@ -36,19 +36,20 @@ def _grid_html(_engine, tag: str, ranked: tuple) -> tuple:
     subs = _oim_subs(_engine, tag)
     lines = _oim_lines(_engine, tag)
     if subs.empty and not lines:
-        return "", 0, 0
-    html = _oim_html(subs, lines, _OIM_EXTENTS[tag]["extent"], list(ranked))
-    return html, len(subs), len(lines)
+        return "", 0, 0, 0, 0, 0
+    html, counts = _oim_html(subs, lines, _OIM_EXTENTS[tag]["extent"], list(ranked), tag)
+    return html, len(subs), len(lines), counts["ok"], counts["collapsed"], counts["missing"]
 
 
 def _render_grid_map(engine, province: str, top_df: pd.DataFrame) -> None:
     """OpenInfraMap grid underlay as a self-contained canvas component
-    (pydeck's TextLayer cannot render CJK on its bundled deck.gl stack)."""
+    (pydeck's TextLayer cannot render CJK on its bundled deck.gl stack).
+    Green = station on the province's 网架图; gold = ranked PF node match."""
     tag = _oim_tag(province)
     if tag is None:
         return
     ranked = tuple(top_df["node_name"]) if not top_df.empty else ()
-    html, n_subs, n_lines = _grid_html(engine, tag, ranked)
+    html, n_subs, n_lines, n_ok, n_coll, n_miss = _grid_html(engine, tag, ranked)
     if not html:
         st.caption("Grid underlay not loaded for this province yet "
                    "(staging.openinfra_* empty — run the OpenInfraMap extract task).")
@@ -56,8 +57,8 @@ def _render_grid_map(engine, province: str, top_df: pd.DataFrame) -> None:
     st.subheader(f"Grid map — {province} (500 kV+ backbone)")
     components.html(html, height=610, scrolling=False)
     st.caption(
+        f"网架图匹配 {n_ok} · 归并 {n_coll} · 未匹配 {n_miss} · "
         f"{n_subs} named stations · {n_lines} line paths (≥330/500 kV) · "
-        "gold = ranked PF node matched to a station · "
         "Grid geometry © OpenStreetMap contributors, ODbL (via OpenInfraMap).")
 
 
