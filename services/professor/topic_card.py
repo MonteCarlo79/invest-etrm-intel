@@ -72,7 +72,8 @@ PROPOSAL_SYSTEM = (
     "\"china\": {\"provinces\": [], \"topics\": []}, "
     "\"evidence_candidates\": [], \"notes\"}]}。"
     "hook.source 只能引用提供的素材（文档标题或 weekly_scan），禁止编造。"
-    "每个选题须包含西方市场机制视角与中国数据支撑点；避免与历史选题重复。")
+    "每个选题须包含西方市场机制视角与中国数据支撑点；避免与历史选题重复。"
+    "JSON字符串值内部如需引用，一律使用「」或《》，严禁使用英文双引号。")
 
 
 def gather(engine, weeks_back: int = 4) -> dict:
@@ -163,7 +164,9 @@ def main() -> None:
     if not pg_url:
         sys.exit("PGURL not set — export it from the main repo's config/.env "
                  "(RDS needs Astrill VPN off or AWS excluded)")
-    engine = sa.create_engine(pg_url)
+    # SQLAlchemy 2.0.4x+ defaults postgresql:// to the psycopg v3 driver;
+    # the image ships psycopg2-binary, so pin the dialect explicitly.
+    engine = sa.create_engine(pg_url.replace("postgresql://", "postgresql+psycopg2://", 1))
     with engine.begin() as c:
         c.execute(sa.text(DDL))
     ctx = gather(engine)

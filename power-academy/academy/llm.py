@@ -24,4 +24,8 @@ def call_json(client, model, system, user, max_tokens=2000, retries=1) -> dict:
             return parse_json(resp.content[0].text)
         except (ValueError, json.JSONDecodeError) as e:
             last = e
+            import logging
+            logging.getLogger("llm").warning(
+                "call_json parse failure (attempt %d): %s | raw[:400] = %r",
+                _ + 1, e, resp.content[0].text[:400])
     raise ValueError(f"unparseable LLM output: {last}")

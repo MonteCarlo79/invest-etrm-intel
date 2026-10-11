@@ -860,7 +860,7 @@ variable "desired_count_retail_risk" {
 variable "image_professor_topic_card" {
   description = "Docker image for the professor weekly topic card job"
   type        = string
-  default     = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-professor-topic-card:v1"
+  default     = "319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-professor-topic-card:v4"
 }
 
 variable "feishu_app_id" {
