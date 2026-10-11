@@ -71,3 +71,5 @@ claims:
   - {pattern: "1—2分钱", evidence: [retail_barriers]}
   - {pattern: "强制退出", evidence: [retail_barriers]}
   - {pattern: "6分钱", evidence: [retail_barriers]}
+  - {pattern: "电网侧独立新型储能", evidence: [anhui_cap_price, ndrc_114_cap_mechanism]}
+  - {pattern: "没有容量补偿", evidence: [anhui_cap_price, ndrc_114_cap_mechanism]}
