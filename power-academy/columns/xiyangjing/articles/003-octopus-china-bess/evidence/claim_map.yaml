@@ -73,3 +73,6 @@ claims:
   - {pattern: "6分钱", evidence: [retail_barriers]}
   - {pattern: "电网侧独立新型储能", evidence: [anhui_cap_price, ndrc_114_cap_mechanism]}
   - {pattern: "没有容量补偿", evidence: [anhui_cap_price, ndrc_114_cap_mechanism]}
+  - {pattern: "大面积亏损", evidence: [owner_market_note]}
+  - {pattern: "不足2分", evidence: [owner_market_note]}
+  - {pattern: "未经证实", evidence: [owner_market_note]}
