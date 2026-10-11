@@ -33,7 +33,7 @@ entries:
   query: GB 2h实测月均~5144£/MW(2026);批发88%/调频13%/容量7%;≈800元/MWh/日
   retrieved_at: '2026-10-11'
   license: own
-  sha256: 573e47fd02a2bcaa39e764ce7525a0dbea73a7051843a0de6de3eb208b3e24a3
+  sha256: e0ea3b2f2f5d093212d6d01188af5c04a3e1cc35dbeb203ee29c05f763f20b8f
 - id: gb_cm_auctions
   kind: western_fact
   source: Ofgem/NESO/DESNZ公开拍卖结果
