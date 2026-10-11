@@ -7,7 +7,6 @@ claims:
   - {pattern: "7000万", evidence: [octopus_model_kb]}
   - {pattern: "80%", evidence: [octopus_model_kb]}
   - {pattern: "86.5亿美元", evidence: [octopus_model_kb]}
-  - {pattern: "650万", evidence: [octopus_model_kb]}
   - {pattern: "1.53亿千瓦", evidence: [cn_storage_fleet]}
   - {pattern: "1.36亿千瓦", evidence: [cn_storage_fleet]}
   - {pattern: "第一大调节性资源", evidence: [cn_storage_fleet]}
