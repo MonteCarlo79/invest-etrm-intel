@@ -81,9 +81,6 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
     html = markdown.markdown(body, extensions=["tables"])
     html = _sanitize(html)
 
-<<<<<<< main
-    src_lines = [f"[{i+1}] {e.get('source','')}（{e.get('retrieved_at','')}获取）"
-=======
     GENERIC_SOURCE = {"policy_excerpt": "公开政策文件", "western_fact": "公开文献",
                       "chart": "作者测算", "news": "公开报道", "owner_note": "作者注记",
                       "data_own": "作者自有经营数据",
@@ -95,7 +92,6 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
         return GENERIC_SOURCE["data_" + e.get("license", "public")]
 
     src_lines = [f"[{i+1}] {_generic(e)}（{e.get('retrieved_at','')}获取）"
->>>>>>> pa-work
                  for i, e in enumerate(refs)]
     disclaimer = (column_root / "style" / "disclaimer.md").read_text(encoding="utf-8").strip()
     foot = ("<section class='foot'><hr/><p><strong>数据来源与口径</strong><br/>"
@@ -104,5 +100,11 @@ def render_article(article_dir: Path, column_root: Path) -> Path:
               "观点为作者分析，不代表任何机构。</p><p>" + disclaimer + "</p></section>")
     out = article_dir / "out" / (article_dir.name + ".html")
     out.parent.mkdir(exist_ok=True)
-    out.write_text(f"<style>{CSS}</style><section>{html}</section>{foot}", encoding="utf-8")
+    doc = ("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n"
+           "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+           f"<title>{article_dir.name}</title>\n"
+           "</head>\n<body>\n"
+           f"<style>{CSS}</style><section>{html}</section>{foot}"
+           "\n</body>\n</html>\n")
+    out.write_text(doc, encoding="utf-8")
     return out
