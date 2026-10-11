@@ -1,0 +1,43 @@
+entries:
+- id: cliff_arithmetic
+  kind: data
+  source: 作者复算（公开输入）
+  query: 0.35/0.28×0.75-1.5次→291-692元/kW·年;断崖43-76%中枢60-70%;165=330×50%
+  retrieved_at: '2026-10-11'
+  license: own
+  sha256: d1988f09c6132ade54195bdb9ba586948504e00863a4664ff45380e9ac5ea72d
+- id: im_comp_announcement
+  kind: data
+  source: 自治区能源局2026-02-25公告/新华社2025-09-26/能源局公开信息
+  query: 42站11.52GW/48.36GWh;67.05亿元;582元/kW·年;17GW+144%;调用+422%/+439%;万成功0.15元;收益率超20%;47站
+  retrieved_at: '2026-10-11'
+  license: public
+  sha256: e90ab38e298396f8e2fdc88ebea601419a527129e96c52237c36a63ff820b8fc
+- id: im_dispatch_behavior_own
+  kind: data
+  source: marketdata.md_id_cleared_energy（自有SQL）
+  query: 晚峰61.0%;凌晨30.1%;午间0.9%;<300元30.2%;捕获价差116.6 vs 可得360-430;捕获率<30%
+  retrieved_at: '2026-10-11'
+  license: own
+  sha256: 58ebb34fc54106f2b592fc2d05d01dfda938a8ad172bb8943a52d6f96f983fea
+- id: im_policy_lineage
+  kind: policy_excerpt
+  source: 内政办发〔2022〕88号/内能源电力字〔2025〕120号/656号
+  query: 0.35元/kWh上限×10年;第十条接口;一年一定一定十年;1.5次上限;消纳困难时段禁放
+  retrieved_at: '2026-10-11'
+  license: public
+  sha256: 4500f99fb85c2d3e051e9af8531b1518364b6c1962f93efd32d0a3dbec10cdc8
+- id: intl_province_practice
+  kind: western_fact
+  source: 课题报告国际借鉴/PJM/英国/德国;辽宁征求意见稿（公开）
+  query: PJM ELCC;GB T-4/T-1;德国战略储备;辽宁370元/kW·年;新疆6h公式
+  retrieved_at: '2026-10-11'
+  license: public
+  sha256: 941f290bc7a0e89b6b66010a06c744618d18732b1dd950730d8be181de7f7c10
+- id: ndrc_114_original
+  kind: policy_excerpt
+  source: 发改价格〔2026〕114号官方PDF（落款2026-01-27, 发布2026-01-30）
+  query: 可靠容量定义;不重复补偿;清单制;充电视同用户缴线损+系统运行费;承受能力评估;煤电50%回收
+  retrieved_at: '2026-10-11'
+  license: public
+  sha256: b1e6a13f4e7f2055ccc4f514dea391caa25d900f9a671dde05f60eebb717cdac

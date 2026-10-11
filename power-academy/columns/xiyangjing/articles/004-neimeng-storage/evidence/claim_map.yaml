@@ -1,0 +1,49 @@
+claims:
+  - {pattern: "2026年2月25日", evidence: [im_comp_announcement]}
+  - {pattern: "42个", evidence: [im_comp_announcement]}
+  - {pattern: "11.52吉瓦", evidence: [im_comp_announcement]}
+  - {pattern: "48.36吉瓦时", evidence: [im_comp_announcement]}
+  - {pattern: "67.05亿元", evidence: [im_comp_announcement]}
+  - {pattern: "582元", evidence: [cliff_arithmetic, im_comp_announcement]}
+  - {pattern: "165元/千瓦·年", evidence: [ndrc_114_original, cliff_arithmetic]}
+  - {pattern: "3.5倍", evidence: [cliff_arithmetic]}
+  - {pattern: "0.35元/千瓦时", evidence: [im_policy_lineage]}
+  - {pattern: "补偿期10年", evidence: [im_policy_lineage]}
+  - {pattern: "一年一定、一定十年", evidence: [im_policy_lineage]}
+  - {pattern: "2025年12月31日", evidence: [im_policy_lineage]}
+  - {pattern: "1700万千瓦", evidence: [im_comp_announcement]}
+  - {pattern: "144%", evidence: [im_comp_announcement]}
+  - {pattern: "963万千瓦", evidence: [im_comp_announcement]}
+  - {pattern: "27.1亿千瓦时", evidence: [im_comp_announcement]}
+  - {pattern: "422%", evidence: [im_comp_announcement]}
+  - {pattern: "23.6亿千瓦时", evidence: [im_comp_announcement]}
+  - {pattern: "439%", evidence: [im_comp_announcement]}
+  - {pattern: "30个", evidence: [im_comp_announcement]}
+  - {pattern: "万成功", evidence: [im_comp_announcement]}
+  - {pattern: "83次", evidence: [im_comp_announcement]}
+  - {pattern: "3704.43万元", evidence: [im_comp_announcement]}
+  - {pattern: "999万元", evidence: [im_comp_announcement]}
+  - {pattern: "20%", evidence: [im_comp_announcement]}
+  - {pattern: "48个", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "474.7万兆瓦时", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "61.0%", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "30.1%", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "30.2%", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "380.3元/兆瓦时", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "263.7元/兆瓦时", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "116.6元/兆瓦时", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "1.38次", evidence: [im_comp_announcement]}
+  - {pattern: "1.5次", evidence: [im_policy_lineage, im_comp_announcement]}
+  - {pattern: "0.15元/千瓦时", evidence: [im_comp_announcement]}
+  - {pattern: "582.5元", evidence: [cliff_arithmetic]}
+  - {pattern: "71.7%", evidence: [cliff_arithmetic]}
+  - {pattern: "43%—76%", evidence: [cliff_arithmetic]}
+  - {pattern: "330元/千瓦", evidence: [cliff_arithmetic, ndrc_114_original]}
+  - {pattern: "50%", evidence: [ndrc_114_original]}
+  - {pattern: "3500多亿千瓦时", evidence: [im_policy_lineage]}
+  - {pattern: "21年", evidence: [im_policy_lineage]}
+  - {pattern: "47个", evidence: [im_comp_announcement]}
+  - {pattern: "2030年", evidence: [im_policy_lineage]}
+  - {pattern: "0.9%", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "17GW", evidence: [im_comp_announcement]}
+  - {pattern: "67亿", evidence: [im_comp_announcement]}
