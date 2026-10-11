@@ -8,7 +8,9 @@ claims:
   - {pattern: "80%", evidence: [octopus_model_kb]}
   - {pattern: "86.5亿美元", evidence: [octopus_model_kb]}
   - {pattern: "650万", evidence: [octopus_model_kb]}
+  - {pattern: "1.53亿千瓦", evidence: [cn_storage_fleet]}
   - {pattern: "1.36亿千瓦", evidence: [cn_storage_fleet]}
+  - {pattern: "第一大调节性资源", evidence: [cn_storage_fleet]}
   - {pattern: "66.43GW", evidence: [cn_storage_fleet]}
   - {pattern: "5144英镑", evidence: [gb_bess_stack_own]}
   - {pattern: "800元/MWh/日", evidence: [gb_bess_stack_own]}
@@ -76,3 +78,5 @@ claims:
   - {pattern: "大面积亏损", evidence: [owner_market_note]}
   - {pattern: "不足2分", evidence: [owner_market_note]}
   - {pattern: "未经证实", evidence: [owner_market_note]}
+  - {pattern: "同等待遇", evidence: [gb_cm_auctions]}
+  - {pattern: "同一出清价", evidence: [gb_cm_auctions]}

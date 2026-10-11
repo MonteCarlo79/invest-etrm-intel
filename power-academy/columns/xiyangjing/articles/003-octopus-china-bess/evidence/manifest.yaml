@@ -19,7 +19,7 @@ entries:
   query: 2025底144.7GW;2025新增66.43GW;独立储能占60%;2030目标3亿kW
   retrieved_at: '2026-10-11'
   license: public
-  sha256: fe2687f78faa09526166a15b843aeec0ca55013eff6f10d71f4366169aa6a3bd
+  sha256: e93d38a3ef7fdcb889a3459e0bc96dd3434b45417994790b15d7d5e6d6baa85b
 - id: cn_sysopfee_own
   kind: data
   source: public.province_sysopfee_monthly（自有SQL）
@@ -40,7 +40,7 @@ entries:
   query: T-4 £63/£65/£60/£27.10每kW·年;电池1.78GW de-rated中标纪录;技术中性同场出清
   retrieved_at: '2026-10-11'
   license: public
-  sha256: fbfa2df76f337090d5335d6676c2c42dce9b181c5471c9b6aee71ae6cfada95c
+  sha256: fc0e6f152e1abb8af0fad217a32bff4cddc88a17fbdd3650e55e6f3f553b185e
 - id: gb_fr_saturation
   kind: western_fact
   source: 绿肆数创/SET Ventures/麦肯锡
