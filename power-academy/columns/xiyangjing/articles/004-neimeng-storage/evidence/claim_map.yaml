@@ -51,7 +51,6 @@ claims:
   - {pattern: "39,200兆瓦时", evidence: [im_market_analyses]}
   - {pattern: "83%", evidence: [im_market_analyses]}
   - {pattern: "29吉瓦时", evidence: [im_market_analyses]}
-  - {pattern: "谷山梁", evidence: [im_market_analyses]}
   - {pattern: "80个", evidence: [im_market_analyses]}
   - {pattern: "21吉瓦/84.26吉瓦时", evidence: [im_market_analyses]}
   - {pattern: "0.28元/千瓦时", evidence: [im_market_analyses, im_policy_lineage]}
@@ -73,3 +72,6 @@ claims:
   - {pattern: "100元", evidence: [im_market_analyses]}
   - {pattern: "市场化容量补偿", evidence: [im_market_analyses]}
   - {pattern: "10小时", evidence: [im_market_analyses]}
+  - {pattern: "100亿", evidence: [owner_note_im]}
+  - {pattern: "巴彦淖尔", evidence: [owner_note_im]}
+  - {pattern: "只建成了一期", evidence: [owner_note_im]}

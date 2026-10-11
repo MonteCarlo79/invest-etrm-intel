@@ -48,3 +48,10 @@ entries:
   retrieved_at: '2026-10-11'
   license: public
   sha256: d72f76bef574bfc5f5b69dabae009985d28f9a6856fc6f0b523ae78b4ea8013e
+- id: owner_note_im
+  kind: owner_note
+  source: 作者注记（自有市场跟踪）
+  query: 2026年补偿总额预计约100亿(67.05亿为2月42站口径);单体最大在巴彦淖尔1GW/4GWh,谷山梁仅建成一期一半
+  retrieved_at: '2026-10-11'
+  license: own
+  sha256: 3ed67de3635722587911b7ae0e253885fc464f803fcd31b10a0779e841bd2a67
