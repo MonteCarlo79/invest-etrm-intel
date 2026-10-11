@@ -512,3 +512,10 @@ Root cause of the Aug 20→Sep 23 silent death: launchd-spawned /bin/bash gets "
 2. `ModuleNotFoundError: psycopg` — sqlalchemy 2.x maps bare `postgresql://` to psycopg v3; images ship psycopg2-binary only (same lesson as retail-risk v4). Fix: qualify to `postgresql+psycopg2://` when v3 absent. Do NOT pass DSN with inline password via --overrides env (classifier-flagged; use the td's own PGURL).
 3. `UniqueViolation (oim_fid, extent_tag)` — gpkg fid is unique PER TABLE; point and polygon tables share fid values (collision at guangdong). Fix: PK includes geom_type; `--recreate` flag drops+recreates staging for schema changes.
 Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping — prefer the image's own env (PGURL) and plain `python -m` commands over shell one-liners.
+
+## 2026-10-11 — nodal-pf-daily: 19-day SILENT batch outage (pinned td + ECR lifecycle)
+**Symptom:** reports.nodal_pf_node_daily stale at 2026-09-21; no alarms, EventBridge Invocations metric looked fine.
+**Root cause chain:** (1) EventBridge target pinned td REVISION (aws_ecs_task_definition.x.arn not arn_without_revision); (2) each terraform apply re-pins the new revision and deregisters the old → 13 days of "TaskDefinition is inactive" FailedInvocations (09-23→10-09); (3) a re-register on 10-10 "fixed" invocation, but the pinned td's image (v29) had been REAPED by the ECR "keep last 5 images" lifecycle → task dies at CannotPullContainerError with ZERO log lines and NO FailedInvocation (RunTask API succeeds, failure is at pull time).
+**Detection gap:** zero-log pull failures are invisible to log greps; use CloudTrail lookup-events (RunTask) → taskArn → empty log stream = pull failure signature.
+**Fix:** rule target → family ARN (main.tf + put-targets); backfill 5-day chunks via run-task (memory-proven shape, avoids 19-day single-process OOM risk).
+**Standing hazard:** ECR keep-last-5 reaps the LIVE service image if ≥5 tags are pushed between deploys — batch jobs pulling that image then die silently. Consider raising lifecycle count or pinning deploy-and-batch images to a long-retention rule.
