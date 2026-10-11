@@ -25,7 +25,6 @@ claims:
   - {pattern: "999万元", evidence: [im_comp_announcement]}
   - {pattern: "20%", evidence: [im_comp_announcement]}
   - {pattern: "48个", evidence: [im_dispatch_behavior_own]}
-  - {pattern: "474.7万兆瓦时", evidence: [im_dispatch_behavior_own]}
   - {pattern: "61.0%", evidence: [im_dispatch_behavior_own]}
   - {pattern: "30.1%", evidence: [im_dispatch_behavior_own]}
   - {pattern: "30.2%", evidence: [im_dispatch_behavior_own]}
@@ -92,3 +91,11 @@ claims:
   - {pattern: "465元/兆瓦时", evidence: [im_market_analyses]}
   - {pattern: "1100元", evidence: [im_market_analyses]}
   - {pattern: "98元", evidence: [im_market_analyses]}
+  - {pattern: "含日内交易头寸", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "错配", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "约59%的价差收窄", evidence: [im_market_analyses]}
+  - {pattern: "反事实时序仿真", evidence: [im_market_analyses]}
+  - {pattern: "自我稀释", evidence: [im_market_analyses]}
+  - {pattern: "波幅仅约8,200兆瓦", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "测算采用了接近上限的利用强度假设", evidence: [cliff_arithmetic]}
+  - {pattern: "具体金额取决于项目投产进度与实际结算电量", evidence: [owner_note_im]}
