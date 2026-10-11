@@ -12,9 +12,8 @@ claims:
   - {pattern: "第一大调节性资源", evidence: [cn_storage_fleet]}
   - {pattern: "66.43GW", evidence: [cn_storage_fleet]}
   - {pattern: "5144英镑", evidence: [gb_bess_stack_own]}
-  - {pattern: "800元/MWh/日", evidence: [gb_bess_stack_own]}
+  - {pattern: "每MWh容量800元", evidence: [gb_bess_stack_own]}
   - {pattern: "724元", evidence: [gb_bess_stack_own, cn_arb_decline_own]}
-  - {pattern: "88%", evidence: [gb_bess_stack_own]}
   - {pattern: "65英镑", evidence: [gb_cm_auctions]}
   - {pattern: "60英镑", evidence: [gb_cm_auctions]}
   - {pattern: "1.78GW", evidence: [gb_cm_auctions]}
@@ -30,8 +29,6 @@ claims:
   - {pattern: "−21%", evidence: [hurin_reports]}
   - {pattern: "−33%", evidence: [hurin_reports]}
   - {pattern: "−39%", evidence: [hurin_reports]}
-  - {pattern: "0.4元/度", evidence: [owner_market_note]}
-  - {pattern: "0.1元/度", evidence: [owner_market_note]}
   - {pattern: "0.10—0.14", evidence: [cn_sysopfee_own]}
   - {pattern: "0.095元/kWh", evidence: [cn_sysopfee_own, hurin_reports]}
   - {pattern: "236%", evidence: [hurin_reports]}
@@ -90,3 +87,8 @@ claims:
   - {pattern: "90%—93%", evidence: [octopus_china_deep]}
   - {pattern: "95%", evidence: [octopus_china_deep]}
   - {pattern: "6GW", evidence: [octopus_china_deep]}
+  - {pattern: "六成", evidence: [gb_bess_stack_own]}
+  - {pattern: "约500元", evidence: [gb_bess_stack_own]}
+  - {pattern: "0.54元/度", evidence: [hurin_reports]}
+  - {pattern: "0.36元/度", evidence: [hurin_reports]}
+  - {pattern: "2027年1月1日", evidence: [anhui_cap_price]}
