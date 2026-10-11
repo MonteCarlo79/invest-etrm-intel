@@ -69,7 +69,6 @@ claims:
   - {pattern: "同年9月", evidence: [shell_china_exit]}
   - {pattern: "66GW", evidence: [cn_storage_fleet]}
   - {pattern: "DCC", evidence: [retail_barriers]}
-  - {pattern: "5000多家", evidence: [retail_barriers]}
   - {pattern: "1—2分钱", evidence: [retail_barriers]}
   - {pattern: "强制退出", evidence: [retail_barriers]}
   - {pattern: "6分钱", evidence: [retail_barriers]}
@@ -80,3 +79,15 @@ claims:
   - {pattern: "未经证实", evidence: [owner_market_note]}
   - {pattern: "同等待遇", evidence: [gb_cm_auctions]}
   - {pattern: "同一出清价", evidence: [gb_cm_auctions]}
+  - {pattern: "680万", evidence: [octopus_china_deep]}
+  - {pattern: "22%", evidence: [octopus_china_deep]}
+  - {pattern: "British Gas", evidence: [octopus_china_deep]}
+  - {pattern: "299英镑", evidence: [octopus_china_deep]}
+  - {pattern: "40—65英镑", evidence: [octopus_china_deep]}
+  - {pattern: "1656号", evidence: [octopus_china_deep]}
+  - {pattern: "2026年3月1日", evidence: [octopus_china_deep]}
+  - {pattern: "5288家", evidence: [retail_barriers, octopus_china_deep]}
+  - {pattern: "70余万", evidence: [retail_barriers, octopus_china_deep]}
+  - {pattern: "90%—93%", evidence: [octopus_china_deep]}
+  - {pattern: "95%", evidence: [octopus_china_deep]}
+  - {pattern: "6GW", evidence: [octopus_china_deep]}

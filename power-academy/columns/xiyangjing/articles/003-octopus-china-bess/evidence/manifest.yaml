@@ -96,7 +96,7 @@ entries:
   query: 5000+售电;广东度电利润1-2分;12个月强制退出;三大阻力+四道壁垒
   retrieved_at: '2026-10-11'
   license: public
-  sha256: 8eb73640b4804d20f1f60266c6d5e02b6bddbecec65ec844079fdaf5944f4e33
+  sha256: 0efc1ebcfb64b1bcc971f1d1578bb387de4441f273ed78afde634e551ce08ee3
 - id: shell_china_exit
   kind: news
   source: 清鹏产研院（2024-04-28）
@@ -118,3 +118,11 @@ entries:
   retrieved_at: '2026-10-11'
   license: own
   sha256: 8b1bbfee1c46bd80149074db81f4db066115c8825d1f7599ba88f6ca78c5e3f3
+- id: octopus_china_deep
+  kind: news
+  source: IESPlaza/电联新媒(廖宇)/深观启元/北极星（2026-02→08）
+  query: Ofgem 680万户/22%/超British Gas;V2G 299英镑/40-65英镑;5288家售电;1656号文;本土90-93% vs
+    章鱼95%;明阳6GW/Swaptopus
+  retrieved_at: '2026-10-11'
+  license: public
+  sha256: d1d884cb172bda319e005fb11e39f13659a2a26f4e471a37b9e2bb73c70f0831
