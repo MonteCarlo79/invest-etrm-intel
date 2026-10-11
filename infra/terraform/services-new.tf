@@ -450,7 +450,7 @@ resource "aws_ecs_task_definition" "crystal_ball_client" {
     environment = [
       { name = "PGURL", value = local.db_pgurl_direct },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-      { name = "BEDROCK_REGION", value = "us-east-1" },
+      { name = "BEDROCK_REGION", value = "ap-southeast-1" }, # must match deployed region (verified in fortune-teller task def :66); us-east-1 was stale
       { name = "AWS_REGION", value = var.region },
       { name = "TIMEZONE", value = "Asia/Shanghai" },
     ]
@@ -493,7 +493,9 @@ resource "aws_ecs_service" "crystal_ball_client" {
   depends_on = [aws_lb_listener.https]
   tags       = local.tags
 
-  lifecycle { ignore_changes = [task_definition] }
+  # desired_count + task_definition managed via CLI (see Crystal-Ball HANDOFF.md).
+  # Applies on 08-19 / 09-06 / 09-11 reset desired_count to 0 (outage each time).
+  lifecycle { ignore_changes = [task_definition, desired_count] }
 }
 
 import {
