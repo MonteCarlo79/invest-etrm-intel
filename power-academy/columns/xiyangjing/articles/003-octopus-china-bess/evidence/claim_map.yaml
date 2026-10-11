@@ -50,7 +50,7 @@ claims:
   - {pattern: "98%", evidence: [anhui_cap_price]}
   - {pattern: "560—600元", evidence: [gb_cm_auctions]}
   - {pattern: "167元", evidence: [gb_cm_auctions]}
-  - {pattern: "330元", evidence: [gb_cm_auctions]}
+  - {pattern: "330元", evidence: [owner_market_note, gb_cm_auctions]}
   - {pattern: "27.1英镑", evidence: [gb_cm_auctions]}
   - {pattern: "200毫秒", evidence: [hurin_reports]}
   - {pattern: "±1%", evidence: [hurin_reports]}
@@ -95,3 +95,5 @@ claims:
   - {pattern: "七成", evidence: [gb_bess_stack_own]}
   - {pattern: "工商业用户按用电量分摊", evidence: [anhui_cap_price]}
   - {pattern: "每月申报次月最大放电功率", evidence: [anhui_cap_price]}
+  - {pattern: "370元", evidence: [owner_market_note]}
+  - {pattern: "时长要求未定", evidence: [owner_market_note]}

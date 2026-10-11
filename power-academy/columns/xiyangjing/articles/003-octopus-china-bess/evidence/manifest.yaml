@@ -117,7 +117,7 @@ entries:
   query: 蒙西现货价差0.4→0.1元/度;0.35放电补偿存量不变,收益下行主因是价差
   retrieved_at: '2026-10-11'
   license: own
-  sha256: c7cf30886c7925b866d07bb04743d401e20cd427aa4beac8b26aba16b4939abf
+  sha256: 49f0bce829c33b093b6c37b75f3ef7a115c0fba208ed36e1f18324f960887e1a
 - id: octopus_china_deep
   kind: news
   source: IESPlaza/电联新媒(廖宇)/深观启元/北极星（2026-02→08）
