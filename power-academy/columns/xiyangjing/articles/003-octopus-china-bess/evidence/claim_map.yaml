@@ -92,3 +92,6 @@ claims:
   - {pattern: "0.54元/度", evidence: [hurin_reports]}
   - {pattern: "0.36元/度", evidence: [hurin_reports]}
   - {pattern: "2027年1月1日", evidence: [anhui_cap_price]}
+  - {pattern: "七成", evidence: [gb_bess_stack_own]}
+  - {pattern: "工商业用户按用电量分摊", evidence: [anhui_cap_price]}
+  - {pattern: "每月申报次月最大放电功率", evidence: [anhui_cap_price]}

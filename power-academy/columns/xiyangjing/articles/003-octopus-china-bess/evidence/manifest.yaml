@@ -5,7 +5,7 @@ entries:
   query: 165元/kW·年×(放电时长/6h)折算;98%阶梯考核;安徽现货度电0.23元;十五五3亿kW
   retrieved_at: '2026-10-11'
   license: public
-  sha256: effce15c407f15fc70157f6d06b773c8b1d946a8b3512976f44623ac23571599
+  sha256: 026534ceb871d690903892017effd15e716bcaa58ff94a39fb101b24cad101a5
 - id: cn_arb_decline_own
   kind: data
   source: marketdata.bess_capture_daily（自有SQL）
@@ -33,7 +33,7 @@ entries:
   query: GB 2h实测月均~5144£/MW(2026);批发88%/调频13%/容量7%;≈800元/MWh/日
   retrieved_at: '2026-10-11'
   license: own
-  sha256: c05fe2dee2990b769b30ccb14c70e624e74d8a084aac7685c1663e4029f1a1e2
+  sha256: 573e47fd02a2bcaa39e764ce7525a0dbea73a7051843a0de6de3eb208b3e24a3
 - id: gb_cm_auctions
   kind: western_fact
   source: Ofgem/NESO/DESNZ公开拍卖结果
