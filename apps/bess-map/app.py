@@ -116,11 +116,11 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_capture":     "Capture Rate (%)",
         "rank_col_days":        "Days",
         "rank_days_unit":       "d",
-"rank_stack_arb":       "Arbitrage",
+        "rank_stack_arb":       "Arbitrage",
         "rank_stack_cap":       "Capacity",
         "rank_stack_anc":       "Freq. reg.",
-"rank_stack_sys":       "Sys. op. fee",
-"fr_mgmt_title":        "FR Revenue Entry & Review",
+        "rank_stack_sys":       "Sys. op. fee",
+        "fr_mgmt_title":        "FR Revenue Entry & Review",
         "fr_pending_count":     "pending",
         "fr_form_prov":         "Province",
         "fr_form_month":        "Month (YYYY-MM)",
@@ -220,6 +220,20 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_col_missing_dates":      "Price gaps",
         "mgmt_col_missing_fund_dates": "Fundamentals gaps",
         "data_ops_log_title":   "Data Operations Log",
+        "lb_title":             "Strategy Leaderboard (promote loop)",
+        "lb_window":            "Evaluation window (days)",
+        "lb_eval_btn":          "Evaluate now",
+        "lb_empty":             "No evaluations yet — click 'Evaluate now' to compute the first window.",
+        "lb_col_model":         "Model",
+        "lb_col_province":      "Province",
+        "lb_col_window_end":    "Window end",
+        "lb_col_days":          "Days",
+        "lb_col_capture":       "Mean capture rate",
+        "lb_col_real":          "Realized ¥/MWh/day",
+        "lb_col_theo":          "Theoretical ¥/MWh/day",
+        "lb_col_delta":         "Δ vs champion",
+        "lb_col_status":        "Status",
+        "lb_forecast_band":     "Forecast band",
         "mgmt_batch_title":     "Batch Backfill",
         "mgmt_batch_caption":   "Download + ingest + capture for stale or missing provinces via the LingFeng scheduled pipeline.",
         "mgmt_batch_start":     "Start date",
@@ -393,11 +407,11 @@ _T: dict[str, dict[str, str]] = {
         "rank_col_capture":     "捕获率（%）",
         "rank_col_days":        "天数",
         "rank_days_unit":       "天",
-"rank_stack_arb":       "套利",
+        "rank_stack_arb":       "套利",
         "rank_stack_cap":       "容量电价",
         "rank_stack_anc":       "调频",
-"rank_stack_sys":       "系统运行费",
-"fr_mgmt_title":        "调频收入录入与确认",
+        "rank_stack_sys":       "系统运行费",
+        "fr_mgmt_title":        "调频收入录入与确认",
         "fr_pending_count":     "条待审",
         "fr_form_prov":         "省份",
         "fr_form_month":        "月份 (YYYY-MM)",
@@ -494,6 +508,20 @@ _T: dict[str, dict[str, str]] = {
         "mgmt_col_missing_dates":      "现货价格断档",
         "mgmt_col_missing_fund_dates": "基本面数据断档",
         "data_ops_log_title":   "数据操作日志",
+        "lb_title":             "策略排行榜（晋级循环）",
+        "lb_window":            "评估窗口（天）",
+        "lb_eval_btn":          "立即评估",
+        "lb_empty":             "暂无评估记录——点击“立即评估”计算首个窗口。",
+        "lb_col_model":         "模型",
+        "lb_col_province":      "省份",
+        "lb_col_window_end":    "窗口截止",
+        "lb_col_days":          "天数",
+        "lb_col_capture":       "平均捕获率",
+        "lb_col_real":          "实现收益 ¥/MWh/日",
+        "lb_col_theo":          "理论收益 ¥/MWh/日",
+        "lb_col_delta":         "与冠军差值",
+        "lb_col_status":        "状态",
+        "lb_forecast_band":     "预测区间",
         "mgmt_batch_title":     "批量补录",
         "mgmt_batch_caption":   "对过旧或缺失数据的省份执行自动下载、导入和捕获流程。",
         "mgmt_batch_start":     "开始日期",
@@ -765,7 +793,6 @@ def _load_installed_bess(_eng_key):
 
 
 @st.cache_data(ttl=3600)
-@st.cache_data(ttl=3600)
 def load_intraday_spread(_eng_key, start: str, end: str):
     sql = sql_text("""
         SELECT p.province, p.spread, v.ann_vol
@@ -862,6 +889,21 @@ def load_dispatch_day(_eng_key, province: str, duration_h: float, day: str):
     return pd.read_sql(sql, _eng(),
                        params={"p": province, "d": duration_h, "day": day},
                        parse_dates=["datetime"])
+
+@st.cache_data(ttl=3600)
+def load_quantile_band(_eng_key, province: str, day: str, model: str = "ols_rt_time_q_v1"):
+    sql = sql_text("""
+        SELECT datetime, q10, q25, q50, q75, q90
+        FROM marketdata.spot_prices_hourly_rt_forecast_quantile
+        WHERE province = :p AND model = :m AND datetime::date = :day
+        ORDER BY datetime
+    """)
+    try:
+        return pd.read_sql(sql, _eng(), params={"p": province, "m": model, "day": day},
+                           parse_dates=["datetime"])
+    except Exception:
+        return pd.DataFrame()
+
 
 @st.cache_data(ttl=3600)
 def load_avg_economics(_eng_key, province: str, duration_h: float, model: str = "ols_rt_time_v1"):
@@ -1896,32 +1938,11 @@ with tab_ranking:
             k4.metric(_t("rank_kpi_cycles"),
                       f"{avg_cycles_4h:.2f}/day" if avg_cycles_4h is not None else "—")
 
-        # Stacked bar chart: arbitrage + capacity payment + 调频 ancillary revenue
-        from services.bess_map.capacity_stack import (
-            capacity_payment_per_mwh_yr, capacity_stack_map,
-            ancillary_per_mwh_yr, load_capacity_rows, load_ancillary_annual,
-            DEFAULT_RATE, DEFAULT_BASE_HOURS,
-        )
-
+        # Stacked bar chart: arbitrage + capacity payment + 调频 ancillary − 系统运行费
         plot_df = rank_df.copy()
         plot_df["Duration"] = plot_df["duration_h"].map({2.0: "2h", 4.0: "4h"})
         if dur_filter != _t("all_durations"):
             plot_df = plot_df[plot_df["Duration"] == dur_filter]
-
-        # stack inputs (cached loaders)
-        _cap_rows = load_capacity_rows(_eng())
-        _status_by_prov = {r[0]: r[4] for r in _cap_rows}
-        _anc_annual = load_ancillary_annual(_eng())          # confirmed only
-        _installed = _load_installed_bess(_ENG_KEY)          # province → bess_mw
-
-        def _cap_for(prov: str, d: float) -> float:
-            if prov in _status_by_prov:
-                return capacity_stack_map(_cap_rows, d).get(prov, 0.0)
-            return capacity_payment_per_mwh_yr(DEFAULT_RATE, DEFAULT_BASE_HOURS, 1.0, d)
-
-        def _anc_for(prov: str, d: float) -> float:
-            return ancillary_per_mwh_yr(_anc_annual.get(prov, 0.0),
-                                        _installed.get(prov) or 0.0, d)
 
         # per-(province, duration) component values → per-100MW standard station (万元/yr)
         # scale: per-MWh value × 100 MW × D h ÷ 1e4 (100MW/200MWh for 2h, 100MW/400MWh for 4h)
@@ -3515,6 +3536,26 @@ with tab_dispatch:
                        name=_t("disp_rt_price"), line=dict(color="orange", width=2)),
             row=1, col=1, secondary_y=True,
         )
+        # Probabilistic forecast band (ols_rt_time_q_v1 residual quantiles, when present)
+        _qb = load_quantile_band(_ENG_KEY, disp_prov, str(detail_date))
+        if not _qb.empty:
+            _qb["hour"] = _qb["datetime"].dt.hour
+            _hx = list(_qb["hour"]) + list(_qb["hour"][::-1])
+            fig_det.add_trace(
+                go.Scatter(x=_hx, y=list(_qb["q90"]) + list(_qb["q10"][::-1]),
+                           fill="toself", fillcolor="rgba(123,31,162,0.10)",
+                           line=dict(width=0), name="q10–q90", hoverinfo="skip"),
+                row=1, col=1, secondary_y=True)
+            fig_det.add_trace(
+                go.Scatter(x=_hx, y=list(_qb["q75"]) + list(_qb["q25"][::-1]),
+                           fill="toself", fillcolor="rgba(123,31,162,0.22)",
+                           line=dict(width=0), name="q25–q75", hoverinfo="skip"),
+                row=1, col=1, secondary_y=True)
+            fig_det.add_trace(
+                go.Scatter(x=_qb["hour"], y=_qb["q50"],
+                           name=_t("lb_forecast_band"),
+                           line=dict(color="#7B1FA2", width=1.5, dash="dash")),
+                row=1, col=1, secondary_y=True)
         fig_det.add_trace(
             go.Scatter(x=detail_df["hour"], y=detail_df["soc_mwh"],
                        name=_t("disp_soc"), fill="tozeroy",
@@ -4203,6 +4244,51 @@ with tab_mgmt:
                         _dismiss_fr(_eng(), _fr_id)
                         st.cache_data.clear()
                         st.rerun()
+
+    # ── Strategy Leaderboard (promote loop) ────────────────────────────────────
+    st.subheader(_t("lb_title"))
+    from services.bess_map.strategy_experiments import (
+        evaluate as _lb_evaluate, load_leaderboard as _lb_load,
+    )
+    _lb_c1, _lb_c2 = st.columns([1, 2])
+    with _lb_c1:
+        lb_window = st.number_input(_t("lb_window"), min_value=7, max_value=180,
+                                    value=30, step=1, key="lb_window")
+    with _lb_c2:
+        st.write("")
+        if st.button(_t("lb_eval_btn"), key="lb_eval_btn"):
+            with st.spinner("evaluating…"):
+                _res = _lb_evaluate(_eng(), "marketdata", window_days=int(lb_window))
+            if _res["rows"]:
+                st.success(f"window_end={_res['window_end']} · {len(_res['rows'])} model×province rows")
+            else:
+                st.info(_res.get("note", _t("lb_empty")))
+    try:
+        lb_df = _lb_load(_eng(), "marketdata", window_days=int(lb_window))
+    except Exception:
+        lb_df = pd.DataFrame()
+    if lb_df.empty:
+        st.info(_t("lb_empty"))
+    else:
+        _badge = {"champion": "🏆 champion", "candidate": "▫️ candidate",
+                  "retired-candidate": "⚠️ retired-candidate"}
+        lb_show = lb_df.copy()
+        lb_show["status"] = lb_show["status"].map(lambda s: _badge.get(s, s))
+        lb_show = lb_show.rename(columns={
+            "model": _t("lb_col_model"), "province": _t("lb_col_province"),
+            "window_end": _t("lb_col_window_end"), "days": _t("lb_col_days"),
+            "mean_capture_rate": _t("lb_col_capture"),
+            "mean_realized_per_mwh": _t("lb_col_real"),
+            "mean_theoretical_per_mwh": _t("lb_col_theo"),
+            "delta_vs_champion": _t("lb_col_delta"),
+            "status": _t("lb_col_status"),
+        })
+        lb_show = lb_show.drop(columns=["evaluated_at"], errors="ignore")
+        st.dataframe(
+            lb_show.sort_values([_t("lb_col_province"), _t("lb_col_capture")],
+                                ascending=[True, False]),
+            use_container_width=True, hide_index=True,
+        )
 
     # ── Data Operations Log ──────────────────────────────────────────────────
     st.divider()
