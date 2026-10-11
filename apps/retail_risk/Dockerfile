@@ -2,9 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+COPY apps/retail_risk/requirements-base.txt ./apps/retail_risk/requirements-base.txt
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
+    --trusted-host mirrors.aliyun.com --timeout 300 --retries 5 \
+    -r apps/retail_risk/requirements-base.txt
 COPY apps/retail_risk/requirements.txt ./apps/retail_risk/requirements.txt
-RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --trusted-host pypi.tuna.tsinghua.edu.cn --timeout 300 --retries 5 \
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
+    --trusted-host mirrors.aliyun.com --timeout 300 --retries 5 \
     -r apps/retail_risk/requirements.txt
 
 COPY libs/ ./libs/
