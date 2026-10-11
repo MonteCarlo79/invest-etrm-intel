@@ -5,7 +5,7 @@ entries:
   query: 0.35/0.28×0.75-1.5次→291-692元/kW·年;断崖43-76%中枢60-70%;165=330×50%
   retrieved_at: '2026-10-11'
   license: own
-  sha256: 431de1c8e4b8241c1439de5ebd2887e590d50fa243edcda8c26b39ad08ef087e
+  sha256: d1988f09c6132ade54195bdb9ba586948504e00863a4664ff45380e9ac5ea72d
 - id: im_comp_announcement
   kind: data
   source: 自治区能源局2026-02-25公告/新华社2025-09-26/能源局公开信息
