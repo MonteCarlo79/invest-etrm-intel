@@ -1,0 +1,29 @@
+entries:
+- id: gx_interim_measures
+  kind: policy_excerpt
+  source: 桂电交易函〔2026〕134号（2026-05-13）
+  query: '平价套餐公式: 批发月分时加权均价 + 浮动价格(4.224)×r6(0.5) = +2.112元/MWh; 附件2/3暂行措施'
+  retrieved_at: '2026-10-10'
+  license: public
+  sha256: 3a3f1c31b733a1d62e41f8fdb7f4cdbb8f6c7090e93a6cd159c25d8389c33383
+- id: gx_price_notice
+  kind: policy_excerpt
+  source: 桂电交易函〔2026〕3号（2026-01-06）
+  query: 近12个月批零价差均值 4.224 元/兆瓦时
+  retrieved_at: '2026-10-10'
+  license: public
+  sha256: 5162c23ff2b3f3942c8c778a66f3c7b265accdf9faeb69ad5ae19e8796f465b2
+- id: gx3_art16_36
+  kind: policy_excerpt
+  source: 广西电力市场零售结算管理办法（3.0版）第十五/十六/三十六条
+  query: Kd0=30用户返还; Kd1=2超额1:9分享; 亏损5个工作日支付
+  retrieved_at: '2026-10-10'
+  license: public
+  sha256: 87b6d5d7c92321425f1e24a3ef5161207df36fcb74cfc1120b8d7587de8820e9
+- id: sd_linked_package
+  kind: policy_excerpt
+  source: 价格联动套餐签约明白纸（山东）
+  query: 套餐=分时参考价+服务费; 售电公司仅设服务费; 封顶价机制(默认勾选); 未勾选→48小时冷静期+知情书+名单公示
+  retrieved_at: '2026-10-10'
+  license: public
+  sha256: 71fe28684055a3f851622eadb0403fd8606530d2d675ae6c04964817d5356147
