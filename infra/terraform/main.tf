@@ -2309,7 +2309,10 @@ resource "aws_cloudwatch_event_target" "nodal_pf_daily_target" {
 
   ecs_target {
     launch_type         = "FARGATE"
-    task_definition_arn = aws_ecs_task_definition.mengxi_dashboard.arn
+    # family ARN (no revision): pinned revisions deregister on image updates and
+    # their images get reaped by ECR lifecycle — the task then fails at pull
+    # with zero logs (19-day silent outage 2026-09-23 → 2026-10-10)
+    task_definition_arn = aws_ecs_task_definition.mengxi_dashboard.arn_without_revision
 
     network_configuration {
       subnets          = var.private_subnet_ids
