@@ -40,7 +40,7 @@ entries:
   query: T-4 £63/£65/£60/£27.10每kW·年;电池1.78GW de-rated中标纪录;技术中性同场出清
   retrieved_at: '2026-10-11'
   license: public
-  sha256: fc0e6f152e1abb8af0fad217a32bff4cddc88a17fbdd3650e55e6f3f553b185e
+  sha256: e3f441f0c18cf98ebeb3c0a4c065e0d43852b3811c78a651eea689b7e6dc0f11
 - id: gb_fr_saturation
   kind: western_fact
   source: 绿肆数创/SET Ventures/麦肯锡
