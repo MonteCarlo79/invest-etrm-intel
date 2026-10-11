@@ -74,6 +74,5 @@ claims:
   - {pattern: "10小时", evidence: [im_market_analyses]}
   - {pattern: "100亿", evidence: [owner_note_im]}
   - {pattern: "巴彦淖尔", evidence: [owner_note_im]}
-  - {pattern: "只建成了一期", evidence: [owner_note_im]}
   - {pattern: "实质性投产当月起算", evidence: [im_policy_lineage, im_market_analyses]}
   - {pattern: "再增约30亿", evidence: [owner_note_im]}
