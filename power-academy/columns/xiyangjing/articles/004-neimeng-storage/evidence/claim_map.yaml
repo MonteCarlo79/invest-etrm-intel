@@ -47,3 +47,29 @@ claims:
   - {pattern: "0.9%", evidence: [im_dispatch_behavior_own]}
   - {pattern: "17GW", evidence: [im_comp_announcement]}
   - {pattern: "67亿", evidence: [im_comp_announcement]}
+  - {pattern: "28座", evidence: [im_market_analyses]}
+  - {pattern: "39,200兆瓦时", evidence: [im_market_analyses]}
+  - {pattern: "83%", evidence: [im_market_analyses]}
+  - {pattern: "29吉瓦时", evidence: [im_market_analyses]}
+  - {pattern: "谷山梁", evidence: [im_market_analyses]}
+  - {pattern: "80个", evidence: [im_market_analyses]}
+  - {pattern: "21吉瓦/84.26吉瓦时", evidence: [im_market_analyses]}
+  - {pattern: "0.28元/千瓦时", evidence: [im_market_analyses, im_policy_lineage]}
+  - {pattern: "259元/兆瓦时", evidence: [im_market_analyses]}
+  - {pattern: "105元", evidence: [im_market_analyses]}
+  - {pattern: "59%", evidence: [im_market_analyses]}
+  - {pattern: "2元", evidence: [im_market_analyses]}
+  - {pattern: "65%", evidence: [im_market_analyses]}
+  - {pattern: "98.3%", evidence: [im_market_analyses]}
+  - {pattern: "48%", evidence: [im_market_analyses]}
+  - {pattern: "34%", evidence: [im_market_analyses]}
+  - {pattern: "22%", evidence: [im_market_analyses]}
+  - {pattern: "红绿灯", evidence: [im_market_analyses]}
+  - {pattern: "12个省", evidence: [im_market_analyses]}
+  - {pattern: "370元/千瓦·年", evidence: [im_market_analyses, intl_province_practice]}
+  - {pattern: "330元", evidence: [im_market_analyses]}
+  - {pattern: "185元", evidence: [im_market_analyses]}
+  - {pattern: "浙江三年从200元退到170元", evidence: [im_market_analyses]}
+  - {pattern: "100元", evidence: [im_market_analyses]}
+  - {pattern: "市场化容量补偿", evidence: [im_market_analyses]}
+  - {pattern: "10小时", evidence: [im_market_analyses]}

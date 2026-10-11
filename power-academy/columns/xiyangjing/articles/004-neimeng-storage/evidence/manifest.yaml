@@ -41,3 +41,10 @@ entries:
   retrieved_at: '2026-10-11'
   license: public
   sha256: b1e6a13f4e7f2055ccc4f514dea391caa25d900f9a671dde05f60eebb717cdac
+- id: im_market_analyses
+  kind: news
+  source: 和展智盈/储能网/西北储储/南方能源观察/零点能源智库/中关村储能联盟
+  query: 三批清单80个21GW/84.26GWh;投运28座39.2GWh占83%;价差压平59%日均+2元;补贴占收入65-98.3%;捕获率48→22/34→9;12省机制;辽宁370;红绿灯
+  retrieved_at: '2026-10-11'
+  license: public
+  sha256: d72f76bef574bfc5f5b69dabae009985d28f9a6856fc6f0b523ae78b4ea8013e
