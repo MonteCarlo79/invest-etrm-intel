@@ -1,7 +1,7 @@
 ---
 id: 003-octopus-china-bess
 byline: pen_name
-status: drafting
+status: approved
 thesis: 中国自己的储能发展路径，已经填平了章鱼能源赖以生存的土壤：灵活性价值在中国通过网侧储能、行政化容量定价和国企虚拟电厂分配，而不经过零售市场；价差被储能内卷摊薄、系统运行费反噬、容量补偿按6小时折算且不足英国零头、虚拟电厂沦为政策工程、外资零售壳牌已先退一步。章鱼缺的不是技术，是土壤。
 western: {concept_ids: [], markets: [GB]}
 china: {provinces: [安徽, 甘肃, 山西, 蒙西, 宁夏, 广东, 江苏, 河北南网, 贵州, 河南, 江西], topics: [储能收益, 容量电价, 虚拟电厂, 售电, 外资准入, 系统运行费]}
