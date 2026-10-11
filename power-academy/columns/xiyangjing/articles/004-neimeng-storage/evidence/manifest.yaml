@@ -19,7 +19,7 @@ entries:
   query: 晚峰61.0%;凌晨30.1%;午间0.9%;<300元30.2%;捕获价差116.6 vs 可得360-430;捕获率<30%
   retrieved_at: '2026-10-11'
   license: own
-  sha256: 58ebb34fc54106f2b592fc2d05d01dfda938a8ad172bb8943a52d6f96f983fea
+  sha256: 70b29057c586e7e30e1dc3b4d52f18410999f2d0acbbaba08cfcfe935110248a
 - id: im_policy_lineage
   kind: policy_excerpt
   source: 内政办发〔2022〕88号/内能源电力字〔2025〕120号/656号

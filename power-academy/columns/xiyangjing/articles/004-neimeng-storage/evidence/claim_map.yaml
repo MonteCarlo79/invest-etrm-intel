@@ -76,3 +76,19 @@ claims:
   - {pattern: "巴彦淖尔", evidence: [owner_note_im]}
   - {pattern: "实质性投产当月起算", evidence: [im_policy_lineage, im_market_analyses]}
   - {pattern: "再增约30亿", evidence: [owner_note_im]}
+  - {pattern: "1.2万兆瓦", evidence: [im_market_analyses]}
+  - {pattern: "4.6万兆瓦", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "50,122兆瓦", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "41,918兆瓦", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "8,200兆瓦", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "四分之一", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "三分之一", evidence: [im_dispatch_behavior_own]}
+  - {pattern: "6,506兆瓦", evidence: [im_market_analyses]}
+  - {pattern: "91元/兆瓦时", evidence: [im_market_analyses]}
+  - {pattern: "75元/兆瓦时", evidence: [im_market_analyses]}
+  - {pattern: "6,935兆瓦", evidence: [im_market_analyses]}
+  - {pattern: "6,402兆瓦", evidence: [im_market_analyses]}
+  - {pattern: "13,337兆瓦", evidence: [im_market_analyses]}
+  - {pattern: "465元/兆瓦时", evidence: [im_market_analyses]}
+  - {pattern: "1100元", evidence: [im_market_analyses]}
+  - {pattern: "98元", evidence: [im_market_analyses]}
