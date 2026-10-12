@@ -168,6 +168,6 @@ def _run_knowledge_pool(tmp_path: Path, filename: str, year: int) -> None:
     except Exception as exc:
         try:
             set_document_status(doc_id, "error", parse_error=str(exc)[:500])
-        except Exception:
-            pass
+        except Exception as inner:
+            logger.warning("spot_ingest: set_document_status(error) also failed for doc_id=%s: %s", doc_id, inner)
         logger.error("spot_ingest: knowledge pool ingestion failed: %s", exc)

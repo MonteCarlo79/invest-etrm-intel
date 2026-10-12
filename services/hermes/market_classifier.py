@@ -6,6 +6,7 @@ Auto-classify is now the default for all document files — no manual trigger ne
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 from shared.anthropic_client import make_client as _make_anthropic_client
 
@@ -141,7 +142,9 @@ def classify_to_market_fundamentals(
 
     try:
         resp = client.messages.create(
-            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
+            # Default sonnet (haiku-4-5 requires use-case form on this Bedrock account);
+            # override via HERMES_CLASSIFY_MODEL, consistent with thinking_agent._resolve_model.
+            model=os.environ.get("HERMES_CLASSIFY_MODEL", "claude-sonnet-4-6"),
             max_tokens=160,
             system=_CLASSIFY_PROMPT,
             messages=[{"role": "user", "content": user_content}],
