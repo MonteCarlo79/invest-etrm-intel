@@ -1543,6 +1543,10 @@ resource "aws_ecs_task_definition" "spot_markets" {
           value = var.uploads_bucket_name
         },
         {
+          name  = "HERMES_URL"
+          value = "https://www.pjh-etrm.ai"
+        },
+        {
           name  = "SMTP_HOST"
           value = var.smtp_host
         },
