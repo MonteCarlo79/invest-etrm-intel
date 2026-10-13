@@ -91,6 +91,8 @@ def render(get_engine) -> None:
             f"No precomputed PF results for {_nm_province} in {_nm_start} → {_nm_end} yet. "
             "The daily batch computes yesterday's nodes every night; history is being backfilled."
         )
+        # The grid underlay does not depend on PF results — show it anyway.
+        _render_grid_map(engine, _nm_province, pd.DataFrame(columns=["node_name"]))
         return
 
     _nm_totals, _nm_monthly = _nm_aggregate(_nm_df, _NM_CONFIG["power_mw"])
