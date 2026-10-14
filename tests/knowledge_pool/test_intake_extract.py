@@ -25,19 +25,28 @@ _CANNED = {
 }
 
 
-class _FakeResp:
-    def __init__(self, text): self.content = [type("B", (), {"text": text})()]
+def _tool_resp(payload, stop_reason="end_turn"):
+    """Response shaped like a forced-tool-call reply: one tool_use block."""
+    block = type("B", (), {"type": "tool_use", "name": "submit_extraction",
+                           "input": payload})()
+    return type("R", (), {"content": [block], "stop_reason": stop_reason})()
+
+
+def _text_resp(text, stop_reason="end_turn"):
+    """Legacy text-only response (no tool_use block)."""
+    block = type("B", (), {"type": "text", "text": text})()
+    return type("R", (), {"content": [block], "stop_reason": stop_reason})()
 
 
 class _FakeClient:
-    def __init__(self, text): self._text = text; self.calls = []
+    def __init__(self, resp): self._resp = resp; self.calls = []
     @property
     def messages(self): return self
-    def create(self, **kwargs): self.calls.append(kwargs); return _FakeResp(self._text)
+    def create(self, **kwargs): self.calls.append(kwargs); return self._resp
 
 
 def test_extract_batch_parses_and_filters_routes():
-    client = _FakeClient(json.dumps(_CANNED, ensure_ascii=False))
+    client = _FakeClient(_tool_resp(_CANNED))
     pages = [Page(filename="IMG_1.jpg", data=b"\xff\xd8img1", kind="image"),
              Page(filename="IMG_2.jpg", data=b"\xff\xd8img2", kind="image")]
     prop = extract_batch(pages, api_key="k", _client=client)
@@ -52,14 +61,35 @@ def test_extract_batch_parses_and_filters_routes():
     assert sum(1 for b in content if b.get("type") == "image") == 2
 
 
-def test_extract_batch_bad_json_raises():
-    client = _FakeClient("not json at all")
+def test_extract_batch_forces_extraction_tool():
+    """Free-text JSON parsing broke on unescaped quotes in long transcriptions
+    (辽宁 batch 2026-10-14). The extractor must constrain output via a forced
+    tool call so the API guarantees schema-valid JSON."""
+    client = _FakeClient(_tool_resp(_CANNED))
+    extract_batch([Page(filename="a.jpg", data=b"x", kind="image")], api_key="k", _client=client)
+    call = client.calls[0]
+    assert call["tool_choice"] == {"type": "tool", "name": "submit_extraction"}
+    tool_names = [t["name"] for t in call["tools"]]
+    assert tool_names == ["submit_extraction"]
+    schema = call["tools"][0]["input_schema"]
+    for field_name in ("title", "province", "category", "summary", "pages", "routes"):
+        assert field_name in schema["properties"], field_name
+
+
+def test_extract_batch_no_tool_block_raises():
+    client = _FakeClient(_text_resp(json.dumps(_CANNED, ensure_ascii=False)))
     with pytest.raises(IntakeError):
         extract_batch([Page(filename="a.jpg", data=b"x", kind="image")], api_key="k", _client=client)
 
 
+def test_extract_batch_max_tokens_raises_split_hint():
+    client = _FakeClient(_tool_resp(_CANNED, stop_reason="max_tokens"))
+    with pytest.raises(IntakeError, match="[Ss]plit"):
+        extract_batch([Page(filename="a.jpg", data=b"x", kind="image")], api_key="k", _client=client)
+
+
 def test_extract_batch_groups_over_20_images():
-    client = _FakeClient(json.dumps(_CANNED, ensure_ascii=False))
+    client = _FakeClient(_tool_resp(_CANNED))
     pages = [Page(filename=f"IMG_{i}.jpg", data=f"img{i}".encode(), kind="image") for i in range(25)]
     prop = extract_batch(pages, api_key="k", _client=client)
     assert len(client.calls) == 2                      # 20 + 5
@@ -67,7 +97,7 @@ def test_extract_batch_groups_over_20_images():
 
 
 def test_extract_batch_text_pages_skip_vision():
-    client = _FakeClient(json.dumps(_CANNED, ensure_ascii=False))
+    client = _FakeClient(_tool_resp(_CANNED))
     pages = [Page(filename="doc.pdf", data=b"pdf", kind="text", text="政策全文……")]
     prop = extract_batch(pages, api_key="k", _client=client)
     content = client.calls[0]["messages"][0]["content"]
@@ -77,7 +107,7 @@ def test_extract_batch_text_pages_skip_vision():
 
 def test_extract_batch_page_no_null_falls_back_to_cursor():
     canned = dict(_CANNED, pages=[{"page_no": None, "text": "空页码转录"}])
-    client = _FakeClient(json.dumps(canned, ensure_ascii=False))
+    client = _FakeClient(_tool_resp(canned))
     pages = [Page(filename="IMG_1.jpg", data=b"\xff\xd8img1", kind="image")]
     prop = extract_batch(pages, api_key="k", _client=client)   # must not raise TypeError
     assert prop.pages == [(1, "空页码转录")]                   # cursor fallback = 1

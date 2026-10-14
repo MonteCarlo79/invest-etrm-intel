@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -69,17 +68,15 @@ def batch_hash(pages_bytes: list[bytes]) -> str:
 
 
 _PROMPT_TMPL = """你在分析一组中文电力市场情报文件（同一主题，共 {n_pages} 页）。
-输出严格 JSON（不要 markdown 围栏，不要任何额外文字）：
-{{
-  "title": "文档标题（主题+省份+日期，如可得）",
-  "province": "省份（限选：{provinces}；无法判断为 null）",
-  "category": "限选一个：{categories}",
-  "summary": "150字内中文摘要",
-  "pages": [{{"page_no": 页码整数, "text": "该页完整转录：表格逐行、图表读数与单位"}}],
-  "routes": [{{"type": "...", "province": "省份或null", "content": "给对应分析师看的中文要点", "structured": {{...}}}}]
-}}
+阅读每一页，然后通过 submit_extraction 工具提交结构化提取结果。字段要求：
+- title: 文档标题（主题+省份+日期，如可得）
+- province: 省份（限选：{provinces}；无法判断为 null）
+- category: 限选一个：{categories}
+- summary: 150字内中文摘要
+- pages: 逐页完整转录（表格逐行、图表读数与单位），页码从 {page_start} 开始连续编号
+- routes: 下方各类路由，只输出文中真实存在的，宁缺毋滥
 
-路由类型（只输出文中真实存在的，宁缺毋滥）：
+路由类型：
 - capacity_comp_rate: 容量电价/容量补偿标准 → structured: {{"cap_comp_yuan_kw": 数值, "peak_duration_hours": 数值或null, "effective_date": "YYYY-MM-DD"}}
 - fr_market_params: 调频容量价格(元/kW·h)/全省资金池 → structured: {{"fr_price_yuan_kw_h": 数值或null, "fr_pool_billion_yuan": 数值或null, "effective_date": "YYYY-MM-DD"}}
 - ancillary_revenue: 已结算调频/辅助服务收入月度金额 → structured: {{"month": "YYYY-MM-01", "metric": "指标名", "amount_yuan": 数值（元）}}
@@ -98,8 +95,50 @@ _PROMPT_TMPL = """你在分析一组中文电力市场情报文件（同一主�
 - spot_note: 给现货策略分析师的供需/格局解读（structured 留空 {{}}）
 - quant_note: 给储能量化分析师的收益机制/约束/需求体量解读（structured 留空 {{}}）
 
-单位换算：万千瓦→GW 除以10；万元→元 乘10000；亿kWh→GWh 乘100。
-页码从 {page_start} 开始连续编号。"""
+单位换算：万千瓦→GW 除以10；万元→元 乘10000；亿kWh→GWh 乘100。"""
+
+# Forced tool call: the API guarantees schema-valid JSON, so long Chinese
+# transcriptions with quotes/newlines can no longer break a free-text parse
+# (辽宁 batch failure 2026-10-14).
+_EXTRACTION_TOOL = {
+    "name": "submit_extraction",
+    "description": "提交本组情报文件的结构化提取结果（分类、逐页转录、数据路由）。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "文档标题（主题+省份+日期，如可得）"},
+            "province": {"type": ["string", "null"], "description": "省份（限选词表；无法判断为 null）"},
+            "category": {"type": "string", "enum": list(CATEGORIES_ALLOWED)},
+            "summary": {"type": "string", "description": "150字内中文摘要"},
+            "pages": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "page_no": {"type": ["integer", "null"]},
+                        "text": {"type": "string",
+                                   "description": "该页完整转录：表格逐行、图表读数与单位"},
+                    },
+                    "required": ["page_no", "text"],
+                },
+            },
+            "routes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "enum": list(ROUTE_TYPES)},
+                        "province": {"type": ["string", "null"]},
+                        "content": {"type": "string", "description": "给对应分析师看的中文要点"},
+                        "structured": {"type": "object"},
+                    },
+                    "required": ["type", "province", "content", "structured"],
+                },
+            },
+        },
+        "required": ["title", "province", "category", "summary", "pages", "routes"],
+    },
+}
 
 
 def _call_vision(client, image_blocks: list[dict], text_pages: list[str],
@@ -114,14 +153,22 @@ def _call_vision(client, image_blocks: list[dict], text_pages: list[str],
     resp = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=16384,
+        tools=[_EXTRACTION_TOOL],
+        tool_choice={"type": "tool", "name": "submit_extraction"},
         messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": prompt}]}],
     )
-    raw = resp.content[0].text.strip()
-    try:
-        start, end = raw.index("{"), raw.rindex("}") + 1
-        return json.loads(raw[start:end])
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise IntakeError(f"Extractor returned unparseable JSON: {exc}; raw head: {raw[:200]}") from exc
+    if getattr(resp, "stop_reason", None) == "max_tokens":
+        raise IntakeError(
+            "Extraction truncated at max_tokens — split the batch into fewer pages and retry."
+        )
+    for block in resp.content:
+        if (getattr(block, "type", None) == "tool_use"
+                and getattr(block, "name", None) == "submit_extraction"):
+            return block.input
+    raise IntakeError(
+        "Extractor returned no extraction payload "
+        f"(content types: {[getattr(b, 'type', '?') for b in resp.content]})."
+    )
 
 
 def _routes_from(data: dict) -> list[RouteProposal]:
