@@ -32,7 +32,7 @@ class SourceStatus:
     last_date: Optional[date]
     days_behind: int
     status: Literal["fresh", "stale", "missing"]
-    group: Literal["auto", "manual", "monthly"]
+    group: Literal["auto", "manual", "monthly", "kb_province"]
     reminder_text: str = ""   # non-empty → send separate upload reminder
     fill_table: str = ""      # non-empty → show 填入数据 button in detail card
     fill_province: str = ""
@@ -417,6 +417,79 @@ def check_kb_activity(pg_url: str) -> list[KBSummary]:
     return results
 
 
+# ── Group F: KB province institutional coverage ───────────────────────────────
+
+_KB_OFFICIAL_CATS = ("market_rules", "policy_doc", "annual_report",
+                     "technical_spec", "exchange_monthly_report")
+_KB_PROVINCE_STALE_DAYS = 90     # flag province official-doc knowledge older than this
+_KB_PROVINCE_DETAIL_CAP = 12     # max rows shown in the detail card section
+
+
+def check_kb_province_freshness(
+    pg_url: str,
+    provinces: Optional[list[str]] = None,
+    today: Optional[date] = None,
+) -> list[SourceStatus]:
+    """Per-province Spot-KB official-doc freshness (read-only).
+
+    Flags provinces whose official knowledge (market rules / policy docs /
+    annual reports / technical specs / exchange monthly disclosures) is
+    missing entirely or whose newest doc is older than 90 days. Matches the
+    province column with a title-LIKE fallback for untagged legacy docs.
+    Only flagged provinces produce rows (group='kb_province').
+
+    Motivation: 2026-10-15 user report — hermes answered a 安徽 research-prep
+    request from 2025-06~09-vintage docs; no institutional coverage existed
+    and no check ever surfaced that.
+    """
+    if provinces is None:
+        from services.knowledge_pool.intake_extract import PROVINCES as _PROVS
+        provinces = [p for p in _PROVS if p != "全国"]
+    out: list[SourceStatus] = []
+    try:
+        import psycopg2
+        conn = psycopg2.connect(pg_url)
+    except Exception as exc:
+        logger.error("check_kb_province_freshness: DB unavailable: %s", exc)
+        return out
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                for prov in provinces:
+                    try:
+                        cur.execute(
+                            """
+                            SELECT MAX(created_at)::date
+                            FROM staging.spot_knowledge_docs
+                            WHERE active AND ingest_status = 'done'
+                              AND category = ANY(%s)
+                              AND (province = %s OR title LIKE %s)
+                            """,
+                            (list(_KB_OFFICIAL_CATS), prov, f"%{prov}%"),
+                        )
+                        row = cur.fetchone()
+                        last = row[0] if row else None
+                    except Exception as exc:
+                        logger.warning("KB province freshness failed for %s: %s", prov, exc)
+                        continue
+                    days = _days_behind(last, today=today)
+                    if days == _MISSING_SENTINEL:
+                        status: Literal["fresh", "stale", "missing"] = "missing"
+                    elif days > _KB_PROVINCE_STALE_DAYS:
+                        status = "stale"
+                    else:
+                        continue
+                    out.append(SourceStatus(
+                        name=f"{prov} 制度文档",
+                        table="staging.spot_knowledge_docs",
+                        last_date=last, days_behind=days,
+                        status=status, group="kb_province",
+                    ))
+    finally:
+        conn.close()
+    return out
+
+
 # ── Feishu card builders ──────────────────────────────────────────────────────
 
 _STATUS_ICON = {"fresh": "✅", "stale": "⚠️", "missing": "🔴"}
@@ -464,6 +537,16 @@ def build_summary_card(report: PatrolReport) -> dict:
             lines.append(f"{cap_icon} Capture       {ops.capture_status}")
         if ops.running_jobs:
             lines.append(f"⏳ 运行中任务      {', '.join(ops.running_jobs)}")
+    kb_prov = report.by_group("kb_province")
+    if kb_prov:
+        prov_miss = sum(1 for s in kb_prov if s.status == "missing")
+        prov_stale = len(kb_prov) - prov_miss
+        parts = []
+        if prov_miss:
+            parts.append(f"{prov_miss} 省缺制度文档")
+        if prov_stale:
+            parts.append(f"{prov_stale} 省超90天未更新")
+        lines.append(f"📚 KB省份覆盖   {' · '.join(parts)}")
     if kb_line:
         lines.append(kb_line)
 
@@ -559,6 +642,19 @@ def build_detail_card(report: PatrolReport) -> dict:
                 "content": f"• {k.name}  最后入库: {last_str} · 7天 {k.count_7d}篇 · 30天 {k.count_30d}篇"}})
         elements.append({"tag": "hr"})
 
+    prov_rows = report.by_group("kb_province")
+    if prov_rows:
+        prov_rows = sorted(prov_rows, key=lambda s: (s.status != "missing", -s.days_behind))
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+            "content": "**📚 KB 省份制度覆盖（规则/政策/年报/月报，缺档或超90天）**"}})
+        for s in prov_rows[:_KB_PROVINCE_DETAIL_CAP]:
+            elements.append(_source_row(s))
+        overflow = len(prov_rows) - _KB_PROVINCE_DETAIL_CAP
+        if overflow > 0:
+            elements.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": f"…另 {overflow} 项未显示"}})
+        elements.append({"tag": "hr"})
+
     elements.append({"tag": "action", "actions": [
         {"tag": "button", "text": {"tag": "plain_text", "content": "收起 ▲"},
          "type": "default", "value": {"act": "patrol_collapse"}},
@@ -646,6 +742,7 @@ def run_patrol(
     sources.extend(check_auto_pipelines(pg_url))
     sources.extend(check_manual_uploads(pg_url))
     sources.extend(check_monthly_data(pg_url))
+    sources.extend(check_kb_province_freshness(pg_url))
     kb = check_kb_activity(pg_url)
     ops = check_ingest_ops(pg_url)
 

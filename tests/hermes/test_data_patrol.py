@@ -297,3 +297,77 @@ def test_detail_card_lists_failed_markets():
     assert "1/3 成功" in card_str
     assert "✗ 广州: Failed chunks" in card_str
     assert "Capture  success" in card_str
+
+
+# ── KB province institutional freshness (Group F) ────────────────────────────
+
+def _conn_fetchone_seq(seq):
+    """Mock conn whose cursor fetchone() returns items from seq in order."""
+    cur = MagicMock()
+    cur.fetchone.side_effect = seq
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    return _make_conn(cur), cur
+
+
+def test_kb_province_freshness_missing_stale_fresh(monkeypatch):
+    import services.hermes.data_patrol as dp
+    today = date(2026, 10, 15)
+    conn, cur = _conn_fetchone_seq([
+        (None,),                                  # 安徽 — never any official doc
+        (date(2026, 3, 1),),                      # 山东 — 228 days old → stale
+        (date(2026, 10, 10),),                    # 广东 — 5 days old → fresh, no row
+    ])
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+    rows = dp.check_kb_province_freshness(
+        "pg", provinces=["安徽", "山东", "广东"], today=today)
+    by_name = {s.name: s for s in rows}
+    assert set(by_name) == {"安徽 制度文档", "山东 制度文档"}       # fresh province absent
+    assert by_name["安徽 制度文档"].status == "missing"
+    assert by_name["山东 制度文档"].status == "stale"
+    assert by_name["山东 制度文档"].days_behind == 228
+    assert all(s.group == "kb_province" for s in rows)
+    # read-only, active+done docs only, province column OR title fallback
+    sql, params = cur.execute.call_args[0][0], cur.execute.call_args[0][1]
+    assert "active" in sql and "ingest_status = 'done'" in sql
+    assert "title LIKE" in sql and "province =" in sql
+    assert "INSERT" not in sql and "UPDATE" not in sql and "DELETE" not in sql
+    assert params[-2] == "广东" and params[-1] == "%广东%"
+
+
+def test_kb_province_freshness_db_down_returns_empty(monkeypatch):
+    import services.hermes.data_patrol as dp
+    monkeypatch.setattr("psycopg2.connect",
+                        MagicMock(side_effect=psycopg2.OperationalError("down")))
+    assert dp.check_kb_province_freshness("pg", provinces=["安徽"]) == []
+
+
+def test_summary_card_kb_province_line(monkeypatch):
+    import services.hermes.data_patrol as dp
+    rows = [
+        dp.SourceStatus(name="安徽 制度文档", table="staging.spot_knowledge_docs",
+                        last_date=None, days_behind=9999, status="missing", group="kb_province"),
+        dp.SourceStatus(name="山东 制度文档", table="staging.spot_knowledge_docs",
+                        last_date=date(2026, 3, 1), days_behind=228, status="stale", group="kb_province"),
+    ]
+    r = dp.PatrolReport(sources=rows, kb_summaries=[], ingest_ops=None)
+    card_str = str(dp.build_summary_card(r))
+    assert "KB省份覆盖" in card_str
+    assert "1 省缺制度文档" in card_str and "1 省超90天" in card_str
+    assert r.has_alerts is True
+
+
+def test_detail_card_kb_province_section_capped():
+    import services.hermes.data_patrol as dp
+    rows = [
+        dp.SourceStatus(name=f"省{i:02d} 制度文档", table="staging.spot_knowledge_docs",
+                        last_date=date(2026, 1, 1), days_behind=100 + i,
+                        status="stale", group="kb_province")
+        for i in range(15)
+    ]
+    r = dp.PatrolReport(sources=rows, kb_summaries=[], ingest_ops=None)
+    card_str = str(dp.build_detail_card(r))
+    assert "KB 省份制度覆盖" in card_str
+    shown = sum(1 for i in range(15) if f"省{i:02d}" in card_str)
+    assert shown == 12                       # capped
+    assert "另 3 项" in card_str
