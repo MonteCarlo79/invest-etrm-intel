@@ -27,6 +27,35 @@ logger = logging.getLogger(__name__)
 #   DEEPSEEK_API_KEY        your DeepSeek API key
 #   DEEPSEEK_MODEL          model name (default: deepseek-chat)
 
+# Trigger for research-prep intent (实地调研问题准备): 调研/考察/走访/出差 near
+# 问题/清单/提纲/准备, a bare 问题清单/问题列表, or English equivalents.
+_RESEARCH_PREP_RE = re.compile(
+    r"(调研|考察|走访|出差).{0,40}(问题|清单|提纲|准备)"
+    r"|问题(清单|列表)"
+    r"|research questions?|question list|field[- ]trip",
+    re.IGNORECASE,
+)
+
+_RESEARCH_PREP_ADDENDUM = """
+
+--- RESEARCH PREP MODE (实地调研问题准备) ---
+The user is preparing questions for a field-research visit (调研). Generate the
+reply (still REPLY JSON) under these rules:
+1. 每题必须点名具体机制、文件、主体或时点 — 禁止"新能源政策如何"这类泛泛之问。
+   好例: "136号文安徽承接方案中,存量新能源项目机制电价与竞价电价的电量如何划分?"
+   坏例: "安徽新能源政策最新进展如何?"
+2. 分两档呈现:
+   A档【已掌握,现场核实口径】— 基于知识库/数据已知的事实(注明来源与日期),问题聚焦确认口径与执行细节;
+   B档【制度空白,现场索取】— 知识库明确缺失的制度信息,问题设计为索取具体文件/规则版本/执行口径。
+3. 对照以下 2026 时效锚点逐项自检覆盖(按主题相关性取舍):
+   136号文承接方案与机制电价竞价结果; 新能源全面入市时间表与保障利用小时数; 现货连续结算/转正进展与结算规则版本;
+   容量补偿/容量租赁最新标准; 独立储能(含共享储能)结算规则与现货准入; 辅助服务品种与价格机制(调频/备用/爬坡);
+   绿电直连/零碳园区/虚拟电厂试点; 跨省通道利用率、输电容量申报与阻塞处理; 售电公司注册/保证金/信用管理与零售价格联动。
+4. 结尾如实说明知识库覆盖范围与缺口(哪些主题无文档覆盖),并建议用户调研后回灌文件至知识库。
+5. 允许使用通用电力市场知识搭建问题框架,但不得将通用知识表述为知识库事实; B档必须明确标注"知识库未覆盖"。
+--- END RESEARCH PREP MODE ---
+"""
+
 SYSTEM_PROMPT = """You are Hermes, a personal electricity market strategist and assistant for a BESS investment professional.
 You help manage tasks, access the user's Microsoft OneDrive, answer questions across all work domains,
 and route data questions to specialist market agents.
@@ -537,6 +566,12 @@ class HermesAgent:
                 mem.save_turn(chat_id, "user", msg.text)
             except Exception:
                 pass
+
+        # Research-prep intent gets a domain addendum (specificity, two-tier
+        # known/missing structure, 2026 recency anchors) — see user report
+        # 2026-10-15 (generic 安徽 question list).
+        if _RESEARCH_PREP_RE.search(msg.text):
+            system += _RESEARCH_PREP_ADDENDUM
 
         raw = self._call_llm(system, msg.text, preferred=self.get_model_pref(chat_id))
 
