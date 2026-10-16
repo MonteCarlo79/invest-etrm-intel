@@ -60,6 +60,10 @@ def test_research_trip_question_list_triggers_addendum():
     assert "RESEARCH PREP MODE" in system
     assert "136号文" in system
     assert "机制电价" in system
+    # 省份调研主线框架 (Dipeng 2026-10-16) baked into the addendum
+    assert "调研主线框架" in system
+    assert "批零价差" in system
+    assert "调频资金池" in system
 
 
 def test_english_field_trip_triggers_addendum():
