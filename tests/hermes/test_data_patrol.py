@@ -327,9 +327,11 @@ def test_kb_province_freshness_missing_stale_fresh(monkeypatch):
     assert by_name["山东 制度文档"].status == "stale"
     assert by_name["山东 制度文档"].days_behind == 228
     assert all(s.group == "kb_province" for s in rows)
-    # read-only, active+done docs only, province column OR title fallback
+    # read-only, active+parsed/ingested docs only, province column OR title fallback
     sql, params = cur.execute.call_args[0][0], cur.execute.call_args[0][1]
-    assert "active" in sql and "ingest_status = 'done'" in sql
+    assert "active" in sql and "'parsed'" in sql and "'ingested'" in sql
+    assert "monthly_report" in str(params[0])          # actual category value (census 2026-10-16)
+    assert "exchange_monthly_report" not in str(params[0])
     assert "title LIKE" in sql and "province =" in sql
     assert "INSERT" not in sql and "UPDATE" not in sql and "DELETE" not in sql
     assert params[-2] == "广东" and params[-1] == "%广东%"

@@ -420,7 +420,7 @@ def check_kb_activity(pg_url: str) -> list[KBSummary]:
 # ── Group F: KB province institutional coverage ───────────────────────────────
 
 _KB_OFFICIAL_CATS = ("market_rules", "policy_doc", "annual_report",
-                     "technical_spec", "exchange_monthly_report")
+                     "technical_spec", "monthly_report")
 _KB_PROVINCE_STALE_DAYS = 90     # flag province official-doc knowledge older than this
 _KB_PROVINCE_DETAIL_CAP = 12     # max rows shown in the detail card section
 
@@ -461,7 +461,7 @@ def check_kb_province_freshness(
                             """
                             SELECT MAX(created_at)::date
                             FROM staging.spot_knowledge_docs
-                            WHERE active AND ingest_status = 'done'
+                            WHERE active AND ingest_status IN ('parsed', 'ingested')
                               AND category = ANY(%s)
                               AND (province = %s OR title LIKE %s)
                             """,
