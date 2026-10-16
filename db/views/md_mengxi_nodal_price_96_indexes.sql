@@ -6,5 +6,11 @@
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_rtnp_date_node_dt
     ON marketdata.md_rt_nodal_price (data_date, node_name, datetime);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_snp96_mengxi_cst_day
-    ON marketdata.md_shanxi_nodal_price_96 (((metric_time AT TIME ZONE 'Asia/Shanghai')::date))
+    ON marketdata.md_shanxi_nodal_price_96 (((metric_time AT TIME ZONE '+08:00')::date))
+    WHERE market_name = '蒙西';
+
+-- v3 (2026-10-16): immutable-tz expression index serving predicates on the
+-- view's rendered metric_time (range filter → day scan before anti-join).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_snp96_mengxi_cst_ts
+    ON marketdata.md_shanxi_nodal_price_96 (((metric_time AT TIME ZONE '+08:00')))
     WHERE market_name = '蒙西';
