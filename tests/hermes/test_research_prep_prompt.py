@@ -64,6 +64,7 @@ def test_research_trip_question_list_triggers_addendum():
     assert "调研主线框架" in system
     assert "批零价差" in system
     assert "调频资金池" in system
+    assert "利润上限" in system
 
 
 def test_english_field_trip_triggers_addendum():
