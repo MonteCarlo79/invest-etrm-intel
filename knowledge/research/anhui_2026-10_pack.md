@@ -58,10 +58,15 @@
 **A 档(MF + HB):** 2025 全社会 3597.86 亿 kWh;交易中心 2026 年 7 月用电量数据已披露(HB 2026-09-04/05 提及,KB 未收录原文);2025 度冬最大负荷(46.1 GW)较 2024(56.3 GW)回落 — 暖冬或口径差异,现场核实
 **B 档:** 2026 年用电增速目标/实际、负荷侧新增长点(数据中心/充换电/制造业项目)
 
-## Q7. 储能收益 — 部分 A 档 + B 档为主
+## Q7. 储能收益 — A 档(平台已全量覆盖)
 
-**A 档(DB):** bess_capture_daily 未覆盖安徽(capture 管道现有省份不含安徽 — 可列入管道扩容候选);province_fr_market / province_ancillary_revenue 安徽均为空(intake 路由表,待灌)
-**B 档:** 调频标准(一次/二次调频技术规范)、调频资金池规模与分摊方式、储能是否已可参与调频/现货、共享储能容量租赁行情;安徽 3 GW BESS(2026-05)的收益实现路径
+**A 档(DB,2026-10-17 探针核实):**
+- **bess_capture_daily 安徽 3,372 行(2025-01-01 → 2026-10-10)**:默认模型 `ols_rt_time_v1` 2h/4h 各 648 天、仅 4 个 NaN-realized 日;`naive_rt_ar17` 642 天。bess-map → Province Ranking 选安徽 + `ols_rt_time_v1` 即可看价差/理论/实现收益/capture rate
+- 价格输入 `spot_prices_hourly` 安徽 15,552 小时全量;theoretical dispatch 全量
+- 采集端:平台价格统一更新至 10-10(LingFeng 发布滞后,各省一致);10-16 晚安徽采集超时一次(观察中)
+- **真正空白:** province_fr_market / province_ancillary_revenue(调频价格、资金池、辅助服务月度收入)安徽均 0 行 — 调频收益部分仍为 B 档
+**B 档:** 调频标准与资金池、一次/二次调频是否对储能开放、共享储能容量租赁行情;安徽 3 GW BESS 的实际收入构成
+(备注:此前"capture 管道不含安徽"的说法有误 — 安徽自 2025-01 起即在管道内,探针 v2 用拉丁名匹配中文省名 + 打印截断导致误判,已更正)
 
 ## Q8. 系统运行费 — A 档(已答)
 
@@ -123,3 +128,6 @@ spot_knowledge_docs 实际类别:other 5722 / policy_doc 882 / **monthly_report 
 
 ## 待补(可选 v3 探针)
 KB 全文精读:136 竞价通知条款细节、安徽月报中的批零价差/分摊/限电口径(v1/v2 探针的 LIKE 查询因 psycopg2 % 转义缺陷未执行,内容待 v3 或 RDS 直连恢复后补)。
+
+## capture 管道备注(2026-10-17 核实)
+安徽自 2025-01 起即在 capture 管道全量运行(3,372 行至 2026-10-10;ols_rt_time_v1 648 天,4 个 NaN-realized 日可用 --force-theoretical 定向回填)。**无需"加入"** — 此前判断为探针缺陷导致的误报。

@@ -255,6 +255,15 @@ WRITE_DEV_REQUEST — record a development request as a structured .md file to O
         "写一个需求文档", "帮我记录", "development request", "dev request", "需求文档".
         Pass the user's FULL original message in the message param — ThinkingAgent will structure it.
 
+RECORD_FACT — record a one-sentence field/research fact into structured tables + KB + memory
+  params: {"text": "user's full message verbatim"}
+  reply: you will generate after seeing results
+  note: use when user says "记一下/记住/记录一下/field note" followed by a market fact
+        (province + metric + value, e.g. "记一下:安徽调频池3000万/月,规则未发布").
+        The fact is extracted, written as DRAFT rows (user confirms with 「确认」),
+        added to the knowledge base and memory. NOT for tasks (CREATE),
+        files (INGEST_NEXT_FILE), or dev requests (WRITE_DEV_REQUEST).
+
 EXPORT_ANSWER — export the last assistant answer to a file and save to OneDrive
   params: {"title": "document title", "fmt": "docx|pdf|png", "folder": "/OneDrive path (default /Hermes Exports)"}
   reply: you will generate after seeing results
@@ -509,6 +518,19 @@ class HermesAgent:
                     reply="",
                 )
 
+        # Confirm fast-path: 「确认」 flips pending record_fact drafts to confirmed
+        if _text_lower in ("确认", "确认入库", "confirm"):
+            try:
+                from services.hermes import record_fact as _rf
+                _pg = os.environ.get("PGURL", "")
+                _pending = _rf.load_pending(pg_url=_pg) if _pg else None
+                if _pending:
+                    _summary = _rf.confirm_pending(_pending, pg_url=_pg)
+                    return Action(action="REPLY", params={},
+                                  reply=f"✅ 已确认入库:{_summary} 已标记 confirmed。")
+            except Exception as _ce:
+                logger.warning("record_fact confirm failed: %s", _ce)
+
         # Current Beijing time injected so the model always knows the date
         _bj = datetime.now(tz=timezone(timedelta(hours=8)))
         _weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -737,6 +759,8 @@ class HermesAgent:
                     onedrive=self.onedrive,
                 )
                 return thinker.write_dev_request_from_message(msg)
+            elif action.action == "RECORD_FACT":
+                return self._record_fact(action.params.get("text", ""))
             elif action.action == "EXPORT_ANSWER":
                 return self._export_answer(
                     title=action.params.get("title", "Hermes Answer"),
@@ -749,6 +773,59 @@ class HermesAgent:
             logger.error("Action %s failed: %s", action.action, exc)
             return f"Error: {exc}"
         return ""
+
+    def _record_fact(self, text: str) -> str:
+        """RECORD_FACT: extract → draft rows → KB → memory (+ pending slot for 「确认」)."""
+        from datetime import datetime, timezone, timedelta
+        from services.hermes import record_fact as rf
+
+        if not text:
+            return "没听到要记的内容 — 请说「记一下:<事实>」。"
+        try:
+            fact = rf.extract_fact(text, self.client)
+        except Exception as exc:
+            logger.warning("record_fact extraction failed: %s", exc)
+            return f"提取失败:{exc}"
+
+        today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+        source = f"hermes-record-fact-{today}"
+        pg_url = os.environ.get("PGURL", "")
+        writes = rf.write_fact_drafts(fact, pg_url=pg_url, source=source) if pg_url else []
+
+        kb_msg = self.ingest_file_to_kb(
+            f"field_note_{fact.get('province') or 'NA'}_{today}.md",
+            text.encode("utf-8"), category="market_intel")
+
+        if pg_url:
+            try:
+                import json as _json
+                import psycopg2 as _pg2
+                pending = rf.pending_writes_for(fact, source)
+                conn = _pg2.connect(pg_url)
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO marketdata.agent_memory (app, category, subject, content, source)"
+                            " VALUES ('hermes', 'field_intel', %s, %s, 'record_fact')",
+                            (f"{fact.get('province')} {fact.get('fact_type')}", text))
+                        if pending:
+                            cur.execute(
+                                "INSERT INTO marketdata.agent_memory (app, category, subject, content, source)"
+                                " VALUES ('hermes', 'pending_record', 'pending_record', %s, 'record_fact')",
+                                (_json.dumps({"writes": pending}, ensure_ascii=False),))
+                conn.close()
+            except Exception as exc:
+                logger.warning("record_fact memory write failed: %s", exc)
+
+        lines = [f"📝 已记下:{fact.get('kb_title') or fact.get('province') or '未指明省份'}"]
+        if fact.get("note"):
+            lines.append(f"备注:{fact['note']}")
+        for w in writes:
+            lines.append(f"• 结构化写入(draft):{w}")
+        lines.append(f"• {kb_msg}")
+        if writes:
+            lines.append("回复「确认」将草稿标记为 confirmed(bess-map 只读 confirmed)。")
+        return "\n".join(lines)
 
     def _ingest_url(self, url: str) -> str:
         if not url:
