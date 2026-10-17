@@ -39,8 +39,12 @@ _SUBMIT_FACT_TOOL = {
             "fact_type": {"type": "string", "enum": list(FACT_TYPES)},
             "value": {"type": ["number", "null"], "description": "归一后的数值(见单位规则)"},
             "unit": {"type": ["string", "null"], "description": "归一后的单位"},
-            "as_of_date": {"type": ["string", "null"], "description": "信息获得日期 YYYY-MM-DD"},
-            "effective_date": {"type": ["string", "null"], "description": "政策/数据生效日期 YYYY-MM-DD(无法判断=as_of)"},
+            "as_of_date": {"type": ["string", "null"],
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                            "description": "信息获得日期 YYYY-MM-DD(无法判断为 null,严禁占位符)"},
+            "effective_date": {"type": ["string", "null"],
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                                "description": "政策/数据生效日期 YYYY-MM-DD(无法判断为 null,严禁占位符)"},
             "metric": {"type": ["string", "null"], "description": "指标名(仅 storage_stat/ancillary_revenue 需要)"},
             "note": {"type": "string", "description": "用户原话的关键限定(如 规则未发布/零和/未传导用户侧)"},
             "kb_title": {"type": "string", "description": "一句话知识库标题(省份+主题+关键数字)"},
@@ -60,7 +64,7 @@ fact_type 定义与单位归一规则:
 - storage_stat: 储能装机/在库/备案统计 → 数值与单位保持原文(如 GW)
 - sysopfee: 系统运行费 → 元/kWh
 - other: 不属于以上(只进知识库,不写结构化表)
-as_of_date: 信息获得日期(用户未说明用今天);effective_date: 政策/数据生效日期(无法判断 = as_of_date)。
+as_of_date: 信息获得日期(用户未说明用今天);effective_date: 政策/数据生效日期(无法判断为 null)。两个日期字段都必须是 YYYY-MM-DD 或 null — 严禁输出 "<UNKNOWN>"、"未知" 等占位符。
 metric: 仅 storage_stat/ancillary_revenue 需要(如 registry_gw / 调频收入);其余为 null。
 note: 用户原话中的关键限定(如"规则未发布""两个细则零和""未传导用户侧"),简洁保留。
 kb_title: 省份+主题+关键数字的一句话标题。
@@ -70,6 +74,32 @@ kb_title: 省份+主题+关键数字的一句话标题。
 
 class RecordFactError(Exception):
     """Extraction or write failed."""
+
+
+def _norm_date(v) -> Optional[str]:
+    """Return v if it is a real YYYY-MM-DD date, else None.
+
+    The extractor can emit placeholder junk ("<UNKNOWN>", "未知") despite the
+    schema pattern — normalise at the boundary before any SQL sees the value
+    (live dogfood failure 2026-10-17).
+    """
+    import datetime as _dt
+    if not isinstance(v, str) or not v.strip():
+        return None
+    v = v.strip()
+    try:
+        _dt.date.fromisoformat(v)
+        return v
+    except ValueError:
+        return None
+
+
+def _fact_dates(fact: dict) -> tuple[str, str]:
+    """(as_of, effective) with fallback chain → as_of → today."""
+    today = __import__("datetime").date.today().isoformat()
+    as_of = _norm_date(fact.get("as_of_date")) or today
+    eff = _norm_date(fact.get("effective_date")) or as_of
+    return as_of, eff
 
 
 def extract_fact(text: str, client) -> dict:
@@ -100,7 +130,7 @@ def write_fact_drafts(fact: dict, *, pg_url: str, source: str) -> list[str]:
     """
     ft = fact.get("fact_type")
     prov = fact.get("province")
-    eff = fact.get("effective_date") or fact.get("as_of_date")
+    as_of, eff = _fact_dates(fact)
     v = fact.get("value")
     out: list[str] = []
     if ft in ("fr_pool", "fr_price"):
@@ -115,7 +145,7 @@ def write_fact_drafts(fact: dict, *, pg_url: str, source: str) -> list[str]:
             province=prov, effective_date=eff, cap_comp_yuan_kw=v, source=source)
         out.append(f"province_cap_comp: {r}")
     elif ft == "ancillary_revenue":
-        month = (fact.get("as_of_date") or "")[:7] + "-01"
+        month = as_of[:7] + "-01"
         r = write_ancillary_draft(
             province=prov, month=month,
             metric=fact.get("metric") or "调频收入",
@@ -128,7 +158,7 @@ def pending_writes_for(fact: dict, source: str) -> list[dict]:
     """Natural-key refs of the draft rows (for the confirm flip)."""
     ft = fact.get("fact_type")
     prov = fact.get("province")
-    eff = fact.get("effective_date") or fact.get("as_of_date")
+    as_of, eff = _fact_dates(fact)
     if ft in ("fr_pool", "fr_price"):
         return [{"table": "marketdata.province_fr_market",
                  "key": {"province": prov, "effective_date": eff, "source": source}}]
@@ -136,7 +166,7 @@ def pending_writes_for(fact: dict, source: str) -> list[dict]:
         return [{"table": "marketdata.province_cap_comp",
                  "key": {"province": prov, "effective_date": eff, "source": source}}]
     if ft == "ancillary_revenue":
-        month = (fact.get("as_of_date") or "")[:7] + "-01"
+        month = as_of[:7] + "-01"
         return [{"table": "marketdata.province_ancillary_revenue",
                  "key": {"province": prov, "month": month,
                          "metric": fact.get("metric") or "调频收入"}}]

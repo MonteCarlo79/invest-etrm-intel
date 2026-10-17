@@ -92,3 +92,32 @@ def test_confirm_pending_flips_drafts_and_deactivates():
 def test_system_prompt_documents_record_fact():
     from services.hermes.agent import SYSTEM_PROMPT
     assert "RECORD_FACT" in SYSTEM_PROMPT
+
+
+def test_norm_date_accepts_iso_and_rejects_junk():
+    assert rf._norm_date("2026-10-01") == "2026-10-01"
+    assert rf._norm_date("<UNKNOWN>") is None
+    assert rf._norm_date("") is None
+    assert rf._norm_date(None) is None
+    assert rf._norm_date("未知") is None
+
+
+def test_write_fact_drafts_junk_dates_fall_back(monkeypatch):
+    """Live dogfood 2026-10-17: Haiku emitted "<UNKNOWN>" for dates and the
+    raw string reached SQL (invalid input syntax for type date). Junk dates
+    must normalise to None → fallback chain (effective→as_of→today)."""
+    junk = dict(_CANNED, effective_date="<UNKNOWN>", as_of_date="未知")
+    captured = {}
+    monkeypatch.setattr(rf, "write_fr_market_draft",
+                        lambda **kw: captured.update(kw) or "ok")
+    rf.write_fact_drafts(junk, pg_url="pg", source="s")
+    import datetime as _dt
+    eff = captured["effective_date"]
+    _dt.date.fromisoformat(eff)                    # must be a real date
+    assert eff == _dt.date.today().isoformat()     # fallback = today
+
+
+def test_extract_schema_constrains_date_format():
+    schema = rf._SUBMIT_FACT_TOOL["input_schema"]["properties"]
+    for field_name in ("as_of_date", "effective_date"):
+        assert schema[field_name].get("pattern"), field_name
