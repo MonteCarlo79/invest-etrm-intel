@@ -93,6 +93,7 @@ _AUTO_SOURCES = [
     ("Canon 日内出清", "marketdata.md_id_cleared_energy", "data_date", ""),
     ("Canon 日前出清", "marketdata.md_da_cleared_energy", "data_date", ""),
     ("Canon RT节点电价", "marketdata.md_rt_nodal_price", "data_date", ""),
+    ("蒙西节点96填充表", "marketdata.md_mengxi_nodal_price_96_filled", "metric_time::date", ""),
     ("BESS捕获率日数据", "marketdata.bess_capture_daily", "trade_date", ""),
     ("GB Elexon结算", "intl_market.gb_elexon_sp", "settlement_date", ""),
     ("GB风电预测", "intl_market.gb_wind_forecast", "start_time::date", ""),

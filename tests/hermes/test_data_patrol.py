@@ -90,6 +90,27 @@ def test_check_auto_pipelines_stale(monkeypatch):
     assert any(s.status == "stale" for s in results)
 
 
+def test_auto_pipelines_cover_nodal_96_filled(monkeypatch):
+    """Filler-silence guard (trader handoff 2026-10-18): the materialized
+    mengxi nodal union fill must be patrolled — if the filler never runs,
+    consumers read stale data silently."""
+    today = date.today()
+    cur = _make_cursor([(today,)])
+    conn = _make_conn(cur)
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+
+    from services.hermes.data_patrol import check_auto_pipelines
+    results = check_auto_pipelines("postgresql://test")
+    filled = [s for s in results if "96_filled" in s.table]
+    assert len(filled) == 1
+    s = filled[0]
+    assert s.table == "marketdata.md_mengxi_nodal_price_96_filled"
+    assert s.group == "auto"
+    assert s.status == "fresh"
+    sqls = [str(c) for c in cur.execute.call_args_list]
+    assert any("metric_time" in sql and "md_mengxi_nodal_price_96_filled" in sql for sql in sqls)
+
+
 def test_check_auto_pipelines_db_error(monkeypatch):
     monkeypatch.setattr("psycopg2.connect", MagicMock(side_effect=psycopg2.OperationalError("down")))
     from services.hermes.data_patrol import check_auto_pipelines
