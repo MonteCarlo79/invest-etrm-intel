@@ -192,7 +192,9 @@ def test_stops():
 def test_env_equals_total_is_valid():
     r = compute_landed(province="青海", basis="发电侧", path_segments=["区域：华东"],
                        green_total=240, env_price=240)
-    assert r.ok and r.landed == pytest.approx(240 - 240 + (0 * 0.0152 / (1 - 0.0152)) + 9.2 + 240, abs=1e-9)
+    # 电能量价=0: seg1 省网青海 D=0 → post=33.9; seg2 区域华东 D=33.9 → G=33.9×0.0152/(1−0.0152)
+    expected = 33.9 + 33.9 * 0.0152 / (1 - 0.0152) + 9.2 + 240
+    assert r.ok and r.landed == pytest.approx(expected, abs=1e-9)
 
 
 def test_zero_loss_segment():
