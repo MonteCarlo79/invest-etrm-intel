@@ -416,6 +416,7 @@ _T: dict[str, dict[str, str]] = {
         "icp_s3_receiver":         "Receiving province",
         "icp_s3_shanghai_proxy":   "⚠️ 上海 is not a LingFeng market (no RT series) — use 江苏 / 浙江 as proxy.",
         "icp_s3_no_data":          "No RT data for this province in the trailing 12 months.",
+        "icp_rt_data_suspect":     "⚠️ Trailing-12m RT average is only {avg} ¥/MWh — this series looks broken (e.g. ingest gap). Spreads are for reference only.",
         "icp_s3_no_scenarios":     "Save scenarios in S1 to overlay landed-cost lines.",
         "icp_s3_rt_line":          "Monthly avg RT (all hours)",
         "icp_s3_chart_title":      "Monthly avg RT vs landed cost — {province}",
@@ -814,6 +815,7 @@ _T: dict[str, dict[str, str]] = {
         "icp_s3_receiver":         "受入省",
         "icp_s3_shanghai_proxy":   "⚠️ 上海非灵丰市场（无现货序列）——以江苏 / 浙江为代理。",
         "icp_s3_no_data":          "该省近 12 个月无现货数据。",
+        "icp_rt_data_suspect":     "⚠️ 该省近 12 个月 RT 均价仅 {avg} 元/MWh —— 数据序列疑似异常（如采集缺口），价差仅供参考。",
         "icp_s3_no_scenarios":     "在 S1 保存方案后可叠加落地成本线。",
         "icp_s3_rt_line":          "月均现货（全时段）",
         "icp_s3_chart_title":      "月均现货 vs 落地成本 — {province}",
@@ -5238,6 +5240,11 @@ with tab_icp:
     if not _rt_rows:
         st.info(_t("icp_s3_no_data"))
     else:
+        # Data-quality guard: a trailing-12m all-hours RT average this low is a
+        # broken series (e.g. 福建 2026 ingest gap), not a market signal.
+        _ttm_avg = sum(p for _, p in _rt_rows) / len(_rt_rows)
+        if _ttm_avg < 50:
+            st.warning(_t("icp_rt_data_suspect", avg=f"{_ttm_avg:.1f}"))
         _monthly_flat = icp_agreements.monthly_avg_rt(_rt_rows, None)
         _fig = go.Figure()
         _fig.add_trace(go.Scatter(x=[m for m, _ in _monthly_flat],
