@@ -5,9 +5,10 @@ AGREEMENTS_2027 is the curated, code-seeded layer of 2027 跨省绿电 agreement
 path_id None — automatically excluded from congestion scoring by the no_path
 logic). Every row carries source_type / source_ref / confidence.
 
-path_id is a key into params.PATHS where a preset maps the channel; rows whose
-channel has no preset (甘浙线 / 金永直流 is not in PATHS) carry path_id None and
-therefore stop with "无路径" in reference_landed and no_path=True in scoring.
+path_id is a key into params.PATHS where a preset maps the channel; 甘浙线 maps
+to the marked v1 extension path "甘浙—华东" (金永直流 tariff, 已行文报备). Rows with
+path_id None (the 甘肃 127亿 context row) stop with "无路径" in reference_landed
+and carry no_path=True in scoring.
 
 Analytics helpers are pure pandas-free functions:
 - profile_hours: resource_mix -> RT hour bucket (PROFILE_BUCKETS)
@@ -32,7 +33,8 @@ AGREEMENTS_2027: list[dict] = [
     {"sender": "宁夏", "receiver": "福建", "path_id": "西北—灵绍—华东",
      "channel_label": "灵绍直流", "volume_100gwh": 20.0, "green": True,
      "resource_mix": "solar", "source_type": "公告",
-     "source_ref": "公告（sohu、解放日报）", "confidence": "公告确认"},
+     "source_ref": "https://www.sohu.com/a/1080551302_121106869 ; https://m.jfdaily.com/wx/detail.do?id=1122197",
+     "confidence": "公告确认"},
     {"sender": "青海", "receiver": "福建", "path_id": "青豫—华中—宜华—华东",
      "channel_label": "青豫直流", "volume_100gwh": 10.0, "green": True,
      "resource_mix": "solar", "source_type": "行业信息",
@@ -49,10 +51,11 @@ AGREEMENTS_2027: list[dict] = [
      "channel_label": "宝合直流", "volume_100gwh": 20.0, "green": True,
      "resource_mix": "solar", "source_type": "行业信息",
      "source_ref": _INTEL, "confidence": "行业信息"},
-    {"sender": "甘肃", "receiver": "上海", "path_id": None,
+    {"sender": "甘肃", "receiver": "上海", "path_id": "甘浙—华东",
      "channel_label": "甘浙线", "volume_100gwh": 10.0, "green": True,
      "resource_mix": "solar", "source_type": "公告",
-     "source_ref": "公告（陇电入浙 2027 投运，H2-2027 起量）", "confidence": "公告确认"},
+     "source_ref": "https://www.stdaily.com/web/gdxw/2026-10/09/content_593113.html",
+     "confidence": "公告确认"},
     {"sender": "陕西", "receiver": "上海", "path_id": "西北—陕武—华中—葛南—华东",
      "channel_label": "陕武直流", "volume_100gwh": 7.5, "green": True,
      "resource_mix": "mixed", "source_type": "行业信息",
@@ -64,13 +67,15 @@ AGREEMENTS_2027: list[dict] = [
     {"sender": "青海", "receiver": "上海", "path_id": "青豫—华中—宜华—华东",
      "channel_label": "青豫直流", "volume_100gwh": 40.0, "green": True,
      "resource_mix": "solar", "source_type": "公告",
-     "source_ref": "公告（北京日报；2026–2028 每年40亿）", "confidence": "公告确认"},
+     "source_ref": "https://xinwen.bjd.com.cn/content/s6a2bd011e4b0e45f3fd2f9fa.html",
+     "confidence": "公告确认"},
     # Display-only context row: 甘肃 2026 green deals total to 7 provinces.
     # path_id None -> excluded from congestion scoring by no_path logic.
     {"sender": "甘肃", "receiver": "多省", "path_id": None,
      "channel_label": "甘肃2026绿电外送合计", "volume_100gwh": 127.0, "green": True,
      "resource_mix": "solar", "source_type": "公告",
-     "source_ref": "公告（甘肃经济网）", "confidence": "公告确认"},
+     "source_ref": "https://gansu.gscn.com.cn/system/2026/01/07/013439606.shtml",
+     "confidence": "公告确认"},
 ]
 
 
@@ -104,7 +109,7 @@ def monthly_avg_rt(rows: list[tuple], hours: set[int] | None = None) -> list[tup
     hours filters by hour-of-day (None = all hours). Months with no matching
     rows drop out. Input may be unsorted; output is sorted by month.
     """
-    acc: dict[str, list[float, int]] = {}
+    acc: dict[str, tuple[float, int]] = {}
     for ts, price in rows:
         if hours is not None and ts.hour not in hours:
             continue

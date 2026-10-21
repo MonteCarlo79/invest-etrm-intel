@@ -6,7 +6,7 @@ def test_table_sizes():
     assert len(P.PROVINCE_GRID) == 27
     assert len(P.REGIONAL_GRID) == 5
     assert len(P.SPECIAL_PROJECTS) == 40
-    assert len(P.PATHS) == 18
+    assert len(P.PATHS) == 19  # 18 Excel presets + 1 v1 extension (甘浙—华东)
 
 
 def test_unpriced_and_noncomputable_stops():
