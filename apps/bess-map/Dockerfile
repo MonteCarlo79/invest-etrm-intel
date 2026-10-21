@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "streamlit==1.58.0" \
     "plotly==6.0.1" \
     pandas \
@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     "requests==2.32.3"
 
 # Install CJK font so matplotlib can render Chinese titles on the geo map
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's|deb.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g; s|deb.debian.org/debian|mirrors.tuna.tsinghua.edu.cn/debian|g; s|security.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
+    && apt-get update && apt-get install -y --no-install-recommends \
         fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/* \
     && python -c "import matplotlib.font_manager as _fm; _fm.fontManager = _fm.FontManager(); print('matplotlib font cache rebuilt')"
@@ -26,6 +27,7 @@ COPY apps/bess-map/                    ./apps/bess-map/
 COPY services/bess_map/                ./services/bess_map/
 COPY services/ancillary_revenue/       ./services/ancillary_revenue/
 COPY services/market_fundamentals/     ./services/market_fundamentals/
+COPY libs/interconnector_pricing/      ./libs/interconnector_pricing/
 COPY shared/                           ./shared/
 COPY auth/                             ./auth/
 

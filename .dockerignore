@@ -98,6 +98,8 @@ services/trading/
 
 # libs not used by gb-market image
 libs/
+# bess-map 跨省绿电 tab (v77+)
+!libs/interconnector_pricing/
 
 # bess-inner-mongolia app
 apps/bess-inner-mongolia/
