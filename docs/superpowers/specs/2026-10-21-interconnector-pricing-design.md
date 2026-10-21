@@ -64,7 +64,11 @@ The Excel's own engine is the authority on math. It has been fully decoded and v
 ### S3 现货价差 (spread panel)
 - Receiving province selector (29 LingFeng markets; 上海 proxied → 江苏/浙江 with a visible flag), trailing 12 months.
 - Chart: monthly-average RT (`marketdata.spot_prices_hourly` → monthly mean of rt_price) vs. landed-cost lines from saved S2 scenarios.
-- Metrics per scenario: average spread (monthly RT − landed), % months with positive spread.
+- **Profile-matched comparison (user decision 2026-10-21):** sending-energy time profile matters — 光伏-dominated sends land mostly at midday where prices run low; 风电 runs higher-priced hours. Each scenario and agreement carries a `resource_mix` (§6); the spread uses the matching RT average:
+  - `solar` → monthly RT averaged over solar hours (10:00–15:00 local — builder's call)
+  - `wind` → monthly RT averaged over wind hours (19:00–06:00 local — builder's call)
+  - `mixed`/`hydro` → flat monthly RT average
+- Metrics per scenario: average profile-matched spread (monthly RT − landed), % months with positive spread. The panel shows which hour bucket each scenario's spread uses.
 
 ### S4 参数库 (read-only browser)
 - All 4th-cycle tables verbatim: 送出省 (27), 区域 (5), 专项 (40), 路径 (18 preset + 2 custom slots), 四川外送特例 (manual-only note), 区域容量分摊 (informational — NOT added to paths, per the Excel's own warning).
@@ -72,7 +76,7 @@ The Excel's own engine is the authority on math. It has been fully decoded and v
 
 ### S5 通道拥挤度 (congestion + 2027 flow map)
 - **S5a 协议电量库**: table of 2027 agreements (schema §6), source-labeled — the curated code-seeded layer is primary. Below it, a secondary table renders `staging.interconnector_gov_agreements` rows (the spot-market tab's extracted-agreements pipeline) labeled 历史协议提取 — read-only, distinct from the curated layer (builder's call: surface, don't merge).
-- **S5b 拥挤度评分**: per channel — congestion score = **spread × agreement volume**. Spread basis (user decision 2026-10-21): **reference landed cost** — panel-adjustable 参考绿电总价 (default 240 元/MWh) + 环境价 (default 5), grossed through each agreement's path via the S1 engine; spread = receiver trailing-12m monthly-avg RT − reference landed. Always-on (no offers needed). Saved S2 scenarios override the reference for their sender+path; when several scenarios cover one channel, their spreads are averaged (builder's call). Receivers without a LingFeng RT series show the proxy rule (§S3).
+- **S5b 拥挤度评分**: per channel — congestion score = **spread × agreement volume**. Spread basis (user decision 2026-10-21): **reference landed cost** — panel-adjustable 参考绿电总价 (default 240 元/MWh) + 环境价 (default 5), grossed through each agreement's path via the S1 engine; spread = receiver trailing-12m monthly-avg RT − reference landed, **profile-matched by the agreement's `resource_mix`** (solar → solar-hours RT, wind → wind-hours RT, else flat — same buckets as S3, user decision 2026-10-21). Always-on (no offers needed). Saved S2 scenarios override the reference for their sender+path; when several scenarios cover one channel, their spreads are averaged (builder's call). Receivers without a LingFeng RT series show the proxy rule (§S3).
 - **S5c 2027 流向图**: channel × receiver matrix, agreement-baseline volumes with monthly profile from historical seasonality (same-month trailing-24-month actual flow shares where available, flat otherwise). **Undershoot flag: trailing-12-month actual flow < 80% of the 2027 contracted volume** (delivery-feasibility proxy — my call, not a judgment on the contract itself). Confidence label per row (公告确认 / 行业信息 / 推算).
 
 ## 5. Engine (exact port — verified against the Excel)
@@ -121,12 +125,13 @@ Agreement = {
   "channel_label": str,         # free text, e.g. "宝合直流"
   "volume_100gwh": float,       # 亿kWh
   "green": bool,
+  "resource_mix": str,          # "solar" | "wind" | "mixed" | "hydro" — drives profile-matched spreads (S3/S5b)
   "source_type": str,           # "公告" | "行业信息"
   "source_ref": str,            # URL or "用户行业信息 2026-10"
   "confidence": str,            # "公告确认" | "行业信息" | "推算"
 }
 ```
-**Seed rows (2027):** 宁夏→福建 20 (公告确认, sohu/解放日报 links); 青海→福建 10 (行业信息); 新疆→上海 25 (行业信息, cumulative-20亿 public context); 甘肃→上海 20 via 庆东 (行业信息); 甘肃→上海 20 via 宝合 (行业信息); 甘肃→上海 10 via 甘浙线 H2-2027 (公告确认, 陇电入浙 2027 operational); 陕西→上海 7.5±2.5 (行业信息, range noted); 山西→上海 10 (行业信息); 青海→上海 40/yr 2026–2028 (公告确认, 北京日报 link). Context row (not a path agreement): 甘肃 2026 green deals 127亿 total to 7 provinces (公告确认, 甘肃经济网 link).
+**Seed rows (2027):** 宁夏→福建 20 solar (公告确认, sohu/解放日报 links); 青海→福建 10 solar (行业信息); 新疆→上海 25 solar (行业信息, cumulative-20亿 public context); 甘肃→上海 20 solar via 庆东 (行业信息); 甘肃→上海 20 solar via 宝合 (行业信息); 甘肃→上海 10 solar via 甘浙线 H2-2027 (公告确认, 陇电入浙 2027 operational); 陕西→上海 7.5±2.5 mixed (行业信息, range noted); 山西→上海 10 mixed (行业信息, 煤电+新能源打捆); 青海→上海 40/yr 2026–2028 solar (公告确认, 北京日报 link). Context row (not a path agreement): 甘肃 2026 green deals 127亿 total to 7 provinces (公告确认, 甘肃经济网 link). S2 scenarios gain the same `resource_mix` input (selector: solar/wind/mixed/hydro; default solar for green offers).
 
 ### DB reads (no writes)
 - `marketdata.spot_prices_hourly` — RT monthly averages per receiving province (S3).
@@ -167,3 +172,4 @@ Agreement = {
 - S5a secondary layer: `interconnector_gov_agreements` rows surfaced (separate table, labeled 历史协议提取), never merged into the curated code-seed.
 - Multi-scenario channel coverage in S5b: spreads averaged when several S2 scenarios share a channel.
 - Undershoot flag: trailing-12-month actual < 80% of 2027 contracted volume — feasibility proxy, not a contract judgment.
+- Profile hour buckets (user-directed feature, my bucket definitions): solar = 10:00–15:00 local, wind = 19:00–06:00 local, mixed/hydro = flat monthly average. Bucket edges are params in `params.py` for later tuning.
