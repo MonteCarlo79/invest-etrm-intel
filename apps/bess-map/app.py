@@ -69,6 +69,10 @@ for _env in [_REPO / "config" / ".env", _REPO / ".env"]:
         load_dotenv(_env)
 
 from services.bess_map.price_lab.pca_shapes import compute_pca
+from libs.interconnector_pricing import params as icp_params
+from libs.interconnector_pricing import engine as icp_engine
+from libs.interconnector_pricing import agreements as icp_agreements
+from libs.interconnector_pricing import db_reads as icp_db
 
 st.set_page_config(page_title="BESS Asset Map", layout="wide", page_icon="🔋")
 
@@ -382,6 +386,118 @@ _T: dict[str, dict[str, str]] = {
         "demand_no_fund":          "Market fundamentals not available — FR sizing unavailable.",
         "demand_no_hourly":        "No hourly fundamentals data for this province/period.",
         "demand_source_note":      "⚠️ FR capacity requirements from provincial/regional FM market rules and national standard GB/T 45905.6-2025. Formula: FR = pct_load × peak load + pct_renew × installed renewables + floor. 'Confirmed' = official documents; 'Estimate' = derived from regional rules or national baseline. Co-location mandates (配储比例) abolished by No. 136 policy and are NOT used here.",
+        # 跨省绿电 (Interconnector Green) tab
+        "icp_tab":                 "Interconnector Green",
+        "icp_s1_header":           "S1 · Landed-Cost Calculator",
+        "icp_s1_sender":           "Sending province",
+        "icp_s1_basis":            "Pricing basis",
+        "icp_s1_basis_help":       "出省节点 only when the offer already includes province-grid fees and losses (省网已包含).",
+        "icp_s1_mix":              "Resource mix",
+        "icp_s1_path":             "Transmission path",
+        "icp_s1_path_custom":      "Custom",
+        "icp_s1_custom_expander":  "Custom path — up to 5 ordered segments (first segment required)",
+        "icp_s1_segment_i":        "Segment {i}",
+        "icp_s1_green_total":      "Green power total price (¥/MWh, VAT incl.)",
+        "icp_s1_env_price":        "Environmental value (¥/MWh)",
+        "icp_s1_calc":             "🧮 Calculate",
+        "icp_s1_landed":           "Landed cost (¥/MWh)",
+        "icp_s1_landed_kwh":       "Landed (¥/kWh)",
+        "icp_s1_increment":        "Transmission adder (¥/MWh)",
+        "icp_s1_totals":           "Σtariff {tariff} · Σloss cost {loss} · composite loss rate {closs}",
+        "icp_s1_caveat":           "结果边界: landed purchase cost at the destination node only — receiving-end 输配电费 / 系统运行费 / 基金附加 are NOT included; do not read this as end-user 到户全价.",
+        "icp_s1_scenario_name":    "Scenario name",
+        "icp_s1_save":             "💾 Save as scenario",
+        "icp_s1_saved":            "Scenario saved",
+        "icp_s2_header":           "S2 · Scenario Comparison",
+        "icp_s2_empty":            "No saved scenarios — compute in S1 and save.",
+        "icp_s2_ranked":           "Ranked by landed cost, ascending",
+        "icp_s2_delete":           "Delete",
+        "icp_s3_header":           "S3 · Spot Spread",
+        "icp_s3_receiver":         "Receiving province",
+        "icp_s3_shanghai_proxy":   "⚠️ 上海 is not a LingFeng market (no RT series) — use 江苏 / 浙江 as proxy.",
+        "icp_s3_no_data":          "No RT data for this province in the trailing 12 months.",
+        "icp_s3_no_scenarios":     "Save scenarios in S1 to overlay landed-cost lines.",
+        "icp_s3_rt_line":          "Monthly avg RT (all hours)",
+        "icp_s3_chart_title":      "Monthly avg RT vs landed cost — {province}",
+        "icp_s3_bucket":           "RT bucket: {bucket}",
+        "icp_s3_spread_metric":    "Avg profile-matched spread (¥/MWh)",
+        "icp_s3_pos_months":       "Positive months",
+        "icp_bucket_solar":        "solar hours 10:00–15:00",
+        "icp_bucket_wind":         "wind hours 19:00–06:00",
+        "icp_bucket_flat":         "flat (all hours)",
+        "icp_s4_header":           "S4 · Parameter Library",
+        "icp_s4_cycle":            "Cycle: {cycle}",
+        "icp_s4_province_grid":    "Sending-province grid tariffs (27)",
+        "icp_s4_regional_grid":    "Regional grid tariffs (5)",
+        "icp_s4_special":          "Special project tariffs (40)",
+        "icp_s4_paths":            "Preset paths",
+        "icp_s4_sichuan":          "Sichuan export exceptions — manual verification required",
+        "icp_s4_capshare":         "Regional capacity share (informational only — recovered via provincial T&D tariffs, NEVER add to path energy fees)",
+        "icp_s4_unpriced":         "Not yet priced",
+        "icp_s4_caveats":          "- **京津唐 exception**: within the 京津唐 grid, energy from plants in 北京/天津/河北 trading inside the 京津唐 region is outside 华北 grid energy-fee coverage (PDF p.4 note 4) — adjust the path to the actual scope, never add the 华北 energy tariff by default.\n"
+                                   "- **Filed vs actual losses**: regions bill at filed loss rates; the difference between filed and actual losses is settled by each regional grid — this calculator does not replace final settlement.\n"
+                                   "- **Not listed ≠ cancelled**: the 2026-07-22 document has no 分享价 annex and does not itemise it; this version does not re-add historical 分享价, nor declare it nationally cancelled.\n"
+                                   "- **Result boundary**: output is the landed purchase cost at the destination node; receiving-end T&D tariffs, system operation fees and surcharges are excluded — never quote it as end-user 到户全价.",
+        "icp_s5_header":           "S5 · Channel Congestion & 2027 Flow Map",
+        "icp_s5a_header":          "S5a · 2027 agreement volumes",
+        "icp_s5a_gov":             "Historical agreement extraction (read-only, not merged)",
+        "icp_s5a_gov_empty":       "No extracted agreements in DB.",
+        "icp_s5b_header":          "S5b · Congestion score = spread × volume",
+        "icp_s5b_ref_green":       "Reference green total (¥/MWh)",
+        "icp_s5b_ref_env":         "Reference env price (¥/MWh)",
+        "icp_s5b_override_note":   "Saved S2 scenarios override the reference landed cost where sender + path match; multiple scenarios on one channel are averaged.",
+        "icp_s5_proxy_note":       "* {orig} has no LingFeng RT series — proxied by {proxy}.",
+        "icp_s5c_header":          "S5c · 2027 flow map (agreement baseline, not a forecast)",
+        "icp_s5c_season_hist":     "historical seasonality",
+        "icp_s5c_season_flat":     "flat (<24m history)",
+        "icp_s5c_undershoot_yes":  "⚠️ <80%",
+        "icp_s5c_undershoot_no":   "—",
+        "icp_s5c_no_data":         "no data",
+        "icp_col_segment":         "Segment",
+        "icp_col_pre":             "Pre-cost",
+        "icp_col_tariff":          "Tariff",
+        "icp_col_loss_rate":       "Loss rate",
+        "icp_col_loss_cost":       "Loss cost",
+        "icp_col_post":            "Post-cost",
+        "icp_col_name":            "Name",
+        "icp_col_sender":          "Sender",
+        "icp_col_basis":           "Basis",
+        "icp_col_path":            "Path",
+        "icp_col_green_total":     "Green total",
+        "icp_col_env":             "Env price",
+        "icp_col_mix":             "Mix",
+        "icp_col_tariff_sum":      "Σtariff",
+        "icp_col_loss_sum":        "Σloss",
+        "icp_col_increment":       "Adder",
+        "icp_col_landed":          "Landed",
+        "icp_col_province":        "Province",
+        "icp_col_loss":            "Loss rate",
+        "icp_col_status":          "Status",
+        "icp_col_region":          "Region",
+        "icp_col_project":         "Project",
+        "icp_col_pdf_page":        "PDF page",
+        "icp_col_computable":      "Computable",
+        "icp_col_segments":        "Segments",
+        "icp_col_station":         "Station",
+        "icp_col_destination":     "Destination",
+        "icp_col_annual_cap":      "Annual cap (亿kWh)",
+        "icp_col_scope":           "Scope",
+        "icp_col_share":           "Share (¥/MWh)",
+        "icp_col_note":            "Note",
+        "icp_col_receiver":        "Receiver",
+        "icp_col_channel":         "Channel",
+        "icp_col_volume":          "Volume (亿kWh)",
+        "icp_col_green":           "Green",
+        "icp_col_source":          "Source",
+        "icp_col_confidence":      "Confidence",
+        "icp_col_period":          "Period",
+        "icp_col_annual_gwh":      "Annual GWh",
+        "icp_col_channel_hint":    "Channel hint",
+        "icp_col_spread":          "Spread (¥/MWh)",
+        "icp_col_score":           "Score",
+        "icp_col_ttm":             "TTM actual (亿kWh)",
+        "icp_col_seasonality":     "Seasonality",
+        "icp_col_undershoot":      "Undershoot",
     },
     "zh": {
         "app_title":            "量化分析师",
@@ -668,6 +784,118 @@ _T: dict[str, dict[str, str]] = {
         "aux_year_month":          "数据月份",
         "aux_bess_source":         "数据来源",
         "aux_fr_history_note":     "各省全部历史记录",
+        # 跨省绿电 tab
+        "icp_tab":                 "跨省绿电",
+        "icp_s1_header":           "S1 · 测算工作台",
+        "icp_s1_sender":           "送出省",
+        "icp_s1_basis":            "报价口径",
+        "icp_s1_basis_help":       "出省节点：仅在报价已含送出省网费用及损耗时选择（省网已包含）。",
+        "icp_s1_mix":              "电源结构",
+        "icp_s1_path":             "输电路径",
+        "icp_s1_path_custom":      "自定义",
+        "icp_s1_custom_expander":  "自定义路径——最多 5 段，按计费顺序填写（第 1 段必填）",
+        "icp_s1_segment_i":        "第 {i} 段",
+        "icp_s1_green_total":      "绿电总价 (元/MWh，含税)",
+        "icp_s1_env_price":        "环境价 (元/MWh)",
+        "icp_s1_calc":             "🧮 计算",
+        "icp_s1_landed":           "落地成本 (元/MWh)",
+        "icp_s1_landed_kwh":       "折合 (元/kWh)",
+        "icp_s1_increment":        "输送增加 (元/MWh)",
+        "icp_s1_totals":           "输电单价合计 {tariff} · 线损折价合计 {loss} · 综合线损率 {closs}",
+        "icp_s1_caveat":           "结果边界：输出为目的节点的落地购电成本；受端用户输配价、系统运行费、基金附加未进入本模型，不能称为终端到户全价。",
+        "icp_s1_scenario_name":    "方案名",
+        "icp_s1_save":             "💾 保存为方案",
+        "icp_s1_saved":            "方案已保存",
+        "icp_s2_header":           "S2 · 方案对比",
+        "icp_s2_empty":            "暂无已存方案——在 S1 计算并保存。",
+        "icp_s2_ranked":           "按落地总价升序排列",
+        "icp_s2_delete":           "删除",
+        "icp_s3_header":           "S3 · 现货价差",
+        "icp_s3_receiver":         "受入省",
+        "icp_s3_shanghai_proxy":   "⚠️ 上海非灵丰市场（无现货序列）——以江苏 / 浙江为代理。",
+        "icp_s3_no_data":          "该省近 12 个月无现货数据。",
+        "icp_s3_no_scenarios":     "在 S1 保存方案后可叠加落地成本线。",
+        "icp_s3_rt_line":          "月均现货（全时段）",
+        "icp_s3_chart_title":      "月均现货 vs 落地成本 — {province}",
+        "icp_s3_bucket":           "现货时段：{bucket}",
+        "icp_s3_spread_metric":    "平均匹配价差 (元/MWh)",
+        "icp_s3_pos_months":       "正价差月份",
+        "icp_bucket_solar":        "光伏时段 10:00–15:00",
+        "icp_bucket_wind":         "风电时段 19:00–06:00",
+        "icp_bucket_flat":         "全时段平直",
+        "icp_s4_header":           "S4 · 参数库",
+        "icp_s4_cycle":            "周期：{cycle}",
+        "icp_s4_province_grid":    "送出省价格 (27)",
+        "icp_s4_regional_grid":    "区域电网价格 (5)",
+        "icp_s4_special":          "专项工程价格 (40)",
+        "icp_s4_paths":            "路径库（预置）",
+        "icp_s4_sichuan":          "四川外送特例——须人工核对适用范围",
+        "icp_s4_capshare":         "区域容量分摊（仅展示——已通过省级输配电价回收，不得叠加到路径电量费）",
+        "icp_s4_unpriced":         "尚未公布核价",
+        "icp_s4_caveats":          "- **京津唐范围例外**：京津唐电网范围内，北京、天津、河北境内电厂参与京津唐地区交易的电量，不纳入华北电网电量电费计收范围（PDF第4页注4）；涉及这类交易应按适用范围调整路径，不能一律加收华北电量价。\n"
+                                   "- **报备线损清算差额**：区域按报备线损计价，报备与实际线损之间的差额由各区域电网清算；表内基础测算不替代最终结算。\n"
+                                   "- **未列示≠声明取消**：2026-07-22 文件没有分享价附表，执行构成也未单列；本版不另行叠加旧表的历史分享价，也不据“未列示”宣布国家已明文取消。\n"
+                                   "- **结果边界**：输出为目的节点的落地购电成本；受端用户输配价、系统运行费、基金附加未进入本次模型，不能把结果称为终端到户全价。",
+        "icp_s5_header":           "S5 · 通道拥挤度与 2027 流向",
+        "icp_s5a_header":          "S5a · 2027 协议电量库",
+        "icp_s5a_gov":             "历史协议提取（只读，不合并）",
+        "icp_s5a_gov_empty":       "数据库中暂无历史协议提取记录。",
+        "icp_s5b_header":          "S5b · 拥挤度评分 = 价差 × 协议电量",
+        "icp_s5b_ref_green":       "参考绿电总价 (元/MWh)",
+        "icp_s5b_ref_env":         "参考环境价 (元/MWh)",
+        "icp_s5b_override_note":   "S2 已存方案在送出省+路径一致时覆盖参考落地价；多方案覆盖同一通道时取平均。",
+        "icp_s5_proxy_note":       "* {orig} 无灵丰现货序列——以 {proxy} 为代理。",
+        "icp_s5c_header":          "S5c · 2027 流向图（协议基线，非预测）",
+        "icp_s5c_season_hist":     "历史季节性",
+        "icp_s5c_season_flat":     "平直（不足24个月历史）",
+        "icp_s5c_undershoot_yes":  "⚠️ <80%",
+        "icp_s5c_undershoot_no":   "—",
+        "icp_s5c_no_data":         "无数据",
+        "icp_col_segment":         "环节",
+        "icp_col_pre":             "段前成本",
+        "icp_col_tariff":          "输电单价",
+        "icp_col_loss_rate":       "线损率",
+        "icp_col_loss_cost":       "损耗折价",
+        "icp_col_post":            "段后成本",
+        "icp_col_name":            "方案名",
+        "icp_col_sender":          "送出省",
+        "icp_col_basis":           "口径",
+        "icp_col_path":            "路径",
+        "icp_col_green_total":     "绿电总价",
+        "icp_col_env":             "环境价",
+        "icp_col_mix":             "电源结构",
+        "icp_col_tariff_sum":      "输电合计",
+        "icp_col_loss_sum":        "损耗合计",
+        "icp_col_increment":       "输送增量",
+        "icp_col_landed":          "落地总价",
+        "icp_col_province":        "省份",
+        "icp_col_loss":            "线损率",
+        "icp_col_status":          "状态",
+        "icp_col_region":          "区域",
+        "icp_col_project":         "专项工程",
+        "icp_col_pdf_page":        "PDF页",
+        "icp_col_computable":      "可自动测算",
+        "icp_col_segments":        "分段",
+        "icp_col_station":         "电站",
+        "icp_col_destination":     "目的地",
+        "icp_col_annual_cap":      "年度上限 (亿kWh)",
+        "icp_col_scope":           "适用范围",
+        "icp_col_share":           "分摊 (元/MWh)",
+        "icp_col_note":            "备注",
+        "icp_col_receiver":        "受入省",
+        "icp_col_channel":         "通道",
+        "icp_col_volume":          "电量 (亿kWh)",
+        "icp_col_green":           "绿电",
+        "icp_col_source":          "来源",
+        "icp_col_confidence":      "置信度",
+        "icp_col_period":          "协议期",
+        "icp_col_annual_gwh":      "年电量GWh",
+        "icp_col_channel_hint":    "通道线索",
+        "icp_col_spread":          "价差 (元/MWh)",
+        "icp_col_score":           "拥挤度评分",
+        "icp_col_ttm":             "近12月实际 (亿kWh)",
+        "icp_col_seasonality":     "季节性",
+        "icp_col_undershoot":      "欠送风险",
     },
 }
 
@@ -1624,9 +1852,10 @@ focused exclusively on China's provincial electricity spot markets.
 """
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_ranking, tab_geo, tab_pca, tab_pf, tab_demand, tab_sysopfee, tab_aux, tab_dispatch, tab_irr, tab_mgmt, tab_agent = st.tabs([
+tab_ranking, tab_geo, tab_pca, tab_pf, tab_demand, tab_sysopfee, tab_aux, tab_dispatch, tab_irr, tab_mgmt, tab_agent, tab_icp = st.tabs([
     _t("tab_ranking"), _t("tab_geo"), _t("tab_pca"), _t("tab_price_forecast"), _t("tab_demand"),
     _t("tab_sysopfee"), _t("tab_aux"), _t("tab_dispatch"), _t("tab_irr"), _t("tab_mgmt"), _t("tab_agent"),
+    _t("icp_tab"),
 ])
 
 _ENG_KEY = "bess_map"   # hashable cache-bust token (stable)
@@ -4769,3 +4998,445 @@ with tab_agent:
                 if c3.button(_t("mem_delete"), key=f"del_mem_{row.id}"):
                     _delete_memory(row.id)
                     st.rerun()
+
+
+# ── 跨省绿电 (Interconnector Green) tab ───────────────────────────────────────
+# DB loader wrappers: psycopg2 raw conn injected into libs db_reads (same
+# pattern as load_cap_comp above); every loader degrades to empty on error.
+_ICP_LINGFENG_29 = [
+    "河南", "新疆", "吉林", "海南", "湖北", "四川", "黑龙江", "福建", "浙江",
+    "江苏", "广西", "安徽", "陕西", "贵州", "云南", "广东", "蒙东", "湖南",
+    "宁夏", "辽宁", "河北南网", "甘肃", "蒙西", "山东", "山西", "冀北",
+    "广州", "青海", "江西",
+]
+
+# 上海 has no LingFeng RT series — proxy map for spread panels (S3 flag, S5b).
+_ICP_PROXY = {"上海": "江苏"}
+
+
+@st.cache_data(ttl=1800)
+def _icp_live_provinces(_eng_key):
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return list(_ICP_LINGFENG_29)
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT province FROM marketdata.spot_prices_hourly ORDER BY 1")
+                rows = [r[0] for r in cur.fetchall()]
+        finally:
+            conn.close()
+        return rows or list(_ICP_LINGFENG_29)
+    except Exception:
+        return list(_ICP_LINGFENG_29)
+
+
+@st.cache_data(ttl=1800)
+def _icp_rt_hourly(_eng_key, province: str, months: int = 12):
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return []
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        try:
+            return icp_db.load_rt_hourly(conn, province, months)
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=1800)
+def _icp_trade_ttm(_eng_key):
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return {}
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        try:
+            return icp_db.load_trade_ttm(conn)
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=1800)
+def _icp_gov_agreements(_eng_key):
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return []
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        try:
+            return icp_db.load_gov_agreements(conn)
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=1800)
+def _icp_channel_monthly(_eng_key):
+    """Trailing-24-month post-check volume per channel → [(channel_1, 'YYYY-MM', mwh)].
+    Feeds seasonality_shares (S5c); flat profile when a channel has <24 months."""
+    dsn = os.environ.get("PGURL", "")
+    if not dsn:
+        return []
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT channel_1, to_char(date_trunc('month', month_start), 'YYYY-MM'),
+                           SUM(vol_post_mwh)
+                    FROM staging.interconnector_trades
+                    WHERE month_start >= now() - interval '24 months'
+                      AND channel_1 IS NOT NULL
+                    GROUP BY channel_1, date_trunc('month', month_start)
+                """)
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+        return [(ch, ym, float(v or 0.0)) for ch, ym, v in rows]
+    except Exception:
+        return []
+
+
+def _icp_norm(s) -> str:
+    """Channel-name normaliser for agreement channel_label ↔ trades channel_1
+    matching (whitespace/case-insensitive; exact match covers all live rows)."""
+    return "".join(str(s).split()).lower()
+
+
+with tab_icp:
+    if "icp_scenarios" not in st.session_state:
+        st.session_state["icp_scenarios"] = []
+    if "icp_custom_segments" not in st.session_state:
+        st.session_state["icp_custom_segments"] = [""] * 5
+
+    # ── S1 测算工作台 ─────────────────────────────────────────────────────────
+    st.header(_t("icp_s1_header"))
+    _c1, _c2, _c3 = st.columns(3)
+    _sender = _c1.selectbox(_t("icp_s1_sender"), list(icp_params.PROVINCE_GRID.keys()),
+                            key="icp_s1_sender")
+    _basis = _c2.radio(_t("icp_s1_basis"), icp_engine.BASES, key="icp_s1_basis",
+                       help=_t("icp_s1_basis_help"))
+    _mix = _c3.selectbox(_t("icp_s1_mix"), icp_params.RESOURCE_MIXES, index=0,
+                         key="icp_s1_mix")
+
+    _custom_label = _t("icp_s1_path_custom")
+    _path_sel = st.selectbox(_t("icp_s1_path"),
+                             list(icp_params.PATHS.keys()) + [_custom_label],
+                             key="icp_s1_path")
+    if _path_sel == _custom_label:
+        with st.expander(_t("icp_s1_custom_expander"), expanded=True):
+            _seg_options = (["区域：" + r for r in icp_params.REGIONAL_GRID]
+                            + ["专项：" + s for s in icp_params.SPECIAL_PROJECTS])
+            _seg_vals = []
+            for _i in range(5):
+                _seg_vals.append(st.selectbox(_t("icp_s1_segment_i", i=_i + 1),
+                                              [""] + _seg_options, key=f"icp_seg_{_i}"))
+            st.session_state["icp_custom_segments"] = _seg_vals
+        _segs = [s for s in st.session_state["icp_custom_segments"] if s]
+        _path_id = None
+    else:
+        _segs = list(icp_params.PATHS[_path_sel])
+        _path_id = _path_sel
+
+    _c4, _c5 = st.columns(2)
+    _green = _c4.number_input(_t("icp_s1_green_total"), value=240.0, step=1.0,
+                              key="icp_s1_green")
+    _env = _c5.number_input(_t("icp_s1_env_price"), value=5.0, step=1.0,
+                            key="icp_s1_env")
+
+    if st.button(_t("icp_s1_calc"), key="icp_s1_calc"):
+        _r = icp_engine.compute_landed(province=_sender, basis=_basis,
+                                       path_segments=_segs,
+                                       green_total=_green, env_price=_env)
+        st.session_state["icp_last_calc"] = {
+            "result": _r,
+            "inputs": {"province": _sender, "basis": _basis, "path_id": _path_id,
+                       "path_segments": list(_segs), "green_total": _green,
+                       "env_price": _env, "resource_mix": _mix},
+        }
+
+    _last = st.session_state.get("icp_last_calc")
+    if _last:
+        _r = _last["result"]
+        if not _r.ok:
+            st.error(_r.stop_reason)
+        else:
+            _m1, _m2, _m3 = st.columns(3)
+            _m1.metric(_t("icp_s1_landed"), f"{_r.landed:.2f}")
+            _m2.metric(_t("icp_s1_landed_kwh"), f"{_r.landed_kwh:.4f}")
+            _m3.metric(_t("icp_s1_increment"), f"{_r.increment:.2f}")
+            st.dataframe(pd.DataFrame([{
+                _t("icp_col_segment"): s.label,
+                _t("icp_col_pre"): round(s.pre_cost, 4),
+                _t("icp_col_tariff"): round(s.tariff, 4),
+                _t("icp_col_loss_rate"): f"{s.loss_rate:.2%}",
+                _t("icp_col_loss_cost"): round(s.loss_cost, 4),
+                _t("icp_col_post"): round(s.post_cost, 4),
+            } for s in _r.segments]), use_container_width=True, hide_index=True)
+            st.caption(_t("icp_s1_totals", tariff=f"{_r.tariff_sum:.2f}",
+                          loss=f"{_r.loss_sum:.2f}", closs=f"{_r.composite_loss:.2%}"))
+            st.caption(_t("icp_s1_caveat"))
+            _inp = _last["inputs"]
+            _sc_name = st.text_input(
+                _t("icp_s1_scenario_name"),
+                value=f"{_inp['province']}·{_inp['basis']}·{_inp['path_id'] or _custom_label}",
+                key="icp_s1_name")
+            if st.button(_t("icp_s1_save"), key="icp_s1_save"):
+                st.session_state["icp_scenarios"].append(
+                    {"name": _sc_name, **_inp, "result": _r})
+                st.toast(_t("icp_s1_saved"))
+
+    # ── S2 方案对比 ───────────────────────────────────────────────────────────
+    st.divider()
+    st.header(_t("icp_s2_header"))
+    _scen = st.session_state["icp_scenarios"]
+    if not _scen:
+        st.info(_t("icp_s2_empty"))
+    else:
+        st.caption(_t("icp_s2_ranked"))
+        _order = sorted(range(len(_scen)), key=lambda i: _scen[i]["result"].landed)
+        st.dataframe(pd.DataFrame([{
+            _t("icp_col_name"): _scen[i]["name"],
+            _t("icp_col_sender"): _scen[i]["province"],
+            _t("icp_col_basis"): _scen[i]["basis"],
+            _t("icp_col_path"): _scen[i]["path_id"] or _custom_label,
+            _t("icp_col_green_total"): _scen[i]["green_total"],
+            _t("icp_col_env"): _scen[i]["env_price"],
+            _t("icp_col_mix"): _scen[i]["resource_mix"],
+            _t("icp_col_tariff_sum"): round(_scen[i]["result"].tariff_sum, 2),
+            _t("icp_col_loss_sum"): round(_scen[i]["result"].loss_sum, 2),
+            _t("icp_col_increment"): round(_scen[i]["result"].increment, 2),
+            _t("icp_col_landed"): round(_scen[i]["result"].landed, 2),
+        } for i in _order]), use_container_width=True, hide_index=True)
+        for i in _order:
+            if st.button(f"{_t('icp_s2_delete')} · {_scen[i]['name']}", key=f"icp_del_{i}"):
+                st.session_state["icp_scenarios"].pop(i)
+                st.rerun()
+
+    # ── S3 现货价差 ───────────────────────────────────────────────────────────
+    st.divider()
+    st.header(_t("icp_s3_header"))
+    _provs = _icp_live_provinces(_ENG_KEY)
+    _receiver = st.selectbox(_t("icp_s3_receiver"), _provs,
+                             index=_provs.index("江苏") if "江苏" in _provs else 0,
+                             key="icp_s3_receiver")
+    if "上海" not in _provs:
+        st.caption(_t("icp_s3_shanghai_proxy"))
+    _rt_rows = _icp_rt_hourly(_ENG_KEY, _receiver, 12)
+    if not _rt_rows:
+        st.info(_t("icp_s3_no_data"))
+    else:
+        _monthly_flat = icp_agreements.monthly_avg_rt(_rt_rows, None)
+        _fig = go.Figure()
+        _fig.add_trace(go.Scatter(x=[m for m, _ in _monthly_flat],
+                                  y=[v for _, v in _monthly_flat],
+                                  mode="lines+markers", name=_t("icp_s3_rt_line")))
+        if _monthly_flat:
+            for _s in _scen:
+                _ld = _s["result"].landed
+                _fig.add_trace(go.Scatter(x=[_monthly_flat[0][0], _monthly_flat[-1][0]],
+                                          y=[_ld, _ld], mode="lines",
+                                          line=dict(dash="dash"), name=_s["name"]))
+        _fig.update_layout(title=_t("icp_s3_chart_title", province=_receiver),
+                           yaxis_title="¥/MWh", height=380)
+        st.plotly_chart(_fig, use_container_width=True)
+        if not _scen:
+            st.caption(_t("icp_s3_no_scenarios"))
+        for _s in _scen:
+            _hours = icp_agreements.profile_hours(_s["resource_mix"])
+            _spreads = [v - _s["result"].landed
+                        for _, v in icp_agreements.monthly_avg_rt(_rt_rows, _hours)]
+            _bucket = (_t("icp_bucket_solar") if _s["resource_mix"] == "solar"
+                       else _t("icp_bucket_wind") if _s["resource_mix"] == "wind"
+                       else _t("icp_bucket_flat"))
+            _r1, _r2, _r3 = st.columns([3, 3, 2])
+            _r1.markdown(f"**{_s['name']}**")
+            _r2.caption(_t("icp_s3_bucket", bucket=_bucket))
+            if _spreads:
+                _avg = sum(_spreads) / len(_spreads)
+                _npos = sum(1 for x in _spreads if x > 0)
+                _r3.metric(_t("icp_s3_spread_metric"), f"{_avg:.1f}",
+                           delta=f"{_t('icp_s3_pos_months')}: {_npos}/{len(_spreads)}")
+            else:
+                _r3.caption(_t("icp_s3_no_data"))
+
+    # ── S4 参数库 ─────────────────────────────────────────────────────────────
+    st.divider()
+    st.header(_t("icp_s4_header"))
+    st.caption(_t("icp_s4_cycle", cycle=icp_params.CYCLE))
+    with st.expander(_t("icp_s4_province_grid")):
+        st.dataframe(pd.DataFrame([{
+            _t("icp_col_province"): k,
+            _t("icp_col_tariff"): v.get("tariff"),
+            _t("icp_col_loss"): v.get("loss"),
+            _t("icp_col_status"): "" if v.get("priced", True) else _t("icp_s4_unpriced"),
+        } for k, v in icp_params.PROVINCE_GRID.items()]),
+            use_container_width=True, hide_index=True)
+    with st.expander(_t("icp_s4_regional_grid")):
+        st.dataframe(pd.DataFrame([{
+            _t("icp_col_region"): k,
+            _t("icp_col_tariff"): v["tariff"],
+            _t("icp_col_loss"): v["loss"],
+        } for k, v in icp_params.REGIONAL_GRID.items()]),
+            use_container_width=True, hide_index=True)
+    with st.expander(_t("icp_s4_special")):
+        st.dataframe(pd.DataFrame([{
+            _t("icp_col_project"): k,
+            _t("icp_col_tariff"): v["tariff"],
+            _t("icp_col_loss"): v["loss"],
+            _t("icp_col_status"): v["status"],
+            _t("icp_col_pdf_page"): v["pdf_page"],
+            _t("icp_col_computable"): "✓" if v["computable"] else "—",
+        } for k, v in icp_params.SPECIAL_PROJECTS.items()]),
+            use_container_width=True, hide_index=True)
+    with st.expander(_t("icp_s4_paths")):
+        st.dataframe(pd.DataFrame([{
+            _t("icp_col_path"): k,
+            _t("icp_col_segments"): " → ".join(v),
+        } for k, v in icp_params.PATHS.items()]),
+            use_container_width=True, hide_index=True)
+    with st.expander(_t("icp_s4_sichuan")):
+        st.dataframe(pd.DataFrame([{
+            _t("icp_col_station"): r["station"],
+            _t("icp_col_destination"): r["destination"],
+            _t("icp_col_annual_cap"): r["annual_cap_100m_kwh"],
+            _t("icp_col_tariff"): r["tariff"],
+            _t("icp_col_loss"): r["loss"],
+            _t("icp_col_scope"): r["scope"],
+        } for r in icp_params.SICHUAN_EXCEPTIONS]),
+            use_container_width=True, hide_index=True)
+    with st.expander(_t("icp_s4_capshare")):
+        st.dataframe(pd.DataFrame([{
+            _t("icp_col_region"): r["region"],
+            _t("icp_col_province"): r["province"],
+            _t("icp_col_share"): r["share"],
+            _t("icp_col_note"): r["note"],
+        } for r in icp_params.REGIONAL_CAPACITY_SHARE]),
+            use_container_width=True, hide_index=True)
+    st.markdown(_t("icp_s4_caveats"))
+
+    # ── S5 通道拥挤度 ─────────────────────────────────────────────────────────
+    st.divider()
+    st.header(_t("icp_s5_header"))
+
+    # S5a 协议电量库
+    st.subheader(_t("icp_s5a_header"))
+    st.dataframe(pd.DataFrame([{
+        _t("icp_col_sender"): a["sender"],
+        _t("icp_col_receiver"): a["receiver"],
+        _t("icp_col_channel"): a["channel_label"],
+        _t("icp_col_volume"): a["volume_100gwh"],
+        _t("icp_col_green"): "✓" if a["green"] else "—",
+        _t("icp_col_mix"): a["resource_mix"],
+        _t("icp_col_path"): a["path_id"] or "—",
+        _t("icp_col_confidence"): a["confidence"],
+        _t("icp_col_source"): a["source_type"],
+    } for a in icp_agreements.AGREEMENTS_2027]), use_container_width=True, hide_index=True)
+    with st.expander(_t("icp_s5a_gov")):
+        _gov = _icp_gov_agreements(_ENG_KEY)
+        if not _gov:
+            st.info(_t("icp_s5a_gov_empty"))
+        else:
+            st.dataframe(pd.DataFrame([{
+                _t("icp_col_sender"): g[0],
+                _t("icp_col_receiver"): g[1],
+                _t("icp_col_annual_gwh"): float(g[2]) if g[2] is not None else None,
+                _t("icp_col_period"): g[3],
+                _t("icp_col_channel_hint"): g[4],
+                _t("icp_col_source"): g[5],
+            } for g in _gov]), use_container_width=True, hide_index=True)
+
+    # S5b 拥挤度评分
+    st.subheader(_t("icp_s5b_header"))
+    _b1, _b2 = st.columns(2)
+    _ref_green = _b1.number_input(_t("icp_s5b_ref_green"), value=240.0, step=1.0,
+                                  key="icp_s5b_green")
+    _ref_env = _b2.number_input(_t("icp_s5b_ref_env"), value=5.0, step=1.0,
+                                key="icp_s5b_env")
+    st.caption(_t("icp_s5b_override_note"))
+
+    _rt_cache: dict = {}
+    _proxied: set = set()
+
+    def _receiver_rt(recv: str):
+        if recv in _provs:
+            _p, _is_proxy = recv, False
+        else:
+            _p, _is_proxy = _ICP_PROXY.get(recv, "江苏"), True
+        if _p not in _rt_cache:
+            _rt_cache[_p] = _icp_rt_hourly(_ENG_KEY, _p, 12)
+        if _is_proxy:
+            _proxied.add((recv, _p))
+        return _rt_cache[_p]
+
+    _spreads: dict = {}
+    for _i, _ag in enumerate(icp_agreements.AGREEMENTS_2027):
+        if _ag.get("path_id") is None or _ag["path_id"] not in icp_params.PATHS:
+            continue
+        _rows = _receiver_rt(_ag["receiver"])
+        if not _rows:
+            continue
+        _monthly = icp_agreements.monthly_avg_rt(
+            _rows, icp_agreements.profile_hours(_ag["resource_mix"]))
+        if not _monthly:
+            continue
+        _rt_avg = sum(v for _, v in _monthly) / len(_monthly)
+        _ovr = [s for s in _scen
+                if s["province"] == _ag["sender"] and s["path_id"] == _ag["path_id"]]
+        if _ovr:
+            _spreads[_i] = sum(_rt_avg - s["result"].landed for s in _ovr) / len(_ovr)
+        else:
+            _ref = icp_agreements.reference_landed(_ag, _ref_green, _ref_env)
+            if _ref.ok:
+                _spreads[_i] = _rt_avg - _ref.landed
+    _scores = icp_agreements.congestion_scores(icp_agreements.AGREEMENTS_2027, _spreads)
+    st.dataframe(pd.DataFrame([{
+        _t("icp_col_channel"): r["channel_label"],
+        _t("icp_col_sender"): r["sender"],
+        _t("icp_col_receiver"): r["receiver"],
+        _t("icp_col_volume"): r["volume_100gwh"],
+        _t("icp_col_spread"): "—" if r["spread"] is None else round(r["spread"], 1),
+        _t("icp_col_score"): "—" if r["score"] is None else round(r["score"], 1),
+        _t("icp_col_confidence"): r["confidence"],
+    } for r in _scores]), use_container_width=True, hide_index=True)
+    for _orig, _px in sorted(_proxied):
+        st.caption(_t("icp_s5_proxy_note", orig=_orig, proxy=_px))
+
+    # S5c 2027 流向图
+    st.subheader(_t("icp_s5c_header"))
+    _ttm = _icp_trade_ttm(_ENG_KEY)
+    _ttm_norm = {_icp_norm(k): v for k, v in _ttm.items() if k}
+    _ch_monthly = _icp_channel_monthly(_ENG_KEY)
+    _ags = icp_agreements.AGREEMENTS_2027
+    _actual = {a["channel_label"]: _ttm_norm.get(_icp_norm(a["channel_label"]))
+               for a in _ags}
+    _flags = icp_agreements.undershoot_flags(_actual, _ags)
+    _flat_profile = [1 / 12] * 12
+    st.dataframe(pd.DataFrame([{
+        _t("icp_col_channel"): _ag["channel_label"],
+        _t("icp_col_receiver"): _ag["receiver"],
+        _t("icp_col_volume"): _ag["volume_100gwh"],
+        _t("icp_col_ttm"): (_t("icp_s5c_no_data") if _actual[_ag["channel_label"]] is None
+                            else round(_actual[_ag["channel_label"]], 1)),
+        _t("icp_col_seasonality"): (
+            _t("icp_s5c_season_flat")
+            if icp_agreements.seasonality_shares(
+                [(ym, v) for ch, ym, v in _ch_monthly
+                 if ch == _ag["channel_label"]]) == _flat_profile
+            else _t("icp_s5c_season_hist")),
+        _t("icp_col_undershoot"): (_t("icp_s5c_undershoot_yes") if _flags[_i]
+                                   else _t("icp_s5c_undershoot_no")),
+        _t("icp_col_confidence"): _ag["confidence"],
+    } for _i, _ag in enumerate(_ags)]), use_container_width=True, hide_index=True)
