@@ -71,9 +71,9 @@ The Excel's own engine is the authority on math. It has been fully decoded and v
 - Each table shows source PDF page refs; the 使用与来源 caveats displayed: 京津唐例外, 报备线损清算差额, 未列示≠声明取消, 结果边界 (不含受端到户费用).
 
 ### S5 通道拥挤度 (congestion + 2027 flow map)
-- **S5a 协议电量库**: table of 2027 agreements (schema §6), source-labeled.
-- **S5b 拥挤度评分**: per channel — congestion score = average spread (S3) × agreement volume (亿kWh). Big positive spread + big contract = crowded. Plus last-12-month actual flow from `staging.spot_interprov_flow` where the channel maps to a LingFeng direction/metric.
-- **S5c 2027 流向图**: channel × receiver matrix, agreement-baseline volumes with monthly profile from historical seasonality (same-month 2025–2026 actual flow shares where available, flat otherwise). Flags: 2026 actual < 80% of contracted (undershoot risk); confidence label per row.
+- **S5a 协议电量库**: table of 2027 agreements (schema §6), source-labeled — the curated code-seeded layer is primary. Below it, a secondary table renders `staging.interconnector_gov_agreements` rows (the spot-market tab's extracted-agreements pipeline) labeled 历史协议提取 — read-only, distinct from the curated layer (builder's call: surface, don't merge).
+- **S5b 拥挤度评分**: per channel — congestion score = **spread × agreement volume**. Spread basis (user decision 2026-10-21): **reference landed cost** — panel-adjustable 参考绿电总价 (default 240 元/MWh) + 环境价 (default 5), grossed through each agreement's path via the S1 engine; spread = receiver trailing-12m monthly-avg RT − reference landed. Always-on (no offers needed). Saved S2 scenarios override the reference for their sender+path; when several scenarios cover one channel, their spreads are averaged (builder's call). Receivers without a LingFeng RT series show the proxy rule (§S3).
+- **S5c 2027 流向图**: channel × receiver matrix, agreement-baseline volumes with monthly profile from historical seasonality (same-month trailing-24-month actual flow shares where available, flat otherwise). **Undershoot flag: trailing-12-month actual flow < 80% of the 2027 contracted volume** (delivery-feasibility proxy — my call, not a judgment on the contract itself). Confidence label per row (公告确认 / 行业信息 / 推算).
 
 ## 5. Engine (exact port — verified against the Excel)
 
@@ -130,7 +130,9 @@ Agreement = {
 
 ### DB reads (no writes)
 - `marketdata.spot_prices_hourly` — RT monthly averages per receiving province (S3).
-- `staging.spot_interprov_flow` — actual channel flows for congestion/seasonality (S5b/S5c): `report_date, direction, metric_type, province_cn, province_share, price_yuan_kwh, total_vol_100gwh, time_period`.
+- `staging.interconnector_trades` — channel-level 2026 trade flows (S5b actuals, S5c seasonality): the spot-market Interconnector tab's table; read-only cross-pillar. NOT `staging.spot_interprov_flow` — builder-check established that table holds only the daily NATIONAL 省间现货 summary (送端/受端 totals + extreme-province metric rows), no per-channel series.
+- `staging.interconnector_mlt_snapshot` — per-channel 2025 MLT volumes (seasonality depth).
+- `staging.interconnector_gov_agreements` — extracted agreement rows, rendered as S5a's secondary layer.
 
 ## 7. Files
 
@@ -162,3 +164,6 @@ Agreement = {
 - S2 scenarios live in session state (not persisted); persistence is a v2 if wanted.
 - Tab position: appended after existing tabs in bess-map; label 跨省绿电 / Interconnector Green.
 - Seasonality fallback: flat monthly profile when a channel lacks 24 months of history.
+- S5a secondary layer: `interconnector_gov_agreements` rows surfaced (separate table, labeled 历史协议提取), never merged into the curated code-seed.
+- Multi-scenario channel coverage in S5b: spreads averaged when several S2 scenarios share a channel.
+- Undershoot flag: trailing-12-month actual < 80% of 2027 contracted volume — feasibility proxy, not a contract judgment.
