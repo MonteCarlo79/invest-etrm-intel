@@ -32,6 +32,6 @@ def test_paths_reference_known_segments():
 
 
 def test_profile_buckets():
-    assert P.PROFILE_BUCKETS["solar"] == [10, 11, 12, 13, 14]
+    assert P.PROFILE_BUCKETS["solar"] == [9, 10, 11, 12, 13, 14, 15, 16, 17]
     assert sorted(P.PROFILE_BUCKETS["wind"]) == [0, 1, 2, 3, 4, 5, 19, 20, 21, 22, 23]
     assert P.PROFILE_BUCKETS["mixed"] is None and P.PROFILE_BUCKETS["hydro"] is None

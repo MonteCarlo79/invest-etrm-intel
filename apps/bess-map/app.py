@@ -5294,11 +5294,12 @@ with tab_icp:
     if not _scen:
         st.caption(_t("icp_s3_no_scenarios"))
     for _s in _scen:
-        _hours = icp_agreements.profile_hours(_s["resource_mix"])
         _s_recv = _s.get("receiver", _receiver)
         _s_rows = _receiver_rt(_s_recv)
         _spreads = [v - _s["result"].landed
-                    for _, v in icp_agreements.monthly_avg_rt(_s_rows, _hours)]
+                    for _, v in icp_agreements.monthly_avg_rt(
+                        _s_rows,
+                        lambda m, _mix=_s["resource_mix"]: icp_agreements.profile_hours_for_month(_mix, m))]
         _bucket = (_t("icp_bucket_solar") if _s["resource_mix"] == "solar"
                    else _t("icp_bucket_wind") if _s["resource_mix"] == "wind"
                    else _t("icp_bucket_flat"))
@@ -5417,7 +5418,7 @@ with tab_icp:
         if not _rows:
             continue
         _monthly = icp_agreements.monthly_avg_rt(
-            _rows, icp_agreements.profile_hours(_ag["resource_mix"]))
+            _rows, lambda m, _mix=_ag["resource_mix"]: icp_agreements.profile_hours_for_month(_mix, m))
         if not _monthly:
             continue
         _rt_avg = sum(v for _, v in _monthly) / len(_monthly)

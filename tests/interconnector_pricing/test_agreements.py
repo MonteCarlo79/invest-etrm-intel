@@ -51,6 +51,20 @@ def test_monthly_avg_rt_profile_filter():
     assert A.monthly_avg_rt(rows, hours={22}) == [("2026-03", 600.0)]
 
 
+def test_solar_contract_window_per_month():
+    # 2026-2028 PPA contract window: 9–17点 base; Jul–Sep adds hour 18 (延至19点)
+    assert A.profile_hours("solar") == {9, 10, 11, 12, 13, 14, 15, 16, 17}
+    assert 18 not in A.profile_hours_for_month("solar", 6)
+    assert 18 in A.profile_hours_for_month("solar", 7)
+    assert 18 in A.profile_hours_for_month("solar", 8)
+    assert 18 in A.profile_hours_for_month("solar", 9)
+    assert A.profile_hours_for_month("mixed", 8) is None
+    rows = [(dt.datetime(2026, 7, 10, 18), 800.0), (dt.datetime(2026, 7, 10, 12), 400.0),
+            (dt.datetime(2026, 6, 10, 18), 900.0), (dt.datetime(2026, 6, 10, 12), 500.0)]
+    out = A.monthly_avg_rt(rows, hours=lambda m: A.profile_hours_for_month("solar", m))
+    assert out == [("2026-06", 500.0), ("2026-07", 600.0)]  # Jul hour-18 counts, Jun's excluded
+
+
 def test_monthly_avg_rt_missing_months_no_crash():
     rows = [(dt.datetime(2026, 1, 5, 12), 300.0), (dt.datetime(2026, 5, 5, 12), 700.0)]
     out = A.monthly_avg_rt(rows)

@@ -188,8 +188,11 @@ REGIONAL_CAPACITY_SHARE = [
 ]
 
 # Profile-matched RT buckets (hours of day). None = flat average over all hours.
+# Solar window aligned to the official 2026-2028 PPA contract curve (9–18点;
+# Jul–Sep extended to 19点 — the +18 hour extension is applied per month via
+# agreements.profile_hours_for_month, not in this base list).
 PROFILE_BUCKETS = {
-    "solar": [10, 11, 12, 13, 14],
+    "solar": [9, 10, 11, 12, 13, 14, 15, 16, 17],
     "wind": [0, 1, 2, 3, 4, 5, 19, 20, 21, 22, 23],
     "mixed": None,
     "hydro": None,

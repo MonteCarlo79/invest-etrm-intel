@@ -98,7 +98,8 @@ AGREEMENTS_2027: list[dict] = [
      "channel_label": "青豫直流", "volume_100gwh": 40.0, "green": True,
      "resource_mix": "solar", "source_type": "公告",
      "source_ref": "https://xinwen.bjd.com.cn/content/s6a2bd011e4b0e45f3fd2f9fa.html",
-     "confidence": "公告确认", "period": "2026-2028"},
+     "confidence": "公告确认", "period": "2026-2028",
+     "curve_note": "9-18点（7-9月延至19点）（青豫+宜华/庆东+锡泰）"},
     # Display-only context row: 甘肃 2026 green deals total to 7 provinces.
     # path_id None -> excluded from congestion scoring by no_path logic.
     {"sender": "甘肃", "receiver": "多省", "path_id": None,
@@ -133,15 +134,32 @@ def profile_hours(resource_mix: str) -> set[int] | None:
     return set(bucket) if bucket else None
 
 
-def monthly_avg_rt(rows: list[tuple], hours: set[int] | None = None) -> list[tuple[str, float]]:
+def profile_hours_for_month(resource_mix: str, month: int) -> set[int] | None:
+    """Contract-window bucket for a calendar month (2026-2028 PPA disclosure):
+    solar base window 9–17点; Jul–Sep extended to 19点 (adds hour 18).
+    None = flat (mixed/hydro/unknown).
+    """
+    base = profile_hours(resource_mix)
+    if base is not None and resource_mix == "solar" and month in (7, 8, 9):
+        return base | {18}
+    return base
+
+
+def monthly_avg_rt(rows: list[tuple], hours=None) -> list[tuple[str, float]]:
     """Average RT price per calendar month from (datetime-like, price) rows.
 
-    hours filters by hour-of-day (None = all hours). Months with no matching
-    rows drop out. Input may be unsorted; output is sorted by month.
+    hours may be: None (all hours), a set of hour-of-day ints, or a callable
+    month_int -> set|None (per-month buckets, e.g. profile_hours_for_month for
+    the solar Jul–Sep 19点 extension). Months with no matching rows drop out.
+    Input may be unsorted; output is sorted by month.
     """
     acc: dict[str, tuple[float, int]] = {}
     for ts, price in rows:
-        if hours is not None and ts.hour not in hours:
+        if callable(hours):
+            h = hours(ts.month)
+            if h is not None and ts.hour not in h:
+                continue
+        elif hours is not None and ts.hour not in hours:
             continue
         key = f"{ts.year:04d}-{ts.month:02d}"
         s, n = acc.get(key, (0.0, 0))
