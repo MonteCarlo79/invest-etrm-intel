@@ -4,7 +4,7 @@ from libs.interconnector_pricing import agreements as A
 
 
 def test_seed_integrity():
-    assert len(A.AGREEMENTS_2027) >= 9
+    assert len(A.AGREEMENTS_2027) >= 13
     for a in A.AGREEMENTS_2027:
         assert a["volume_100gwh"] > 0
         assert a["resource_mix"] in ("solar", "wind", "mixed", "hydro")
@@ -14,6 +14,26 @@ def test_seed_integrity():
     assert nx["volume_100gwh"] == 20 and nx["confidence"] == "公告确认"
     qh = [a for a in A.AGREEMENTS_2027 if a["sender"] == "青海" and a["receiver"] == "上海"][0]
     assert qh["volume_100gwh"] == 40 and qh["resource_mix"] == "solar"
+
+
+def test_seed_shanghai_ppa_table():
+    sh = [a for a in A.AGREEMENTS_2027 if a["receiver"] == "上海" and a.get("period") == "2027-2029"]
+    assert len(sh) == 9
+    assert all(a["confidence"] == "公告确认" for a in sh)
+    by_sender = {}
+    for a in sh:
+        by_sender.setdefault(a["sender"], 0.0)
+        by_sender[a["sender"]] += a["volume_100gwh"]
+    assert by_sender["甘肃"] == 50.0     # 庆东20 + 宝合20 + 甘浙10
+    assert by_sender["陕西"] == 20.0     # 宝合
+    assert by_sender["山西"] == 10.0     # 雁淮
+    assert by_sender["黑龙江"] == 10.0   # 高岭+锡泰
+    assert by_sender["西藏"] == 7.0      # 柴拉+宝合, 6-10月
+    assert by_sender["宁夏"] == 15.0     # 威越(甘浙)
+    assert by_sender["吉林"] == 3.0      # 高岭+锡泰
+    xz = [a for a in sh if a["sender"] == "西藏"][0]
+    assert xz["months"] == [6, 7, 8, 9, 10] and xz["resource_mix"] == "hydro"
+    assert xz["path_id"] is None         # 西藏 unpriced → no_path scoring
 
 
 def test_reference_landed_uses_engine():

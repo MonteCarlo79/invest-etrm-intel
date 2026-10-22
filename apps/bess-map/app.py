@@ -467,6 +467,7 @@ _T: dict[str, dict[str, str]] = {
         "icp_col_sender":          "Sender",
         "icp_col_basis":           "Basis",
         "icp_col_path":            "Path",
+        "icp_col_curve":           "Curve note",
         "icp_col_green_total":     "Green total",
         "icp_col_env":             "Env price",
         "icp_col_mix":             "Mix",
@@ -869,6 +870,7 @@ _T: dict[str, dict[str, str]] = {
         "icp_col_sender":          "送出省",
         "icp_col_basis":           "口径",
         "icp_col_path":            "路径",
+        "icp_col_curve":           "协议曲线",
         "icp_col_green_total":     "绿电总价",
         "icp_col_env":             "环境价",
         "icp_col_mix":             "电源结构",
@@ -5380,6 +5382,7 @@ with tab_icp:
         _t("icp_col_green"): "✓" if a["green"] else "—",
         _t("icp_col_mix"): a["resource_mix"],
         _t("icp_col_path"): a["path_id"] or "—",
+        _t("icp_col_curve"): a.get("curve_note", ""),
         _t("icp_col_confidence"): a["confidence"],
         _t("icp_col_source"): a["source_type"],
     } for a in icp_agreements.AGREEMENTS_2027]), use_container_width=True, hide_index=True)
@@ -5464,5 +5467,6 @@ with tab_icp:
             else _t("icp_s5c_season_hist")),
         _t("icp_col_undershoot"): (_t("icp_s5c_undershoot_yes") if _flags[_i]
                                    else _t("icp_s5c_undershoot_no")),
+        _t("icp_col_curve"): _ag.get("curve_note", ""),
         _t("icp_col_confidence"): _ag["confidence"],
     } for _i, _ag in enumerate(_ags)]), use_container_width=True, hide_index=True)

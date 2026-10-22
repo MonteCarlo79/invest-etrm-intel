@@ -1,14 +1,15 @@
 """2027 agreement seed + congestion analytics for the 跨省绿电 tool (Spec §6).
 
 AGREEMENTS_2027 is the curated, code-seeded layer of 2027 跨省绿电 agreements:
-9 path agreements + 1 display-only context row (甘肃 2026 green-deal total,
-path_id None — automatically excluded from congestion scoring by the no_path
-logic). Every row carries source_type / source_ref / confidence.
-
-path_id is a key into params.PATHS where a preset maps the channel; 甘浙线 maps
-to the marked v1 extension path "甘浙—华东" (金永直流 tariff, 已行文报备). Rows with
-path_id None (the 甘肃 127亿 context row) stop with "无路径" in reference_landed
-and carry no_path=True in scoring.
+13 path agreements + 1 display-only context row. Provenance tiers:
+- 上海受入 2027-2029 PPA 序列 (9 rows, 公告确认, from the 北京电力交易平台
+  allocation table screenshot supplied by the user 2026-10-22) — 协议期限
+  2027-2029, every row carrying curve_note (全年全时段 / 6-10月 / 年内另行通知)
+  and period. 西藏 row is path_id None (西藏 unpriced in 4th-cycle 送出省价格)
+  with months=[6..10] for the 6-10月 curve.
+- 其他受入省份 (宁夏/青海→福建, 新疆/青海→上海) from public announcements and
+  user industry intel, each with source_type/source_ref/confidence.
+- 甘肃 2026 127亿 display-only context row (path_id None, excluded from scoring).
 
 Analytics helpers are pure pandas-free functions:
 - profile_hours: resource_mix -> RT hour bucket (PROFILE_BUCKETS)
@@ -28,13 +29,63 @@ from .params import PATHS, PROFILE_BUCKETS
 YEAR = 2027
 
 _INTEL = "用户行业信息 2026-10"
+_BJ_PLATFORM = "北京电力交易平台 2027-2029 上海受入协议序列（2026-10 用户截图）"
 
 AGREEMENTS_2027: list[dict] = [
+    # ── 上海受入 (2027-2029 PPA, 北京电力交易平台序列表) ─────────────────────
+    {"sender": "陕西", "receiver": "上海", "path_id": "西北—宝合—华东",
+     "channel_label": "宝合直流", "volume_100gwh": 20.0, "green": True,
+     "resource_mix": "mixed", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "全年全时段", "period": "2027-2029"},
+    {"sender": "甘肃", "receiver": "上海", "path_id": "西北—庆东—华北—锡泰—华东",
+     "channel_label": "庆东直流", "volume_100gwh": 20.0, "green": True,
+     "resource_mix": "solar", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "全年全时段（通道：庆东+锡泰）", "period": "2027-2029"},
+    {"sender": "甘肃", "receiver": "上海", "path_id": "西北—宝合—华东",
+     "channel_label": "宝合直流", "volume_100gwh": 20.0, "green": True,
+     "resource_mix": "solar", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "全年全时段", "period": "2027-2029"},
+    {"sender": "山西", "receiver": "上海", "path_id": "雁淮—华东",
+     "channel_label": "雁淮直流", "volume_100gwh": 10.0, "green": False,
+     "resource_mix": "mixed", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "全年全时段（煤电+新能源打捆）", "period": "2027-2029"},
+    {"sender": "黑龙江", "receiver": "上海", "path_id": "东北—高岭—华北—锡泰—华东",
+     "channel_label": "高岭直流", "volume_100gwh": 10.0, "green": True,
+     "resource_mix": "wind", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "全年全时段（通道：高岭+锡泰）", "period": "2027-2029"},
+    {"sender": "西藏", "receiver": "上海", "path_id": None,
+     "channel_label": "柴拉+宝合", "volume_100gwh": 7.0, "green": True,
+     "resource_mix": "hydro", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "6-10月全月全时段（柴拉+宝合；西藏无送出省价，不可测算）",
+     "months": [6, 7, 8, 9, 10], "period": "2027-2029"},
+    {"sender": "甘肃", "receiver": "上海", "path_id": "甘浙—华东",
+     "channel_label": "甘浙线", "volume_100gwh": 10.0, "green": True,
+     "resource_mix": "solar", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM + " ; https://www.stdaily.com/web/gdxw/2026-10/09/content_593113.html",
+     "confidence": "公告确认",
+     "curve_note": "年内另行通知（威越=甘浙）", "period": "2027-2029"},
+    {"sender": "宁夏", "receiver": "上海", "path_id": "甘浙—华东",
+     "channel_label": "甘浙线", "volume_100gwh": 15.0, "green": True,
+     "resource_mix": "solar", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "年内另行通知（威越=甘浙）", "period": "2027-2029"},
+    {"sender": "吉林", "receiver": "上海", "path_id": "东北—高岭—华北—锡泰—华东",
+     "channel_label": "高岭直流", "volume_100gwh": 3.0, "green": True,
+     "resource_mix": "wind", "source_type": "公告",
+     "source_ref": _BJ_PLATFORM, "confidence": "公告确认",
+     "curve_note": "年内另行通知（通道：高岭+锡泰）", "period": "2027-2029"},
+    # ── 其他受入省份 (行业信息 + 公开公告) ─────────────────────────────────────
     {"sender": "宁夏", "receiver": "福建", "path_id": "西北—灵绍—华东",
      "channel_label": "灵绍直流", "volume_100gwh": 20.0, "green": True,
      "resource_mix": "solar", "source_type": "公告",
      "source_ref": "https://www.sohu.com/a/1080551302_121106869 ; https://m.jfdaily.com/wx/detail.do?id=1122197",
-     "confidence": "公告确认"},
+     "confidence": "公告确认", "period": "2027-2031"},
     {"sender": "青海", "receiver": "福建", "path_id": "青豫—华中—宜华—华东",
      "channel_label": "青豫直流", "volume_100gwh": 10.0, "green": True,
      "resource_mix": "solar", "source_type": "行业信息",
@@ -43,32 +94,11 @@ AGREEMENTS_2027: list[dict] = [
      "channel_label": "吉泉直流", "volume_100gwh": 25.0, "green": True,
      "resource_mix": "solar", "source_type": "行业信息",
      "source_ref": _INTEL + "（公开背景：累计已送20亿）", "confidence": "行业信息"},
-    {"sender": "甘肃", "receiver": "上海", "path_id": "西北—庆东—华北—锡泰—华东",
-     "channel_label": "庆东直流", "volume_100gwh": 20.0, "green": True,
-     "resource_mix": "solar", "source_type": "行业信息",
-     "source_ref": _INTEL, "confidence": "行业信息"},
-    {"sender": "甘肃", "receiver": "上海", "path_id": "西北—宝合—华东",
-     "channel_label": "宝合直流", "volume_100gwh": 20.0, "green": True,
-     "resource_mix": "solar", "source_type": "行业信息",
-     "source_ref": _INTEL, "confidence": "行业信息"},
-    {"sender": "甘肃", "receiver": "上海", "path_id": "甘浙—华东",
-     "channel_label": "甘浙线", "volume_100gwh": 10.0, "green": True,
-     "resource_mix": "solar", "source_type": "公告",
-     "source_ref": "https://www.stdaily.com/web/gdxw/2026-10/09/content_593113.html",
-     "confidence": "公告确认"},
-    {"sender": "陕西", "receiver": "上海", "path_id": "西北—陕武—华中—葛南—华东",
-     "channel_label": "陕武直流", "volume_100gwh": 7.5, "green": True,
-     "resource_mix": "mixed", "source_type": "行业信息",
-     "source_ref": _INTEL + "（7.5±2.5 区间）", "confidence": "行业信息"},
-    {"sender": "山西", "receiver": "上海", "path_id": "雁淮—华东",
-     "channel_label": "雁淮直流", "volume_100gwh": 10.0, "green": False,
-     "resource_mix": "mixed", "source_type": "行业信息",
-     "source_ref": _INTEL + "（煤电+新能源打捆）", "confidence": "行业信息"},
     {"sender": "青海", "receiver": "上海", "path_id": "青豫—华中—宜华—华东",
      "channel_label": "青豫直流", "volume_100gwh": 40.0, "green": True,
      "resource_mix": "solar", "source_type": "公告",
      "source_ref": "https://xinwen.bjd.com.cn/content/s6a2bd011e4b0e45f3fd2f9fa.html",
-     "confidence": "公告确认"},
+     "confidence": "公告确认", "period": "2026-2028"},
     # Display-only context row: 甘肃 2026 green deals total to 7 provinces.
     # path_id None -> excluded from congestion scoring by no_path logic.
     {"sender": "甘肃", "receiver": "多省", "path_id": None,
