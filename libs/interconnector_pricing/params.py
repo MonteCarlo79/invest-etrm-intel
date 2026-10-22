@@ -196,3 +196,47 @@ PROFILE_BUCKETS = {
 }
 
 RESOURCE_MIXES = ("solar", "wind", "mixed", "hydro")
+
+
+# ── Province → regional grid (for receiver-aware path filtering) ─────────────
+# Derived from the price tables' own structure (5 regional grids + 送出省价格).
+# 蒙西 mapped to 华北 (flagged in UI; 蒙西 is NOT a valid 送出省 in this model —
+# absent from the 27 送出省价格 rows). 南方电网 receivers are unpriceable here:
+# no 南方 regional price row exists in the 4th-cycle tables.
+PROVINCE_TO_REGION: dict[str, str] = {
+    "北京": "华北", "天津": "华北", "河北": "华北", "冀北": "华北", "山西": "华北",
+    "山东": "华北", "蒙西": "华北",
+    "上海": "华东", "江苏": "华东", "浙江": "华东", "安徽": "华东", "福建": "华东",
+    "湖北": "华中（西南）", "湖南": "华中（西南）", "河南": "华中（西南）",
+    "江西": "华中（西南）", "四川": "华中（西南）", "重庆": "华中（西南）",
+    "辽宁": "东北", "吉林": "东北", "黑龙江": "东北", "蒙东": "东北",
+    "陕西": "西北", "甘肃": "西北", "青海": "西北", "宁夏": "西北", "新疆": "西北",
+}
+
+UNPRICEABLE_RECEIVERS: tuple = ("广州", "广西", "云南", "贵州", "海南")
+
+# Send region of 专项 when one leads a preset path (only those used as first
+# segments are pinned; middle segments need no entry).
+SPECIAL_SEND_REGION: dict[str, str] = {
+    "灵绍直流": "西北", "银东直流": "西北", "雁淮直流": "华北", "青豫直流": "西北",
+    "吉泉直流": "西北", "昭沂直流": "西北", "高岭直流": "东北", "庆东直流": "西北",
+    "金永直流": "西北",
+}
+
+
+def path_regions(path_segments: list[str]) -> tuple[str, str]:
+    """(start_region, end_region) of a preset path from its own segments."""
+    first, last = path_segments[0], path_segments[-1]
+    start = first.split("：", 1)[1] if first.startswith("区域：") else SPECIAL_SEND_REGION[first.split("：", 1)[1]]
+    end = last.split("：", 1)[1]
+    return start, end
+
+
+def filter_paths(province: str, receiver: str) -> list[str]:
+    """Preset paths whose start region == sender's and end region == receiver's."""
+    send_r = PROVINCE_TO_REGION.get(province)
+    recv_r = PROVINCE_TO_REGION.get(receiver)
+    if not send_r or not recv_r:
+        return []
+    return [name for name, segs in PATHS.items()
+            if path_regions(segs) == (send_r, recv_r)]

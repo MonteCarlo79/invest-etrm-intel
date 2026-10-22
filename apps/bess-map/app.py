@@ -390,6 +390,9 @@ _T: dict[str, dict[str, str]] = {
         "icp_tab":                 "Interconnector Green",
         "icp_s1_header":           "S1 · Landed-Cost Calculator",
         "icp_s1_sender":           "Sending province",
+        "icp_s1_receiver":         "Receiving province",
+        "icp_s1_receiver_unpriceable": "南方电网 receivers have no regional price row in this model — cannot price paths into 广州/广西/云南/贵州/海南.",
+        "icp_s1_path_none":        "No preset path for this sender→receiver pair — use Custom.",
         "icp_s1_basis":            "Pricing basis",
         "icp_s1_basis_help":       "出省节点 only when the offer already includes province-grid fees and losses (省网已包含).",
         "icp_s1_mix":              "Resource mix",
@@ -789,6 +792,9 @@ _T: dict[str, dict[str, str]] = {
         "icp_tab":                 "跨省绿电",
         "icp_s1_header":           "S1 · 测算工作台",
         "icp_s1_sender":           "送出省",
+        "icp_s1_receiver":         "接收省份",
+        "icp_s1_receiver_unpriceable": "接收属南方电网（广州/广西/云南/贵州/海南）——本模型无南方区域价，无法测算。",
+        "icp_s1_path_none":        "该送出→接收组合无预置路径 —— 可使用自定义。",
         "icp_s1_basis":            "报价口径",
         "icp_s1_basis_help":       "出省节点：仅在报价已含送出省网费用及损耗时选择（省网已包含）。",
         "icp_s1_mix":              "电源结构",
@@ -5125,17 +5131,26 @@ with tab_icp:
 
     # ── S1 测算工作台 ─────────────────────────────────────────────────────────
     st.header(_t("icp_s1_header"))
-    _c1, _c2, _c3 = st.columns(3)
+    _c1, _c2, _c3, _c4 = st.columns(4)
     _sender = _c1.selectbox(_t("icp_s1_sender"), list(icp_params.PROVINCE_GRID.keys()),
                             key="icp_s1_sender")
-    _basis = _c2.radio(_t("icp_s1_basis"), icp_engine.BASES, key="icp_s1_basis",
+    _s1_provs = _icp_live_provinces(_ENG_KEY)
+    _receiver = _c2.selectbox(_t("icp_s1_receiver"), _s1_provs,
+                              index=_s1_provs.index("上海") if "上海" in _s1_provs else 0,
+                              key="icp_s1_receiver")
+    _basis = _c3.radio(_t("icp_s1_basis"), icp_engine.BASES, key="icp_s1_basis",
                        help=_t("icp_s1_basis_help"))
-    _mix = _c3.selectbox(_t("icp_s1_mix"), icp_params.RESOURCE_MIXES, index=0,
+    _mix = _c4.selectbox(_t("icp_s1_mix"), icp_params.RESOURCE_MIXES, index=0,
                          key="icp_s1_mix")
 
     _custom_label = _t("icp_s1_path_custom")
+    _filtered_paths = icp_params.filter_paths(_sender, _receiver)
+    if _receiver in icp_params.UNPRICEABLE_RECEIVERS:
+        st.warning(_t("icp_s1_receiver_unpriceable"))
+    elif not _filtered_paths:
+        st.info(_t("icp_s1_path_none"))
     _path_sel = st.selectbox(_t("icp_s1_path"),
-                             list(icp_params.PATHS.keys()) + [_custom_label],
+                             _filtered_paths + [_custom_label],
                              key="icp_s1_path")
     if _path_sel == _custom_label:
         with st.expander(_t("icp_s1_custom_expander"), expanded=True):
@@ -5164,9 +5179,9 @@ with tab_icp:
                                        green_total=_green, env_price=_env)
         st.session_state["icp_last_calc"] = {
             "result": _r,
-            "inputs": {"province": _sender, "basis": _basis, "path_id": _path_id,
-                       "path_segments": list(_segs), "green_total": _green,
-                       "env_price": _env, "resource_mix": _mix},
+            "inputs": {"province": _sender, "receiver": _receiver, "basis": _basis,
+                       "path_id": _path_id, "path_segments": list(_segs),
+                       "green_total": _green, "env_price": _env, "resource_mix": _mix},
         }
 
     _last = st.session_state.get("icp_last_calc")
@@ -5193,7 +5208,7 @@ with tab_icp:
             _inp = _last["inputs"]
             _sc_name = st.text_input(
                 _t("icp_s1_scenario_name"),
-                value=f"{_inp['province']}·{_inp['basis']}·{_inp['path_id'] or _custom_label}",
+                value=f"{_inp['province']}→{_inp['receiver']}·{_inp['path_id'] or _custom_label}",
                 key="icp_s1_name")
             if st.button(_t("icp_s1_save"), key="icp_s1_save"):
                 st.session_state["icp_scenarios"].append(
@@ -5212,6 +5227,7 @@ with tab_icp:
         st.dataframe(pd.DataFrame([{
             _t("icp_col_name"): _scen[i]["name"],
             _t("icp_col_sender"): _scen[i]["province"],
+            _t("icp_col_receiver"): _scen[i].get("receiver", "—"),
             _t("icp_col_basis"): _scen[i]["basis"],
             _t("icp_col_path"): _scen[i]["path_id"] or _custom_label,
             _t("icp_col_green_total"): _scen[i]["green_total"],
@@ -5259,25 +5275,41 @@ with tab_icp:
         _fig.update_layout(title=_t("icp_s3_chart_title", province=_receiver),
                            yaxis_title="¥/MWh", height=380)
         st.plotly_chart(_fig, use_container_width=True)
-        if not _scen:
-            st.caption(_t("icp_s3_no_scenarios"))
-        for _s in _scen:
-            _hours = icp_agreements.profile_hours(_s["resource_mix"])
-            _spreads = [v - _s["result"].landed
-                        for _, v in icp_agreements.monthly_avg_rt(_rt_rows, _hours)]
-            _bucket = (_t("icp_bucket_solar") if _s["resource_mix"] == "solar"
-                       else _t("icp_bucket_wind") if _s["resource_mix"] == "wind"
-                       else _t("icp_bucket_flat"))
-            _r1, _r2, _r3 = st.columns([3, 3, 2])
-            _r1.markdown(f"**{_s['name']}**")
-            _r2.caption(_t("icp_s3_bucket", bucket=_bucket))
-            if _spreads:
-                _avg = sum(_spreads) / len(_spreads)
-                _npos = sum(1 for x in _spreads if x > 0)
-                _r3.metric(_t("icp_s3_spread_metric"), f"{_avg:.1f}",
-                           delta=f"{_t('icp_s3_pos_months')}: {_npos}/{len(_spreads)}")
-            else:
-                _r3.caption(_t("icp_s3_no_data"))
+    _rt_cache: dict = {}
+    _proxied: set = set()
+
+    def _receiver_rt(recv: str):
+        if recv in _provs:
+            _p, _is_proxy = recv, False
+        else:
+            _p, _is_proxy = _ICP_PROXY.get(recv, "江苏"), True
+        if _p not in _rt_cache:
+            _rt_cache[_p] = _icp_rt_hourly(_ENG_KEY, _p, 12)
+        if _is_proxy:
+            _proxied.add((recv, _p))
+        return _rt_cache[_p]
+
+    if not _scen:
+        st.caption(_t("icp_s3_no_scenarios"))
+    for _s in _scen:
+        _hours = icp_agreements.profile_hours(_s["resource_mix"])
+        _s_recv = _s.get("receiver", _receiver)
+        _s_rows = _receiver_rt(_s_recv)
+        _spreads = [v - _s["result"].landed
+                    for _, v in icp_agreements.monthly_avg_rt(_s_rows, _hours)]
+        _bucket = (_t("icp_bucket_solar") if _s["resource_mix"] == "solar"
+                   else _t("icp_bucket_wind") if _s["resource_mix"] == "wind"
+                   else _t("icp_bucket_flat"))
+        _r1, _r2, _r3 = st.columns([3, 3, 2])
+        _r1.markdown(f"**{_s['name']}** · {_s_recv}")
+        _r2.caption(_t("icp_s3_bucket", bucket=_bucket))
+        if _spreads:
+            _avg = sum(_spreads) / len(_spreads)
+            _npos = sum(1 for x in _spreads if x > 0)
+            _r3.metric(_t("icp_s3_spread_metric"), f"{_avg:.1f}",
+                       delta=f"{_t('icp_s3_pos_months')}: {_npos}/{len(_spreads)}")
+        else:
+            _r3.caption(_t("icp_s3_no_data"))
 
     # ── S4 参数库 ─────────────────────────────────────────────────────────────
     st.divider()
@@ -5374,20 +5406,6 @@ with tab_icp:
                                 key="icp_s5b_env")
     st.caption(_t("icp_s5b_override_note"))
 
-    _rt_cache: dict = {}
-    _proxied: set = set()
-
-    def _receiver_rt(recv: str):
-        if recv in _provs:
-            _p, _is_proxy = recv, False
-        else:
-            _p, _is_proxy = _ICP_PROXY.get(recv, "江苏"), True
-        if _p not in _rt_cache:
-            _rt_cache[_p] = _icp_rt_hourly(_ENG_KEY, _p, 12)
-        if _is_proxy:
-            _proxied.add((recv, _p))
-        return _rt_cache[_p]
-
     _spreads: dict = {}
     for _i, _ag in enumerate(icp_agreements.AGREEMENTS_2027):
         if _ag.get("path_id") is None or _ag["path_id"] not in icp_params.PATHS:
@@ -5401,7 +5419,8 @@ with tab_icp:
             continue
         _rt_avg = sum(v for _, v in _monthly) / len(_monthly)
         _ovr = [s for s in _scen
-                if s["province"] == _ag["sender"] and s["path_id"] == _ag["path_id"]]
+                if s["province"] == _ag["sender"] and s["path_id"] == _ag["path_id"]
+                and s.get("receiver") == _ag["receiver"]]
         if _ovr:
             _spreads[_i] = sum(_rt_avg - s["result"].landed for s in _ovr) / len(_ovr)
         else:
