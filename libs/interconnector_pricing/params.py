@@ -243,3 +243,26 @@ def filter_paths(province: str, receiver: str) -> list[str]:
         return []
     return [name for name, segs in PATHS.items()
             if path_regions(segs) == (send_r, recv_r)]
+
+
+# ── Channel anchor provinces (clearing priority) ─────────────────────────────
+# Anchor = province hosting the flow-origin converter station. Anchor-province
+# flows clear ahead of intermediary provinces relaying through the same channel
+# (e.g. 陕西 > 甘肃 on 宝合). 柴拉直流 is anchored at 西藏 for the 反向 outbound
+# (拉萨端) PPA flow to 上海; its 正向 anchor is 青海 (柴达木).
+CHANNEL_ANCHOR_PROVINCE: dict[str, str] = {
+    "宝合直流": "陕西",
+    "庆东直流": "甘肃",
+    "灵绍直流": "宁夏",
+    "雁淮直流": "山西",
+    "银东直流": "宁夏",
+    "陕武直流": "陕西",
+    "青豫直流": "青海",
+    "吉泉直流": "新疆",
+    "高岭直流": "内蒙古",
+    "锡泰直流": "内蒙古",
+    "金永直流": "甘肃",
+    "甘浙线": "甘肃",
+    "柴拉直流": "西藏",
+    "柴拉+宝合": "西藏",
+}

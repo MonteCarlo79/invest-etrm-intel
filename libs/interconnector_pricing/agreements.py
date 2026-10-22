@@ -217,3 +217,22 @@ def seasonality_shares(monthly_volumes: list[tuple[str, float]]) -> list[float]:
     if grand <= 0:
         return flat
     return [t / grand for t in totals]
+
+
+def priority_note(agreement: dict) -> str:
+    """Clearing-priority label for an agreement row.
+
+    Period tier (rule 2): 2026-2028 存量PPA clears before 2027-2029 新增PPA.
+    Anchor tier (rule 1): anchor-province sender clears before intermediary
+    provinces relaying through the same channel (anchor = CHANNEL_ANCHOR_PROVINCE
+    by channel_label). Authoritative full list lives in 国网优先计划通道
+    (non-public) — this is a display approximation.
+    """
+    from .params import CHANNEL_ANCHOR_PROVINCE
+    tier = "存量PPA·优先" if agreement.get("period") == "2026-2028" else "新增PPA"
+    anchor = CHANNEL_ANCHOR_PROVINCE.get(agreement.get("channel_label", ""))
+    if not anchor:
+        return tier
+    if agreement["sender"] == anchor:
+        return f"{tier}·锚省优先"
+    return f"{tier}·中转(锚省{anchor}优先)"

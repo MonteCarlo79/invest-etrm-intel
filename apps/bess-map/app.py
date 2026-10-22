@@ -450,6 +450,8 @@ _T: dict[str, dict[str, str]] = {
         "icp_s5b_ref_green":       "Reference green total (¥/MWh)",
         "icp_s5b_ref_env":         "Reference env price (¥/MWh)",
         "icp_s5b_override_note":   "Saved S2 scenarios override the reference landed cost where sender + path match; multiple scenarios on one channel are averaged.",
+        "icp_s5b_priority_rules":  "清算优先级: ① 通道锚省 > 中转省 (e.g. 陕西>甘肃 on 宝合); ② 存量PPA(2026-2028) > 新增PPA(2027-2029); ③ 完整优先序列在国网优先计划通道(非公开)。PPA 电量仅为通道流量子集 — 通道还承载现货/优先计划及其他省间协议电量。",
+        "icp_col_priority":        "Clearing priority",
         "icp_s5_proxy_note":       "* {orig} has no LingFeng RT series — proxied by {proxy}.",
         "icp_s5c_header":          "S5c · 2027 flow map (agreement baseline, not a forecast)",
         "icp_s5c_season_hist":     "historical seasonality",
@@ -853,6 +855,8 @@ _T: dict[str, dict[str, str]] = {
         "icp_s5b_ref_green":       "参考绿电总价 (元/MWh)",
         "icp_s5b_ref_env":         "参考环境价 (元/MWh)",
         "icp_s5b_override_note":   "S2 已存方案在送出省+路径一致时覆盖参考落地价；多方案覆盖同一通道时取平均。",
+        "icp_s5b_priority_rules":  "清算优先级: ① 通道锚省 > 中转省 (如 陕西>甘肃 用宝合); ② 存量PPA(2026-2028) > 新增PPA(2027-2029); ③ 完整优先序列在国网优先计划通道(非公开)。PPA 电量仅为通道流量子集 —— 通道还承载现货、优先计划及其他省间协议电量。",
+        "icp_col_priority":        "清算优先级",
         "icp_s5_proxy_note":       "* {orig} 无灵丰现货序列——以 {proxy} 为代理。",
         "icp_s5c_header":          "S5c · 2027 流向图（协议基线，非预测）",
         "icp_s5c_season_hist":     "历史季节性",
@@ -5384,6 +5388,7 @@ with tab_icp:
         _t("icp_col_mix"): a["resource_mix"],
         _t("icp_col_path"): a["path_id"] or "—",
         _t("icp_col_curve"): a.get("curve_note", ""),
+        _t("icp_col_priority"): icp_agreements.priority_note(a),
         _t("icp_col_confidence"): a["confidence"],
         _t("icp_col_source"): a["source_type"],
     } for a in icp_agreements.AGREEMENTS_2027]), use_container_width=True, hide_index=True)
@@ -5409,6 +5414,7 @@ with tab_icp:
     _ref_env = _b2.number_input(_t("icp_s5b_ref_env"), value=5.0, step=1.0,
                                 key="icp_s5b_env")
     st.caption(_t("icp_s5b_override_note"))
+    st.caption(_t("icp_s5b_priority_rules"))
 
     _spreads: dict = {}
     for _i, _ag in enumerate(icp_agreements.AGREEMENTS_2027):
@@ -5469,5 +5475,6 @@ with tab_icp:
         _t("icp_col_undershoot"): (_t("icp_s5c_undershoot_yes") if _flags[_i]
                                    else _t("icp_s5c_undershoot_no")),
         _t("icp_col_curve"): _ag.get("curve_note", ""),
+        _t("icp_col_priority"): icp_agreements.priority_note(_ag),
         _t("icp_col_confidence"): _ag["confidence"],
     } for _i, _ag in enumerate(_ags)]), use_container_width=True, hide_index=True)
