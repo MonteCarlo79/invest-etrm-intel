@@ -110,6 +110,9 @@ _T: dict[str, dict[str, str]] = {
         # ranking
         "rank_title":           "BESS Investment Screening — Province Ranking",
         "rank_caption":         "Annual net revenue for a standard 100 MW station (200 MWh at 2h / 400 MWh at 4h), 万元/yr: arbitrage + capacity + 调频 − 系统运行费. LP perfect-foresight dispatch.",
+        "rank_spread_basis_rt": "理论值 basis: actual RT intraday spread (max−min hourly mean).",
+        "rank_spread_basis_fc": "实际值 basis: spread of the {model} forecast series (the spread dispatch actually sees).",
+        "rank_fr_small_fleet_note": "FR pool-share fallback suppressed (provincial fleet < 500 MW, pool-average not credible): {provs}",
         "rank_kpi_2h":          "Best Province (2h)",
         "rank_kpi_4h":          "Best Province (4h)",
         "rank_kpi_capture":     "Aggregate Capture",
@@ -520,6 +523,9 @@ _T: dict[str, dict[str, str]] = {
         "tab_agent":            "量化分析师",
         "rank_title":           "储能投资筛选 — 省份排名",
         "rank_caption":         "100MW 标准储能站（2h=200MWh / 4h=400MWh）的年度净收益（万元/年）：套利 + 容量电价 + 调频 − 系统运行费（充电成本）。基于LP完美预见调度。",
+        "rank_spread_basis_rt": "理论值口径：实时现货实际价差（小时均价最大值−最小值）。",
+        "rank_spread_basis_fc": "实际值口径：预测模型 {model} 的预测价差（调度实际看到的价差）。",
+        "rank_fr_small_fleet_note": "以下省份调频资金池回退被抑制（省内储能装机 < 500MW，池均值不可信）：{provs}",
         "rank_kpi_2h":          "最优省份（2h）",
         "rank_kpi_4h":          "最优省份（4h）",
         "rank_kpi_capture":     "综合捕获率",
@@ -1032,6 +1038,24 @@ def _load_installed_bess(_eng_key):
     """)
     df = pd.read_sql(sql, _eng())
     return dict(zip(df["province"], df["bess_mw"].astype(float)))
+
+
+@st.cache_data(ttl=3600)
+def load_forecast_spread(_eng_key, start: str, end: str, model: str):
+    """Intraday spread of the FORECAST price series (实际值 basis):
+    per province, MAX(hourly mean) − MIN(hourly mean) of rt_pred over the
+    period, for the selected model. 理论值 uses raw RT (load_intraday_spread)."""
+    sql = sql_text("""
+        SELECT province, MAX(avg_price) - MIN(avg_price) AS spread
+        FROM (
+            SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
+                   AVG(rt_pred) AS avg_price
+            FROM marketdata.spot_prices_hourly_rt_forecast
+            WHERE model = :model AND datetime BETWEEN :start AND :end
+            GROUP BY province, hour
+        ) t GROUP BY province
+    """)
+    return pd.read_sql(sql, _eng(), params={"model": model, "start": start, "end": end})
 
 
 @st.cache_data(ttl=3600)
@@ -2119,6 +2143,7 @@ with tab_ranking:
             fr_component, sysopfee_annual_cost_per_mwh,
             discharge_comp_per_mwh_yr, DISCHARGE_MODE_RATE_THRESHOLD,
             DEFAULT_RATE, DEFAULT_BASE_HOURS, STACKABLE_STATUSES,
+            fr_pool_skipped,
         )
         _cap_comp = load_cap_comp_latest(_eng())       # curated 容量补偿 tab (primary)
         _cap_rows = load_capacity_rows(_eng())          # coefficient + status layer
@@ -2153,6 +2178,11 @@ with tab_ranking:
         def _anc_for(prov: str, d: float) -> float:
             return fr_component(prov, d, _anc_annual.get(prov),
                                 _fr_pool.get(prov), _installed.get(prov) or 0.0)
+
+        _fr_suppressed = [p for p in _fr_pool
+                          if fr_pool_skipped(_installed.get(p) or 0.0, _fr_pool.get(p))]
+        if _fr_suppressed:
+            st.caption(_t("rank_fr_small_fleet_note", provs="、".join(sorted(_fr_suppressed))))
 
         def _sys_for(prov: str, d: float) -> float:
             return sysopfee_annual_cost_per_mwh(_sysop.get(prov, 0.0),
@@ -2303,11 +2333,17 @@ with tab_ranking:
         # Intraday spread section
         st.subheader(_t("rank_spread_title"))
         st.caption(_t("rank_spread_caption"))
-        spread_df = load_intraday_spread(_ENG_KEY, sel_start, sel_end)
+        if profit_col == "theoretical_profit_per_mwh_day":
+            spread_df = load_intraday_spread(_ENG_KEY, sel_start, sel_end)
+            _sp_basis = _t("rank_spread_basis_rt")
+        else:
+            spread_df = load_forecast_spread(_ENG_KEY, sel_start, sel_end, sel_model)
+            _sp_basis = _t("rank_spread_basis_fc", model=_model_label)
         spread_df = spread_df[~spread_df["province"].isin(_RANKING_EXCLUDE)]
         if not spread_df.empty:
+            st.caption(_sp_basis)
             spread_df["vol_label"] = spread_df["ann_vol"].map(
-                lambda v: f"σ {v*100:.0f}%" if pd.notna(v) else "")
+                lambda v: f"σ {v*100:.0f}%" if pd.notna(v) else "") if "ann_vol" in spread_df else ""
             fig_sp = px.bar(
                 spread_df, x="spread", y="province", orientation="h",
                 color="spread", color_continuous_scale="Blues", text="vol_label",

@@ -141,16 +141,32 @@ def fr_pool_per_mwh_yr(fr_pool_yuan: float, bess_mw: float, duration_h: float,
                                 bess_mw, duration_h)
 
 
+MIN_FLEET_MW_FOR_POOL_SHARE = 500.0
+# Below this fleet size the pool-share rate is not credible: dividing a province
+# pool by a tiny installed base explodes the per-kW figure (陕西 2026-10 incident:
+# 3.5亿 pool × 30% ÷ 98 MW → 1,071 ¥/kW/yr → ~1.1–1.4亿 for a 100 MW station).
+
+
 def fr_component(province: str, duration_h: float,
                  confirmed_actual_yuan: float | None,
                  fr_pool_yuan: float | None,
                  bess_mw: float) -> float:
-    """Precedence (user spec): mileage-settled actuals > pool-share > 0."""
+    """Precedence (user spec): mileage-settled actuals > pool-share > 0.
+
+    Pool-share is suppressed when the provincial fleet is below
+    MIN_FLEET_MW_FOR_POOL_SHARE — better to show no 调频 than a fabricated
+    fleet-average number. The mileage-actuals path is unaffected."""
     if confirmed_actual_yuan:
         return ancillary_per_mwh_yr(confirmed_actual_yuan, bess_mw, duration_h)
-    if fr_pool_yuan:
+    if fr_pool_yuan and bess_mw >= MIN_FLEET_MW_FOR_POOL_SHARE:
         return fr_pool_per_mwh_yr(fr_pool_yuan, bess_mw, duration_h, province)
     return 0.0
+
+
+def fr_pool_skipped(bess_mw: float, fr_pool_yuan: float | None) -> bool:
+    """True when a pool exists but the fallback is suppressed on a tiny fleet
+    (for UI data notes)."""
+    return bool(fr_pool_yuan) and 0.0 <= bess_mw < MIN_FLEET_MW_FOR_POOL_SHARE
 
 
 # ── 系统运行费: per-kWh adder on charging energy ─────────────────────────────

@@ -150,3 +150,29 @@ def test_cap_comp_name_map():
     assert "蒙西" in CAP_COMP_NAME_MAP["内蒙古（蒙东）"]
     assert "蒙东" in CAP_COMP_NAME_MAP["内蒙古（蒙东）"]
     assert CAP_COMP_NAME_MAP["冀南"] == ["河北南网"]
+
+
+def test_pool_share_suppressed_on_tiny_fleet():
+    from services.bess_map.capacity_stack import fr_component, fr_pool_skipped
+    # 陕西 incident values: pool 3.5e8, fleet 98 MW → must be 0, not ~1071 ¥/kW/yr
+    assert fr_component("陕西", 2.0, None, 3.5e8, 98.0) == 0.0
+    assert fr_pool_skipped(98.0, 3.5e8) is True
+
+
+def test_pool_share_alive_at_credible_fleet():
+    from services.bess_map.capacity_stack import fr_component, fr_pool_skipped
+    assert fr_component("蒙西", 2.0, None, 3.5e8, 15134.0) > 0.0
+    assert fr_pool_skipped(15134.0, 3.5e8) is False
+
+
+def test_confirmed_actuals_unaffected_by_small_fleet():
+    from services.bess_map.capacity_stack import fr_component
+    # mileage-settled actuals bypass the fleet-size guard entirely
+    assert fr_component("新疆", 2.0, 5.6791e6, None, 100.0) > 0.0
+    assert fr_component("新疆", 2.0, 5.6791e6, 3.5e8, 100.0) > 0.0
+
+
+def test_pool_share_boundary_at_500mw():
+    from services.bess_map.capacity_stack import fr_component
+    assert fr_component("X", 2.0, None, 1e8, 499.9) == 0.0
+    assert fr_component("X", 2.0, None, 1e8, 500.0) > 0.0
