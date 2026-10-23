@@ -12,8 +12,12 @@ def test_seed_integrity():
         assert a["source_type"] in ("公告", "行业信息")
     nx = [a for a in A.AGREEMENTS_2027 if a["sender"] == "宁夏" and a["receiver"] == "福建"][0]
     assert nx["volume_100gwh"] == 20 and nx["confidence"] == "公告确认"
-    qh = [a for a in A.AGREEMENTS_2027 if a["sender"] == "青海" and a["receiver"] == "上海"][0]
-    assert qh["volume_100gwh"] == 40 and qh["resource_mix"] == "solar"
+    qh = [a for a in A.AGREEMENTS_2027 if a["sender"] == "青海" and a["receiver"] == "上海"]
+    assert len(qh) == 2 and all(a["resource_mix"] == "solar" for a in qh)
+    assert sum(a["volume_100gwh"] for a in qh) == pytest.approx(39.57475, abs=1e-4)  # 19.9105 青豫 + 19.66425 庆东
+    assert {a["channel_label"] for a in qh} == {"青豫直流", "庆东直流"}
+    md = [a for a in A.AGREEMENTS_2027 if a["sender"] == "蒙东"][0]
+    assert md["volume_100gwh"] == pytest.approx(5.028) and md["flat_profile"] is True
 
 
 def test_seed_shanghai_ppa_table():
