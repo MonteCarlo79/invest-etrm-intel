@@ -8,7 +8,8 @@ def test_province_region_mapping():
     assert P.PROVINCE_TO_REGION["山西"] == "华北"
     assert P.PROVINCE_TO_REGION["四川"] == "华中（西南）"
     assert P.PROVINCE_TO_REGION["蒙西"] == "华北"
-    assert set(P.UNPRICEABLE_RECEIVERS) == {"广州", "广西", "云南", "贵州", "海南"}
+    assert P.PROVINCE_TO_REGION["河北南网"] == "华北"
+    assert set(P.UNPRICEABLE_RECEIVERS) == {"广州", "广东", "广西", "云南", "贵州", "海南"}
     # all 27 送出省 have a region (蒙西 is receiver-only, correctly absent below)
     for prov in P.PROVINCE_GRID:
         if prov == "西藏":
