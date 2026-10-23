@@ -216,7 +216,7 @@ PROVINCE_TO_REGION: dict[str, str] = {
     "陕西": "西北", "甘肃": "西北", "青海": "西北", "宁夏": "西北", "新疆": "西北",
 }
 
-UNPRICEABLE_RECEIVERS: tuple = ("广州", "广西", "云南", "贵州", "海南")
+UNPRICEABLE_RECEIVERS: tuple = ("广州", "广东", "广西", "云南", "贵州", "海南")
 
 # Send region of 专项 when one leads a preset path (only those used as first
 # segments are pinned; middle segments need no entry).
@@ -266,3 +266,16 @@ CHANNEL_ANCHOR_PROVINCE: dict[str, str] = {
     "柴拉直流": "西藏",
     "柴拉+宝合": "西藏",
 }
+
+
+# Canonical receiver province list: 上海 (main PPA destination, not a LingFeng
+# market) + the 29 LingFeng markets. UI receiver selectors must use THIS list,
+# never DB-distinct province values (which carry contaminated entities like
+# 豫中东/豫北/豫南/豫西, 海南礼记/海南那悦, 甘肃西河).
+RECEIVER_PROVINCES: list = [
+    "上海",
+    "河南", "新疆", "吉林", "海南", "湖北", "四川", "黑龙江", "福建", "浙江",
+    "江苏", "广西", "安徽", "陕西", "贵州", "云南", "广东", "蒙东", "湖南",
+    "宁夏", "辽宁", "河北南网", "甘肃", "蒙西", "山东", "山西", "冀北",
+    "广州", "青海", "江西",
+]

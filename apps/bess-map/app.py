@@ -391,7 +391,7 @@ _T: dict[str, dict[str, str]] = {
         "icp_s1_header":           "S1 · Landed-Cost Calculator",
         "icp_s1_sender":           "Sending province",
         "icp_s1_receiver":         "Receiving province",
-        "icp_s1_receiver_unpriceable": "南方电网 receivers have no regional price row in this model — cannot price paths into 广州/广西/云南/贵州/海南.",
+        "icp_s1_receiver_unpriceable": "南方电网 receivers have no regional price row in this model — cannot price paths into 广州/广东/广西/云南/贵州/海南.",
         "icp_s1_path_none":        "No preset path for this sender→receiver pair — use Custom.",
         "icp_s1_basis":            "Pricing basis",
         "icp_s1_basis_help":       "出省节点 only when the offer already includes province-grid fees and losses (省网已包含).",
@@ -796,7 +796,7 @@ _T: dict[str, dict[str, str]] = {
         "icp_s1_header":           "S1 · 测算工作台",
         "icp_s1_sender":           "送出省",
         "icp_s1_receiver":         "接收省份",
-        "icp_s1_receiver_unpriceable": "接收属南方电网（广州/广西/云南/贵州/海南）——本模型无南方区域价，无法测算。",
+        "icp_s1_receiver_unpriceable": "接收属南方电网（广州/广东/广西/云南/贵州/海南）——本模型无南方区域价，无法测算。",
         "icp_s1_path_none":        "该送出→接收组合无预置路径 —— 可使用自定义。",
         "icp_s1_basis":            "报价口径",
         "icp_s1_basis_help":       "出省节点：仅在报价已含送出省网费用及损耗时选择（省网已包含）。",
@@ -5030,21 +5030,14 @@ _ICP_PROXY = {"上海": "江苏"}
 
 @st.cache_data(ttl=1800)
 def _icp_live_provinces(_eng_key):
-    dsn = os.environ.get("PGURL", "")
-    if not dsn:
-        return list(_ICP_LINGFENG_29)
-    try:
-        import psycopg2 as _pg
-        conn = _pg.connect(dsn)
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT province FROM marketdata.spot_prices_hourly ORDER BY 1")
-                rows = [r[0] for r in cur.fetchall()]
-        finally:
-            conn.close()
-        return rows or list(_ICP_LINGFENG_29)
-    except Exception:
-        return list(_ICP_LINGFENG_29)
+    """Canonical receiver list from params (上海 + 29 LingFeng markets).
+
+    Deliberately NOT DB-distinct: spot_prices_hourly.province carries
+    contaminated non-province entities (豫中东/豫北/豫南/豫西 sub-regions,
+    海南礼记/海南那悦 entity names from ingest, 甘肃西河 reversed spelling),
+    and 上海 — the main PPA destination — is not a LingFeng market.
+    """
+    return list(icp_params.RECEIVER_PROVINCES)
 
 
 @st.cache_data(ttl=1800)

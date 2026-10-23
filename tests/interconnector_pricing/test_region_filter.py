@@ -46,3 +46,13 @@ def test_filter_paths_unpriceable_receiver():
 
 def test_filter_paths_intra_region():
     assert P.filter_paths("安徽", "江苏") == ["华东区域"]
+
+
+def test_receiver_list_canonical():
+    receivers = P.RECEIVER_PROVINCES
+    assert receivers[0] == "上海"
+    assert len(receivers) == 30
+    for dirty in ("豫中东", "豫北", "豫南", "豫西", "海南礼记", "海南那悦", "甘肃西河", "甘肃河西"):
+        assert dirty not in receivers, dirty
+    for r in receivers:
+        assert r in P.PROVINCE_TO_REGION or r in P.UNPRICEABLE_RECEIVERS, r
