@@ -211,3 +211,35 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - LingFeng 福建 selector bug: decide whether to fix collector mapping or report to vendor; add zero-price monitoring rule to hermes data patrol (silent 2026 福建 zeros across prices+fundamentals).
 - 003 candidates: first 云霄 auction results (25.6/100 vs measured 85/101/16); retail-risk P2 ingestion (山东 PDF + contract schemas) still open from earlier queue.
 - Watch: parallel session's stale worktree keeps deleting newer files from main (3 clobber incidents this week) — restore via merge-tree when it happens.
+
+## Session Summary, 2026-10-21 → 2026-10-23
+**Worked on:** 跨省绿电 interconnector pricing tool (bess-map, Pillar 2) end-to-end — spec → builder-check → plan → subagent-driven build → 8 production deploys (v77–v84) — plus the 福建 RT series manual repair and a week of user-driven fixes on the live tool. (Earlier same month, same session lineage: Market Intel Intake shipped to spot-market v47/v48 — batch intake tab with vision extraction, `province_storage_pipeline` table, `get_storage_pipeline` Strategist tool; 宁夏 deck ingested as KB doc 7992.)
+
+**Completed:**
+- **跨省绿电 tab (S1–S5)** in bess-map: exact port of 卡师傅27 4th-cycle landed-cost engine (`libs/interconnector_pricing/` — 27 送出省/5 区域/40 专项/18+1 paths, golden-verified to 1e-9 against all 7 Excel scenarios; engine rule: tariff flat per segment, cost grossed by loss `D×F/(1−F)`, 环境价 flat at end). S2 offer compare, S3 profile-matched spread, S4 param browser, S5 2027 congestion screener.
+- **Receiver-aware filtering**: 接收省份 selector + sender→receiver path filtering (PROVINCE_TO_REGION; 南方电网 unpriceable; canonical receiver list 上海+29 LingFeng after live bug report — DB-distinct carried 豫中东/豫北/海南礼记/甘肃西河 contaminants).
+- **2027–2029 Shanghai PPA seed** from user's industry intel + official 北京电力交易平台 tables: 9 rows 公告确认 （陕西20/甘肃20+20/山西10/黑龙江10/西藏7@6-10月/甘肃甘浙10/宁夏甘浙15/吉林3), 蒙东 5.028 (2026 firm cap from traded docs), 青海 40亿 corridor-split （青豫19.9105 + 庆东19.66425 = 39.57475亿）. 9 traded PPA PDFs committed in models/ as audit source.
+- **Contract-window solar buckets**: profile-matched spreads use the official PPA contract curve (9–17点 base, Jul–Sep +18点） via `profile_hours_for_month`; 蒙东 全天一条线 honored via flat_profile.
+- **Clearing-priority layer**: CHANNEL_ANCHOR_PROVINCE map （锚省 = flow-origin converter-station province) + per-row `priority_note` （存量PPA·优先 2026-2028 / 新增PPA × 锚省/中转） + rules caption （国网优先计划通道 non-public; PPA is subset of channel flows).
+- **福建 RT repair**: 6,430 hours filled into `spot_prices_hourly` from 景融 Excel (fill-only, zero nonzero pipeline values overwritten; 2026-01-15 avg 374.6 = sheet exact). Hour-label convention verified: sheet 01:00 = 00:00–01:00 (end-of-hour). LingFeng 福建 ingest still broken past 2026-09-15.
+- **Ranking fixes**: FR pool-share fallback suppressed <500MW fleet （陕西 3.5亿 ÷ 98MW → 1,071 ¥/kW/yr fabrication killed; actuals untouched); spread toggle wired （实际值 = forecast-model price spread); 元/kWh-discharged unit mode; spread chart sorted bars with 2dp spread + 0dp σ labels (σ on both bases).
+- **Geo map fix**: both maps now inline base64 PNGs — st.pyplot was the app's only media-endpoint rendering and its stream breaks under ALB+Cognito (broken-image icon; ASGI frame-order error in logs).
+
+**In progress:** nothing open in flight. Awaiting user confirmation that the geo maps render post-v84.
+
+**Decisions made:**
+- Params in repo (versioned), NOT DB — user chose A over a Data Management edit UI; pricing-cycle update = edit + redeploy.
+- Congestion spread basis = reference landed cost (default 240+5, panel-adjustable), NOT offer-only — screener works with zero live offers.
+- 甘浙—华东 added as marked v1 extension path (beyond Excel verbatim; 金永直流 tariff published, user listed 甘浙 in 2027 flows).
+- Sysopfee stays note-only (province_sysopfee_monthly has no draft mechanism — never overwrite confirmed rows).
+- 西藏 PPA row kept with path_id=None （西藏 unpriced in 4th-cycle 送出省价格） — honest no_path in scoring, months=[6..10] carried.
+- FR fallback: zero-out beats sanity-cap (option B) — don't fabricate on tiny fleet bases.
+- Geo fix by construction (base64 bypass) rather than deeper ALB/media debugging — pipeline proven in-container with real data.
+
+**Next session:**
+- Confirm geo maps render (user hard-refresh); if broken, st.exception wrapper is the next probe.
+- 陕西 3.5亿 FR pool provenance (option C): verify official source or mark superseded — screener may have LLM-estimated it.
+- 宁夏 2026-2028 seasonal volumes （银东+锡泰/陕武+宜华， Jan/Dec+Jul/Aug only) — last known seed gap.
+- 福建 LingFeng pipeline fix (separate workstream; repaired series ends 2026-09-15).
+- Open items from intake arc: sysopfee draft queue (needs status column + bess-map wiring) if manual 系统运行费 intake becomes recurring.
+- Infra lessons logged: OneDrive reverts (2 incidents), git classifier flapping (use `!` handoff), silent pipe failures (never trust `| tail` exit codes — check output), Docker Hub/PyPI/apt blocked from China (ECR Public base + Tsinghua mirrors now in Dockerfile), bulk DB writes from Mac die (ECS run-task + S3 transport is the reliable pattern), temp-index plumbing for ALL commits on the shared tree.
