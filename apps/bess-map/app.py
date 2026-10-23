@@ -2408,6 +2408,16 @@ with tab_ranking:
             st.plotly_chart(fig_sp, use_container_width=True)
 
 # ── Tab 2: Geo Map ────────────────────────────────────────────────────────────
+def _fig_to_b64(fig, dpi: int = 110) -> str:
+    """matplotlib Figure → base64 PNG string for inline <img> rendering
+    (bypasses the st.pyplot media endpoint, which breaks under the ALB proxy)."""
+    import base64 as _b64
+    import io as _io
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    return _b64.b64encode(buf.getvalue()).decode()
+
+
 with tab_geo:
     st.caption(
         "Colour = simple payback period (annual revenue ÷ capex).  "
@@ -2450,6 +2460,9 @@ with tab_geo:
         st.warning(f"{_t('geo_unavailable')} ({_geo_err})")
 
     if not geo_rank_df.empty and _geojson_bess:
+        # Render via embedded base64 PNG, not st.pyplot: the media endpoint that
+        # st.pyplot streams through breaks under ALB+Cognito proxying (broken-
+        # image icon, ASGI frame-order errors in service logs).
         col_2h, col_4h = st.columns(2)
         with col_2h:
             st.subheader(_t("geo_2h_title"))
@@ -2459,7 +2472,8 @@ with tab_geo:
                 title=_t("geo_2h_title"),
                 extra_rev_map=_geo_extra_map if _geo_extra_map else None,
             )
-            st.pyplot(fig_geo2, use_container_width=True)
+            st.markdown(f'<img src="data:image/png;base64,{_fig_to_b64(fig_geo2)}" style="max-width:100%">',
+                        unsafe_allow_html=True)
             plt.close(fig_geo2)
         with col_4h:
             st.subheader(_t("geo_4h_title"))
@@ -2469,7 +2483,8 @@ with tab_geo:
                 title=_t("geo_4h_title"),
                 extra_rev_map=_geo_extra_map if _geo_extra_map else None,
             )
-            st.pyplot(fig_geo4, use_container_width=True)
+            st.markdown(f'<img src="data:image/png;base64,{_fig_to_b64(fig_geo4)}" style="max-width:100%">',
+                        unsafe_allow_html=True)
             plt.close(fig_geo4)
 
         st.caption(
