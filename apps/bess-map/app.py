@@ -1048,18 +1048,39 @@ def _load_installed_bess(_eng_key):
 
 @st.cache_data(ttl=3600)
 def load_forecast_spread(_eng_key, start: str, end: str, model: str):
-    """Intraday spread of the FORECAST price series (实际值 basis):
+    """Intraday spread + annualised σ of the FORECAST price series (实际值 basis):
     per province, MAX(hourly mean) − MIN(hourly mean) of rt_pred over the
-    period, for the selected model. 理论值 uses raw RT (load_intraday_spread)."""
+    period, plus σ of day-over-day mean-price changes (√365, ≥50 ¥/MWh floor).
+    理论值 uses raw RT (load_intraday_spread)."""
     sql = sql_text("""
-        SELECT province, MAX(avg_price) - MIN(avg_price) AS spread
+        SELECT p.province, p.spread, v.ann_vol
         FROM (
-            SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
-                   AVG(rt_pred) AS avg_price
-            FROM marketdata.spot_prices_hourly_rt_forecast
-            WHERE model = :model AND datetime BETWEEN :start AND :end
-            GROUP BY province, hour
-        ) t GROUP BY province
+            SELECT province, MAX(avg_price) - MIN(avg_price) AS spread
+            FROM (
+                SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
+                       AVG(rt_pred) AS avg_price
+                FROM marketdata.spot_prices_hourly_rt_forecast
+                WHERE model = :model AND datetime BETWEEN :start AND :end
+                GROUP BY province, hour
+            ) t GROUP BY province
+        ) p
+        LEFT JOIN (
+            SELECT province,
+                   CASE WHEN AVG(p) >= 50
+                        THEN STDDEV_SAMP(dp) / NULLIF(AVG(p), 0) * SQRT(365)
+                   END AS ann_vol
+            FROM (
+                SELECT province, p,
+                       p - LAG(p) OVER (PARTITION BY province ORDER BY d) AS dp
+                FROM (
+                    SELECT province, datetime::date AS d, AVG(rt_pred) AS p
+                    FROM marketdata.spot_prices_hourly_rt_forecast
+                    WHERE model = :model AND datetime BETWEEN :start AND :end
+                    GROUP BY province, datetime::date
+                ) dm
+            ) c GROUP BY province
+        ) v USING (province)
+        ORDER BY p.spread
     """)
     return pd.read_sql(sql, _eng(), params={"model": model, "start": start, "end": end})
 
@@ -2366,8 +2387,12 @@ with tab_ranking:
         spread_df = spread_df[~spread_df["province"].isin(_RANKING_EXCLUDE)]
         if not spread_df.empty:
             st.caption(_sp_basis)
-            spread_df["vol_label"] = spread_df["ann_vol"].map(
-                lambda v: f"σ {v*100:.0f}%" if pd.notna(v) else "") if "ann_vol" in spread_df else ""
+            spread_df = spread_df.sort_values("spread", ascending=True)
+            spread_df["vol_label"] = spread_df.apply(
+                lambda r: f"{r['spread']:.2f}"
+                          + (f"  σ {r['ann_vol']*100:.0f}%"
+                             if pd.notna(r.get("ann_vol")) else ""),
+                axis=1)
             fig_sp = px.bar(
                 spread_df, x="spread", y="province", orientation="h",
                 color="spread", color_continuous_scale="Blues", text="vol_label",
