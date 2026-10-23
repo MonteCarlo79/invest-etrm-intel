@@ -113,6 +113,9 @@ _T: dict[str, dict[str, str]] = {
         "rank_spread_basis_rt": "理论值 basis: actual RT intraday spread (max−min hourly mean).",
         "rank_spread_basis_fc": "实际值 basis: spread of the {model} forecast series (the spread dispatch actually sees).",
         "rank_fr_small_fleet_note": "FR pool-share fallback suppressed (provincial fleet < 500 MW, pool-average not credible): {provs}",
+        "rank_unit_mode":         "Display units",
+        "rank_unit_wan":          "万元/年",
+        "rank_unit_kwh":          "元/kWh discharged",
         "rank_kpi_2h":          "Best Province (2h)",
         "rank_kpi_4h":          "Best Province (4h)",
         "rank_kpi_capture":     "Aggregate Capture",
@@ -526,6 +529,9 @@ _T: dict[str, dict[str, str]] = {
         "rank_spread_basis_rt": "理论值口径：实时现货实际价差（小时均价最大值−最小值）。",
         "rank_spread_basis_fc": "实际值口径：预测模型 {model} 的预测价差（调度实际看到的价差）。",
         "rank_fr_small_fleet_note": "以下省份调频资金池回退被抑制（省内储能装机 < 500MW，池均值不可信）：{provs}",
+        "rank_unit_mode":         "显示单位",
+        "rank_unit_wan":          "万元/年",
+        "rank_unit_kwh":          "元/kWh（放电量）",
         "rank_kpi_2h":          "最优省份（2h）",
         "rank_kpi_4h":          "最优省份（4h）",
         "rank_kpi_capture":     "综合捕获率",
@@ -2306,22 +2312,40 @@ with tab_ranking:
             "4h Rev", "4h Cap%", "4h Cycles",
         ]
         # stack components + totals per duration (Total = arb + cap + anc − sysopfee)
-        # all money columns in 万元/yr per 100MW standard station (×100×D/1e4)
+        # money columns default to 万元/yr per 100MW standard station (×100×D/1e4);
+        # unit mode converts to 元/kWh of discharged volume:
+        #   元/kWh = (万元 × 1e4) ÷ (100×D MWh × cycles/day × 365 × 1000 kWh/MWh)
+        #          = 万元 × 10 ÷ (100×D × cycles × 365)
+        _unit_mode = st.radio(_t("rank_unit_mode"),
+                              [_t("rank_unit_wan"), _t("rank_unit_kwh")],
+                              index=0, horizontal=True, key="rank_unit_mode")
+        _money = {}
         for d, rev_s in ((2.0, disp_wide[sort_2h]), (4.0, disp_wide[sort_4h])):
             tag = "2h" if d == 2.0 else "4h"
             scale = 100.0 * d / 1e4
             cap_s = disp_wide["province"].map(lambda p: _cap_for(p, d) * scale)
             anc_s = disp_wide["province"].map(lambda p: _anc_for(p, d) * scale)
             sys_s = disp_wide["province"].map(lambda p: _sys_for(p, d) * scale)
-            out[f"{tag} Rev"] = (disp_wide[sort_2h if d == 2.0 else sort_4h] * scale).values
-            out[f"{tag} CapPmt"] = cap_s.values
-            out[f"{tag} AncRev"] = anc_s.values
-            out[f"{tag} SysOp"] = sys_s.values
-            out[f"{tag} Total"] = (rev_s.fillna(0.0) * scale + cap_s + anc_s - sys_s).values
-        for col in ["2h Rev", "4h Rev", "2h CapPmt", "4h CapPmt",
-                    "2h AncRev", "4h AncRev", "2h SysOp", "4h SysOp",
-                    "2h Total", "4h Total"]:
-            out[col] = out[col].apply(lambda v: f"{v:,.0f}万" if pd.notna(v) else "—")
+            _money[tag] = {
+                "Rev": (disp_wide[sort_2h if d == 2.0 else sort_4h] * scale).values,
+                "CapPmt": cap_s.values,
+                "AncRev": anc_s.values,
+                "SysOp": sys_s.values,
+                "Total": (rev_s.fillna(0.0) * scale + cap_s + anc_s - sys_s).values,
+            }
+        _kwh = _unit_mode == _t("rank_unit_kwh")
+        for d in (2.0, 4.0):
+            tag = "2h" if d == 2.0 else "4h"
+            cyc = disp_wide[f"cycles_{tag}"].astype(float)
+            disc = 100.0 * d * cyc * 365.0          # discharged MWh/yr
+            for comp in ("Rev", "CapPmt", "AncRev", "SysOp", "Total"):
+                vals = _money[tag][comp]
+                if _kwh:
+                    out[f"{tag} {comp}"] = [
+                        f"{v * 10.0 / dm:.3f}" if pd.notna(v) and pd.notna(dm) and dm > 0 else "—"
+                        for v, dm in zip(vals, disc)]
+                else:
+                    out[f"{tag} {comp}"] = [f"{v:,.0f}万" if pd.notna(v) else "—" for v in vals]
         for col in ["2h Cap%", "4h Cap%"]:
             out[col] = out[col].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—")
         for col in ["2h Cycles", "4h Cycles"]:
