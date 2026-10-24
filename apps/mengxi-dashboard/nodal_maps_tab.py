@@ -32,24 +32,32 @@ _PROVINCES = ["蒙西", "山西", "陕西", "湖南", "浙江", "云南", "贵�
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _grid_html(_engine, tag: str, ranked: tuple) -> tuple:
+def _grid_html(_engine, tag: str, ranked: tuple, pf_key: str, pf_values: dict) -> tuple:
     subs = _oim_subs(_engine, tag)
     lines = _oim_lines(_engine, tag)
     if subs.empty and not lines:
-        return "", 0, 0, 0, 0, 0
-    html, counts = _oim_html(subs, lines, _OIM_EXTENTS[tag]["extent"], list(ranked), tag)
-    return html, len(subs), len(lines), counts["ok"], counts["collapsed"], counts["missing"]
+        return "", 0, 0, 0, 0, 0, 0
+    html, counts = _oim_html(subs, lines, _OIM_EXTENTS[tag]["extent"], list(ranked), tag,
+                             pf_values=pf_values)
+    return (html, len(subs), len(lines),
+            counts["ok"], counts["collapsed"], counts["missing"], counts["pf_matched"])
 
 
-def _render_grid_map(engine, province: str, top_df: pd.DataFrame) -> None:
+def _render_grid_map(engine, province: str, top_df: pd.DataFrame,
+                     totals_df: pd.DataFrame | None = None) -> None:
     """OpenInfraMap grid underlay as a self-contained canvas component
     (pydeck's TextLayer cannot render CJK on its bundled deck.gl stack).
-    Green = station on the province's 网架图; gold = ranked PF node match."""
+    Green = station on the province's 网架图; gold ring = top-N PF node match;
+    blue band = PF Rev/MW level for stations matching a PF node."""
     tag = _oim_tag(province)
     if tag is None:
         return
     ranked = tuple(top_df["node_name"]) if not top_df.empty else ()
-    html, n_subs, n_lines, n_ok, n_coll, n_miss = _grid_html(engine, tag, ranked)
+    pf_values = {}
+    if totals_df is not None and not totals_df.empty:
+        pf_values = dict(zip(totals_df["node_name"], totals_df["rev_per_mw"].astype(float)))
+    pf_key = str(len(pf_values)) + ":" + (f"{max(pf_values.values()):.0f}" if pf_values else "0")
+    html, n_subs, n_lines, n_ok, n_coll, n_miss, n_pf = _grid_html(engine, tag, ranked, pf_key, pf_values)
     if not html:
         st.caption("Grid underlay not loaded for this province yet "
                    "(staging.openinfra_* empty — run the OpenInfraMap extract task).")
@@ -58,6 +66,7 @@ def _render_grid_map(engine, province: str, top_df: pd.DataFrame) -> None:
     components.html(html, height=610, scrolling=False)
     st.caption(
         f"网架图匹配 {n_ok} · 归并 {n_coll} · 未匹配 {n_miss} · "
+        f"PF节点上图 {n_pf} · "
         f"{n_subs} named stations · {n_lines} line paths (≥330/500 kV) · "
         "Grid geometry © OpenStreetMap contributors, ODbL (via OpenInfraMap).")
 
@@ -104,8 +113,8 @@ def render(get_engine) -> None:
 
     _nm_top_df = _nm_totals.head(_nm_top_n)
 
-    # ── Geographic grid underlay (OpenInfraMap staging, if loaded) ──────────
-    _render_grid_map(engine, _nm_province, _nm_top_df)
+    # ── Geographic grid underlay (OpenInfraMap staging + PF spread layer) ───
+    _render_grid_map(engine, _nm_province, _nm_top_df, _nm_totals)
 
     # ── Ranked bar chart ────────────────────────────────────────────────────
     st.subheader("Ranked nodes by PF revenue / MW")

@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 
-from services.openinfra.match import match_vision
+from services.openinfra.match import match_vision, norm_name
 from services.openinfra.vision_lists import VISION_LISTS
+
+# sequential blue ramp for PF Rev/MW magnitude bands (light→dark)
+_PF_BANDS = ["#dbe7f3", "#9ec4dd", "#5b9bc4", "#2673a8", "#0d4d80"]
 
 
 def _line_style(name: str, max_voltage) -> tuple[str, float, bool]:
@@ -31,10 +34,12 @@ def _line_style(name: str, max_voltage) -> tuple[str, float, bool]:
 
 
 def build_grid_map_html(subs, lines, extent, ranked_names, extent_tag: str,
-                        max_pts: int = 60) -> tuple[str, dict]:
+                        pf_values: dict | None = None, max_pts: int = 60) -> tuple[str, dict]:
     """subs: DataFrame(name, max_voltage, lon, lat); lines: [{max_voltage, path}];
-    ranked_names: PF node names to highlight in gold when a station matches.
-    Returns (html, counts) where counts = {ok, collapsed, missing}."""
+    ranked_names: PF node names to ring in gold when a station matches;
+    pf_values: {pf_node_name: rev_per_mw} — stations whose name core matches a
+    PF node get a sequential blue band by value (darker = higher Rev/MW).
+    Returns (html, counts) where counts = {ok, collapsed, missing, pf_matched}."""
     def _ds(path):
         if len(path) <= max_pts:
             return path
@@ -43,10 +48,46 @@ def build_grid_map_html(subs, lines, extent, ranked_names, extent_tag: str,
 
     matched = match_vision(VISION_LISTS.get(extent_tag, []), subs)
     vision_total = len(VISION_LISTS.get(extent_tag, []))
+
+    # PF node -> station: strip 内蒙./蒙东. prefix + /220kV.xM suffix, normalize,
+    # then match onto station normalized names (exact or containment)
+    pf_by_station: dict[str, float] = {}
+    if pf_values:
+        by_norm = {}
+        for r in subs.itertuples():
+            k = norm_name(r.name)
+            if k:
+                by_norm[k] = r.name
+        for node, val in pf_values.items():
+            # 内蒙.德岭山站/220kV.1M → strip /voltage part FIRST (it contains a
+            # dot), then the province prefix, then normalize
+            core = norm_name(str(node).split("/")[0].split(".")[-1])
+            if not core:
+                continue
+            if core in by_norm:
+                pf_by_station[by_norm[core]] = float(val)
+                continue
+            cands = [k for k in by_norm if len(k) >= 3 and (k in core or core in k)]
+            if cands:
+                pf_by_station[by_norm[min(cands, key=len)]] = float(val)
+    pf_vals = list(pf_by_station.values())
+    if pf_vals:
+        pf_vals.sort()
+        qs = [pf_vals[int(len(pf_vals) * q)] for q in (0.2, 0.4, 0.6, 0.8)]
+    else:
+        qs = []
+
+    def _band(v: float) -> int:
+        for i, q in enumerate(qs):
+            if v <= q:
+                return i
+        return len(_PF_BANDS) - 1
+
     counts = {
         "ok": sum(1 for m in matched.values() if m["status"] == "OK"),
         "collapsed": sum(1 for m in matched.values() if m["status"] == "COLLAPSED"),
         "missing": vision_total - len(matched),
+        "pf_matched": len(pf_by_station),
     }
 
     ranked = [r for r in ranked_names if len(r) >= 2]
@@ -57,8 +98,11 @@ def build_grid_map_html(subs, lines, extent, ranked_names, extent_tag: str,
         m = matched.get(name)
         mv = r.max_voltage
         mv = int(mv) if mv == mv and mv is not None else 0  # NaN-safe
+        pfv = pf_by_station.get(name)
         if gold:
             kind = "gold"
+        elif pfv is not None:
+            kind = "pf"
         elif m and m["status"] == "OK":
             kind = "ok"
         elif m:
@@ -66,7 +110,8 @@ def build_grid_map_html(subs, lines, extent, ranked_names, extent_tag: str,
         else:
             kind = "other"
         stations.append({"n": name, "x": round(r.lon, 5), "y": round(r.lat, 5),
-                         "v": mv, "k": kind,
+                         "v": mv, "k": kind, "b": _band(pfv) if pfv is not None else -1,
+                         "pf": round(pfv / 1000.0, 1) if pfv is not None else None,
                          "lbl": (m["vision"] if m else name)})
     line_data = []
     for p in lines:
@@ -95,6 +140,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <span style="color:#b8a02e">●</span><span style="font-size:12px;color:#666">归并</span>
   <span style="color:#8a8f98">●</span><span style="font-size:12px;color:#666">其他命名站</span>
   <span style="color:#ffc300">●</span><span style="font-size:12px;color:#666">PF排名匹配</span>
+  <span class="lg"><span class="sw" style="background:#dbe7f3"></span><span class="sw" style="background:#5b9bc4"></span><span class="sw" style="background:#0d4d80"></span> PF Rev/MW (深=高)</span>
   <span style="margin-left:auto;color:#999">滚轮缩放 · 拖拽平移 · 双击复位</span>
 </div>
 <canvas id="cv"></canvas>
@@ -103,6 +149,7 @@ const D = __DATA__;
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const [x0,x1,y0,y1] = D.ext;
 const KIND_COLOR = {ok:'#2e8b57', collapsed:'#b8a02e', other:'#8a8f98', gold:'#ffc300'};
+const PF_BANDS = ['#dbe7f3','#9ec4dd','#5b9bc4','#2673a8','#0d4d80'];
 let W,H,scale,ox,oy;
 function fit(){
   const r = cv.parentElement.getBoundingClientRect();
@@ -130,24 +177,29 @@ function draw(){
   for(const s of D.subs){
     const [a,b]=px(s.x,s.y);
     if(a<-10||a>W+10||b<-10||b>H+10) continue;
-    const r = s.k==='gold'?6.5:(s.k==='ok'?4:(s.k==='collapsed'?3.4:2.4));
+    const isPf = s.k==='pf';
+    const r = s.k==='gold'?6.5:(isPf?5.5:(s.k==='ok'?4:(s.k==='collapsed'?3.4:2.4)));
     ctx.beginPath(); ctx.arc(a,b,r,0,6.284);
-    ctx.fillStyle = KIND_COLOR[s.k];
+    ctx.fillStyle = isPf ? PF_BANDS[s.b] : KIND_COLOR[s.k];
     ctx.fill(); ctx.lineWidth=1; ctx.strokeStyle='#2b2b2b'; ctx.stroke();
+    if(s.k==='gold'){ ctx.beginPath(); ctx.arc(a,b,r+2.5,0,6.284);
+      ctx.lineWidth=1.6; ctx.strokeStyle='#b8860b'; ctx.stroke(); }
   }
   if(document.getElementById('lbl').checked){
     const zoomK = Math.max(0.45, Math.min(2.2, scale/60));
     const budget = Math.floor(80 * zoomK * 1.6);
     const placed = [];
     ctx.font = '12px sans-serif'; ctx.textAlign='center';
-    const cand = D.subs.filter(s=>s.k==='gold'||s.k==='ok'||s.k==='collapsed')
-                       .sort((a,b)=>(a.k==='gold'?-1:0)-(b.k==='gold'?-1:0) || b.v-a.v);
+    const cand = D.subs.filter(s=>s.k!=='other')
+                       .sort((a,b)=>(a.k==='gold'?-1:0)-(b.k==='gold'?-1:0)
+                              || (a.k==='pf'?-1:0)-(b.k==='pf'?-1:0) || b.v-a.v);
     let n=0;
     for(const s of cand){
       if(n>=budget) break;
       const [a,b]=px(s.x,s.y);
       if(a<0||a>W||b<0||b>H) continue;
-      const w = ctx.measureText(s.lbl).width;
+      const text = s.pf!=null ? s.lbl+' · '+s.pf+'k' : s.lbl;
+      const w = ctx.measureText(text).width;
       const box = [a-w/2-2, b-17, a+w/2+2, b-4];
       let hit=false;
       for(const q of placed){ if(!(box[2]<q[0]||box[0]>q[2]||box[3]<q[1]||box[1]>q[3])){hit=true;break;} }
@@ -155,8 +207,8 @@ function draw(){
       placed.push(box); n++;
       ctx.fillStyle='rgba(242,241,234,0.78)';
       ctx.fillRect(box[0],box[1],box[2]-box[0],box[3]-box[1]);
-      ctx.fillStyle = s.k==='gold'?'#8a5a00':(s.k==='ok'?'#1d5c38':(s.k==='collapsed'?'#7a6520':'#555'));
-      ctx.fillText(s.lbl,a,b-5);
+      ctx.fillStyle = s.k==='gold'?'#8a5a00':(s.k==='pf'?'#0d4d80':(s.k==='ok'?'#1d5c38':(s.k==='collapsed'?'#7a6520':'#555')));
+      ctx.fillText(text,a,b-5);
     }
   }
 }
