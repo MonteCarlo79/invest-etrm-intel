@@ -14,6 +14,8 @@ Deal Structurer today prices *deals* (floors, tolls, PPAs) off an annual revenue
 2. **Where is the market mispricing it?** (option value vs. capex/ask → undervalued screen)
 3. **How do we capture it?** (link model value to realized capture in bess-map / mengxi ops)
 
+**The decision that motivates this (2026-10-24):** development permits for BESS (开发指标) are on offer in provinces where **today's intrinsic value does not cover build cost**. The permit is a real option: the right, not the obligation, to build within a validity window. What may justify the permit price is (a) extrinsic value from price dynamics (spreads widening as renewable penetration and market liberalization proceed) and (b) **policy-regime optionality** — capacity payments, FR market access, and discharge compensation are being rolled out province by province under the 136号 reform path; a permit bought cheap today exercises into a much richer revenue stack if the policy lands. The system's job: price that option honestly, per province, so the permit bid is a number, not a feeling.
+
 BESS first (the cleanest spread option; data and LP already in production). Coal-fired plants second (dark-spread options with unit commitment — phase 2, interface designed now, built later).
 
 Method source: KYOS plant/storage valuation as digested in power-academy (`power-academy/inventory/plant_hedging_and_trading_strategies_kyos_20110530.md`, `worldpower2009_realisticpowerplantvaluation.md` — PCA in commodity simulation, Monte Carlo of spot prices, per-path dispatch optimization, intrinsic/extrinsic split, delta by price-shock-and-revalue). Teaching implementations: `power-academy/labs/intrinsic_vs_extrinsic_value/`, `monte_carlo_and_lsm_for_generation_valuation/`, `dispatch_optimisation_and_delta_hedging/`.
@@ -29,10 +31,12 @@ For a dispatchable asset and a rolling 12-month window of hourly RT prices:
 
 Design property to state in UI: for storage, extrinsic dominates — most of a battery's value is purchased volatility, and the split quantifies exactly how much. This is the investment-relevant insight.
 
+**Third layer — the build (permit) option.** The asset's option value `V_asset = V_int + V_ext + policy_net` is the *underlying*; the development permit is an option *on* it: pay permit cost today for the right to commit capex K(τ) at any exercise date τ within the validity window. `V_permit = E[ max_τ ( V_asset(state_τ) − K(τ) )⁺ ] − permit_cost`, where states branch on **policy scenarios** (each lever scenario carries an effective date and a probability) and on simulated drift of the price regime (extrinsic evolves as markets mature). Method: scenario-weighted decision tree over the permit life (v1), cross-checked by the Dixit-Pindyck perpetual build-option closed form (academy lab `real_options_framework_for_generation_assets` — β1, wait multiplier b/(b−1), exercise trigger V*; lattice version in `ccgt_investment_option_and_optimal_timing`). A permit is a GO when V_permit > 0 — i.e., when the probability-weighted upside from waiting exceeds the permit price.
+
 Two calibration anchors already in production:
 
 - **Historical PF benchmark** `V_hist` — `marketdata.bess_capture_daily.theoretical_profit_per_mwh_day` summed over the same window (daily perfect-foresight LP). A well-calibrated simulator gives `V_tot ≈ V_hist`; the ratio is the calibration report (§8). Reader note: theoretical rows are duplicated across models in that table — filter to one model (champion `ols_rt_time_v1`) or dedup. V_hist is energy-only (theoretical dispatch runs without compensation), consistent with the energy-only V_tot.
-- **Capture rate** — `bess_capture_daily.capture_rate` (champion model `ols_rt_time_v1`, trailing 90 d, repo convention Σrealized/Σtheoretical) applied as haircut → **capture-adjusted value** `V_cap = capture × V_tot`. The honest "what we actually expect to bank" number. Directly links Pillar 2 realized performance into the valuation.
+- **Capture rate** — `bess_capture_daily.capture_rate` (champion model `ols_rt_time_v1`, trailing 90 d, repo convention Σrealized/Σtheoretical) applied as haircut to the energy value only → **capture-adjusted value** `V_cap = capture × (V_int + V_ext) + policy_net` (policy streams are contracted/regulated, not forecast-dependent). The honest "what we actually expect to bank" number. Directly links Pillar 2 realized performance into the valuation.
 
 ## 3. Goals / non-goals / anti-goals
 
@@ -41,8 +45,9 @@ Two calibration anchors already in production:
 2. Extrinsic value via upgraded PCA Monte Carlo with vectorized per-path DP dispatch.
 3. Policy-lever revenue stack (capacity price 容量电价, capacity compensation 容量补偿, frequency response 调频, system operation fee 系统运行费, discharge compensation) as scenario-adjustable inputs layered on option value.
 4. Undervaluation screen: total value annuitized vs. capex benchmark → margin ranking across provinces/durations.
-5. Two new Deal Structurer tabs + 3 Structurer agent tools; snapshot table + batch CLI.
-6. Calibration report: `V_tot` vs `V_hist` per province.
+5. **Permit (build-option) valuation**: scenario-weighted decision tree over the permit validity window — policy scenarios with probability + effective date, capex-at-COD with decline rate — output V_permit vs. permit ask price → GO/NO-GO on the permit purchase.
+6. Two new Deal Structurer tabs + 3 Structurer agent tools; snapshot table + batch CLI.
+7. Calibration report: `V_tot` vs `V_hist` per province.
 
 **Non-goals (v1):** coal valuation (interface stub only); nodal-granularity option value (provincial v1; nodal path via `md_mengxi_nodal_price_96` later); LSM/realistic-policy valuation (capture haircut is the v1 substitute); forward-curve term structure (rolling-average curve *is* the curve); any web/external data; any trading-execution linkage.
 
@@ -126,7 +131,7 @@ Per (province, asset, duration, window):
 - `V_int` = DP dispatch on expected curve (deterministic; DP and LP agree here by gate).
 - `V_tot` = mean path revenue; also report P10/P50/P90.
 - `V_ext = V_tot − V_int` (assert ≥ −ε).
-- **Policy stack** (scenario-adjustable, reported ¥/kW/yr — `capacity_stack` returns ¥/MWh_installed/yr, the conversion is pure unit math): capacity_price, cap_comp, FR (mileage actuals > pool-share > 0 precedence per `capacity_stack.fr_component`, incl. its 500 MW fleet floor), discharge_comp, minus sysopfee cost. Rates/default lever values from the DB loaders; **volume-based levers** (discharge_comp, sysopfee — both take cycles/volume, not just rates) use the option engine's own MC-mean annual discharge volume from the DP paths (self-consistent with V_tot; discharge volume is far more model-stable than revenue; cross-checked against capture-pipeline realized cycles in the calibration report). Scenario = named override set {lever: multiplier|absolute} stored in snapshot params. Presets: `current_policy`, `capacity_x1.5`, `fr_pool_halved`, custom.
+- **Policy stack** (scenario-adjustable, reported ¥/kW/yr — `capacity_stack` returns ¥/MWh_installed/yr, the conversion is pure unit math): capacity_price, cap_comp, FR (mileage actuals > pool-share > 0 precedence per `capacity_stack.fr_component`, incl. its 500 MW fleet floor), discharge_comp, minus sysopfee cost. Rates/default lever values from the DB loaders; **volume-based levers** (discharge_comp, sysopfee — both take cycles/volume, not just rates) use the option engine's own MC-mean annual discharge volume from the DP paths (self-consistent with V_tot; discharge volume is far more model-stable than revenue; cross-checked against capture-pipeline realized cycles in the calibration report). Scenario = named override set {lever: multiplier|absolute} **plus, for permit valuation, an effective date and a probability** (e.g. "容量电价 doubles from 2027-07, p=0.6") stored in snapshot params. Presets: `current_policy`, `capacity_x1.5`, `fr_pool_halved`, custom.
 - `V_total = V_int + V_ext + policy_net`; `V_cap = capture_rate × (V_int+V_ext) + policy_net` (policy streams are not capture-discounted).
 - **Greeks** (KYOS price-shock-and-revalue, cheap under vectorized DP): delta = V(curve+10 ¥/MWh) − V(curve); vega = V(score σ ×1.1) − V; theta = V(window −1 month) − V.
 - Units: internal ¥/kW/yr; screen also shows ¥/kWh/yr = ÷duration_h for capex comparison.
@@ -137,7 +142,21 @@ Per (province, asset, duration, window):
 - Matrix: province × duration rows; columns intrinsic, extrinsic, policy, total, capture-adj, capex, **margin ¥/kWh**, **IRR-uplift**, freshness flag. `IRR_uplift = IRR(V_cap) − IRR(V_int + policy_net)` — how many IRR points the optionality adds over the static-curve case (the committee one-liner). Sortable; stale/excluded provinces visibly marked, not silently dropped.
 - Cross-links: province rows deep-link to bess-map (Pillar 2 detail); 蒙西 rows show owned-asset realized benchmark from `reports.bess_asset_daily_scenario_pnl` (Pillar 3 actuals vs model).
 
-### 5.6 Persistence (`snapshot.py`)
+### 5.6 Permit / build-option valuation (`build_option.py` in `libs/option_value/`)
+
+The decision object from §1: is this permit worth its ask price?
+
+**Inputs:** permit cost (¥, user-entered — no permit-price table exists; observed asks are manual input), validity window (years to construction deadline), asset params (province, MW, duration), capex-at-COD with annual decline rate (BESS capex still falling — waiting buys cheaper capex as well as information), policy scenario set from §5.4 (each with probability + effective date), price-regime drift assumption (extrinsic growth rate, default 0 — conservative).
+
+**Method (v1):** scenario-weighted decision tree over the validity window.
+- At each scenario resolution date, the policy state is revealed; `V_asset` in each state = `V_int + V_ext + policy_net(state)` from the engine, annuitized to NPV at hurdle over project life, net of capex-at-that-date.
+- Exercise decision at each node: build iff `NPV_asset(state, τ) > 0`; permit value = probability-weighted Σ of exercise payoffs discounted to today, minus permit cost.
+- **Cross-check:** Dixit-Pindyck perpetual build option (academy `real_options_framework_for_generation_assets/compute.py` — β1 root, trigger V*, wait multiplier b/(b−1)) with σ of V_asset estimated from the scenario spread; large divergence (>30%) between tree and DP trigger is a review flag, not a blocker.
+- Output: V_permit, breakeven permit price, GO/NO-GO vs. ask, and the decomposition driving it (how much comes from price extrinsic vs. each policy scenario) — the committee needs to see *which policy bet* carries the value.
+
+**Anti-goal:** do not build a full American-option lattice in v1; the two/three-date scenario tree captures the actual decision cadence (policy documents land on government schedules, not continuously).
+
+### 5.7 Persistence (`snapshot.py`)
 
 `marketdata.option_value_snapshot` (DDL `db/ddl/marketdata/option_value_snapshot.sql`, idempotent `CREATE TABLE IF NOT EXISTS`, applied via ensure-pattern like `deal_committee.sql`):
 
@@ -153,14 +172,14 @@ PK (province, asset_type, duration_h, asof_date)
 
 Only `batch.py` writes. App tabs read latest per key. Numpy paths never persisted (deal_committee lesson).
 
-### 5.7 Batch CLI (`batch.py`)
+### 5.8 Batch CLI (`batch.py`)
 
 `python services/option_engine/run_option_batch.py --province 山东 --duration 2 --paths 1000` (single) or `--screen` (29 provinces × 2 durations, fast mode: 200 paths). Full refresh ≈ minutes under vectorized DP. ECS scheduling deferred (nodal-writer terraform pattern when needed); manual/cron first.
 
 ## 6. App surface (deal_structurer v-next)
 
-- **Tab 8 · 期权价值 (Option Value)**: province/asset/duration/window pickers → expected-curve chart, simulated-path fan (P10/50/90), value waterfall (intrinsic → +extrinsic → +policy stack → total → capture-adj), Greeks row, policy-lever sliders (scenario preset dropdown), calibration line (V_tot vs V_hist for this province).
-- **Tab 9 · 价值筛选 (Value Screen)**: the matrix of §5.5 + margin ranking bar chart.
+- **Tab 8 · 期权价值 (Option Value)**: province/asset/duration/window pickers → expected-curve chart, simulated-path fan (P10/50/90), value waterfall (intrinsic → +extrinsic → +policy stack → total → capture-adj), Greeks row, policy-lever sliders (scenario preset dropdown with probability + effective-date per scenario), calibration line (V_tot vs V_hist for this province). **Permit panel**: permit cost, validity window, capex-at-COD + decline rate → V_permit, breakeven permit price, GO/NO-GO, value decomposition by policy scenario (§5.6).
+- **Tab 9 · 价值筛选 (Value Screen)**: the matrix of §5.5 + margin ranking bar chart. Permit-relevant sort: ascending intrinsic vs. (extrinsic + policy-upside) ratio — permits are cheapest precisely where intrinsic is low but optionality is high; that ordering is the hunt list.
 - Tab numbering continues existing convention (`app.py:41-48` nav list); 💬 Structurer unchanged otherwise.
 - **Agent tools (+3)** in `libs/deal_models/adapters/agent_tools.py`: `get_option_value(province, asset_type, duration_h)` (latest snapshot + on-demand fast recompute), `screen_option_values(sort_by, min_freshness)`, `get_policy_levers(province)`. Same grounding-rule system prompt; tool results cite `option_value_snapshot` asof_date.
 - Portal card copy update only (no Quick Ask change).
@@ -185,6 +204,7 @@ Only `batch.py` writes. App tabs read latest per key. Numpy paths never persiste
 - Closed-form cross-check: `bess_spread_call_strip` value within 15% of fast-MC V_tot for 1-cycle-constrained BESS (different models, same economics — flags calibration bugs).
 - Policy: each lever's sign and magnitude vs `capacity_stack` hand-computed province （山东）.
 - Snapshot round-trip; ensure-DDL idempotent.
+- Permit tree: deterministic 2-state fixture reproduces hand-computed V_permit; DP perpetual cross-check matches academy lab numbers on the lab's own parameters (`real_options_framework_for_generation_assets/compute.py`); GO iff V_permit > 0; probability weights must sum ≤ 1 (validated input).
 
 **Integration:** 山东 BESS 2h end-to-end batch → snapshot → Tab 8 render locally (`streamlit run apps/deal_structurer/app.py --server.port 8522`, AUTH_MODE n/a — app has no Cognito locally); screen tab loads < 60 s cold (fast mode pre-computed by batch).
 
@@ -196,9 +216,10 @@ Only `batch.py` writes. App tabs read latest per key. Numpy paths never persiste
 2. pca_simulator v2 + moment tests
 3. dp_dispatch + **DP/LP gate**
 4. value_stack + Greeks + policy layer + tests
-5. `services/option_engine/` readers + DDL + batch CLI + calibration report (run on real data, review numbers before UI)
-6. Tabs 8/9 + 3 agent tools, local run verification
-7. Commit per unit; deploy only on explicit confirmation (standard protocol: read LATEST-IMAGES.md, next tag, --platform linux/amd64, jq-swap from current tdArn — deal-structurer deploys bypass terraform)
+5. build_option (permit tree + DP cross-check) + tests
+6. `services/option_engine/` readers + DDL + batch CLI + calibration report (run on real data, review numbers before UI)
+7. Tabs 8/9 (incl. permit panel) + 3 agent tools, local run verification
+8. Commit per unit; deploy only on explicit confirmation (standard protocol: read LATEST-IMAGES.md, next tag, --platform linux/amd64, jq-swap from current tdArn — deal-structurer deploys bypass terraform)
 
 ## 10. Explicitly deferred (recorded so they aren't silently dropped)
 
@@ -214,3 +235,4 @@ Coal DP valuation (interface ready); LSM realistic-policy (academy `monte_carlo_
 6. **Provincial v1, nodal deferred** — nodal 15-min data only covers 蒙西/山东 well; provincial screen is the investment question.
 7. **Screen IRR is unlevered; IRR-uplift = IRR(V_cap) − IRR(V_int+policy_net)** — leverage is deal-specific and pollutes a province ranking; uplift isolates what optionality adds to returns. (Settled at builder check; flag if you want levered instead.)
 8. **Volume-based policy levers use the engine's own MC-mean discharge volume**, not capture-pipeline realized cycles — self-consistent with V_tot; realized cycles are the calibration cross-check. (Settled at builder check.)
+9. **Permit valuation = scenario decision tree, not an American lattice** — policy reveals land on government schedules, so discrete dated scenarios with probabilities are the honest model; Dixit-Pindyck perpetual closed form is a cross-check only. Price-regime drift default 0 (conservative; upside is the policy bet, not assumed market kindness).
