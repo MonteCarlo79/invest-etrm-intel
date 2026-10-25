@@ -149,6 +149,37 @@ def to_ov_result(row: dict, *, power_mw: float, revenue_paths_yuan=None) -> dict
     }
 
 
+def resolve_ov_result(row: dict | None, *, prev: dict | None,
+                      power_mw: float) -> dict | None:
+    """Decide the new ``ov_result`` session value (contract producer).
+
+    A None row (no snapshot / snapshot read raised) yields None — the empty
+    state CLEARS the contract: a previous cell's dict must never survive a
+    cell switch (review fix round 1). A present row normalizes via
+    ``to_ov_result``; a same-cell ``prev`` recompute's ``revenue_paths_yuan``
+    is preserved across reruns (the snapshot itself never persists paths).
+    The preservation key includes ``power_mw``: paths are scaled
+    ×power_mw×1000, so a power change drops them to None (honest) rather
+    than silently carrying a stale scale — the UI notes the recompute path.
+    """
+    if row is None:
+        return None
+    ov = to_ov_result(row, power_mw=power_mw)
+    if prev is not None:
+        d_prev, d_ov = prev.get("duration_h"), ov["duration_h"]
+        same_cell = (
+            prev.get("province") == ov["province"]
+            and prev.get("asset_type") == ov["asset_type"]
+            and d_prev is not None and d_ov is not None
+            and float(d_prev) == float(d_ov)  # 0.0 (wind/solar) is a valid duration
+            and str(prev.get("asof_date")) == ov["asof_date"]
+            and prev.get("power_mw") == ov["power_mw"]
+        )
+        if same_cell:
+            ov["revenue_paths_yuan"] = prev.get("revenue_paths_yuan")
+    return ov
+
+
 def _f(v) -> float | None:
     return None if v is None else float(v)
 
@@ -269,25 +300,27 @@ def render() -> None:
         row = None  # table not created yet → empty state below
 
     # ── (b) value display ────────────────────────────────────────────────────
-    if row is None:
+    # Contract producer: empty state clears ov_result (never a stale cell's
+    # dict); same-cell paths survive reruns only while power_mw is unchanged.
+    prev_ov = st.session_state.get("ov_result")
+    ov = resolve_ov_result(row, prev=prev_ov, power_mw=power_mw)
+    st.session_state["ov_result"] = ov
+
+    if ov is None:
         st.info("该省份/资产类型暂无价值快照。请运行批量引擎 "
                 "（services/option_engine/run_option_batch.py），"
                 "或使用下方「按需重算」生成。")
     else:
-        ov = to_ov_result(row, power_mw=power_mw)
-
-        # Preserve a same-cell recompute's paths across reruns (the snapshot
-        # itself never persists paths).
-        prev = st.session_state.get("ov_result")
         if (
-            prev
-            and prev.get("province") == ov["province"]
-            and prev.get("asset_type") == ov["asset_type"]
-            and float(prev.get("duration_h") or -1) == ov["duration_h"]
-            and str(prev.get("asof_date")) == ov["asof_date"]
+            prev_ov
+            and prev_ov.get("revenue_paths_yuan") is not None
+            and ov["revenue_paths_yuan"] is None
         ):
-            ov["revenue_paths_yuan"] = prev.get("revenue_paths_yuan")
-        st.session_state["ov_result"] = ov
+            st.caption(
+                f"⚠️ 装机功率已变更：原路径分布按旧功率 "
+                f"({prev_ov.get('power_mw')} MW) 缩放，已置空 — "
+                "重新「按需重算」以生成新功率下的分布。"
+            )
 
         st.caption(
             f"快照日期 {ov['asof_date']} · 窗口 "

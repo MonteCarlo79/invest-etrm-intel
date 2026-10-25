@@ -1,6 +1,8 @@
 # tests/deal_structurer/test_option_tab.py
 import numpy as np
-from apps.deal_structurer.option_tab import waterfall_data, calibration_line, cell_label
+from apps.deal_structurer.option_tab import (waterfall_data, calibration_line,
+                                             cell_label, to_ov_result,
+                                             resolve_ov_result)
 
 ROW = dict(province="山东", asset_type="bess", duration_h=2.0, asof_date="2026-10-25",
            intrinsic_yuan_kw=168.34, extrinsic_yuan_kw=83.81, policy_net_yuan_kw=62.59,
@@ -29,3 +31,30 @@ def test_calibration_line():
 def test_cell_label_grade_badges():
     assert "bid-grade" in cell_label(ROW, has_calibration=True)
     assert "筛选级" in cell_label(dict(ROW, asset_type="wind"), has_calibration=False)
+
+
+# ── review fix round 1: contract-producer regressions ───────────────────────
+
+def test_resolve_ov_result_none_row_clears_contract():
+    prev = to_ov_result(ROW, power_mw=100.0)          # a previous cell's dict
+    assert resolve_ov_result(None, prev=prev, power_mw=100.0) is None
+
+def test_resolve_ov_result_power_mw_mismatch_drops_paths():
+    paths = np.array([1.0, 2.0])
+    prev = to_ov_result(ROW, power_mw=100.0, revenue_paths_yuan=paths)
+    out = resolve_ov_result(ROW, prev=prev, power_mw=200.0)   # power changed
+    assert out["revenue_paths_yuan"] is None                   # honest drop, no rescale
+    assert out["power_mw"] == 200.0
+
+def test_resolve_ov_result_same_cell_preserves_paths():
+    paths = np.array([1.0, 2.0])
+    prev = to_ov_result(ROW, power_mw=100.0, revenue_paths_yuan=paths)
+    out = resolve_ov_result(ROW, prev=prev, power_mw=100.0)   # unchanged power
+    assert out["revenue_paths_yuan"] is paths
+
+def test_resolve_ov_result_zero_duration_preservation():
+    row_wind = dict(ROW, asset_type="wind", duration_h=0.0, capture_adj_yuan_kw=None)
+    paths = np.array([3.0])
+    prev = to_ov_result(row_wind, power_mw=50.0, revenue_paths_yuan=paths)
+    out = resolve_ov_result(row_wind, prev=prev, power_mw=50.0)
+    assert out["revenue_paths_yuan"] is paths   # duration 0.0 is not "missing"
