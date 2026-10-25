@@ -254,7 +254,7 @@ def test_vectorized_matches_single():
   - `renewable_revenue_paths(price_paths: np.ndarray, cf_paths: np.ndarray, params: RenewableParams) -> tuple[np.ndarray, np.ndarray]  # (revenue_per_path ¥, gen_mwh_per_path)`
   - `renewable_intrinsic(curve: ExpectedCurve, params: RenewableParams) -> tuple[float, float]  # (¥ for capacity_mw unit, gen MWh)`
 
-Method (pinned): `z_price` = standardized residual of each simulated hour vs. its month-hour mean (std floored at 1e-6); `z_cf = ρ·z_price + √(1−ρ²)·z'`, `z'` iid Normal; `cf = clip(cf_profile[month, hour] + cf_sigma·z_cf, 0, 1)`; revenue = `Σ_t max(price_t, 0)·cf_t·capacity_mw·1h` when `curtailment_floor` else `Σ price_t·cf_t·capacity`. Intrinsic uses `curve.hourly` with the deterministic `cf_profile` rows (no noise).
+Method (pinned): `z_price` = standardized residual of each simulated hour vs. its month-hour mean (std floored at 1e-6); `z_cf = ρ·z_price + √(1−ρ²)·z'`, `z'` iid Normal; `cf = cf_profile[month % 12, hour] + cf_sigma·z_cf` (**Ratified 2026-10-25 (T4 review): NO [0,1] clip on CF** — clipping introduces a Jensen bias at zero-profile hours that inflates E[cf] and can flip extrinsic positive, destroying the cannibalization sign the tests exist to pin; Gaussian CF marginals may leave [0,1] mildly at the default cf_sigma=0.15 — accepted v1 limitation, calibration report watches it per province); revenue = `Σ_t max(price_t, 0)·cf_t·capacity_mw·1h` when `curtailment_floor` else `Σ price_t·cf_t·capacity`. Intrinsic uses `curve.hourly` with the deterministic `cf_profile` rows (no noise).
 
 - [ ] **Step 1: Write the failing tests**
 
