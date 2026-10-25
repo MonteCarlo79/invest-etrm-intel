@@ -28,23 +28,27 @@ _COLUMNS = (
     "window_start", "window_end",
     "intrinsic_yuan_kw", "extrinsic_yuan_kw", "total_yuan_kw",
     "capture_adj_yuan_kw",
+    "policy_net_yuan_kw", "extrinsic_p10", "extrinsic_p90",
     "policy_json", "greeks_json", "mc_params",
 )
 _JSON_FIELDS = ("policy_json", "greeks_json", "mc_params")
 _FLOAT_FIELDS = (
     "intrinsic_yuan_kw", "extrinsic_yuan_kw", "total_yuan_kw",
     "capture_adj_yuan_kw",
+    "policy_net_yuan_kw", "extrinsic_p10", "extrinsic_p90",
 )
 
 _UPSERT = text("""
     INSERT INTO marketdata.option_value_snapshot
         (province, asset_type, duration_h, asof_date, window_start, window_end,
          intrinsic_yuan_kw, extrinsic_yuan_kw, total_yuan_kw, capture_adj_yuan_kw,
+         policy_net_yuan_kw, extrinsic_p10, extrinsic_p90,
          policy_json, greeks_json, mc_params)
     VALUES (:province, :asset_type, :duration_h, :asof_date,
             :window_start, :window_end,
             :intrinsic_yuan_kw, :extrinsic_yuan_kw, :total_yuan_kw,
             :capture_adj_yuan_kw,
+            :policy_net_yuan_kw, :extrinsic_p10, :extrinsic_p90,
             CAST(:policy_json AS jsonb), CAST(:greeks_json AS jsonb),
             CAST(:mc_params AS jsonb))
     ON CONFLICT (province, asset_type, duration_h, asof_date) DO UPDATE SET
@@ -54,6 +58,9 @@ _UPSERT = text("""
         extrinsic_yuan_kw   = EXCLUDED.extrinsic_yuan_kw,
         total_yuan_kw       = EXCLUDED.total_yuan_kw,
         capture_adj_yuan_kw = EXCLUDED.capture_adj_yuan_kw,
+        policy_net_yuan_kw  = EXCLUDED.policy_net_yuan_kw,
+        extrinsic_p10       = EXCLUDED.extrinsic_p10,
+        extrinsic_p90       = EXCLUDED.extrinsic_p90,
         policy_json         = EXCLUDED.policy_json,
         greeks_json         = EXCLUDED.greeks_json,
         mc_params           = EXCLUDED.mc_params,
@@ -128,6 +135,7 @@ def read_latest(eng, province: str, asset_type: str, duration_h: float
                window_start, window_end,
                intrinsic_yuan_kw, extrinsic_yuan_kw, total_yuan_kw,
                capture_adj_yuan_kw,
+               policy_net_yuan_kw, extrinsic_p10, extrinsic_p90,
                policy_json, greeks_json, mc_params, created_at
         FROM marketdata.option_value_snapshot
         WHERE province = :province AND asset_type = :asset_type

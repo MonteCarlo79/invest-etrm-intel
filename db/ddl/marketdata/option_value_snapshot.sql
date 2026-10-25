@@ -22,3 +22,12 @@ CREATE TABLE IF NOT EXISTS marketdata.option_value_snapshot (
 
 CREATE INDEX IF NOT EXISTS idx_option_value_snapshot_asof
     ON marketdata.option_value_snapshot (asof_date);
+
+-- Plan-2 app-surface seam: top-level queryable columns (nullable; populated
+-- by the writer on the next upsert after deploy).
+ALTER TABLE marketdata.option_value_snapshot
+    ADD COLUMN IF NOT EXISTS policy_net_yuan_kw DOUBLE PRECISION;
+ALTER TABLE marketdata.option_value_snapshot
+    ADD COLUMN IF NOT EXISTS extrinsic_p10 DOUBLE PRECISION;
+ALTER TABLE marketdata.option_value_snapshot
+    ADD COLUMN IF NOT EXISTS extrinsic_p90 DOUBLE PRECISION;
