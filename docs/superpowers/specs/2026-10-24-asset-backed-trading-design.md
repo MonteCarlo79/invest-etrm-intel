@@ -191,7 +191,9 @@ Only `batch.py` writes. App tabs read latest per key. Numpy paths never persiste
 
 ### 5.9 Generative investment agent (`services/option_engine/scout.py` + `scout_scans/`)
 
-Nightly loop, four stages. Deterministic first, LLM second — the LLM never invents candidates, it only explains candidates the data produced:
+Tiered cadence (2026-10-25 revision — daily was over-provisioned): **investment scans monthly** + event-driven rescan (a new policy doc for a province ingested into the knowledge pool → rescan that province only); **trading scans weekly** (basis/congestion regimes persist days-to-weeks); **option-value snapshot batch weekly** (cheap, no LLM, keeps Tab 8/9 fresh). **LLM thesis drafting is delta-gated**: skip when the same province/asset/kind fired last run with evidence numbers within tolerance — this, not frequency, is the main cost lever (~70-80% of calls eliminated in steady state).
+
+Four stages. Deterministic first, LLM second — the LLM never invents candidates, it only explains candidates the data produced:
 
 1. **Generate (deterministic scans → candidates).** Each scan is a pure SQL/pandas function returning structured candidates with the evidence numbers attached:
    - *Permit scan*: provinces where intrinsic < capex annuity but extrinsic + policy-upside lifts V_cap above it (the hunt-list ordering from Tab 9), with data-freshness filter.
@@ -203,13 +205,26 @@ Nightly loop, four stages. Deterministic first, LLM second — the LLM never inv
 
 DDL `db/ddl/marketdata/option_opportunity_cards.sql` (ensure-pattern): `id, created_at, kind (permit|mna|trading), province, asset_type, thesis TEXT, evidence_json JSONB, validation TEXT, validation_detail JSONB, status (new|approved|rejected|snoozed|promoted), review_note TEXT, reviewed_at, scan_params JSONB`.
 
-Scheduling: nightly after the option batch (chain in the same CLI); v1 runs manual/cron, EventBridge rule later (nodal-writer terraform pattern).
+Scheduling: monthly investment sweep + weekly trading sweep, chained after the option batch (same CLI flags); v1 runs manual/cron, EventBridge rule later (nodal-writer terraform pattern).
 
 ## 6. App surface (deal_structurer v-next)
 
-- **Tab 8 · 期权价值 (Option Value)**: province/**asset-type (BESS 2h/4h, wind, solar)**/window pickers → expected-curve chart, simulated-path fan (P10/50/90), value waterfall (intrinsic → +extrinsic → +policy stack → total → capture-adj; **extrinsic shown red when negative** for wind/solar cannibalization), Greeks row, policy-lever sliders (scenario preset dropdown with probability + effective-date per scenario; lever list filtered by asset type), calibration line (V_tot vs V_hist for BESS; simulated vs empirical capture discount for wind/solar). **Acquisition panel** with mode toggle: permit mode (permit cost, validity, capex-at-COD + decline) / M&A mode (ask price, actuals anchor where available, turnaround levers) → V_option, breakeven price, GO/NO-GO, value decomposition by policy scenario (§5.6).
-- **Tab 9 · 价值筛选 (Value Screen)**: the matrix of §5.5 across provinces × asset types + margin ranking bar chart. **Top section: opportunity-card review queue** (§5.9) — new cards with thesis + validation verdict, approve/reject/snooze actions, approve promotes to `deal_briefs`. Permit-relevant sort: ascending intrinsic vs. (extrinsic + policy-upside) ratio — permits are cheapest precisely where intrinsic is low but optionality is high; that ordering is the hunt list. M&A mode overlay: rows annotated with known distressed-asking context where a deal brief exists in `deal_briefs` (linkage to Tab 0/6 flow).
-- Tab numbering continues existing convention (`app.py:41-48` nav list); 💬 Structurer unchanged otherwise.
+**Tab consolidation (2026-10-25): 9 surfaces → 7.** The old linear pipeline (Tabs 1–4: price sim → dispatch → cashflow → MC) is superseded by the option engine; every surviving tab answers one distinct question:
+
+| Nav entry | Absorbs | Question it answers |
+|---|---|---|
+| 0 · Deal Intake (unchanged) | — | What are the deal terms? |
+| **期权价值 (new)** | old Tab 1 price-sim fan, Tab 2 dispatch revenue, Tab 4 engine-level MC; price-wind correlation table moves to its calibration section | What is it worth, decomposed? |
+| **Project Finance** (reworked Tab 3) | old Tab 4's finance layer: equity-IRR distribution, P(IRR<hurdle), tornado | How do I finance it — levered view? |
+| Deal Pricing (unchanged) | — | How do I slice/hedge the revenue risk? |
+| **价值筛选 (new)** | old Tab 7 portfolio contribution (becomes a screen section) + scout review queue | Where should I look next? What's on the queue? |
+| 投委会 (unchanged) | — | Committee decision |
+| 💬 Structurer (unchanged) | +4 agent tools | Ask |
+
+Deprecated and removed in the build: `price_tab.py`, `dispatch_tab.py`, `mc_tab.py`, `screening_tab.py` (content preserved per the map; git history keeps the rest). `session_cache.py` key list rebuilt for the new tabs. New linear deal flow: **Intake → Option Value → Project Finance → Deal Pricing → Committee**, with Screen + scout as origination alongside.
+
+- **期权价值 (Option Value)**: province/**asset-type (BESS 2h/4h, wind, solar)**/window pickers → expected-curve chart, simulated-path fan (P10/50/90), value waterfall (intrinsic → +extrinsic → +policy stack → total → capture-adj; **extrinsic shown red when negative** for wind/solar cannibalization), Greeks row, policy-lever sliders (scenario preset dropdown with probability + effective-date per scenario; lever list filtered by asset type; **scenario-sourced value always labeled as judgment, not data**; extrinsic always with P10/P90 band, never a bare point estimate), calibration line (V_tot vs V_hist for BESS; simulated vs empirical capture discount for wind/solar). **Acquisition panel** with mode toggle: permit mode (permit cost, validity, capex-at-COD + decline) / M&A mode (ask price, actuals anchor where available, turnaround levers) → V_option, breakeven price, GO/NO-GO, value decomposition by policy scenario (§5.6).
+- **价值筛选 (Value Screen)**: the matrix of §5.5 across provinces × asset types + margin ranking bar chart + **portfolio-fit section** (marginal contribution vs. fleet, the old Tab 7 engine via `libs/deal_models/workflows/portfolio_contribution.py`). **Top section: opportunity-card review queue** (§5.9) — new cards with thesis + validation verdict, approve/reject/snooze actions, approve promotes to `deal_briefs`. Permit-relevant sort: ascending intrinsic vs. (extrinsic + policy-upside) ratio — permits are cheapest precisely where intrinsic is low but optionality is high; that ordering is the hunt list. M&A mode overlay: rows annotated with known distressed-asking context where a deal brief exists in `deal_briefs` (linkage to Tab 0/6 flow).
 - **Agent tools (+4)** in `libs/deal_models/adapters/agent_tools.py`: `get_option_value(province, asset_type, duration_h)` (latest snapshot + on-demand fast recompute), `screen_option_values(sort_by, min_freshness)`, `get_policy_levers(province)`, `list_opportunity_cards(status, kind)` (review queue access for the Structurer chat). Same grounding-rule system prompt; tool results cite `option_value_snapshot` asof_date.
 - Portal card copy update only (no Quick Ask change).
 
@@ -250,8 +265,8 @@ Scheduling: nightly after the option batch (chain in the same CLI); v1 runs manu
 5. value_stack + Greeks + per-asset-type policy registry + tests
 6. build_option (permit tree + M&A mode + DP cross-check) + tests
 7. `services/option_engine/` readers + DDL + batch CLI + calibration report (run on real data, review numbers before UI)
-8. Tabs 8/9 (incl. acquisition panel) + 4 agent tools, local run verification
-9. scout scans + thesis drafter + validator + `option_opportunity_cards` + Tab 9 review queue; manual nightly run; review a week of cards before trusting thresholds
+8. Tabs per the §6 consolidation map (build new Option Value + Value Screen, rework Project Finance, remove price_tab/dispatch_tab/mc_tab/screening_tab, rebuild session_cache keys) + 4 agent tools, local run verification
+9. scout scans + thesis drafter + validator + `option_opportunity_cards` + review queue; manual runs at the §5.9 cadence; **a month of weekly trading + one monthly investment sweep under manual review before trusting thresholds**
 10. Commit per unit; deploy only on explicit confirmation (standard protocol: read LATEST-IMAGES.md, next tag, --platform linux/amd64, jq-swap from current tdArn — deal-structurer deploys bypass terraform)
 
 ## 10. Explicitly deferred (recorded so they aren't silently dropped)
@@ -274,3 +289,6 @@ Coal DP valuation (interface ready); LSM realistic-policy (academy `monte_carlo_
 12. **Scout = deterministic generate, LLM explain** — candidates come only from threshold scans with evidence numbers attached; the LLM drafts prose, never invents opportunities. Keeps the grounding rule enforceable and the cards auditable.
 13. **Retail-margin trading scan deferred to v1.5** — retail-risk P2 (山东 PDF + contract schemas) is still landing; scanning on half-built registers would produce confident garbage. DA-RT basis, nodal congestion, and interconnector scans ship in v1.
 14. **Review decisions are training data** — approve/reject + reason stored per card and fed to `agent_memory` (app key `deal_scout`); this is the bridge to the Stage-4 markdown knowledge base (approved theses become `knowledge/` entries at session-end review).
+15. **Tiered scout cadence** (user call 2026-10-25): investment monthly + policy-event-driven, trading weekly, batch weekly, LLM delta-gated — cost controlled by the delta gate more than by frequency.
+16. **Tab consolidation** (user call 2026-10-25): 9 → 7; old pipeline tabs 1/2/4/7 removed, content mapped per §6. Deal flow becomes Intake → Option Value → Project Finance → Deal Pricing → Committee.
+17. **Honesty rules hard-wired in UI**: extrinsic always carries a P10/P90 band (never a bare point); scenario-sourced value labeled judgment-not-data; **BESS v1 numbers are bid-grade, wind/solar are screen-grade** (thin fundamentals history + parametric CF fallback) — bids off wind/solar rows wait for v1.5 calibration depth.
