@@ -86,25 +86,30 @@ def _normalize_units(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 
 def _rt_da_fallback(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Per-hour RT → DA fallback: rt ≤ 0 or NaN → da of the same hour.
+    """Per-hour RT → DA fallback: rt == 0 or NaN → da of the same hour.
 
     This is the per-hour fallback that ``fetch_price_history`` lacks (it only
     switches columns when the ENTIRE column is zero); mirrors
-    ``run_capture_pipeline.py``'s ``rt.replace(0, nan).fillna(da)`` with
-    ≤ 0 extended to cover negative placeholders. Hours where both legs are
-    missing stay NaN — curves drops those days downstream; do NOT ffill here.
-    Returns (df copy, {"filled": n_substituted, "missing_both": n}).
+    ``run_capture_pipeline.py``'s ``rt.replace(0, nan).fillna(da)`` EXACTLY,
+    including exact-zero comparison. GENUINE negative RT prices (山东 has
+    real negative-price hours — paid-to-charge value) are kept, not masked:
+    the capture pipeline that produces V_hist keeps them, and the engine must
+    match or the calibration ratio is biased upward in exactly the
+    negative-price provinces. Hours where both legs are missing stay NaN —
+    curves drops those days downstream; do NOT ffill here. Returns (df copy,
+    {"filled": n_substituted, "missing_both": n, "negatives_kept": n}).
     """
     out = df.copy()
     rt = pd.to_numeric(out["rt_price"], errors="coerce")
     da = pd.to_numeric(out["da_price"], errors="coerce")
-    mask = rt.isna() | (rt <= 0)
+    mask = rt.isna() | (rt == 0)
     substitutable = mask & da.notna()
     out["rt_price"] = rt.where(~mask, da)
     out["da_price"] = da
     meta = {
         "filled": int(substitutable.sum()),
         "missing_both": int((mask & da.isna()).sum()),
+        "negatives_kept": int((rt < 0).sum()),
     }
     return out, meta
 
@@ -114,7 +119,7 @@ def _rt_da_fallback(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 # ---------------------------------------------------------------------------
 
 def read_price_series(eng, province: str, window_end: date,
-                      months: int = 12) -> pd.Series:
+                      months: int = 12, return_meta: bool = False):
     """Hourly RT ¥/MWh series for ``province`` over the history window.
 
     Window semantics match ``curves.build_expected_curve``: window_start is
@@ -124,11 +129,21 @@ def read_price_series(eng, province: str, window_end: date,
     downstream as an incomplete day.
 
     Read-time hygiene: unit normalization (×1000 when a column's nanmedian
-    < 5) then per-hour RT≤0/NaN → DA fallback. Hours with both legs missing
-    stay NaN (no ffill — curves drops incomplete days).
+    < 5) then per-hour RT=0/NaN → DA fallback (exact-zero only — genuine
+    negative RT prices are kept, matching the capture pipeline that produces
+    V_hist). Hours with both legs missing stay NaN (no ffill — curves drops
+    incomplete days).
 
     Returns a Series indexed by naive datetime, or an empty Series when the
-    province has no rows in the window.
+    province has no rows in the window. With ``return_meta=True`` returns
+    ``(series, meta)`` where meta carries the read-time masking counts::
+
+        {"units":    {col: {"scaled": bool, "count": int}, ...},
+         "fallback": {"filled": int, "missing_both": int,
+                      "negatives_kept": int}}
+
+    (batch writes these into mc_params; default False keeps the pinned
+    signature and call pattern).
     """
     window_start = (
         (pd.Timestamp(window_end) - pd.DateOffset(months=months))
@@ -146,17 +161,22 @@ def read_price_series(eng, province: str, window_end: date,
             "province": province, "start": window_start, "end": window_end,
         })
     if df.empty:
-        return pd.Series(np.array([], dtype=float),
-                         index=pd.DatetimeIndex([], name="datetime"),
-                         name="rt_price")
+        s = pd.Series(np.array([], dtype=float),
+                      index=pd.DatetimeIndex([], name="datetime"),
+                      name="rt_price")
+        meta = {"units": {},
+                "fallback": {"filled": 0, "missing_both": 0,
+                             "negatives_kept": 0}}
+        return (s, meta) if return_meta else s
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = df.drop_duplicates(subset=["datetime"]).sort_values("datetime")
-    df, _units = _normalize_units(df)
-    df, _fb = _rt_da_fallback(df)
+    df, units_meta = _normalize_units(df)
+    df, fb_meta = _rt_da_fallback(df)
     s = df.set_index("datetime")["rt_price"]
     if s.index.tz is not None:
         s.index = s.index.tz_localize(None)
-    return s
+    meta = {"units": units_meta, "fallback": fb_meta}
+    return (s, meta) if return_meta else s
 
 
 # ---------------------------------------------------------------------------

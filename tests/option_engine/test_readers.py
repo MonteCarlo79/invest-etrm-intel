@@ -13,3 +13,12 @@ def test_rt_da_fallback_per_hour():
     df = pd.DataFrame({"rt_price": [0.0, np.nan, 400.0], "da_price": [300.0, 310.0, 350.0]})
     out, meta = _rt_da_fallback(df)
     assert out["rt_price"].tolist() == [300.0, 310.0, 400.0] and meta["filled"] == 2
+
+def test_negative_rt_prices_kept():
+    # Genuine negative RT prices (山东 has real negative-price hours) must NOT
+    # be masked to DA — the capture pipeline behind V_hist keeps them, and the
+    # engine must match or the calibration ratio biases upward.
+    df = pd.DataFrame({"rt_price": [-50.0, 0.0, 400.0], "da_price": [320.0, 300.0, 350.0]})
+    out, meta = _rt_da_fallback(df)
+    assert out["rt_price"].tolist() == [-50.0, 300.0, 400.0] and meta["filled"] == 1
+    assert meta["negatives_kept"] == 1
