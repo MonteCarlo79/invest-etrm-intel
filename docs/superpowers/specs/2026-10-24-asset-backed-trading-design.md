@@ -22,6 +22,8 @@ Deal Structurer today prices *deals* (floors, tolls, PPAs) off an annual revenue
 
 The system's job: price the option honestly per province per asset type, so the permit bid or M&A offer is a number, not a feeling.
 
+**The generative layer (added 2026-10-25):** the engine above answers questions the desk asks. The **generative investment agent** asks its own: a nightly scout loop that sweeps all provinces × asset types plus trading scans, drafts opportunity theses grounded on DB data, validates each against **realized monetization evidence** (actual capture rates and settlement P&L of operating assets in the asset-risk/retail-risk registers and the IM fleet), and files opportunity cards into a review queue. The desk approves or rejects; approved cards promote directly into the existing Deal Intake → DAF committee flow. Scope covers **trading opportunities** as well as permits and M&A — DA-RT basis regimes, nodal congestion rents, interconnector spread windows. The machine proposes, the desk disposes; every review decision is stored, so the scout learns the desk's taste over time (bridge toward the Stage-4 markdown knowledge base).
+
 BESS first (the cleanest spread option; data and LP already in production). Coal-fired plants second (dark-spread options with unit commitment — phase 2, interface designed now, built later).
 
 Method source: KYOS plant/storage valuation as digested in power-academy (`power-academy/inventory/plant_hedging_and_trading_strategies_kyos_20110530.md`, `worldpower2009_realisticpowerplantvaluation.md` — PCA in commodity simulation, Monte Carlo of spot prices, per-path dispatch optimization, intrinsic/extrinsic split, delta by price-shock-and-revalue). Teaching implementations: `power-academy/labs/intrinsic_vs_extrinsic_value/`, `monte_carlo_and_lsm_for_generation_valuation/`, `dispatch_optimisation_and_delta_hedging/`.
@@ -56,10 +58,11 @@ Two calibration anchors already in production:
 5. **Permit & M&A (build/acquisition option) valuation**: scenario-weighted decision tree over the decision window — policy scenarios with probability + effective date, capex-at-COD with decline rate (permits) or ask price + actuals anchor + turnaround levers (M&A) → GO/NO-GO.
 6. Two new Deal Structurer tabs + 3 Structurer agent tools; snapshot table + batch CLI.
 7. Calibration report: `V_tot` vs `V_hist` (BESS, vs `bess_capture_daily`); simulated vs empirical capture-rate discount (wind/solar, vs price×volume observations in `spot_fundamentals_hourly`).
+8. **Generative investment agent (§5.9)**: nightly scout → opportunity theses → validation against realized monetization (asset-risk/retail-risk registers, IM fleet actuals) → review queue → promote-to-brief. Covers permit, M&A, **and trading** opportunities.
 
 **Non-goals (v1):** coal valuation (interface stub only); nodal-granularity option value (provincial v1; nodal path via `md_mengxi_nodal_price_96` later); LSM/realistic-policy valuation (capture haircut is the v1 substitute); forward-curve term structure (rolling-average curve *is* the curve); any web/external data; any trading-execution linkage.
 
-**Anti-goals (failure even if it "works"):** a simulator whose `V_tot` cannot be reconciled to `V_hist` within tolerance; a screen that takes minutes to load; new unit-mix bugs (¥/kWh vs ¥/MWh — the repo has been bitten); anything that writes to production tables from the interactive app path.
+**Anti-goals (failure even if it "works"):** a simulator whose `V_tot` cannot be reconciled to `V_hist` within tolerance; a screen that takes minutes to load; new unit-mix bugs (¥/kWh vs ¥/MWh — the repo has been bitten); anything that writes to production tables from the interactive app path; **a scout that bypasses the human review gate** (no auto-promotion to deal briefs, no order generation — opportunity cards are advisory until a person approves); theses not grounded in tool-returned data (CLAUDE.md agent rule 1 applies to the scout as to every agent).
 
 ## 4. What already exists (reuse map — do not rebuild)
 
@@ -184,14 +187,30 @@ Only `batch.py` writes. App tabs read latest per key. Numpy paths never persiste
 
 ### 5.8 Batch CLI (`batch.py`)
 
-`python services/option_engine/run_option_batch.py --province 山东 --duration 2 --paths 1000` (single) or `--screen` (29 provinces × 2 durations, fast mode: 200 paths). Full refresh ≈ minutes under vectorized DP. ECS scheduling deferred (nodal-writer terraform pattern when needed); manual/cron first.
+`python services/option_engine/run_option_batch.py --province 山东 --duration 2 --paths 1000` (single) or `--screen` (29 provinces × asset types, fast mode: 200 paths). Full refresh ≈ minutes under vectorized DP. ECS scheduling deferred (nodal-writer terraform pattern when needed); manual/cron first.
+
+### 5.9 Generative investment agent (`services/option_engine/scout.py` + `scout_scans/`)
+
+Nightly loop, four stages. Deterministic first, LLM second — the LLM never invents candidates, it only explains candidates the data produced:
+
+1. **Generate (deterministic scans → candidates).** Each scan is a pure SQL/pandas function returning structured candidates with the evidence numbers attached:
+   - *Permit scan*: provinces where intrinsic < capex annuity but extrinsic + policy-upside lifts V_cap above it (the hunt-list ordering from Tab 9), with data-freshness filter.
+   - *M&A scan*: provinces with distressed context (deal briefs marked M&A, or observed ask vs. V_cap gap above threshold); owned-asset underperformance vs. champion-model capture (sell-or-fix signal from `strategy_experiments`).
+   - *Trading scans*: (a) DA−RT basis regime shift per province (rolling 30d basis vs trailing 12m distribution, `spot_prices_hourly`); (b) nodal PF-revenue outliers (`reports.nodal_pf_node_daily` — best-congestion-rent nodes for BESS siting); (c) interconnector spread windows (spot-market 跨区通道 data, S5 forecast surface). Retail-margin scan deferred to v1.5 (retail-risk P2 contract schemas still landing).
+2. **Thesis drafting (LLM, grounded).** Per candidate, one Claude call with the candidate's evidence pack: what the optionality is, why it's mispriced, which policy bet carries it, what would falsify it. Same grounding rule as all platform agents (answer only from tool/pack data; cite table + asof). Output: 200-word Chinese thesis card.
+3. **Validate (realized monetization evidence).** Attach the actuals: comparable operating assets' realized capture (`bess_capture_daily` realized vs theoretical; `rm_settlement_items` actual comp/FR revenues via the asset-risk registers; retail books 21–24 MTM margins via retail-risk; IM fleet settlement history). Each thesis gets a validation verdict: `confirmed` (actuals within engine band), `weakened` (actuals below band — state the gap), `no_evidence` (no comparable operating asset — honest label, not a failure).
+4. **Review queue + promotion.** Cards land in `marketdata.option_opportunity_cards` and render in Tab 9's top section (and optionally Feishu via the hermes card pattern — follow-on, not v1). Desk actions: approve / reject (+reason) / snooze. **Approve** converts the card into a `deal_briefs` row (prefilled params) → the existing Tab 0/6 DAF flow takes over. Review decisions feed `agent_memory` (app key `deal_scout`) so repeat rejects tune future thresholds.
+
+DDL `db/ddl/marketdata/option_opportunity_cards.sql` (ensure-pattern): `id, created_at, kind (permit|mna|trading), province, asset_type, thesis TEXT, evidence_json JSONB, validation TEXT, validation_detail JSONB, status (new|approved|rejected|snoozed|promoted), review_note TEXT, reviewed_at, scan_params JSONB`.
+
+Scheduling: nightly after the option batch (chain in the same CLI); v1 runs manual/cron, EventBridge rule later (nodal-writer terraform pattern).
 
 ## 6. App surface (deal_structurer v-next)
 
 - **Tab 8 · 期权价值 (Option Value)**: province/**asset-type (BESS 2h/4h, wind, solar)**/window pickers → expected-curve chart, simulated-path fan (P10/50/90), value waterfall (intrinsic → +extrinsic → +policy stack → total → capture-adj; **extrinsic shown red when negative** for wind/solar cannibalization), Greeks row, policy-lever sliders (scenario preset dropdown with probability + effective-date per scenario; lever list filtered by asset type), calibration line (V_tot vs V_hist for BESS; simulated vs empirical capture discount for wind/solar). **Acquisition panel** with mode toggle: permit mode (permit cost, validity, capex-at-COD + decline) / M&A mode (ask price, actuals anchor where available, turnaround levers) → V_option, breakeven price, GO/NO-GO, value decomposition by policy scenario (§5.6).
-- **Tab 9 · 价值筛选 (Value Screen)**: the matrix of §5.5 across provinces × asset types + margin ranking bar chart. Permit-relevant sort: ascending intrinsic vs. (extrinsic + policy-upside) ratio — permits are cheapest precisely where intrinsic is low but optionality is high; that ordering is the hunt list. M&A mode overlay: rows annotated with known distressed-asking context where a deal brief exists in `deal_briefs` (linkage to Tab 0/6 flow).
+- **Tab 9 · 价值筛选 (Value Screen)**: the matrix of §5.5 across provinces × asset types + margin ranking bar chart. **Top section: opportunity-card review queue** (§5.9) — new cards with thesis + validation verdict, approve/reject/snooze actions, approve promotes to `deal_briefs`. Permit-relevant sort: ascending intrinsic vs. (extrinsic + policy-upside) ratio — permits are cheapest precisely where intrinsic is low but optionality is high; that ordering is the hunt list. M&A mode overlay: rows annotated with known distressed-asking context where a deal brief exists in `deal_briefs` (linkage to Tab 0/6 flow).
 - Tab numbering continues existing convention (`app.py:41-48` nav list); 💬 Structurer unchanged otherwise.
-- **Agent tools (+3)** in `libs/deal_models/adapters/agent_tools.py`: `get_option_value(province, asset_type, duration_h)` (latest snapshot + on-demand fast recompute), `screen_option_values(sort_by, min_freshness)`, `get_policy_levers(province)`. Same grounding-rule system prompt; tool results cite `option_value_snapshot` asof_date.
+- **Agent tools (+4)** in `libs/deal_models/adapters/agent_tools.py`: `get_option_value(province, asset_type, duration_h)` (latest snapshot + on-demand fast recompute), `screen_option_values(sort_by, min_freshness)`, `get_policy_levers(province)`, `list_opportunity_cards(status, kind)` (review queue access for the Structurer chat). Same grounding-rule system prompt; tool results cite `option_value_snapshot` asof_date.
 - Portal card copy update only (no Quick Ask change).
 
 ## 7. Linkage to existing apps (read-only, no cross-writes)
@@ -199,9 +218,9 @@ Only `batch.py` writes. App tabs read latest per key. Numpy paths never persiste
 | App | What option engine reads | For |
 |---|---|---|
 | bess-map (P2) | `bess_capture_daily` (V_hist, capture), `capacity_stack` levers, IRR defaults | calibration, haircut, policy, capex |
-| mengxi-dashboard (P3) | `reports.bess_asset_daily_scenario_pnl`, `asset_registry` | owned-asset realized benchmark in Tab 8/9 |
-| asset-risk / retail-risk | `rm_settlement_items` empirical comp rates (economics.py:36-74 pattern) | policy default verification |
-| spot-market (P1) | nothing in v1 | (P4: fundamentals-informed PCA score models via price_lab ridge) |
+| mengxi-dashboard (P3) | `reports.bess_asset_daily_scenario_pnl`, `asset_registry`, `reports.nodal_pf_node_daily` | owned-asset realized benchmark; nodal congestion scan |
+| asset-risk / retail-risk | `rm_settlement_items` empirical comp rates (economics.py:44-74 pattern); retail books 21–24 trades/invoices/MTM | policy default verification; **scout validation evidence (realized monetization)** |
+| spot-market (P1) | interconnector channel data (跨区通道 tab source tables) | trading scan (c); (P4: fundamentals-informed PCA score models via price_lab ridge) |
 | portal | — | card copy |
 
 ## 8. Verification
@@ -216,6 +235,7 @@ Only `batch.py` writes. App tabs read latest per key. Numpy paths never persiste
 - Snapshot round-trip; ensure-DDL idempotent.
 - Permit tree: deterministic 2-state fixture reproduces hand-computed V_permit; DP perpetual cross-check matches academy lab numbers on the lab's own parameters (`real_options_framework_for_generation_assets/compute.py`); GO iff V_permit > 0; probability weights must sum ≤ 1 (validated input).
 - Wind/solar: simulated capture-rate discount matches empirical (Σ price×volume / Σvolume vs mean price, from `spot_fundamentals_hourly`) within tolerance per covered province; **solar extrinsic is negative in cannibalization provinces (assert sign, never floored)**; curtailment-floor contribution ≥ 0 and material in 山东 (negative-price hours); M&A mode with actuals anchor reproduces the owned-asset's realized revenue band as sanity.
+- Scout: each scan reproduces hand-computed candidates on fixture data (basis-shift detection on a synthetic step series; nodal outlier z-score thresholds); validation verdict logic (confirmed/weakened/no_evidence) on known owned assets — a thesis for "蒙西 BESS at champion capture" must come back `confirmed` against our own settlement history; approve-flow writes a valid `deal_briefs` row; grounding spot-check — every number in a thesis card traces to its evidence pack.
 
 **Integration:** 山东 BESS 2h end-to-end batch → snapshot → Tab 8 render locally (`streamlit run apps/deal_structurer/app.py --server.port 8522`, AUTH_MODE n/a — app has no Cognito locally); screen tab loads < 60 s cold (fast mode pre-computed by batch).
 
@@ -230,8 +250,9 @@ Only `batch.py` writes. App tabs read latest per key. Numpy paths never persiste
 5. value_stack + Greeks + per-asset-type policy registry + tests
 6. build_option (permit tree + M&A mode + DP cross-check) + tests
 7. `services/option_engine/` readers + DDL + batch CLI + calibration report (run on real data, review numbers before UI)
-8. Tabs 8/9 (incl. acquisition panel) + 3 agent tools, local run verification
-9. Commit per unit; deploy only on explicit confirmation (standard protocol: read LATEST-IMAGES.md, next tag, --platform linux/amd64, jq-swap from current tdArn — deal-structurer deploys bypass terraform)
+8. Tabs 8/9 (incl. acquisition panel) + 4 agent tools, local run verification
+9. scout scans + thesis drafter + validator + `option_opportunity_cards` + Tab 9 review queue; manual nightly run; review a week of cards before trusting thresholds
+10. Commit per unit; deploy only on explicit confirmation (standard protocol: read LATEST-IMAGES.md, next tag, --platform linux/amd64, jq-swap from current tdArn — deal-structurer deploys bypass terraform)
 
 ## 10. Explicitly deferred (recorded so they aren't silently dropped)
 
@@ -250,3 +271,6 @@ Coal DP valuation (interface ready); LSM realistic-policy (academy `monte_carlo_
 9. **Permit valuation = scenario decision tree, not an American lattice** — policy reveals land on government schedules, so discrete dated scenarios with probabilities are the honest model; Dixit-Pindyck perpetual closed form is a cross-check only. Price-regime drift default 0 (conservative; upside is the policy bet, not assumed market kindness).
 10. **Wind/solar extrinsic may be negative (short-vol cannibalization) — reported with sign, never floored.** Their positive optionality = curtailment floor + policy + build option + retrofit. This is the honest economics and the screen's key differentiator vs. naive "renewables NPV" models.
 11. **M&A = same engine, different wrapper** — no separate valuation stack; actuals anchor (where the asset is in our data perimeter) replaces the model haircut; turnaround levers are scenario rows, not a parallel model.
+12. **Scout = deterministic generate, LLM explain** — candidates come only from threshold scans with evidence numbers attached; the LLM drafts prose, never invents opportunities. Keeps the grounding rule enforceable and the cards auditable.
+13. **Retail-margin trading scan deferred to v1.5** — retail-risk P2 (山东 PDF + contract schemas) is still landing; scanning on half-built registers would produce confident garbage. DA-RT basis, nodal congestion, and interconnector scans ship in v1.
+14. **Review decisions are training data** — approve/reject + reason stored per card and fed to `agent_memory` (app key `deal_scout`); this is the bridge to the Stage-4 markdown knowledge base (approved theses become `knowledge/` entries at session-end review).
