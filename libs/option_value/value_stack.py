@@ -10,11 +10,11 @@ simulated path volume (spec §11.8).
 
 Horizon discipline (load-bearing): extrinsic = mean(path revenue) −
 intrinsic is meaningful only when paths and intrinsic cover the same
-hours. compute_greeks therefore simulates with n_days = curve.n_days so
-paths cover exactly len(curve.hourly). compute_value_stack accepts paths
-on any day-aligned prefix of the curve and values the intrinsic on the
-PATHS' horizon (curve truncated to the first T hours), so the extrinsic
-is same-horizon by construction.
+hours. compute_greeks therefore simulates with n_days = min(365,
+curve.n_days) — the ¥/kW/yr basis pin: values are per-year, so a window
+longer than 365 days simulates exactly one year — so paths cover a
+day-aligned prefix of the curve and compute_value_stack's truncation
+keeps the intrinsic same-horizon by construction.
 
 Greeks use common random numbers: base and bumped re-values share
 PCASimConfig.seed, and renewable CF copula noise shares the fixed
@@ -71,6 +71,11 @@ def apply_policy(
     """
     if asset_type not in _APPLICABLE:
         raise ValueError(f"no applicable-lever map for asset_type={asset_type!r}")
+    if rte <= 0:
+        raise ValueError(
+            f"rte must be > 0 (got {rte}): the BESS sysopfee charge-energy "
+            f"basis volume/rte is undefined otherwise"
+        )
     v = float(volume_mwh_per_kw)
     comp: dict = {
         "capacity_price": float(levers.capacity_price_yuan_kw_yr),
@@ -154,9 +159,10 @@ def compute_value_stack(
     extrinsic = total_energy - intrinsic
     if model.asset_type == "bess":
         assert extrinsic >= -1e-6, (
-            f"BESS extrinsic negative ({extrinsic:.6g} ¥/kW): the dispatch "
-            f"value is convex in price, so the simulated mean must not "
-            f"undershoot the intrinsic"
+            f"BESS extrinsic negative/NaN ({extrinsic:.6g} ¥/kW) — check for "
+            f"missing-calendar-month data holes (mc_params coverage) before "
+            f"suspecting the economics; the dispatch value is convex in "
+            f"price, so the simulated mean must not undershoot the intrinsic"
         )
 
     policy_net, _ = apply_policy(levers, model.asset_type, vol_kw_mean, rte)
@@ -201,6 +207,10 @@ def compute_greeks(
 ) -> dict:
     """Finite-difference Greeks of V_total (¥/kW/yr), common random numbers.
 
+    All legs simulate min(365, curve.n_days) days — the ¥/kW/yr basis pin:
+    values are annual, so a longer window simulates exactly one year (the
+    value stack's prefix truncation keeps every intrinsic same-horizon).
+
     - delta: curve bumped +10 ¥/MWh — month_hour_mean AND hourly, and
       floor/cap with them so the simulator's clip bounds shift with the
       price level instead of truncating the parallel shift — re-simulated
@@ -210,9 +220,12 @@ def compute_greeks(
       refit (fit_pca_v2) and re-simulation with the same seed; minus base.
       ``prices`` is the raw hourly series the curve was built from — the
       refit is impossible without it, so it is a required argument even
-      though delta/vega do not use it.
+      though delta/vega do not use it. When the refit curve has a missing
+      calendar month (NaN month-hour row — a data hole), simulating it
+      would propagate NaN: theta is then None with ``theta_note`` set.
     """
-    base_paths = simulate_pca_v2(sim_params, curve, curve.n_days, cfg)
+    n_sim = min(365, curve.n_days)  # ¥/kW/yr basis: cap the horizon at 1 year
+    base_paths = simulate_pca_v2(sim_params, curve, n_sim, cfg)
     base = compute_value_stack(
         model, curve, base_paths, levers, capture_rate
     ).total_yuan_kw
@@ -224,25 +237,34 @@ def compute_greeks(
         floor=curve.floor + 10.0,
         cap=curve.cap + 10.0,
     )
-    paths_d = simulate_pca_v2(sim_params, curve_d, curve.n_days, cfg)
+    paths_d = simulate_pca_v2(sim_params, curve_d, n_sim, cfg)
     delta = (
         compute_value_stack(model, curve_d, paths_d, levers, capture_rate).total_yuan_kw
         - base
     )
 
     params_v = dataclasses.replace(sim_params, inno_scale=sim_params.inno_scale * 1.1)
-    paths_v = simulate_pca_v2(params_v, curve, curve.n_days, cfg)
+    paths_v = simulate_pca_v2(params_v, curve, n_sim, cfg)
     vega = (
         compute_value_stack(model, curve, paths_v, levers, capture_rate).total_yuan_kw
         - base
     )
 
     curve_t = build_expected_curve(prices, curve.window_end - timedelta(days=30))
-    params_t = fit_pca_v2(prices, curve_t, cfg)
-    paths_t = simulate_pca_v2(params_t, curve_t, curve_t.n_days, cfg)
-    theta = (
-        compute_value_stack(model, curve_t, paths_t, levers, capture_rate).total_yuan_kw
-        - base
-    )
+    if np.isnan(curve_t.month_hour_mean).any():
+        theta = None
+        theta_note = (
+            "theta skipped: theta-refit curve has a missing calendar month "
+            "(data hole) — simulating it would propagate NaN"
+        )
+    else:
+        params_t = fit_pca_v2(prices, curve_t, cfg)
+        paths_t = simulate_pca_v2(params_t, curve_t, min(365, curve_t.n_days), cfg)
+        theta = float(
+            compute_value_stack(model, curve_t, paths_t, levers, capture_rate).total_yuan_kw
+            - base
+        )
+        theta_note = None
 
-    return {"delta": float(delta), "vega": float(vega), "theta": float(theta)}
+    return {"delta": float(delta), "vega": float(vega), "theta": theta,
+            "theta_note": theta_note}

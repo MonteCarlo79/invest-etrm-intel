@@ -58,8 +58,9 @@ def test_greeks_signs_and_magnitude():
     model = BESSDispatchOption(BESSParams())
     g = compute_greeks(model, c, sp, cfg, PolicyLevers(), capture_rate=None, prices=s)
 
-    assert set(g) == {"delta", "vega", "theta"}
-    assert all(np.isfinite(v) for v in g.values())
+    assert set(g) == {"delta", "vega", "theta", "theta_note"}
+    assert all(np.isfinite(g[k]) for k in ("delta", "vega", "theta"))
+    assert g["theta_note"] is None  # refit window covers all calendar months
 
     assert g["delta"] < 0    # parallel shift: RTE drag (charge MWh = discharge/rte > discharge)
     # Analytic delta: the engine's own intrinsic discharge volume, normalised to
