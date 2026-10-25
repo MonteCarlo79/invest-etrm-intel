@@ -157,7 +157,7 @@ Mode toggle `许可指标 (permit)` / `并购 (M&A)`. Permit mode inputs: permit
 - Consumes: snapshot table via a new pure query function (implement in `screen_tab.py` using the passed engine): `SELECT DISTINCT ON (province, asset_type, duration_h) * FROM marketdata.option_value_snapshot ORDER BY province, asset_type, duration_h, asof_date DESC`; `libs/option_value/value_stack.annuitize`; portfolio-fit engine `libs/deal_models/workflows/portfolio_contribution.py` (read its public functions before use).
 - Produces:
   - `screen_rows_to_frame(rows: list[dict], capex_yuan_kwh_bess: float, capex_yuan_kw_renewable: float, hurdle: float, life_years: int) -> pd.DataFrame` — **unit-correct margins (pinned)**: BESS per-kWh-energy margin `= annuitize(v) / duration_h − capex_yuan_kwh_bess` (1 kW = duration_h kWh; no ×1000 anywhere — the ¥/kW→¥/kWh conversion is ÷duration_h); wind/solar (duration_h=0) per-kW margin `= annuitize(v) − capex_yuan_kw_renewable` where `v = capture_adj if not None else total`. `irr_uplift = implied_irr(v) − implied_irr(intrinsic + policy_net)` (capex basis matched per class). **Sort by `implied_irr(v)` descending** (unit-free, comparable across classes); NaN IRR last.
-  - `implied_irr(annual_yuan_kw: float, capex_yuan_kw: float, life_years: int = 15) -> float | None` — bisection on `annuitize(annual, r, life) − capex = 0`, r ∈ (−0.5, 1.0), tol 1e-4; None when unsolvable.
+  - `implied_irr(annual_yuan_kw: float, capex_yuan_kw: float, life_years: int = 15) -> float | None` — bisection on `annuitize(annual, r, life) − capex = 0`, r ∈ (−0.5, 1.0), tol 1e-4; **None when `annual × life_years < capex` (no undiscounted payback → no meaningful IRR — ratified ruling G1, 2026-10-26) or no sign change in the bracket**; None when unsolvable.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -183,14 +183,14 @@ def test_screen_frame_margin_and_nan_safe_sort():
              total_yuan_kw=1250.0, capture_adj_yuan_kw=None, extrinsic_p10=-120.0, extrinsic_p90=10.0,
              policy_json={}, mc_params={}),
     ]
-    df = screen_rows_to_frame(rows, capex_yuan_kwh_bess=600.0, capex_yuan_kw_renewable=5000.0,
+    df = screen_rows_to_frame(rows, capex_yuan_kwh_bess=600.0, capex_yuan_kw_renewable=5500.0,
                               hurdle=0.08, life_years=15)
-    # 蒙西 BESS 4h: capex 2400 ¥/kW, capture-adj 560 → IRR ≈ 22%; 江苏 wind: 1250 vs 5000 → ≈ 21.5%
+    # 蒙西 BESS 4h: capex 2400 ¥/kW, capture-adj 560 → IRR ≈ 22.2%; 江苏 wind: 1250 vs 5500 → ≈ 21.5%
     assert df.iloc[0]["province"] == "蒙西"                     # sorted by implied IRR desc, unit-free
     mx = df[df.province=="蒙西"].iloc[0]
     assert abs(mx["npv_margin_yuan_kwh"] - (560.0*8.5595/4.0 - 600.0)) < 1.0   # ÷duration, no ×1000
     js = df[df.province=="江苏"].iloc[0]
-    assert abs(js["npv_margin_yuan_kw"] - (1250.0*8.5595 - 5000.0)) < 1.0      # renewable per-kW basis
+    assert abs(js["npv_margin_yuan_kw"] - (1250.0*8.5595 - 5500.0)) < 1.0      # renewable per-kW basis
     assert "stale" in js["freshness"]                            # old asof flagged
     assert js["extrinsic_yuan_kw"] == -50.0                      # negative extrinsic intact
 ```
