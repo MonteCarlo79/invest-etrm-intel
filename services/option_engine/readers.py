@@ -61,27 +61,61 @@ _PRICE_COLS = ("rt_price", "da_price")
 # ---------------------------------------------------------------------------
 
 def _normalize_units(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Scale legacy ¥/kWh columns to ¥/MWh, per price column independently.
+    """Scale legacy ¥/kWh columns to ¥/MWh, per (day, column).
 
-    A column whose nanmedian is < 5 is assumed to be in ¥/kWh and is
-    multiplied by 1000 (spec §5.1 read-time normalization). Returns the
-    (copied) DataFrame and per-column metadata:
-    ``{"rt_price": {"scaled": bool, "count": int}, ...}`` where count is the
-    number of non-NaN values multiplied (0 when not scaled).
+    Granularity and signature are load-bearing (T8 real-data gate):
+    spot_prices_hourly carries MIXED-unit windows — multi-source ingestion
+    flips scale across date ranges (the 山东 2025-10→2026-10 window
+    alternates ¥/kWh and ¥/MWh segments ~18 times) — so a whole-column
+    median either rescales the already-¥/MWh days to 1000× (measured on
+    that window: clip bounds [-90000, 1383400] ¥/MWh, V_tot 254k ¥/kW) or
+    leaves the ¥/kWh days 1000× too small. A day is ¥/kWh when
+    max(ABS(values)) < 5 — empirically bimodal with a wide empty gap on
+    all five gate provinces (kWh-side day max ≤ 0.26, MWh-side day min ≥
+    50; nothing in [2, 50)). MAX, not median: half-placeholder days
+    (山东 2026-09-24: 13 zeros + 11 genuine 400-512 ¥/MWh rows) have a
+    zero median but are ¥/MWh; ABS because 山东 has genuinely
+    all-negative ¥/MWh days (2026-01-01..11, day median −80 ¥/MWh) that a
+    signed statistic would misread as ¥/kWh. All-zero placeholder days
+    scale harmlessly (0×1000=0). Falls back to the whole-column rule
+    (max-abs < 5) when no datetime column is present (unit tests).
+
+    Returns the (copied) DataFrame and per-column metadata:
+    ``{"rt_price": {"scaled": bool, "count": int, "days_scaled": int|None,
+    "days_total": int|None}, ...}`` where count is the number of non-NaN
+    values multiplied (0 when not scaled); days_* are None in whole-column
+    mode.
     """
     out = df.copy()
     meta: dict[str, dict] = {}
+    day_key = None
+    if "datetime" in out.columns:
+        day_key = pd.to_datetime(out["datetime"]).dt.date.to_numpy()
     for col in _PRICE_COLS:
         if col not in out.columns:
             continue
         s = pd.to_numeric(out[col], errors="coerce")
-        valid = s.dropna()
-        scaled = bool(len(valid) > 0 and valid.median() < 5.0)
-        if scaled:
-            out[col] = s * 1000.0
-        else:
-            out[col] = s
-        meta[col] = {"scaled": scaled, "count": int(len(valid)) if scaled else 0}
+        if day_key is None:
+            valid = s.dropna()
+            scaled = bool(len(valid) > 0 and valid.abs().max() < 5.0)
+            if scaled:
+                out[col] = s * 1000.0
+            else:
+                out[col] = s
+            meta[col] = {"scaled": scaled,
+                         "count": int(len(valid)) if scaled else 0,
+                         "days_scaled": None, "days_total": None}
+            continue
+        abs_max = s.abs().groupby(day_key).transform("max")
+        scale_day = (abs_max < 5.0).to_numpy()  # all-NaN day → NaN → False
+        out[col] = s.to_numpy(dtype=float) * np.where(scale_day, 1000.0, 1.0)
+        day_frame = pd.DataFrame({"day": day_key, "scale": scale_day})
+        meta[col] = {
+            "scaled": bool(scale_day.any()),
+            "count": int((s.notna().to_numpy() & scale_day).sum()),
+            "days_scaled": int(day_frame.groupby("day")["scale"].first().sum()),
+            "days_total": int(day_frame["day"].nunique()),
+        }
     return out, meta
 
 
@@ -128,11 +162,13 @@ def read_price_series(eng, province: str, window_end: date,
     query), so the anchor day contributes only its 00:00 row and is dropped
     downstream as an incomplete day.
 
-    Read-time hygiene: unit normalization (×1000 when a column's nanmedian
-    < 5) then per-hour RT=0/NaN → DA fallback (exact-zero only — genuine
-    negative RT prices are kept, matching the capture pipeline that produces
-    V_hist). Hours with both legs missing stay NaN (no ffill — curves drops
-    incomplete days).
+    Read-time hygiene: unit normalization (per (day, column): a day whose
+    max ABS price < 5 is ¥/kWh → ×1000 — whole-window statistics misread
+    the mixed-unit segments multi-source ingestion produces) then per-hour
+    RT=0/NaN → DA fallback (exact-zero only — genuine negative RT prices
+    are kept, matching the capture pipeline that produces V_hist). Hours
+    with both legs missing stay NaN (no ffill — curves drops incomplete
+    days).
 
     Returns a Series indexed by naive datetime, or an empty Series when the
     province has no rows in the window. With ``return_meta=True`` returns
@@ -422,6 +458,8 @@ def read_cf_profile(eng, province: str, kind: str) -> np.ndarray | None:
     if df.empty:
         return None
     df["datetime"] = pd.to_datetime(df["datetime"])
+    if df["datetime"].dt.tz is not None:
+        df["datetime"] = df["datetime"].dt.tz_localize(None)
     df["mw"] = pd.to_numeric(df["mw"], errors="coerce")
     df = df.dropna(subset=["mw"])
     if df.empty:
