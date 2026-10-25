@@ -34,6 +34,25 @@ def test_probability_sum_rejected():
     with pytest.raises(ValueError):
         value_permit([sc1, sc2], PolicyLevers(), 50.0, "bess", 0.85, _inputs(0.0))
 
+def test_asof_determinism():
+    sc = PolicyScenario("cap_x", {"capacity_price_yuan_kw_yr": 5_000_000.0}, date(2027,1,1), 0.6)
+    a = value_permit([sc], PolicyLevers(), 50.0, "bess", 0.85, _inputs(0.0), asof=date(2026,1,1))
+    b = value_permit([sc], PolicyLevers(), 50.0, "bess", 0.85, _inputs(0.0), asof=date(2026,1,1))
+    assert a == b                                    # fixed asof → identical PermitResult on repeat
+
+    # asof AFTER every effective_date: all scenarios reveal at τ=0, so the tree
+    # degenerates to immediate-exercise-or-nothing. Chosen comparison (documented):
+    # with p=1.0 the root equals the NO-SCENARIO tree evaluated on the all-active
+    # lever set. (dp_check_value legitimately differs — sigma exists only in the
+    # scenario version — so the comparison is on tree values, not the whole result.)
+    late = value_permit([PolicyScenario("cap_x", {"capacity_price_yuan_kw_yr": 5_000_000.0},
+                                        date(2026,1,1), 1.0)],
+                        PolicyLevers(), 50.0, "bess", 0.85, _inputs(0.0), asof=date(2026,6,1))
+    ref = value_permit([], PolicyLevers(capacity_price_yuan_kw_yr=5_000_000.0),
+                       50.0, "bess", 0.85, _inputs(0.0), asof=date(2026,6,1))
+    assert late.breakeven_permit_yuan == pytest.approx(ref.breakeven_permit_yuan)
+    assert late.v_permit_yuan == pytest.approx(ref.v_permit_yuan)
+
 def test_acquisition_actuals_anchor_replaces_model():
     r = value_acquisition(ask_yuan=1.0, energy_value_yuan_kw=50.0, levers=PolicyLevers(),
                           power_mw=1.0, duration_h=2.0, asset_type="bess", rte=0.85,

@@ -29,9 +29,9 @@ Simplifications (documented, spec §5.6):
   volume (the engine's MC-mean) in every state; it does not re-simulate per
   scenario. Both value functions therefore take ``volume_mwh_per_kw``
   (default 0.0, exact whenever all volume-based levers are zero).
-- scenario effective dates are converted to tau in years from
-  ``date.today()`` (the valuation date), clamped at 0 — a scenario already
-  in effect resolves at the root.
+- scenario effective dates are converted to tau in years from the ``asof``
+  valuation date (default ``date.today()``), clamped at 0 — a scenario
+  already in effect resolves at the root.
 - scenarios sharing one effective_date are mutually exclusive reveals:
   their probabilities must sum to <= 1 (else ValueError). Scenarios on
   different dates are independent — no constraint.
@@ -225,17 +225,20 @@ def value_permit(
     rte: float,
     inputs: PermitInputs,
     volume_mwh_per_kw: float = 0.0,
+    asof: date | None = None,
 ) -> PermitResult:
     """Value a greenfield development permit as an option to build.
 
     ``scenarios`` is designed for n <= 4 (<= 16 states per node). Root value
     minus ``inputs.permit_cost_yuan`` is ``v_permit_yuan``; GO iff positive.
     ``decomposition`` maps each scenario name to its leave-one-out marginal
-    contribution to the root value, plus a ``notes`` list.
+    contribution to the root value, plus a ``notes`` list. ``asof`` is the
+    valuation date anchoring all taus (default ``date.today()``); pass a
+    fixed date to reproduce a persisted snapshot or backtest (spec §5.7).
     """
     _validate_probabilities(scenarios)
     scenarios = sorted(scenarios, key=lambda sc: (sc.effective_date, sc.name))
-    today = date.today()
+    today = asof if asof is not None else date.today()
     taus = [
         max(0.0, (sc.effective_date - today).days / _DAYS_PER_YEAR)
         for sc in scenarios
