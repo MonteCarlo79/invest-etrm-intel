@@ -3,9 +3,9 @@
 into ``marketdata.option_value_snapshot`` (spec §5.7).
 
 Full chain per (province, asset_type, duration_h): readers → expected curve
-→ PCA v2 fit → simulate (``n_days = curve.n_days`` — horizon discipline:
-paths cover exactly ``len(curve.hourly)`` hours, so ``compute_value_stack``
-needs no truncation) → asset model from ``ASSET_MODELS`` →
+→ PCA v2 fit → simulate (``n_days = min(365, curve.n_days)`` — the ¥/kW/yr
+basis pin; ``compute_value_stack``'s prefix truncation keeps the intrinsic
+same-horizon) → asset model from ``ASSET_MODELS`` →
 ``compute_value_stack`` + ``compute_greeks`` → snapshot upsert.
 
 ``mc_params`` carries the reproducibility record (spec §5.7): model, seed,
@@ -131,6 +131,14 @@ def run_one(eng, province: str, asset_type: str, duration_h: float,
     curve = dataclasses.replace(curve, province=province)
     if curve.insufficient_history:
         return {"skipped": province, "reason": "insufficient_history"}
+    # A calendar month with no complete day leaves a NaN month-hour row;
+    # simulating on it would propagate NaN through every path (reachable on
+    # feed holes like 福建's). Skip and write nothing.
+    missing_rows = np.isnan(curve.month_hour_mean).any(axis=1)
+    if missing_rows.any():
+        months = sorted(12 if r == 0 else int(r)
+                        for r in np.where(missing_rows)[0])
+        return {"skipped": province, "reason": f"missing_months:{months}"}
 
     levers = readers.read_policy_levers(eng, province, asset_type,
                                         duration_h=duration_h)
@@ -145,7 +153,11 @@ def run_one(eng, province: str, asset_type: str, duration_h: float,
     cfg = PCASimConfig(n_components=_N_COMPONENTS, n_paths=int(n_paths),
                        seed=int(seed))
     sim_params = fit_pca_v2(series, curve, cfg)
-    paths = simulate_pca_v2(sim_params, curve, curve.n_days, cfg)
+    # ¥/kW/yr basis pin: simulate at most one year of days even when the
+    # curve window runs longer; compute_value_stack's prefix truncation
+    # keeps the intrinsic same-horizon.
+    sim_days = min(365, curve.n_days)
+    paths = simulate_pca_v2(sim_params, curve, sim_days, cfg)
 
     fallback_notes: list[str] = []
     params = _build_params(eng, province, asset_type, duration_h,
@@ -163,6 +175,7 @@ def run_one(eng, province: str, asset_type: str, duration_h: float,
         "n_paths": int(n_paths),
         "n_components": cfg.n_components,
         "n_days": curve.n_days,
+        "sim_days": sim_days,
         "coverage_months": curve.coverage_months,
         "history_months": _HISTORY_MONTHS,
         "clip_floor_yuan_mwh": curve.floor,

@@ -38,6 +38,8 @@ def _engine():
 def _print_row(row: dict) -> None:
     g = row["greeks_json"]
     mc = row["mc_params"]
+    theta_s = (f"theta {g['theta']:.2f}" if g.get("theta") is not None
+               else f"theta n/a ({g.get('theta_note', 'skipped')})")
     print(
         f"{row['province']} {row['asset_type']} {row['duration_h']}h "
         f"asof={row['asof_date']} "
@@ -52,9 +54,10 @@ def _print_row(row: dict) -> None:
            if row["capture_adj_yuan_kw"] is not None else "n/a")
     )
     print(f"  greeks: delta {g['delta']:.2f} | vega {g['vega']:.2f} | "
-          f"theta {g['theta']:.2f}")
+          + theta_s)
     print(f"  mc: seed={mc['seed']} paths={mc['n_paths']} "
           f"k={mc['n_components']} days={mc['n_days']} "
+          f"sim_days={mc.get('sim_days', mc['n_days'])} "
           f"clip=[{mc['clip_floor_yuan_mwh']:.1f}, "
           f"{mc['clip_cap_yuan_mwh']:.1f}] git={mc['git_sha']}")
     for note in mc.get("parametric_fallbacks") or []:

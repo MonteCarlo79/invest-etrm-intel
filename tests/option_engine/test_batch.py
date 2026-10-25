@@ -27,3 +27,18 @@ def test_run_one_skips_insufficient_history():
     with patch.object(b.readers, "read_price_series", return_value=s):
         out = b.run_one(_FakeEng(), "福建", "bess", 2.0, n_paths=10)
     assert out["skipped"] == "福建"
+
+def test_run_one_skips_missing_calendar_months(monkeypatch):
+    # 390-day series with June 2026 fully absent: coverage 360/30.44 ≈ 11.8
+    # months passes insufficient_history, but month 6's mean row is NaN —
+    # run_one must skip with missing_months and never write a snapshot
+    # (simulating on a NaN month-hour row would poison every path).
+    idx = pd.date_range("2025-11-01", periods=390*24, freq="h")
+    idx = idx[~((idx.year == 2026) & (idx.month == 6))]
+    s = pd.Series(300 + 120*np.sin(2*np.pi*(idx.hour-6)/24), index=idx)
+    monkeypatch.setattr(batch.readers, "read_price_series", lambda *a, **k: s)
+    written = {}
+    monkeypatch.setattr(batch.snapshot, "write_snapshot", lambda eng, row: written.update(row))
+    out = batch.run_one(_FakeEng(), "福建", "bess", 2.0, n_paths=10)
+    assert out["skipped"] == "福建" and out["reason"] == "missing_months:[6]"
+    assert written == {}
