@@ -67,11 +67,11 @@ def main(argv=None) -> int:
 
     flagged = df[df["flag_ok"] == False]  # noqa: E712 — pandas boolean mask
     if not flagged.empty:
-        print("\nFLAGGED (outside band — need a cause hypothesis: data gap "
-              "vs model miss):")
+        print("\nFLAGGED (energy-only ratio outside band — need a cause "
+              "hypothesis: data gap vs model miss):")
         for _, r in flagged.iterrows():
             print(f"  {r['province']} {r['asset_type']} {r['duration_h']}h "
-                  f"ratio={r['ratio']:.3f}")
+                  f"ratio_energy={r['ratio_energy']:.3f}")
     return 0
 
 
