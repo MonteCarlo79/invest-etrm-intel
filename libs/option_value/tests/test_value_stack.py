@@ -4,7 +4,9 @@ from datetime import date
 from libs.option_value.curves import build_expected_curve
 from libs.option_value.contracts import BESSParams, PolicyLevers, PCASimConfig
 from libs.option_value.asset_models import ASSET_MODELS, BESSDispatchOption
-from libs.option_value.value_stack import apply_policy, compute_value_stack, annuitize
+from libs.option_value.pca_simulator import fit_pca_v2
+from libs.option_value.value_stack import (apply_policy, compute_value_stack,
+    annuitize, compute_greeks)
 
 def test_apply_policy_signs_and_magnitude():
     lv = PolicyLevers(capacity_price_yuan_kw_yr=100.0, discharge_comp_yuan_kwh=0.28,
@@ -42,3 +44,33 @@ def test_coal_stub_raises():
     import pytest
     with pytest.raises(NotImplementedError):
         ASSET_MODELS["coal"]().intrinsic(None)
+
+def test_greeks_signs_and_magnitude():
+    # Same 400-day 300 + 150·sin shape as the Jensen test, plus sigma=25 noise:
+    # zero noise makes every PCA innovation degenerate (inno_scale ≈ 0), which
+    # would force vega = 0 and break the long-volatility assert below.
+    rng = np.random.default_rng(3)
+    idx = pd.date_range("2025-11-01", periods=400*24, freq="h")
+    s = pd.Series(300 + 150*np.sin(2*np.pi*(idx.hour-6)/24) + rng.normal(0, 25, len(idx)), index=idx)
+    c = build_expected_curve(s, date(2026, 11, 30))
+    cfg = PCASimConfig(n_paths=32, seed=42)
+    sp = fit_pca_v2(s, c, cfg)
+    model = BESSDispatchOption(BESSParams())
+    g = compute_greeks(model, c, sp, cfg, PolicyLevers(), capture_rate=None, prices=s)
+
+    assert set(g) == {"delta", "vega", "theta"}
+    assert all(np.isfinite(v) for v in g.values())
+
+    assert g["delta"] < 0    # parallel shift: RTE drag (charge MWh = discharge/rte > discharge)
+    # Analytic delta: the engine's own intrinsic discharge volume, normalised to
+    # per-kW per day (÷ unit kW ÷ n_days), annualised ×365, earning +10 on each
+    # discharged MWh and paying +10 on each charged MWh (= discharge/rte):
+    #   analytic = mean_daily_discharge_mwh_per_kw × 365 × 10 × (1 − 1/rte)
+    # The value stack spans curve.n_days (400d), so the ×365 annualisation
+    # understates |delta| by ~35/400 (~0.12 ¥/kW) — absorbed by the 0.5 tolerance.
+    rte = model.params.rte
+    mean_daily_per_kw = model.intrinsic(c)[1] / (model.params.power_mw * 1000.0) / c.n_days
+    analytic = mean_daily_per_kw * 365 * 10.0 * (1.0 - 1.0 / rte)
+    assert abs(g["delta"] - analytic) < 0.5
+
+    assert g["vega"] > 0     # BESS long volatility: more dispersion → more spread capture
