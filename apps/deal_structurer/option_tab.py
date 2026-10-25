@@ -25,13 +25,31 @@ the agent tools)::
         power_mw: float,
     }
 
+The acquisition panel below the value section turns the cell's V_asset into
+a GO/NO-GO on real money: 许可指标 (permit) mode values a development permit
+as a scenario-weighted build option (``build_option.value_permit``); 并购
+(M&A) mode values a distressed-asset purchase against its ask
+(``build_option.value_acquisition``). Scenario-sourced values are labeled
+情景假设/判断 (judgment), never data; the verdict text decomposes which
+policy bet carries the value. Its own session contract::
+
+    st.session_state["acq_result"]: dict | None = {
+        mode: "permit" | "mna",
+        result: PermitResult | AcquisitionResult,
+        inputs_echo: dict,   # serializable echo incl. energy basis + volume note
+    }
+
 All data assembly lives in pure functions (no streamlit imports) so it is
 unit-testable; ``render()`` is the only function that imports streamlit.
-Units: values ¥/kW/yr; prices ¥/MWh; capex ¥/kWh.
+Units: values ¥/kW/yr; prices ¥/MWh; capex ¥/kWh; NPV outputs ¥.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
+
+from libs.option_value.contracts import PermitInputs, PolicyScenario
 
 # spec §8 acceptance band for the calibration ratio (energy-only).
 RATIO_LO, RATIO_HI = 0.7, 1.4
@@ -182,6 +200,188 @@ def resolve_ov_result(row: dict | None, *, prev: dict | None,
 
 def _f(v) -> float | None:
     return None if v is None else float(v)
+
+
+# ---------------------------------------------------------------------------
+# Acquisition panel — pure helpers (no streamlit) — unit-tested
+# ---------------------------------------------------------------------------
+
+# Lever registry: short name (ASSET_MODELS applicable_levers) →
+# (PolicyLevers field, display unit). The scenario editor's dropdown is
+# filtered to the cell asset's applicable levers and stores FIELD names
+# (what PolicyScenario.lever_overrides keys on).
+_LEVER_FIELD: dict[str, tuple[str, str]] = {
+    "capacity_price": ("capacity_price_yuan_kw_yr", "¥/kW/yr"),
+    "cap_comp": ("cap_comp_yuan_kw_yr", "¥/kW/yr"),
+    "fr": ("fr_yuan_kw_yr", "¥/kW/yr"),
+    "discharge_comp": ("discharge_comp_yuan_kwh", "¥/kWh"),
+    "sysopfee": ("sysopfee_yuan_kwh", "¥/kWh"),
+    "mechanism_premium": ("mechanism_premium_yuan_mwh", "¥/MWh"),
+    "green_cert": ("green_cert_yuan_mwh", "¥/MWh"),
+}
+_LEVER_FIELDS = frozenset(f for f, _ in _LEVER_FIELD.values())
+
+_ACQ_MAX_SCENARIOS = 4  # build_option.value_permit is designed for n <= 4
+
+
+def applicable_lever_fields(asset_type: str) -> list[tuple[str, str, str]]:
+    """(short_name, PolicyLevers field, unit) for the asset's applicable
+    levers, read from the ASSET_MODELS registry (ruling: dropdown filter)."""
+    from libs.option_value.asset_models import ASSET_MODELS
+
+    return [(s, *_LEVER_FIELD[s])
+            for s in ASSET_MODELS[asset_type].applicable_levers]
+
+
+def preset_scenario_rows(preset: str, asset_type: str) -> list[dict]:
+    """Editor rows for a preset. ``current_policy`` is empty; the other two
+    map to the asset's applicable analogue (BESS capacity/FR ↔ renewable
+    mechanism/green-cert). All preset names carry the 情景假设 label."""
+    d = date(date.today().year + 1, 7, 1)
+    if preset == "current_policy":
+        return []
+    if preset == "capacity_x1.5":
+        if asset_type == "bess":
+            return [{"name": "容量电价×1.5（情景假设）",
+                     "lever": "capacity_price_yuan_kw_yr", "mode": "multiplier",
+                     "value": 1.5, "effective_date": d, "probability": 0.5}]
+        return [{"name": "机制电价×1.5（情景假设）",
+                 "lever": "mechanism_premium_yuan_mwh", "mode": "multiplier",
+                 "value": 1.5, "effective_date": d, "probability": 0.5}]
+    if preset == "fr_pool_halved":
+        if asset_type == "bess":
+            return [{"name": "调频池减半（情景假设）", "lever": "fr_yuan_kw_yr",
+                     "mode": "multiplier", "value": 0.5,
+                     "effective_date": d, "probability": 0.5}]
+        return [{"name": "绿证减半（情景假设）", "lever": "green_cert_yuan_mwh",
+                 "mode": "multiplier", "value": 0.5,
+                 "effective_date": d, "probability": 0.5}]
+    return []
+
+
+def scenario_rows_to_scenarios(rows: list[dict],
+                               base_levers_value=0.0) -> list[PolicyScenario]:
+    """Convert scenario-editor rows into engine ``PolicyScenario`` objects.
+
+    ``mode == "multiplier"`` scales the lever's base value;
+    ``mode == "absolute"`` sets it. ``base_levers_value`` is either a float
+    applied to every multiplier row, or a dict {lever_field: base_value}
+    (the UI passes the current PolicyLevers values so each row scales its
+    OWN lever's base). Same-date scenarios are mutually exclusive reveals:
+    their probabilities must sum to <= 1 (mirrors the engine's own guard,
+    raised here with the Chinese explanation so the UI never surprises the
+    engine). Unknown lever fields are rejected loudly — a bogus key would
+    otherwise surface as a dataclasses.replace TypeError deep in the tree.
+    """
+    scenarios: list[PolicyScenario] = []
+    for r in rows:
+        lever = str(r.get("lever", ""))
+        if lever not in _LEVER_FIELDS:
+            raise ValueError(
+                f"未知政策杠杆 {lever!r} — 情景编辑器只允许适用杠杆下拉列表中的字段"
+            )
+        if r.get("mode") == "multiplier":
+            base = (
+                float(base_levers_value.get(lever, 0.0))
+                if isinstance(base_levers_value, dict)
+                else float(base_levers_value)
+            )
+            override = base * float(r["value"])
+        else:  # absolute
+            override = float(r["value"])
+        prob = float(r.get("probability", 0.0))
+        if not 0.0 <= prob <= 1.0:
+            raise ValueError(
+                f"情景 {r.get('name')!r} 的概率 {prob} 超出 [0, 1] 区间"
+            )
+        scenarios.append(PolicyScenario(
+            name=str(r.get("name") or lever),
+            lever_overrides={lever: override},
+            effective_date=r["effective_date"],
+            probability=prob,
+        ))
+    by_date: dict[date, float] = {}
+    for sc in scenarios:
+        by_date[sc.effective_date] = by_date.get(sc.effective_date, 0.0) + sc.probability
+    for d, total in by_date.items():
+        if total > 1.0 + 1e-9:
+            raise ValueError(
+                f"生效日期 {d} 的情景概率合计 {total:.2%} > 100% — "
+                "同一生效日期的情景互为互斥揭示，概率之和不得超过 1"
+            )
+    return scenarios
+
+
+def energy_value_from_ov(ov: dict) -> tuple[float | None, str]:
+    """Capture-adjusted ENERGY part of the cell for the permit tree
+    (ruling 1): ``capture_adj − policy_net`` when capture_adj is present,
+    else ``intrinsic + extrinsic``. Returns (¥/kW/yr, basis label) — the
+    basis is echoed in the panel's results expander (honesty rule)."""
+    ca, pol = ov.get("capture_adj_yuan_kw"), ov.get("policy_net_yuan_kw")
+    if ca is not None and pol is not None:
+        return (float(ca) - float(pol),
+                "capture_adj − policy_net（捕获率调整后的能量部分）")
+    intr, extr = ov.get("intrinsic_yuan_kw"), ov.get("extrinsic_yuan_kw")
+    if intr is not None and extr is not None:
+        return (float(intr) + float(extr),
+                "intrinsic + extrinsic（该行无捕获率基准 — 未做捕获率折减）")
+    return None, "快照缺少价值分量 — 无法推导能量价值"
+
+
+def volume_from_mc_params(mc: dict) -> tuple[float, str]:
+    """MC-mean volume (MWh/kW) for volume-based policy levers: the
+    snapshot's mc_params when it records one, else 0.0 with a note (exact
+    whenever all volume-based levers are zero — build_option contract).
+    The engine does not persist the volume today, so the note also says
+    recompute does not backfill it."""
+    for key in ("volume_mwh_per_kw", "mean_volume_mwh_per_kw", "vol_kw_mean"):
+        v = mc.get(key)
+        if v is not None:
+            return float(v), f"快照 mc_params[{key}]"
+    return 0.0, ("快照 mc_params 未记录 MC 均值体量 → 体量型政策杠杆"
+                 "（放电补偿/系统运行费/机制电价/绿证）按 0 体量估值，"
+                 "这些杠杆全为 0 时结果精确（引擎 build_option 约定）；"
+                 "「按需重算」不会补录体量（引擎不持久化该项）")
+
+
+def permit_verdict_text(result) -> str:
+    """Committee one-liner for a PermitResult: GO/NO-GO, net value,
+    breakeven permit fee, and WHICH policy bet carries the value — each
+    scenario's leave-one-out contribution with its share of the net permit
+    value. Accepts both the engine shape (decomposition={"per_scenario":
+    {...}, "notes": [...]}) and a flat {name: contribution} dict."""
+    verdict = "GO" if result.go else "NO-GO"
+    decomp = result.decomposition or {}
+    per = decomp.get("per_scenario", decomp)
+    lines = [
+        f"{verdict}：许可净价值 {result.v_permit_yuan:,.0f} ¥"
+        f"（盈亏平衡许可费上限 {result.breakeven_permit_yuan:,.0f} ¥）"
+    ]
+    if per:
+        lines.append("价值来源（政策赌注分解，均为情景假设/判断，非数据）：")
+        v = result.v_permit_yuan
+        for name, contrib in sorted(per.items(), key=lambda kv: -abs(kv[1])):
+            share = f"{contrib / v:.0%}" if v else "—"
+            lines.append(f"- {name}: {contrib:,.0f} ¥（占许可净价值 {share}）")
+    return "\n".join(lines)
+
+
+def acquisition_verdict_text(result) -> str:
+    """M&A counterpart: GO/NO-GO on margin = fair NPV − ask, with the
+    per-uplift NPV decomposition (each uplift a judgment input)."""
+    verdict = "GO" if result.go else "NO-GO"
+    lines = [
+        f"{verdict}：公允 NPV {result.fair_npv_yuan:,.0f} ¥，"
+        f"margin（NPV − 要价）{result.margin_yuan:,.0f} ¥"
+    ]
+    if result.rows:
+        lines.append("扭亏提升分解（均为情景假设/判断，非数据）：")
+        for r in result.rows:
+            lines.append(
+                f"- {r['name']}: +{r['annual_yuan_kw']:,.1f} ¥/kW/yr → "
+                f"NPV {r['npv_yuan']:,.0f} ¥"
+            )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +704,307 @@ def render() -> None:
             for note in (mc.get("parametric_fallbacks") or []):
                 st.caption(f"参数化回退：{note}")
             st.json(mc)
+
+    # ── acquisition panel (permit / M&A) — below the value section ─────────
+    st.divider()
+    st.subheader("收购决策 · Acquisition（开发指标 / 并购）")
+
+    if ov is None:
+        # Contract producer: no cell value → no acquisition result (never
+        # leave a stale cell's acq_result behind, same discipline as ov_result).
+        st.session_state["acq_result"] = None
+        st.info("收购决策以该单元的 V_asset 为标的 — 请先获得价值快照"
+                "（上方快照读取或「按需重算」）。")
+    else:
+        from libs.option_value.build_option import (
+            value_acquisition,
+            value_permit,
+        )
+
+        acq_mode = st.radio("模式", ["许可指标 (permit)", "并购 (M&A)"],
+                            horizontal=True, key="acq_mode")
+
+        energy_val, energy_basis = energy_value_from_ov(ov)
+        vol_mwh_kw, vol_note = volume_from_mc_params(ov.get("mc_params") or {})
+        rte = 0.85 if asset_type == "bess" else 1.0  # 引擎 BESSParams.rte 默认
+
+        base_levers = None
+        try:
+            base_levers = readers.read_policy_levers(
+                eng, province, asset_type, duration_h=duration_h)
+        except Exception as e:
+            st.warning(f"政策杠杆读取失败：{e} — 收购估值不可用。")
+        if base_levers is not None and energy_val is None:
+            st.warning(f"无法推导能量价值：{energy_basis}")
+            base_levers = None
+
+        if base_levers is None:
+            st.session_state["acq_result"] = None
+        elif acq_mode == "许可指标 (permit)":
+            st.caption("把开发指标视为「建设期权」：政策情景在各自生效日揭示"
+                       "（互斥/独立规则见引擎），NPV>0 才建设。能量价值基准与"
+                       "体量取值见结果展开栏；hurdle 8% / 寿命 15 年为引擎默认。")
+            pc = st.columns(4)
+            permit_cost = pc[0].number_input("指标费用 permit cost (¥)", 0.0, 1e10,
+                                             5_000_000.0, step=100_000.0,
+                                             key="acq_permit_cost")
+            validity = pc[1].number_input("有效期 validity (年)", 0.5, 10.0, 2.0,
+                                          step=0.5, key="acq_validity")
+            capex_unit = "¥/kWh" if asset_type == "bess" else "¥/kW"
+            capex_default = (600.0 if asset_type == "bess"
+                             else 5_000.0 if asset_type == "wind" else 3_200.0)
+            capex = pc[2].number_input(f"capex 今日造价 ({capex_unit})", 0.0, 1e6,
+                                       capex_default, step=50.0, key="acq_capex")
+            decline_pct = pc[3].number_input("capex 年降 (%/yr)", 0.0, 30.0, 5.0,
+                                             step=1.0, key="acq_decline")
+            if asset_type != "bess":
+                st.caption("风光造价按 ¥/kW 口径：引擎 capex 公式含 ×duration_h，"
+                           "风光单元 duration_h=0 → 面板按 duration=1.0 传入"
+                           "（纯调用方约定，引擎未改动）。")
+
+            # ── scenario editor (≤4 rows; presets fill; all scenario-sourced
+            #    values are 情景假设/判断, never data) ──────────────────────
+            st.markdown("**政策情景编辑器**（≤4 个情景；情景价值均为 "
+                        "**情景假设/判断**，非数据）")
+            pr1, pr2, pr3 = st.columns([2, 1, 1])
+            with pr1:
+                preset = st.selectbox(
+                    "预设", ["current_policy", "capacity_x1.5", "fr_pool_halved"],
+                    key="acq_preset")
+            with pr2:
+                if st.button("载入预设", key="acq_load"):
+                    st.session_state["acq_scen_rows"] = preset_scenario_rows(
+                        preset, asset_type)
+                    for j in range(_ACQ_MAX_SCENARIOS):
+                        for f in ("name", "lever", "mode", "value", "date", "prob"):
+                            st.session_state.pop(f"acq_scen_{j}_{f}", None)
+                    st.rerun()
+            with pr3:
+                if st.button("清空情景", key="acq_clear"):
+                    st.session_state["acq_scen_rows"] = []
+                    for j in range(_ACQ_MAX_SCENARIOS):
+                        for f in ("name", "lever", "mode", "value", "date", "prob"):
+                            st.session_state.pop(f"acq_scen_{j}_{f}", None)
+                    st.rerun()
+
+            rows_state = st.session_state.setdefault("acq_scen_rows", [])
+            lever_opts = applicable_lever_fields(asset_type)
+            field_names = [f for _, f, _ in lever_opts]
+            fmt = {f: f"{s} ({f}, {u})" for s, f, u in lever_opts}
+
+            if st.button("＋ 添加情景", key="acq_add",
+                         disabled=len(rows_state) >= _ACQ_MAX_SCENARIOS):
+                rows_state.append({
+                    "name": f"情景{len(rows_state) + 1}（情景假设）",
+                    "lever": field_names[0], "mode": "multiplier", "value": 1.0,
+                    "effective_date": date(date.today().year + 1, 7, 1),
+                    "probability": 0.5,
+                })
+                for j in range(_ACQ_MAX_SCENARIOS):
+                    for f in ("name", "lever", "mode", "value", "date", "prob"):
+                        st.session_state.pop(f"acq_scen_{j}_{f}", None)
+                st.rerun()
+
+            current_rows = []
+            for i, r in enumerate(rows_state):
+                ec = st.columns([3, 3, 2, 2, 2, 2, 1])
+                name = ec[0].text_input(
+                    "名称", value=r.get("name", f"情景{i + 1}（情景假设）"),
+                    key=f"acq_scen_{i}_name")
+                lever = ec[1].selectbox(
+                    "杠杆", field_names,
+                    index=(field_names.index(r["lever"])
+                           if r.get("lever") in field_names else 0),
+                    format_func=lambda f: fmt[f], key=f"acq_scen_{i}_lever")
+                mode = ec[2].selectbox(
+                    "方式", ["multiplier", "absolute"],
+                    index=0 if r.get("mode") == "multiplier" else 1,
+                    key=f"acq_scen_{i}_mode")
+                val = ec[3].number_input(
+                    "值", value=float(r.get("value", 1.0)), step=0.05,
+                    format="%.6g", key=f"acq_scen_{i}_value")
+                eff = ec[4].date_input(
+                    "生效日", value=r.get("effective_date", date.today()),
+                    key=f"acq_scen_{i}_date")
+                prob = ec[5].slider(
+                    "概率", 0.0, 1.0, float(r.get("probability", 0.5)), 0.05,
+                    key=f"acq_scen_{i}_prob")
+                if ec[6].button("✕", key=f"acq_scen_{i}_del"):
+                    rows_state.pop(i)
+                    for j in range(_ACQ_MAX_SCENARIOS):
+                        for f in ("name", "lever", "mode", "value", "date", "prob"):
+                            st.session_state.pop(f"acq_scen_{j}_{f}", None)
+                    st.rerun()
+                current_rows.append({"name": name, "lever": lever, "mode": mode,
+                                     "value": val, "effective_date": eff,
+                                     "probability": prob})
+            # Sync the scaffold with the widgets so structural edits next
+            # rerun (add/delete/preset) rebuild from CURRENT values.
+            st.session_state["acq_scen_rows"] = current_rows
+
+            lever_base = {f: float(getattr(base_levers, f))
+                          for f in _LEVER_FIELDS}
+            try:
+                scenarios = scenario_rows_to_scenarios(
+                    current_rows, base_levers_value=lever_base)
+                inputs = PermitInputs(
+                    permit_cost_yuan=float(permit_cost),
+                    validity_years=float(validity),
+                    capex_yuan_kwh_today=float(capex),
+                    capex_decline_rate=float(decline_pct) / 100.0,
+                    power_mw=float(power_mw),
+                    # 风光 capex 按 ¥/kW 口径 → duration=1.0（调用方约定）
+                    duration_h=(float(duration_h) if asset_type == "bess"
+                                else 1.0),
+                )
+                res = value_permit(
+                    scenarios, base_levers, float(energy_val), asset_type,
+                    float(rte), inputs,
+                    volume_mwh_per_kw=float(vol_mwh_kw), asof=date.today())
+            except ValueError as e:
+                # Engine/converter guard (e.g. same-date probability sum > 1):
+                # Chinese explanation, never a traceback.
+                st.error(f"情景校验失败：{e}")
+                st.session_state["acq_result"] = None
+            else:
+                echo = {
+                    "province": province, "asset_type": asset_type,
+                    "duration_h": float(duration_h), "power_mw": float(power_mw),
+                    "permit_cost_yuan": float(permit_cost),
+                    "validity_years": float(validity),
+                    "capex_yuan_kwh_today": float(capex),
+                    "capex_decline_rate": float(decline_pct) / 100.0,
+                    "capex_duration_convention": (
+                        "bess：¥/kWh × duration_h" if asset_type == "bess"
+                        else "风光：¥/kW（duration 按 1.0 传入）"),
+                    "energy_value_yuan_kw": float(energy_val),
+                    "energy_basis": energy_basis,
+                    "volume_mwh_per_kw": float(vol_mwh_kw),
+                    "volume_note": vol_note,
+                    "rte": float(rte), "hurdle": 0.08, "life_years": 15,
+                    "asof": str(date.today()),
+                    "snapshot_asof": str(ov["asof_date"]),
+                    "scenarios": [
+                        dict(r, effective_date=str(r["effective_date"]))
+                        for r in current_rows
+                    ],
+                }
+                st.session_state["acq_result"] = {
+                    "mode": "permit", "result": res, "inputs_echo": echo,
+                }
+                vc = st.columns(4)
+                vc[0].metric("判定", "GO ✅" if res.go else "NO-GO ❌")
+                vc[1].metric("许可净价值 v_permit", _fmt(res.v_permit_yuan, "¥"))
+                vc[2].metric("盈亏平衡许可费",
+                             _fmt(res.breakeven_permit_yuan, "¥"))
+                vc[3].metric("Dixit-Pindyck 交叉检验",
+                             _fmt(res.dp_check_value, "¥"))
+                st.text(permit_verdict_text(res))
+                with st.expander("结果明细 · 输入回显 / 能量基准 / 情景假设",
+                                 expanded=False):
+                    st.caption(f"能量价值基准：{energy_basis} "
+                               f"= {energy_val:,.1f} ¥/kW/yr")
+                    st.caption(f"体量：{vol_note}（volume = "
+                               f"{vol_mwh_kw:,.3f} MWh/kW）")
+                    st.caption(f"RTE 假设 {rte}（引擎 BESS 默认；风光不适用）· "
+                               f"hurdle 8% / 寿命 15 年（引擎默认）· "
+                               f"估值日 {date.today()}（快照 asof "
+                               f"{ov['asof_date']}）")
+                    for note in (res.decomposition or {}).get("notes", []):
+                        st.caption(f"DP 交叉检验说明：{note}")
+                    st.json(echo)
+
+        else:  # 并购 (M&A)
+            st.caption("困境资产并购：公允 NPV vs 要价。实测锚非空时替代模型"
+                       "能量价值（引擎约定）；扭亏提升为判断输入（情景假设）。")
+            ma1, ma2 = st.columns(2)
+            ask = ma1.number_input("要价 ask (¥)", 0.0, 1e11, 300_000_000.0,
+                                   step=1_000_000.0, key="acq_ask")
+            use_anchor = ma2.checkbox("使用实测锚 actuals anchor",
+                                      key="acq_use_anchor")
+            anchor = None
+            if use_anchor:
+                anchor = ma2.number_input("实测锚 (¥/kW/yr)", 0.0, 1e5, 200.0,
+                                          step=10.0, key="acq_anchor")
+            st.caption("实测锚口径：引擎实测锚取自资产的结算历史，仅适用于在管"
+                       "范围内的资产（蒙西 fleet）— 本期方案仅支持手工输入。")
+
+            st.markdown("**扭亏提升 uplift**（名称 + ¥/kW/yr 增量，≤4 行；"
+                        "均为 **情景假设/判断**，非数据）")
+            up_state = st.session_state.setdefault("acq_up_rows", [])
+            if st.button("＋ 添加提升项", key="acq_up_add",
+                         disabled=len(up_state) >= 4):
+                up_state.append({"name": f"提升{len(up_state) + 1}", "delta": 0.0})
+                for j in range(4):
+                    st.session_state.pop(f"acq_up_{j}_name", None)
+                    st.session_state.pop(f"acq_up_{j}_delta", None)
+                st.rerun()
+
+            uplift_rows = []
+            for i, r in enumerate(up_state):
+                uc = st.columns([4, 2, 1])
+                nm = uc[0].text_input("名称", value=r.get("name", f"提升{i + 1}"),
+                                      key=f"acq_up_{i}_name")
+                dl = uc[1].number_input("¥/kW/yr", value=float(r.get("delta", 0.0)),
+                                        step=5.0, key=f"acq_up_{i}_delta")
+                if uc[2].button("✕", key=f"acq_up_{i}_del"):
+                    up_state.pop(i)
+                    for j in range(4):
+                        st.session_state.pop(f"acq_up_{j}_name", None)
+                        st.session_state.pop(f"acq_up_{j}_delta", None)
+                    st.rerun()
+                uplift_rows.append((nm, float(dl)))
+            st.session_state["acq_up_rows"] = [
+                {"name": n, "delta": d} for n, d in uplift_rows]
+
+            try:
+                res = value_acquisition(
+                    ask_yuan=float(ask),
+                    energy_value_yuan_kw=float(energy_val),
+                    levers=base_levers, power_mw=float(power_mw),
+                    duration_h=float(duration_h), asset_type=asset_type,
+                    rte=float(rte), uplift_rows=uplift_rows,
+                    actuals_anchor_yuan_kw=anchor,
+                    volume_mwh_per_kw=float(vol_mwh_kw))
+            except ValueError as e:
+                st.error(f"并购估值失败：{e}")
+                st.session_state["acq_result"] = None
+            else:
+                echo = {
+                    "province": province, "asset_type": asset_type,
+                    "duration_h": float(duration_h), "power_mw": float(power_mw),
+                    "ask_yuan": float(ask),
+                    "actuals_anchor_yuan_kw": anchor,
+                    "energy_value_yuan_kw": float(energy_val),
+                    "energy_basis": (
+                        "实测锚（替代模型能量价值）" if anchor is not None
+                        else energy_basis),
+                    "volume_mwh_per_kw": float(vol_mwh_kw),
+                    "volume_note": vol_note,
+                    "rte": float(rte), "hurdle": 0.08, "life_years": 15,
+                    "snapshot_asof": str(ov["asof_date"]),
+                    "uplift_rows": [{"name": n, "delta_yuan_kw_yr": d}
+                                    for n, d in uplift_rows],
+                }
+                st.session_state["acq_result"] = {
+                    "mode": "mna", "result": res, "inputs_echo": echo,
+                }
+                ac = st.columns(3)
+                ac[0].metric("判定", "GO ✅" if res.go else "NO-GO ❌")
+                ac[1].metric("公允 NPV", _fmt(res.fair_npv_yuan, "¥"))
+                ac[2].metric("margin（NPV − 要价）", _fmt(res.margin_yuan, "¥"))
+                st.text(acquisition_verdict_text(res))
+                with st.expander("结果明细 · 输入回显 / 能量基准 / 情景假设",
+                                 expanded=False):
+                    st.caption(f"能量价值基准：{echo['energy_basis']} "
+                               f"= {energy_val if anchor is None else anchor:,.1f} "
+                               "¥/kW/yr")
+                    st.caption(f"体量：{vol_note}（volume = "
+                               f"{vol_mwh_kw:,.3f} MWh/kW）")
+                    st.caption(f"RTE 假设 {rte}（引擎 BESS 默认；风光不适用）· "
+                               f"hurdle 8% / 寿命 15 年（引擎默认）· "
+                               f"快照 asof {ov['asof_date']}")
+                    st.json(echo)
 
     # ── (c) on-demand recompute ──────────────────────────────────────────────
     st.divider()
