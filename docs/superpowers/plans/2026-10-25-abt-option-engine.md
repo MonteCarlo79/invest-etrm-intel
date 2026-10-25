@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Units (hard rules, repo has been bitten):** prices ¥/MWh internally everywhere; value metrics ¥/kW/yr (per kW of rated power); readers normalize on ingest (`_normalize_units`: per price column, if `nanmedian < 5` → ×1000). Conversion `¥/kW/yr = profit_per_mwh_installed_day × 365 × duration_h`.
+- **Units (hard rules, repo has been bitten):** prices ¥/MWh internally everywhere; value metrics ¥/kW/yr (per kW of rated power); readers normalize on ingest **per (day, column): a day is ¥/kWh iff max(|values|) < 5** — MAX not median (half-placeholder days), ABS (山东 has genuinely all-negative ¥/MWh days); empirically bimodal with an empty [2,50) gap (ratified T8). Simulation horizon: `min(365, curve.n_days)` days — values are ¥/kW/**yr** and feed annuitize() (ratified at final review; prefix truncation keeps intrinsic same-horizon).
 - **No SVD, no large BLAS matmuls** in new code — Fargate OpenBLAS segfault (`docs/handoff-2026-07-25-deal-structurer.md`). Use `np.linalg.eigh` on the 24×24 covariance and per-PC `np.outer` accumulation, exactly as `libs/deal_models/price_simulator.py:55-96`.
 - **Determinism:** every simulation takes an explicit `seed` (default 42); same seed → identical output. Greeks use common random numbers (same seed on bumped re-values).
 - **Negative extrinsic is reported, never floored** (wind/solar cannibalization; spec §11.10).
@@ -554,7 +554,7 @@ def test_snapshot_roundtrip():
 - Produces:
   - `batch.run_one(eng, province: str, asset_type: str, duration_h: float, n_paths: int = 1000, seed: int = 42) -> dict` — full chain: readers → `build_expected_curve` → `fit_pca_v2` → `simulate_pca_v2` (n_days = curve days) → asset model from `ASSET_MODELS` (RenewableParams built from `read_cf_profile` + `read_price_volume_corr`, parametric fallback with note when None) → `compute_value_stack` + `compute_greeks` → snapshot row dict (`mc_params` includes seed, n_paths, n_components, clip bounds, data coverage, lever notes, and **`git_sha` via `subprocess.check_output(["git","rev-parse","--short","HEAD"])`** — spec §5.7). `insufficient_history` → returns `{"skipped": province, "reason": "insufficient_history"}` and writes nothing (Review Focus #2).
   - `batch.run_screen(eng, provinces: list[str] | None = None, n_paths: int = 200, seed: int = 42) -> list[dict]` — provinces × [("bess",2.0), ("bess",4.0), ("wind",0.0), ("solar",0.0)].
-  - `calibration.calibration_report(eng, provinces: list[str]) -> pd.DataFrame` — columns `[province, asset_type, duration_h, v_tot_yuan_kw, v_hist_yuan_kw, ratio, flag_ok]`; `flag_ok = ratio between 0.7 and 1.4` (spec §8); reads latest snapshots + `read_hist_pf_per_kw_yr`.
+  - `calibration.calibration_report(eng, provinces: list[str]) -> pd.DataFrame` — columns `[province, asset_type, duration_h, v_tot_yuan_kw, v_hist_yuan_kw, ratio_energy, flag_ok, ratio_with_policy, masking…]`; **`flag_ok` rides `ratio_energy = (intrinsic+extrinsic)/v_hist` ∈ [0.7, 1.4] (spec §8 intent — engine energy economics vs the PF benchmark); `ratio_with_policy` (= v_tot/v_hist) is informational only** (ratified T8 fix round 1 — the policy-inclusive numerator structurally false-flags high-policy provinces 蒙西/山西).
 
 - [ ] **Step 1: Wire test — batch end-to-end with stubbed readers**
 
