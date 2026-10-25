@@ -46,6 +46,11 @@ def test_crafted_day_arbitrages():
     assert rev > 0 and dis > 0
     # charge must happen in the cheap half: revenue bounded by 2 MWh grid delivery
     assert dis <= 2.0 + 1e-9
+    # Regression tripwire for taper-consistency semantics: DP matches the LP
+    # optimum exactly on this day (1000*sqrt(0.85) - 20/sqrt(0.85)); a broken
+    # backward/roll-out clip symmetry would silently pass the 2% median gate.
+    assert abs(rev - 900.2613999474231) < 1e-6
+    assert abs(rev - optimise_window(day, 1.0, 2.0, 0.85).profit) < 1e-6
 
 def test_dp_lp_gate_synthetic():
     rng = np.random.default_rng(3)
