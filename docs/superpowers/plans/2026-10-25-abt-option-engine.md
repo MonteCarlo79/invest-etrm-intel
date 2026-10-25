@@ -43,7 +43,8 @@
 **Interfaces:**
 - Consumes: nothing (first task).
 - Produces (all later tasks rely on these exact names):
-  - `@dataclass ExpectedCurve`: `province: str, window_start: date, window_end: date, month_hour_mean: np.ndarray  # (12, 24) ¥/MWh`, `hourly: np.ndarray  # (n_complete_days*24,) ¥/MWh tiled curve`, `floor: float, cap: float, n_days: int, coverage_months: float, insufficient_history: bool`
+  - `@dataclass ExpectedCurve`: `province: str, window_start: date, window_end: date, month_hour_mean: np.ndarray  # (12, 24) ¥/MWh — ROW INDEX = month % 12 (row 0 = December, row 2 = February); every consumer must use month % 12`, `hourly: np.ndarray  # (n_complete_days*24,) ¥/MWh tiled curve`, `floor: float, cap: float, n_days: int, coverage_months: float, insufficient_history: bool`
+  - Window semantics (pinned by T1 tests): `build_expected_curve` applies a LOWER time bound only (window_start = first day of month (window_end − months)); days after window_end are not excluded by this function — upstream readers bound the query at window_end. `build_expected_curve` does not take a province argument; callers set `curve.province` downstream (e.g. via `dataclasses.replace`).
   - `@dataclass PCASimConfig`: `n_components: int = 4, n_paths: int = 500, seed: int = 42, innovations: str = "student_t"`
   - `@dataclass PCAv2Params`: `loadings: np.ndarray  # (k, 24)`, `phi: np.ndarray  # (k,) AR(1) coef`, `inno_scale: np.ndarray  # (k,)`, `inno_df: np.ndarray  # (k,) — NaN means Normal`
   - `@dataclass BESSParams`: `power_mw: float = 1.0, duration_h: float = 2.0, rte: float = 0.85, soc_grid_step_frac: float = 0.1`
@@ -280,7 +281,7 @@ def _params(rho):
 
 def _cf_mean(p: RenewableParams, c, n_days):
     idx = pd.date_range(c.window_end, periods=n_days*24, freq="h")
-    return np.array([p.cf_profile[ts.month-1, ts.hour] for ts in idx])
+    return np.array([p.cf_profile[ts.month % 12, ts.hour] for ts in idx])
 
 def test_correlation_recovered():
     c, paths = _curve_and_paths()
