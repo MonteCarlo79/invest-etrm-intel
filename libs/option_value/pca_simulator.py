@@ -96,7 +96,10 @@ def fit_pca_v2(
         phi_p = float(s_cur @ s_prev) / denom if denom > 0 else 0.0
         phi[p] = np.clip(phi_p, -_PHI_CLIP, _PHI_CLIP)
 
-        e = s_cur - phi_p * s_prev
+        # Innovations from the CLIPPED phi: when the ±0.999 clip binds, the
+        # residuals must be consistent with the phi the simulator actually
+        # recurses on.
+        e = s_cur - phi[p] * s_prev
         e_std = float(e.std())
         if e_std < _MIN_INNO_STD:
             inno_scale[p] = e_std  # ≈ 0: PC contributes nothing

@@ -44,12 +44,22 @@ def main(argv=None) -> int:
 
     eng = _engine()
     df = calibration.calibration_report(eng, provinces)
-    print(f"Calibration report (band [{calibration.RATIO_LO}, "
-          f"{calibration.RATIO_HI}]) — V_tot vs V_hist ¥/kW/yr")
+    print(f"Calibration report — band [{calibration.RATIO_LO}, "
+          f"{calibration.RATIO_HI}] on ratio_energy = (intrinsic+extrinsic)/"
+          f"V_hist (¥/kW/yr); ratio_with_policy is informational only")
     if df.empty:
         print("  (no snapshots found — run run_option_batch.py first)")
         return 1
     print(df.to_string(index=False))
+
+    skewed = df[(df["asset_type"] == "bess")
+                & (df["rt_days_scaled"].fillna(0) > 0)]
+    if not skewed.empty:
+        provs = ", ".join(sorted(skewed["province"].unique()))
+        print(f"\nCaveat: {provs} — ¥/kWh flat-fill days were rescaled at "
+              f"read time (rt days_scaled > 0); V_hist inherits the "
+              f"mixed-unit skew until the Pillar-2 capture pipeline re-runs "
+              f"on normalized prices.")
 
     print("\nRead-time masking counts (mc_params of latest snapshots):")
     for m in calibration.masking_summary(eng, provinces):

@@ -174,7 +174,9 @@ def read_price_series(eng, province: str, window_end: date,
     province has no rows in the window. With ``return_meta=True`` returns
     ``(series, meta)`` where meta carries the read-time masking counts::
 
-        {"units":    {col: {"scaled": bool, "count": int}, ...},
+        {"units":    {col: {"scaled": bool, "count": int,
+                            "days_scaled": int | None,
+                            "days_total": int | None}, ...},
          "fallback": {"filled": int, "missing_both": int,
                       "negatives_kept": int}}
 

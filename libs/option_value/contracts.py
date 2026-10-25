@@ -32,6 +32,10 @@ class ExpectedCurve:
 
 @dataclass
 class PCASimConfig:
+    """PCA simulator configuration. ``innovations`` is currently inert:
+    fit_pca_v2 always uses the moment-estimated Student-t df with a Normal
+    fallback; the field documents intent for a future selector."""
+
     n_components: int = 4
     n_paths: int = 500
     seed: int = 42
