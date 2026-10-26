@@ -42,6 +42,7 @@ COPY shared/                  ./shared/
 COPY services/deal_committee/  ./services/deal_committee/
 COPY services/deal_structurer/ ./services/deal_structurer/
 COPY db/ddl/marketdata/deal_committee.sql ./db/ddl/marketdata/deal_committee.sql
+COPY db/ddl/marketdata/option_value_snapshot.sql ./db/ddl/marketdata/option_value_snapshot.sql
 COPY services/knowledge_pool/  ./services/knowledge_pool/
 # headless agents dispatched via services.hermes.market_agent_bridge
 COPY services/spot_mcp/        ./services/spot_mcp/

@@ -19,3 +19,11 @@ def test_no_dead_session_refs():
     import re
     src = pathlib.Path("apps/deal_structurer/deal_tab.py").read_text()
     assert "mc_result" not in src                          # rewired to ov_result
+
+def test_dockerfile_copies_both_ddl_files():
+    # The in-image recompute button runs batch.run_one → write_snapshot →
+    # ensure_table, which reads the DDL from the image filesystem — a missing
+    # COPY is a prod FileNotFoundError.
+    src = pathlib.Path("apps/deal_structurer/Dockerfile").read_text()
+    assert "COPY db/ddl/marketdata/deal_committee.sql" in src
+    assert "COPY db/ddl/marketdata/option_value_snapshot.sql" in src
