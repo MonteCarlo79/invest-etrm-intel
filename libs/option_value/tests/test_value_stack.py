@@ -40,6 +40,29 @@ def test_jensen_extrinsic_nonnegative_bess():
     assert vs.extrinsic_yuan_kw >= -1e-6
     assert vs.capture_adj_yuan_kw is None                       # missing capture → None, no crash
 
+def test_value_stack_surfaces_mean_volume():
+    # Same BESS synthetic as the Jensen fixture: the stack must surface the
+    # per-kW MC-mean path volume for persistence (volume-based policy levers).
+    import dataclasses
+    from libs.option_value.value_stack import _CF_COPULA_SEED
+    idx = pd.date_range("2025-11-01", periods=400*24, freq="h")
+    s = pd.Series(300 + 150*np.sin(2*np.pi*(idx.hour-6)/24), index=idx)
+    c = build_expected_curve(s, date(2026, 11, 30))
+    model = BESSDispatchOption(BESSParams())
+    rng = np.random.default_rng(9)
+    paths = c.hourly[:24*365] + rng.normal(0, 30, (50, 24*365))
+    vs = compute_value_stack(model, c, paths, PolicyLevers(), capture_rate=None)
+    assert vs.mean_volume_mwh_per_kw is not None
+    assert vs.mean_volume_mwh_per_kw > 0
+    # Pin: equals the per-path mean on the stack's own horizon truncation,
+    # divided by the same unit factor (power_mw × 1000) as the revenue terms.
+    T = paths.shape[1]
+    horizon = (c if T == c.hourly.shape[0]
+               else dataclasses.replace(c, hourly=c.hourly[:T], n_days=T // 24))
+    _rev, vol_paths = model.value_paths(paths, curve=horizon, seed=_CF_COPULA_SEED)
+    expected = float(np.mean(vol_paths)) / (model.params.power_mw * 1000.0)
+    assert abs(vs.mean_volume_mwh_per_kw - expected) < 1e-9
+
 def test_coal_stub_raises():
     import pytest
     with pytest.raises(NotImplementedError):

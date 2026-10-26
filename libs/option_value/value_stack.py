@@ -121,7 +121,8 @@ def compute_value_stack(
     curve. The model runs at ``power_mw`` / ``capacity_mw`` MW scale;
     revenue and volume are divided by ``unit_mw × 1000`` for the per-kW
     basis before policy is applied. Policy levers are valued at the MEAN
-    path volume.
+    path volume, which is also surfaced on the returned stack as
+    ``mean_volume_mwh_per_kw`` for persistence.
     """
     paths = np.asarray(paths, dtype=float)
     n_hours = curve.hourly.shape[0]
@@ -182,6 +183,7 @@ def compute_value_stack(
         capture_adj_yuan_kw=capture_adj,
         extrinsic_p10=float(p10),
         extrinsic_p90=float(p90),
+        mean_volume_mwh_per_kw=vol_kw_mean,
     )
 
 

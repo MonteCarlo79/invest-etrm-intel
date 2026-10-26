@@ -95,6 +95,11 @@ class ValueStack:
     capture_adj_yuan_kw: float | None
     extrinsic_p10: float
     extrinsic_p90: float
+    # MC-mean simulated path volume, MWh per kW over the valued horizon
+    # (same per-kW basis as the revenue terms). None when the model reports
+    # no volume. Surfaced so the snapshot can persist it for volume-based
+    # policy levers (放电补偿/系统运行费) in the acquisition panel.
+    mean_volume_mwh_per_kw: float | None = None
 
 
 @dataclass
