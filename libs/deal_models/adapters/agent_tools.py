@@ -1,6 +1,8 @@
 """libs/deal_models/adapters/agent_tools.py — Claude API tool definitions + dispatch."""
 from __future__ import annotations
 import json
+import math
+from datetime import date, datetime
 import numpy as np
 from libs.deal_models.contracts import (
     OUParams, PriceSimRequest, DispatchRequest,
@@ -12,20 +14,66 @@ from libs.deal_models.project_cashflow import compute_cashflow
 from libs.deal_models.monte_carlo import run_monte_carlo
 import libs.deal_models.deal_structures as _ds_mod  # triggers registration
 
+# Option-value engine readers (import-safe: no DB at import; engines are
+# created lazily inside the handlers, never here).
+from services.option_engine import snapshot as _snapshot
+from services.option_engine import readers as _readers
+from services.option_engine import calibration as _calibration
+from apps.deal_structurer import screen_tab as _screen_tab
+
 # Cached last MC result so Strategist can reference it across tool calls
 _last_mc_result = None
 _last_price_paths = None
 
 
+def _json_default(o):
+    if isinstance(o, (np.integer, np.floating)):
+        return float(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()
+    raise TypeError(f"Not serializable: {type(o)}")
+
+
 def _j(obj) -> str:
     """JSON serialize; convert numpy scalars."""
-    def _default(o):
-        if isinstance(o, (np.integer, np.floating)):
-            return float(o)
-        if isinstance(o, np.ndarray):
-            return o.tolist()
-        raise TypeError(f"Not serializable: {type(o)}")
-    return json.dumps(obj, default=_default)
+    return json.dumps(obj, default=_json_default)
+
+
+def _json_clean(o):
+    """Recursively map non-finite floats to None and dates to ISO strings so
+    option-value rows never emit NaN/Inf literals or crash on date objects."""
+    if isinstance(o, dict):
+        return {k: _json_clean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_clean(v) for v in o]
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    return o
+
+
+def _jo(obj) -> str:
+    """JSON for the option-value tools: literal UTF-8 (Chinese province names
+    stay readable in the transcript) over pre-cleaned values."""
+    return json.dumps(_json_clean(obj), default=_json_default,
+                      ensure_ascii=False)
+
+
+def _lazy_engine():
+    """Create the DB engine inside the handler (never at module import).
+
+    Returns None when the engine cannot be constructed (e.g. PGURL unset) so
+    stubbed readers in tests still run; a real reader then fails on use and
+    the handler surfaces it as a JSON error string.
+    """
+    try:
+        from services.common.db_utils import get_engine
+        return get_engine()
+    except Exception:
+        return None
 
 
 AGENT_TOOLS = [
@@ -155,7 +203,270 @@ AGENT_TOOLS = [
             "query": {"type": "string", "description": "Keyword to locate (returns ±1500 chars)"},
         }, "required": ["filename"]},
     },
+    {
+        "name": "get_option_value",
+        "description": (
+            "Latest option-engine value snapshot for one province × asset type × duration: "
+            "intrinsic / extrinsic / policy-net / total / capture-adjusted value, extrinsic "
+            "P10–P90, greeks, and the V_hist calibration check. All values are ¥/kW/yr as of "
+            "the snapshot's asof_date. Returns an error when no snapshot exists (run the "
+            "option batch first)."
+        ),
+        "input_schema": {"type": "object", "properties": {
+            "province": {"type": "string", "description": "Province name e.g. 山东"},
+            "asset_type": {"type": "string", "enum": ["bess", "wind", "solar"]},
+            "duration_h": {"type": "number", "description": "BESS duration hours (e.g. 2.0, 4.0); 0 for wind/solar"},
+        }, "required": ["province", "asset_type", "duration_h"]},
+    },
+    {
+        "name": "screen_option_values",
+        "description": (
+            "Screen all latest option-value snapshot cells (province × asset type × duration) "
+            "into an NPV-margin / implied-IRR ranking — the permit/M&A hunt list. sort_by: "
+            "'margin' (implied IRR desc, unit-free, the screen tab's pinned sort), "
+            "'extrinsic_share' (extrinsic/total desc), 'total' (total value desc). Returns the "
+            "top 15 rows, each with grade badge, asof_date and freshness. Values are ¥/kW/yr "
+            "as of each row's asof_date; margins use default capex assumptions "
+            "(BESS 600 ¥/kWh, wind/solar 5500 ¥/kW, hurdle 8%, life 15y)."
+        ),
+        "input_schema": {"type": "object", "properties": {
+            "sort_by": {"type": "string", "enum": ["margin", "extrinsic_share", "total"],
+                        "description": "Ranking key (default 'margin')"},
+            "min_freshness_days": {"type": "integer",
+                                   "description": "Drop rows whose asof_date is older than this many days (default 14)"},
+        }},
+    },
+    {
+        "name": "get_policy_levers",
+        "description": (
+            "Confirmed policy levers for one province from the capacity-stack register: "
+            "capacity price, capacity compensation, frequency-regulation (FR), discharge "
+            "compensation and system-operation fee, each with a provenance note. ¥/kW/yr "
+            "levers are duration-dependent (duration_h, default 2.0); ¥/kWh levers are rates "
+            "(volume applied at valuation time). Confirmed policy only — no fallback defaults."
+        ),
+        "input_schema": {"type": "object", "properties": {
+            "province": {"type": "string", "description": "Province name e.g. 山东"},
+            "asset_type": {"type": "string", "enum": ["bess", "wind", "solar"]},
+            "duration_h": {"type": "number", "description": "BESS duration hours (default 2.0)"},
+        }, "required": ["province", "asset_type"]},
+    },
 ]
+
+
+# ---------------------------------------------------------------------------
+# Option-value engine tools — DB/engine numbers only, each result stamped
+# with the snapshot's asof_date; engines are created lazily per call.
+# ---------------------------------------------------------------------------
+
+# Screen defaults mirror screen_tab's pinned sidebar values.
+_SCREEN_CAPEX_BESS_YUAN_KWH = 600.0
+_SCREEN_CAPEX_REN_YUAN_KW = 5500.0
+_SCREEN_HURDLE = 0.08
+_SCREEN_LIFE_YEARS = 15
+_SCREEN_TOP_N = 15
+
+_SCREEN_KEEP = (
+    "province", "asset_type", "duration_h", "asof_date", "freshness", "grade",
+    "intrinsic_yuan_kw", "extrinsic_yuan_kw", "extrinsic_p10", "extrinsic_p90",
+    "policy_net_yuan_kw", "total_yuan_kw", "capture_adj_yuan_kw",
+    "screen_value_yuan_kw", "capex_yuan_kw", "npv_margin_yuan_kwh",
+    "npv_margin_yuan_kw", "implied_irr", "irr_uplift", "extrinsic_share",
+    "masking",
+)
+
+
+def _asof_age_days(asof, today: date | None = None) -> int | None:
+    """Age of an asof value in days; None when unparseable. Same parsing as
+    screen_tab.freshness_label (which returns a label, not a number)."""
+    if asof is None:
+        return None
+    if isinstance(asof, str):
+        try:
+            asof = date.fromisoformat(asof[:10])
+        except ValueError:
+            return None
+    elif isinstance(asof, datetime):
+        asof = asof.date()
+    elif not isinstance(asof, date):
+        return None
+    return ((today or date.today()) - asof).days
+
+
+def _calibration_note(eng, row: dict) -> dict:
+    """V_hist calibration check for a BESS snapshot row (spec §8 band on
+    (intrinsic+extrinsic)/V_hist); non-BESS rows have no benchmark. Read
+    failures degrade to a note — never raise."""
+    if row.get("asset_type") != "bess":
+        return {"note": "no V_hist benchmark — calibration is BESS-only"}
+    try:
+        v_hist = _readers.read_hist_pf_per_kw_yr(
+            eng, row.get("province"), float(row.get("duration_h")),
+            row.get("window_start"), row.get("window_end"))
+    except Exception as e:
+        return {"note": f"calibration unavailable: {e}", "flag_ok": None}
+    if not v_hist:
+        return {"note": "no V_hist row over the snapshot window",
+                "v_hist_yuan_kw": v_hist, "flag_ok": None}
+    intr, extr = row.get("intrinsic_yuan_kw"), row.get("extrinsic_yuan_kw")
+    energy = intr + extr if (intr is not None and extr is not None) else None
+    ratio = energy / v_hist if energy is not None else None
+    return {
+        "v_hist_yuan_kw": v_hist,
+        "ratio_energy": ratio,
+        "flag_ok": (None if ratio is None
+                    else bool(_calibration.RATIO_LO <= ratio
+                              <= _calibration.RATIO_HI)),
+    }
+
+
+def _tool_get_option_value(inputs: dict) -> str:
+    try:
+        eng = _lazy_engine()
+        row = _snapshot.read_latest(
+            eng, inputs["province"], inputs["asset_type"],
+            float(inputs["duration_h"]))
+    except Exception as e:
+        return _jo({"error": f"option snapshot read failed: {e}"})
+    if row is None:
+        return _jo({"error": "no snapshot — run batch",
+                    "hint": "services/option_engine/run_option_batch.py"})
+    return _jo({
+        "province": row.get("province"),
+        "asset_type": row.get("asset_type"),
+        "duration_h": float(inputs["duration_h"]),
+        "asof_date": row.get("asof_date"),
+        "window": [row.get("window_start"), row.get("window_end")],
+        "intrinsic_yuan_kw": row.get("intrinsic_yuan_kw"),
+        "extrinsic_yuan_kw": row.get("extrinsic_yuan_kw"),
+        "extrinsic_p10": row.get("extrinsic_p10"),
+        "extrinsic_p90": row.get("extrinsic_p90"),
+        "policy_net_yuan_kw": row.get("policy_net_yuan_kw"),
+        "total_yuan_kw": row.get("total_yuan_kw"),
+        "capture_adj_yuan_kw": row.get("capture_adj_yuan_kw"),
+        "greeks": row.get("greeks_json"),
+        "calibration": _calibration_note(eng, row),
+        "masking": _screen_tab.masking_note(row.get("mc_params")),
+        "units": "¥/kW/yr as of asof_date",
+    })
+
+
+def _tool_screen_option_values(inputs: dict) -> str:
+    sort_by = inputs.get("sort_by") or "margin"
+    if sort_by not in ("margin", "extrinsic_share", "total"):
+        return _jo({"error": "sort_by must be margin|extrinsic_share|total, "
+                             f"got {sort_by!r}"})
+    max_age = int(inputs.get("min_freshness_days", 14))
+    try:
+        eng = _lazy_engine()
+        rows = _screen_tab.read_latest_cells(eng)
+    except Exception as e:
+        return _jo({"error": f"screen read failed: {e}"})
+
+    # Freshness floor: drop cells staler than min_freshness_days, and cells
+    # with no parseable asof (freshness unverifiable).
+    fresh = []
+    for r in rows:
+        age = _asof_age_days(r.get("asof_date"))
+        if age is not None and age <= max_age:
+            fresh.append(r)
+    if not fresh:
+        return _jo({"rows": [], "sort_by": sort_by,
+                    "min_freshness_days": max_age,
+                    "note": "no snapshot cells within the freshness window — "
+                            "run services/option_engine/run_option_batch.py"})
+
+    df = _screen_tab.screen_rows_to_frame(
+        fresh, capex_yuan_kwh_bess=_SCREEN_CAPEX_BESS_YUAN_KWH,
+        capex_yuan_kw_renewable=_SCREEN_CAPEX_REN_YUAN_KW,
+        hurdle=_SCREEN_HURDLE, life_years=_SCREEN_LIFE_YEARS)
+    records = _json_clean(df.to_dict("records"))
+
+    # extrinsic_share on every row (sort key for one mode, grounding context
+    # for the others); None when total is absent/zero.
+    for rec in records:
+        extr, tot = rec.get("extrinsic_yuan_kw"), rec.get("total_yuan_kw")
+        rec["extrinsic_share"] = (extr / tot) if (extr is not None and tot) \
+            else None
+
+    def _key(field):
+        return lambda rec: (rec.get(field)
+                            if rec.get(field) is not None else float("-inf"))
+
+    if sort_by == "extrinsic_share":
+        records.sort(key=_key("extrinsic_share"), reverse=True)
+    elif sort_by == "total":
+        records.sort(key=_key("total_yuan_kw"), reverse=True)
+    # sort_by == "margin": the frame's pinned implied_irr-desc order stands.
+
+    n_cells = len(records)
+    records = records[:_SCREEN_TOP_N]
+
+    # Grade badges (screen_tab semantics): BESS rows upgrade to bid-grade
+    # only when a V_hist calibration row exists over the snapshot's own
+    # window; checked only for the emitted rows, never upgraded on doubt.
+    windows = {}
+    for r in fresh:
+        try:
+            windows[(r.get("province"), r.get("asset_type"),
+                     float(r.get("duration_h") or 0.0))] = (
+                r.get("window_start"), r.get("window_end"))
+        except (TypeError, ValueError):
+            continue
+    for rec in records:
+        if rec.get("asset_type") != "bess":
+            continue
+        ws, we = windows.get((rec.get("province"), "bess",
+                              float(rec.get("duration_h") or 0.0)),
+                             (None, None))
+        try:
+            has_cal = _readers.read_hist_pf_per_kw_yr(
+                eng, rec.get("province"), float(rec.get("duration_h")),
+                ws, we) is not None
+        except Exception:
+            has_cal = False
+        rec["grade"] = _screen_tab.grade_badge("bess", has_cal)
+
+    return _jo({
+        "rows": [{k: rec.get(k) for k in _SCREEN_KEEP} for rec in records],
+        "n_cells": n_cells,
+        "n_returned": len(records),
+        "sort_by": sort_by,
+        "min_freshness_days": max_age,
+        "capex_assumptions": {
+            "bess_yuan_kwh": _SCREEN_CAPEX_BESS_YUAN_KWH,
+            "renewable_yuan_kw": _SCREEN_CAPEX_REN_YUAN_KW,
+            "hurdle": _SCREEN_HURDLE,
+            "life_years": _SCREEN_LIFE_YEARS,
+        },
+        "units": "¥/kW/yr as of each row's asof_date",
+    })
+
+
+def _tool_get_policy_levers(inputs: dict) -> str:
+    duration_h = float(inputs.get("duration_h", 2.0))
+    try:
+        eng = _lazy_engine()
+        levers = _readers.read_policy_levers(
+            eng, inputs["province"], inputs["asset_type"], duration_h)
+    except Exception as e:
+        return _jo({"error": f"policy lever read failed: {e}"})
+    return _jo({
+        "province": inputs["province"],
+        "asset_type": inputs["asset_type"],
+        "duration_h": duration_h,
+        "capacity_price_yuan_kw_yr": levers.capacity_price_yuan_kw_yr,
+        "cap_comp_yuan_kw_yr": levers.cap_comp_yuan_kw_yr,
+        "fr_yuan_kw_yr": levers.fr_yuan_kw_yr,
+        "discharge_comp_yuan_kwh": levers.discharge_comp_yuan_kwh,
+        "sysopfee_yuan_kwh": levers.sysopfee_yuan_kwh,
+        "mechanism_premium_yuan_mwh": levers.mechanism_premium_yuan_mwh,
+        "green_cert_yuan_mwh": levers.green_cert_yuan_mwh,
+        "notes": levers.notes,
+        "units": ("capacity_price/cap_comp/FR are ¥/kW/yr (duration-dependent); "
+                  "discharge_comp/sysopfee are ¥/kWh rates; "
+                  "mechanism_premium/green_cert are ¥/MWh"),
+    })
 
 
 def dispatch_tool(name: str, inputs: dict) -> str:
@@ -181,6 +492,13 @@ def dispatch_tool(name: str, inputs: dict) -> str:
             if name == "read_uploaded_doc":
                 return _j(_sa.tool_read_uploaded_doc(
                     inputs["filename"], inputs.get("page"), inputs.get("query")))
+
+        if name == "get_option_value":
+            return _tool_get_option_value(inputs)
+        if name == "screen_option_values":
+            return _tool_screen_option_values(inputs)
+        if name == "get_policy_levers":
+            return _tool_get_policy_levers(inputs)
 
         if name == "run_price_simulation":
             ou = OUParams(

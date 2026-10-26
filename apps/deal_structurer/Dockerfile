@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-wqy-micro
 COPY apps/deal_structurer/    ./apps/deal_structurer/
 COPY libs/deal_models/        ./libs/deal_models/
 COPY libs/risk/               ./libs/risk/
+COPY libs/option_value/       ./libs/option_value/
 COPY services/deal_engine/    ./services/deal_engine/
 COPY services/common/         ./services/common/
 COPY shared/                  ./shared/
@@ -46,6 +47,8 @@ COPY services/knowledge_pool/  ./services/knowledge_pool/
 COPY services/spot_mcp/        ./services/spot_mcp/
 COPY services/market_fundamentals/ ./services/market_fundamentals/
 COPY services/bess_map/        ./services/bess_map/
+# option-value engine (screen tab + option agent tools)
+COPY services/option_engine/   ./services/option_engine/
 COPY services/mengxi_trading/  ./services/mengxi_trading/
 COPY services/asset_risk/      ./services/asset_risk/
 COPY services/retail_risk/     ./services/retail_risk/

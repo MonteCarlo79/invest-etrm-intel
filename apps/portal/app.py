@@ -746,7 +746,9 @@ with col_deal:
             "Probabilistic deal-structuring platform replacing Excel valuation models. "
             "Simulates spot price uncertainty, values BESS/wind dispatch revenue, projects "
             "full project IRR/DSCR/NPV, and prices structured deals (floor, collar, swap, PPA) "
-            "via Monte Carlo. Includes a Claude Strategist for quantitative deal questions."
+            "via Monte Carlo. An option-value engine decomposes each province's asset value "
+            "into intrinsic, extrinsic (optionality) and policy stacks. Includes a Claude "
+            "Strategist for quantitative deal questions."
         ),
         capabilities=[
             "Price simulation: OU and PCA models with @Risk-style parameter sliders",
@@ -754,6 +756,7 @@ with col_deal:
             "Project cashflow: equity IRR, ROACE, DSCR, NPV — replicates Excel .xlsm structure",
             "Monte Carlo: 500–5000 paths, P10/P50/P90, VaR, CVaR, tornado sensitivity",
             "Deal pricing: revenue floor, cap, collar, swap, tolling, fixed-price PPA",
+            "Option-value engine: province × asset value screen, implied IRR ranking, policy levers",
             "Claude Strategist: 'What floor guarantees 8% equity IRR at P90?'",
         ],
         app_slug="deal-structurer",
