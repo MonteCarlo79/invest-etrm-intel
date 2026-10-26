@@ -11,8 +11,11 @@ I/O only via the caller's SQLAlchemy engine — no module-level engine.
 from __future__ import annotations
 
 import json
+import math
+from datetime import date, datetime
 from pathlib import Path
 
+import numpy as np
 from sqlalchemy import text
 
 _DDL_PATH = (
@@ -77,25 +80,59 @@ def ensure_table(eng) -> None:
                 conn.execute(text(stmt))
 
 
-def save_card(eng, card: dict) -> int:
-    """Insert one card, return its id. ``card`` keys are the table column
-    names; the three JSON fields accept dicts. ``signature`` falls back to
+def _json_safe(obj):
+    """Recursively convert numpy scalars/arrays to plain Python and map
+    non-finite floats to None (jsonb rejects NaN/Inf literals). Ported from
+    ``services/option_engine/snapshot.py::_json_safe`` — its docstring
+    records the numpy-persistence lesson — and extended: pandas Timestamps
+    and date/datetime objects become ISO strings (Timestamp subclasses
+    datetime, so one branch covers both, and the extension must live here
+    because it has to recurse at any nesting depth)."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return _json_safe(obj.tolist())
+    if isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, (float, np.floating)):
+        f = float(obj)
+        return f if math.isfinite(f) else None
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    return obj
+
+
+def _build_params(card: dict) -> dict:
+    """INSERT params for one card. The three JSON fields are serialized
+    numpy/pandas-safe via ``_json_safe``; ``signature`` falls back to
     ``build_signature(card)`` when absent."""
-    ensure_table(eng)
-    params = {
+    return {
         "kind": card.get("kind"),
         "province": card.get("province"),
         "asset_type": card.get("asset_type"),
         "thesis": card.get("thesis"),
-        "evidence_json": json.dumps(card.get("evidence_json") or {}),
+        "evidence_json": json.dumps(_json_safe(card.get("evidence_json") or {})),
         "validation": card.get("validation", "pending"),
-        "validation_detail": json.dumps(card.get("validation_detail") or {}),
-        "scan_params": json.dumps(card.get("scan_params") or {}),
+        "validation_detail": json.dumps(_json_safe(card.get("validation_detail") or {})),
+        "scan_params": json.dumps(_json_safe(card.get("scan_params") or {})),
         "scan_date": card.get("scan_date"),
         "signature": card.get("signature") or build_signature(card),
     }
+
+
+def save_card(eng, card: dict) -> int:
+    """Insert one card, return its id. ``card`` keys are the table column
+    names; the three JSON fields accept dicts (numpy/pandas-safe
+    serialization). ``scan_date`` is required in practice: the delta gate
+    (``recent_same_signature``) windows on it, so a NULL scan_date makes the
+    card invisible to re-fire suppression."""
+    ensure_table(eng)
     with eng.begin() as conn:
-        return conn.execute(_INSERT, params).scalar_one()
+        return conn.execute(_INSERT, _build_params(card)).scalar_one()
 
 
 def list_cards(eng, status: str | None = None, kind: str | None = None,

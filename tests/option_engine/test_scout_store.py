@@ -1,5 +1,5 @@
 # tests/option_engine/test_scout_store.py
-import os, pytest
+import json, os, pytest
 from services.option_engine.scout import store
 
 def test_signature_stable_and_scoped():
@@ -24,6 +24,21 @@ def test_review_action_sql_shape():
     assert params == {"cid": 7, "status": "approved", "note": "理由"}
     with pytest.raises(ValueError):
         store.review_action(eng, 7, "promoted", "")     # promote goes through the brief flow, not review_action
+
+def test_save_card_params_json_safe():
+    import numpy as np, pandas as pd
+    params = store._build_params({
+        "kind": "trading", "province": "山东", "asset_type": "bess",
+        "evidence_json": {"v": np.int64(3), "ts": pd.Timestamp("2026-10-26 08:00"),
+                          "bad": float("nan"), "arr": np.array([1.5, 2.5]),
+                          "flag": np.bool_(True)},
+        "validation_detail": {"p": np.float32(0.25)},
+        "scan_params": {},
+        "scan_date": "2026-10-26", "signature": "trading|山东|bess|json"})
+    payload = json.loads(params["evidence_json"])       # raises if not serializable
+    assert payload == {"v": 3, "ts": "2026-10-26T08:00:00", "bad": None,
+                       "arr": [1.5, 2.5], "flag": True}
+    assert json.loads(params["validation_detail"]) == {"p": 0.25}
 
 @pytest.mark.skipif(not os.environ.get("PGURL"), reason="integration: needs PGURL")
 def test_card_roundtrip_live():
