@@ -25,6 +25,25 @@ def test_review_action_sql_shape():
     with pytest.raises(ValueError):
         store.review_action(eng, 7, "promoted", "")     # promote goes through the brief flow, not review_action
 
+def test_set_validation_sql_shape():
+    class Rec:
+        def __init__(self): self.calls = []
+        def execute(self, sql, params=None): self.calls.append((str(sql), params))
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    class Eng:
+        def __init__(self): self.c = Rec()
+        def connect(self): return self.c
+        def begin(self): return self.c
+    eng = Eng()
+    store.set_validation(eng, 9, "weakened", {"gap_pp": -0.3})
+    sql, params = eng.c.calls[0]
+    assert "UPDATE marketdata.option_opportunity_cards" in sql
+    assert params["cid"] == 9 and params["verdict"] == "weakened"
+    assert json.loads(params["detail"]) == {"gap_pp": -0.3}
+    with pytest.raises(ValueError):
+        store.set_validation(eng, 9, "approved", "")    # review vocabulary stays with review_action
+
 def test_save_card_params_json_safe():
     import numpy as np, pandas as pd
     params = store._build_params({

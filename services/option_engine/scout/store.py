@@ -56,6 +56,18 @@ _UPDATE_CARRIED = text("""
     WHERE id = :cid
 """)
 
+_UPDATE_VALIDATION = text("""
+    UPDATE marketdata.option_opportunity_cards
+    SET validation = :verdict,
+        validation_detail = CAST(:detail AS jsonb)
+    WHERE id = :cid
+""")
+
+# The validator's verdict vocabulary (Task 5) plus the pre-validation
+# default. Review-status words ('approved'/'rejected'/...) never pass here —
+# those stay with review_action / the promotion flow.
+_VALIDATION_VERDICTS = ("confirmed", "weakened", "no_evidence", "pending")
+
 
 def build_signature(card: dict) -> str:
     """Stable dedup key — independent of thesis text and evidence drift."""
@@ -178,6 +190,26 @@ def mark_carried(eng, card_id: int) -> None:
     """Set status='carried' — card carried forward to the next scan."""
     with eng.begin() as conn:
         conn.execute(_UPDATE_CARRIED, {"cid": card_id})
+
+
+def set_validation(eng, card_id: int, verdict: str, detail: dict) -> None:
+    """Set validation + validation_detail on a saved card — the dedicated
+    writer for (re-)validation of an existing row (the orchestrator saves
+    new cards with the verdict already set; this serves re-validation
+    without touching review status). Guarded to the validator's verdict
+    vocabulary; review actions stay with ``review_action``. ``detail`` is
+    serialized numpy/pandas-safe like the other JSON fields."""
+    if verdict not in _VALIDATION_VERDICTS:
+        raise ValueError(
+            f"set_validation allows {sorted(_VALIDATION_VERDICTS)}, "
+            f"got {verdict!r}"
+        )
+    with eng.begin() as conn:
+        conn.execute(_UPDATE_VALIDATION, {
+            "cid": card_id,
+            "verdict": verdict,
+            "detail": json.dumps(_json_safe(detail or {})),
+        })
 
 
 def recent_same_signature(eng, signature: str, within_days: int = 40
