@@ -21,12 +21,12 @@ explain; thesis drafting is Task 4).
 
    Capex basis per asset class (brief's parameters): renewable cells
    (duration_h = 0) use ``capex_yuan_kw_renewable`` flat per kW; BESS cells
-   use ``capex_yuan_kwh_bess × duration_h × 2`` per kW — the factor pinned
-   by the controller-corrected test block (2h @ 600 ¥/kWh → 2400 ¥/kW capex
-   annuity threshold; every test comment computes against 2400). NOTE: this
-   doubles screen_tab's display conversion (1 kW = duration_h kWh → 1200
-   ¥/kW for the same cell) — flagged to the controller for a confirming
-   ruling; the test assertions only pass with the 2400 basis.
+   use ``capex_yuan_kwh_bess × duration_h`` per kW — SCREEN PARITY
+   (controller ruling, 2026-10-26 fix round 1): the same 1 kW = duration_h
+   kWh conversion as screen_tab's plan-2 margin formula
+   ``annuitize(v)/duration_h − capex_yuan_kwh_bess`` (2h @ 600 ¥/kWh →
+   1200 ¥/kW capex annuity threshold). An earlier ×2 doubling was a
+   plan-side arithmetic defect and was removed.
 
 2. ``scan_underperformance`` — owned-asset sell-or-fix signals from
    ``marketdata.strategy_experiments`` (ruling 2: latest window_end per
@@ -164,7 +164,7 @@ def _permit_candidate(row: dict, capex_kwh_bess: float, capex_kw_ren: float,
             log.info("permit_hunt %s skipped: BESS cell with duration_h <= 0",
                      province)
             return None
-        capex_kw = capex_kwh_bess * duration_h * 2.0  # test-pinned basis (module docstring)
+        capex_kw = capex_kwh_bess * duration_h  # screen parity (module docstring)
     else:
         capex_kw = capex_kw_ren
 

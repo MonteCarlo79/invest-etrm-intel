@@ -9,9 +9,9 @@ def _snap(intrinsic, extrinsic, policy, total, capture_adj, province="蒙西", a
 
 def test_permit_hunt_fires_only_on_optionality_gap():
     rows = [
-        _snap(200.0, 100.0, 100.0, 400.0, 500.0),          # intrinsic 300 annuity 2567 < capex 2400? 300*8.5595=2567.85 ≥ 2400 → NOT a permit candidate (static clears)
-        _snap(150.0, 150.0, 80.0, 380.0, 300.0, province="山西"),  # static 230*8.5595=1968.7 < 2400; full 300*8.5595=2567.85 ≥ 2400×1.05=2520 → CANDIDATE
-        _snap(100.0, 50.0, 50.0, 200.0, 150.0, province="江苏"),   # full 150*8.5595=1283.9 < 2520 → no
+        _snap(120.0, 50.0, 30.0, 200.0, 160.0),          # static (120+30)*8.5595=1283.9 ≥ capex 1200 → NOT a permit candidate (static clears)
+        _snap(100.0, 60.0, 20.0, 180.0, 150.0, province="山西"),  # static 120*8.5595=1027.1 < 1200; full 150*8.5595=1283.9 ≥ 1200×1.05=1260 → CANDIDATE
+        _snap(80.0, 30.0, 20.0, 130.0, 100.0, province="江苏"),   # static 100*8.5595=855.95 < 1200 AND full 855.95 < 1260 → no
     ]
     out = si.compute_permit_hunt(rows)
     assert [c["province"] for c in out] == ["山西"]
