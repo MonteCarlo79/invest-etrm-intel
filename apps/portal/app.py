@@ -751,12 +751,10 @@ with col_deal:
             "Strategist for quantitative deal questions."
         ),
         capabilities=[
-            "Price simulation: OU and PCA models with @Risk-style parameter sliders",
-            "Dispatch valuation: BESS arbitrage, wind energy, wind+BESS (spread call strip)",
-            "Project cashflow: equity IRR, ROACE, DSCR, NPV — replicates Excel .xlsm structure",
-            "Monte Carlo: 500–5000 paths, P10/P50/P90, VaR, CVaR, tornado sensitivity",
+            "Option-value engine: intrinsic / extrinsic / policy stack per province × asset cell, V_hist calibration",
+            "Value screen: implied-IRR margin ranking across provinces, bid-grade badges, portfolio fit",
+            "Project finance: equity IRR, ROACE, DSCR, NPV — plus revenue-path IRR distribution, VaR/CVaR, NPV tornado",
             "Deal pricing: revenue floor, cap, collar, swap, tolling, fixed-price PPA",
-            "Option-value engine: province × asset value screen, implied IRR ranking, policy levers",
             "Claude Strategist: 'What floor guarantees 8% equity IRR at P90?'",
         ],
         app_slug="deal-structurer",

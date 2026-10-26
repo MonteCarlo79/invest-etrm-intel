@@ -515,6 +515,7 @@ def render() -> None:
             prev_ov
             and prev_ov.get("revenue_paths_yuan") is not None
             and ov["revenue_paths_yuan"] is None
+            and prev_ov.get("power_mw") != ov["power_mw"]
         ):
             st.caption(
                 f"⚠️ 装机功率已变更：原路径分布按旧功率 "

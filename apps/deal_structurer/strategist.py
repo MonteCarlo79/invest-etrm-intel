@@ -117,7 +117,7 @@ def render() -> None:
         st.session_state["agent_display"] = [{"role": "assistant", "content": (
             "你好!我可以:\n"
             "- 读取上传的投委会文档并回答细节问题\n"
-            "- 针对 tab 1-6 的结果接受挑战(如「容量补偿降到 280 重算」)\n"
+            "- 针对「期权价值 / 项目财务 / Deal Pricing / 价值筛选 / 投委会」各页结果接受挑战(如「容量补偿降到 280 重算」)\n"
             "- 改参重算并生成修订版 DAF(历史库中留痕)\n"
         )}]
 
