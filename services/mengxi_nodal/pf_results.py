@@ -15,6 +15,11 @@ _TABLE = "reports.nodal_pf_node_daily"
 
 CONFIG = {"power_mw": 100.0, "duration_h": 2.0, "rte_pct": 85.0}
 
+# Ranking floor: a node must have at least this many days covered in the
+# window to rank (synthetic/one-off nodes like 等值母线 have tiny denominators
+# and would otherwise top the ¥/MWh ranking on a single good day)
+MIN_COVERAGE_DAYS = 30
+
 
 def get_pf_results(engine, province: str, start: date, end: date) -> pd.DataFrame:
     """Daily PF revenue rows for a province+range at the stored config."""
@@ -53,7 +58,7 @@ def aggregate_pf(df: pd.DataFrame, power_mw: float) -> tuple[pd.DataFrame, pd.Da
     """
     if df.empty:
         return (pd.DataFrame(columns=["rank", "node_name", "rev_per_mw", "rev_per_mwh",
-                                      "total_profit_cny", "total_discharge_mwh"]),
+                                      "total_profit_cny", "total_discharge_mwh", "days_covered"]),
                 pd.DataFrame())
     df = df.copy()
     df["data_date"] = pd.to_datetime(df["data_date"])
@@ -61,15 +66,17 @@ def aggregate_pf(df: pd.DataFrame, power_mw: float) -> tuple[pd.DataFrame, pd.Da
 
     totals = (df.groupby("node_name")
                 .agg(total_profit_cny=("revenue_cny", "sum"),
-                     total_discharge_mwh=("discharge_mwh", "sum"))
+                     total_discharge_mwh=("discharge_mwh", "sum"),
+                     days_covered=("data_date", "nunique"))
                 .reset_index())
     totals["rev_per_mw"] = totals["total_profit_cny"] / power_mw
     totals["rev_per_mwh"] = (totals["total_profit_cny"]
                              / totals["total_discharge_mwh"].replace(0, pd.NA)).fillna(0.0)
+    totals = totals[totals["days_covered"] >= MIN_COVERAGE_DAYS]
     totals = totals.sort_values(["rev_per_mwh", "node_name"], ascending=[False, True]).reset_index(drop=True)
     totals["rank"] = range(1, len(totals) + 1)
     totals = totals[["rank", "node_name", "rev_per_mw", "rev_per_mwh",
-                     "total_profit_cny", "total_discharge_mwh"]]
+                     "total_profit_cny", "total_discharge_mwh", "days_covered"]]
 
     msum = df.groupby(["node_name", "month"]).agg(
         rev=("revenue_cny", "sum"), mwh=("discharge_mwh", "sum"))
