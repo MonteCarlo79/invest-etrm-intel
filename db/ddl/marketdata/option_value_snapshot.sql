@@ -31,3 +31,10 @@ ALTER TABLE marketdata.option_value_snapshot
     ADD COLUMN IF NOT EXISTS extrinsic_p10 DOUBLE PRECISION;
 ALTER TABLE marketdata.option_value_snapshot
     ADD COLUMN IF NOT EXISTS extrinsic_p90 DOUBLE PRECISION;
+
+-- MC-mean simulated path volume (MWh/kW over the valued horizon): lets the
+-- acquisition panel value volume-based policy levers (放电补偿/系统运行费)
+-- at the simulated mean instead of 0. Nullable; populated by the writer on
+-- the next upsert after deploy.
+ALTER TABLE marketdata.option_value_snapshot
+    ADD COLUMN IF NOT EXISTS mc_mean_volume_mwh_per_kw DOUBLE PRECISION;

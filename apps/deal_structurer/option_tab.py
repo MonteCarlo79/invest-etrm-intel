@@ -20,6 +20,7 @@ the agent tools)::
         province, asset_type, duration_h, asof_date,
         intrinsic_yuan_kw, extrinsic_yuan_kw, policy_net_yuan_kw,
         total_yuan_kw, capture_adj_yuan_kw, extrinsic_p10, extrinsic_p90,
+        mc_mean_volume_mwh_per_kw,   # None on rows predating the column
         greeks: dict, policy_json: dict, mc_params: dict,
         revenue_paths_yuan: np.ndarray | None,   # None when snapshot-sourced
         power_mw: float,
@@ -159,6 +160,7 @@ def to_ov_result(row: dict, *, power_mw: float, revenue_paths_yuan=None) -> dict
         "capture_adj_yuan_kw": _f(row.get("capture_adj_yuan_kw")),
         "extrinsic_p10": _f(row.get("extrinsic_p10")),
         "extrinsic_p90": _f(row.get("extrinsic_p90")),
+        "mc_mean_volume_mwh_per_kw": _f(row.get("mc_mean_volume_mwh_per_kw")),
         "greeks": dict(row.get("greeks_json") or row.get("greeks") or {}),
         "policy_json": dict(row.get("policy_json") or {}),
         "mc_params": dict(row.get("mc_params") or {}),
@@ -328,20 +330,35 @@ def energy_value_from_ov(ov: dict) -> tuple[float | None, str]:
     return None, "快照缺少价值分量 — 无法推导能量价值"
 
 
+def volume_from_ov(ov: dict) -> tuple[float, str]:
+    """MC-mean volume (MWh/kW) for volume-based policy levers.
+
+    Preferred source: the snapshot's persisted ``mc_mean_volume_mwh_per_kw``
+    column (carried through ``to_ov_result``). Rows predating the column
+    carry None → legacy fallback via ``volume_from_mc_params`` (0.0 with the
+    loud note). A fresh「按需重算」writes the column and clears the note.
+    """
+    v = ov.get("mc_mean_volume_mwh_per_kw")
+    if v is not None:
+        return float(v), "快照 mc_mean_volume_mwh_per_kw（MC 均值路径体量）"
+    return volume_from_mc_params(ov.get("mc_params") or {})
+
+
 def volume_from_mc_params(mc: dict) -> tuple[float, str]:
-    """MC-mean volume (MWh/kW) for volume-based policy levers: the
-    snapshot's mc_params when it records one, else 0.0 with a note (exact
-    whenever all volume-based levers are zero — build_option contract).
-    The engine does not persist the volume today, so the note also says
-    recompute does not backfill it."""
+    """Legacy-row fallback for the MC-mean volume (MWh/kW): the snapshot's
+    mc_params when it records one, else 0.0 with a loud note (exact whenever
+    all volume-based levers are zero — build_option contract). Since the
+    mc_mean_volume_mwh_per_kw column patch the engine persists the volume,
+    so「按需重算」backfills it and clears the note."""
     for key in ("volume_mwh_per_kw", "mean_volume_mwh_per_kw", "vol_kw_mean"):
         v = mc.get(key)
         if v is not None:
             return float(v), f"快照 mc_params[{key}]"
-    return 0.0, ("快照 mc_params 未记录 MC 均值体量 → 体量型政策杠杆"
+    return 0.0, ("快照行无 MC 均值体量（旧版行，早于 "
+                 "mc_mean_volume_mwh_per_kw 列）→ 体量型政策杠杆"
                  "（放电补偿/系统运行费/机制电价/绿证）按 0 体量估值，"
                  "这些杠杆全为 0 时结果精确（引擎 build_option 约定）；"
-                 "「按需重算」不会补录体量（引擎不持久化该项）")
+                 "「按需重算」会写入体量并消除本提示")
 
 
 def permit_verdict_text(result) -> str:
@@ -726,7 +743,7 @@ def render() -> None:
                             horizontal=True, key="acq_mode")
 
         energy_val, energy_basis = energy_value_from_ov(ov)
-        vol_mwh_kw, vol_note = volume_from_mc_params(ov.get("mc_params") or {})
+        vol_mwh_kw, vol_note = volume_from_ov(ov)
         rte = 0.85 if asset_type == "bess" else 1.0  # 引擎 BESSParams.rte 默认
 
         base_levers = None
