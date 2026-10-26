@@ -12,6 +12,7 @@ def test_snapshot_roundtrip():
                intrinsic_yuan_kw=1.0, extrinsic_yuan_kw=2.0, total_yuan_kw=3.0,
                capture_adj_yuan_kw=2.9,
                policy_net_yuan_kw=0.5, extrinsic_p10=1.2, extrinsic_p90=2.8,
+               mc_mean_volume_mwh_per_kw=0.73,
                policy_json={}, greeks_json={}, mc_params={"seed": 42})
     write_snapshot(eng, row)
     got = read_latest(eng, "测试省", "bess", 2.0)
@@ -19,3 +20,4 @@ def test_snapshot_roundtrip():
     assert got["policy_net_yuan_kw"] == 0.5
     assert got["extrinsic_p10"] == 1.2
     assert got["extrinsic_p90"] == 2.8
+    assert got["mc_mean_volume_mwh_per_kw"] == pytest.approx(0.73)
