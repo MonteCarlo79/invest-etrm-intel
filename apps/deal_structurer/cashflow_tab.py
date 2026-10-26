@@ -123,6 +123,34 @@ def base_revenue_default_m(ov: dict | None) -> tuple[float, str | None]:
     return 15.0, None
 
 
+def _cell_identity(ov: dict) -> dict:
+    """The identity keys of the cell an ov_result (or a distribution computed
+    from it) belongs to: province × asset_type × duration_h × asof × power."""
+    return {
+        "province": ov.get("province"),
+        "asset_type": ov.get("asset_type"),
+        "duration_h": (None if ov.get("duration_h") is None
+                       else float(ov.get("duration_h"))),
+        "asof_date": (None if ov.get("asof_date") is None
+                      else str(ov.get("asof_date"))),
+        "power_mw": (None if ov.get("power_mw") is None
+                     else float(ov.get("power_mw"))),
+    }
+
+
+def dist_cell_mismatch(dist: dict, ov: dict | None) -> bool:
+    """True when a stored cf_dist_result was produced by a DIFFERENT cell
+    than the current ov_result — the render path must warn, never silently
+    show cell-A's distribution under cell-B's caption. A dist without a
+    recorded identity (pre-fix shape) counts as mismatched."""
+    if dist is None or ov is None:
+        return False
+    cell = dist.get("cell")
+    if not cell:
+        return True
+    return cell != _cell_identity(ov)
+
+
 # ---------------------------------------------------------------------------
 # Streamlit rendering
 # ---------------------------------------------------------------------------
@@ -254,6 +282,7 @@ def _render_distribution(ov: dict | None, *, capex: float, om: float,
         st.session_state["cf_dist_result"] = {
             "irr_paths": irrs, "metrics": metrics, "tornado": tornado,
             "p50_rev": p50_rev, "n_paths": int(paths.size),
+            "cell": _cell_identity(ov),
             "fin_echo": {
                 "capex_m": capex / 1e6, "om_m": om / 1e6, "life": life,
                 "debt_ratio": debt_ratio, "interest": interest,
@@ -266,6 +295,13 @@ def _render_distribution(ov: dict | None, *, capex: float, om: float,
         st.info("点击 **▶ 计算分布** 生成股权 IRR 分布、收入 VaR/CVaR 与 "
                 "NPV 敏感性龙卷风图。")
         return
+    if dist_cell_mismatch(dist, ov):
+        old = dist.get("cell") or {}
+        st.warning(
+            f"以下为 {old.get('province')} · {old.get('asset_type')} · "
+            f"{old.get('duration_h')}h · {old.get('power_mw')} MW · 快照 "
+            f"{old.get('asof_date')} 的分布 — 点击 ▶ 计算分布 刷新"
+        )
 
     mt = dist["metrics"]
     m = st.columns(4)

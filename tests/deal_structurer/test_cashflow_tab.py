@@ -42,3 +42,25 @@ def test_npv_tornado_directions_and_order():
     assert by["interest_rate"]["d_plus"] == 0.0 == by["interest_rate"]["d_minus"]
     assert by["om_cost"]["d_plus"] < 0 < by["om_cost"]["d_minus"]
     assert by["revenue_scale"]["d_minus"] < 0 < by["revenue_scale"]["d_plus"]
+
+
+def test_dist_cell_mismatch_flagged():
+    # cf_dist_result carries its producing cell's identity; any drift vs the
+    # current ov_result (province / asset / duration / asof / power) must be
+    # flagged so cell-A's distribution never renders under cell-B's caption.
+    from apps.deal_structurer.cashflow_tab import dist_cell_mismatch
+
+    ov = {"province": "山东", "asset_type": "bess", "duration_h": 2.0,
+          "asof_date": "2026-10-25", "power_mw": 100.0}
+    same = {"cell": dict(ov)}
+    assert not dist_cell_mismatch(same, ov)
+    for drift in ({"province": "山西"}, {"asset_type": "wind"},
+                  {"duration_h": 4.0}, {"asof_date": "2026-10-24"},
+                  {"power_mw": 200.0}):
+        cell = dict(ov)
+        cell.update(drift)
+        assert dist_cell_mismatch({"cell": cell}, ov), drift
+    assert dist_cell_mismatch({}, ov)          # pre-fix shape: no identity
+    assert not dist_cell_mismatch(None, ov)    # nothing rendered → no warning
+    assert not dist_cell_mismatch(same, None)  # no current cell → no warning
+
