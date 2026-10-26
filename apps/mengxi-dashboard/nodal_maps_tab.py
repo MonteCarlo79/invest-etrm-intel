@@ -55,7 +55,7 @@ def _render_grid_map(engine, province: str, top_df: pd.DataFrame,
     ranked = tuple(top_df["node_name"]) if not top_df.empty else ()
     pf_values = {}
     if totals_df is not None and not totals_df.empty:
-        pf_values = dict(zip(totals_df["node_name"], totals_df["rev_per_mw"].astype(float)))
+        pf_values = dict(zip(totals_df["node_name"], totals_df["rev_per_mwh"].astype(float)))
     pf_key = str(len(pf_values)) + ":" + (f"{max(pf_values.values()):.0f}" if pf_values else "0")
     html, n_subs, n_lines, n_ok, n_coll, n_miss, n_pf = _grid_html(engine, tag, ranked, pf_key, pf_values)
     if not html:
@@ -117,24 +117,24 @@ def render(get_engine) -> None:
     _render_grid_map(engine, _nm_province, _nm_top_df, _nm_totals)
 
     # ── Ranked bar chart ────────────────────────────────────────────────────
-    st.subheader("Ranked nodes by PF revenue / MW")
+    st.subheader("Ranked nodes by PF revenue / MWh discharged")
     _nm_bar = px.bar(
-        _nm_top_df, x="node_name", y="rev_per_mw",
-        labels={"node_name": "Node", "rev_per_mw": "Rev / MW (CNY)"},
+        _nm_top_df, x="node_name", y="rev_per_mwh",
+        labels={"node_name": "Node", "rev_per_mwh": "Rev / MWh (CNY)"},
         title=f"Top {_nm_top_n} nodes — {_nm_province} PF spread ({_nm_start} → {_nm_end})",
-        color="rev_per_mw", color_continuous_scale="Blues",
+        color="rev_per_mwh", color_continuous_scale="Blues",
     )
     _nm_bar.update_layout(xaxis_tickangle=-45, showlegend=False)
     st.plotly_chart(_nm_bar, use_container_width=True)
 
     # ── Heatmap: node × month ───────────────────────────────────────────────
     if not _nm_monthly.empty:
-        st.subheader("Monthly PF revenue / MW heatmap")
+        st.subheader("Monthly PF revenue / MWh heatmap")
         _nm_hm_df = _nm_monthly.reindex(_nm_totals["node_name"].tolist()).head(_nm_top_n).fillna(0.0)
         _nm_hm = px.imshow(
             _nm_hm_df.values, x=list(_nm_hm_df.columns), y=list(_nm_hm_df.index),
-            labels={"x": "Month", "y": "Node", "color": "Rev/MW (CNY)"},
-            title=f"Monthly PF revenue / MW — top {_nm_top_n} nodes",
+            labels={"x": "Month", "y": "Node", "color": "Rev/MWh (CNY)"},
+            title=f"Monthly PF revenue / MWh — top {_nm_top_n} nodes",
             color_continuous_scale="RdYlGn", aspect="auto",
         )
         _nm_hm.update_layout(height=max(400, _nm_top_n * 20))
@@ -142,9 +142,11 @@ def render(get_engine) -> None:
 
     # ── Top-N investment table ──────────────────────────────────────────────
     st.subheader(f"Top {_nm_top_n} node investment summary")
-    _nm_disp = _nm_top_df[["rank", "node_name", "rev_per_mw", "total_profit_cny"]].copy()
-    _nm_disp.columns = ["Rank", "Node", "Rev / MW (CNY)", f"Total Profit {_NM_CONFIG['power_mw']:.0f}MW (CNY)"]
-    _nm_disp["Rev / MW (CNY)"] = _nm_disp["Rev / MW (CNY)"].map("{:,.0f}".format)
+    _nm_disp = _nm_top_df[["rank", "node_name", "rev_per_mwh", "total_discharge_mwh", "total_profit_cny"]].copy()
+    _nm_disp.columns = ["Rank", "Node", "Rev / MWh (CNY)", "Discharge (MWh)",
+                        f"Total Profit {_NM_CONFIG['power_mw']:.0f}MW (CNY)"]
+    _nm_disp["Rev / MWh (CNY)"] = _nm_disp["Rev / MWh (CNY)"].map("{:,.0f}".format)
+    _nm_disp["Discharge (MWh)"] = _nm_disp["Discharge (MWh)"].map("{:,.0f}".format)
     _nm_disp[f"Total Profit {_NM_CONFIG['power_mw']:.0f}MW (CNY)"] = \
         _nm_disp[f"Total Profit {_NM_CONFIG['power_mw']:.0f}MW (CNY)"].map("{:,.0f}".format)
     st.dataframe(_nm_disp, use_container_width=True, hide_index=True)

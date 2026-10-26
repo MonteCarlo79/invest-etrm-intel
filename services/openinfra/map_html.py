@@ -111,7 +111,7 @@ def build_grid_map_html(subs, lines, extent, ranked_names, extent_tag: str,
             kind = "other"
         stations.append({"n": name, "x": round(r.lon, 5), "y": round(r.lat, 5),
                          "v": mv, "k": kind, "b": _band(pfv) if pfv is not None else -1,
-                         "pf": round(pfv / 1000.0, 1) if pfv is not None else None,
+                         "pf": round(pfv) if pfv is not None else None,
                          "lbl": (m["vision"] if m else name)})
     line_data = []
     for p in lines:
@@ -140,7 +140,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <span style="color:#b8a02e">●</span><span style="font-size:12px;color:#666">归并</span>
   <span style="color:#8a8f98">●</span><span style="font-size:12px;color:#666">其他命名站</span>
   <span style="color:#ffc300">●</span><span style="font-size:12px;color:#666">PF排名匹配</span>
-  <span class="lg"><span class="sw" style="background:#dbe7f3"></span><span class="sw" style="background:#5b9bc4"></span><span class="sw" style="background:#0d4d80"></span> PF Rev/MW (深=高)</span>
+  <span class="lg"><span class="sw" style="background:#dbe7f3"></span><span class="sw" style="background:#5b9bc4"></span><span class="sw" style="background:#0d4d80"></span> PF Rev/MWh (深=高)</span>
   <span style="margin-left:auto;color:#999">滚轮缩放 · 拖拽平移 · 双击复位</span>
 </div>
 <canvas id="cv"></canvas>
@@ -198,7 +198,7 @@ function draw(){
       if(n>=budget) break;
       const [a,b]=px(s.x,s.y);
       if(a<0||a>W||b<0||b>H) continue;
-      const text = s.pf!=null ? s.lbl+' · '+s.pf+'k' : s.lbl;
+      const text = s.pf!=null ? s.lbl+' · '+s.pf : s.lbl;
       const w = ctx.measureText(text).width;
       const box = [a-w/2-2, b-17, a+w/2+2, b-4];
       let hit=false;
