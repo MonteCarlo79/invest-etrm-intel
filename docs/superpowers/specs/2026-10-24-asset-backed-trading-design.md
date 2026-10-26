@@ -176,12 +176,16 @@ Two decision modes over the same engine output `V_asset`:
 ```
 province TEXT, asset_type TEXT, duration_h DOUBLE, asof_date DATE,
 window_start DATE, window_end DATE,
-intrinsic_yuan_kw DOUBLE, extrinsic_yuan_kw DOUBLE, total_yuan_kw DOUBLE,
-capture_adj_yuan_kw DOUBLE, policy_json JSONB, greeks_json JSONB,
+intrinsic_yuan_kw DOUBLE, extrinsic_yuan_kw DOUBLE, policy_net_yuan_kw DOUBLE,
+total_yuan_kw DOUBLE, capture_adj_yuan_kw DOUBLE,
+extrinsic_p10 DOUBLE, extrinsic_p90 DOUBLE,
+policy_json JSONB, greeks_json JSONB,
 mc_params JSONB (model, n_paths, seed, n_components, clip bounds, git sha),
 created_at TIMESTAMPTZ DEFAULT NOW(),
 PK (province, asset_type, duration_h, asof_date)
 ```
+
+(2026-10-25 amendment, user-approved: `policy_net_yuan_kw`, `extrinsic_p10`, `extrinsic_p90` added as top-level columns — the extrinsic band is display-critical per §11.17 and vol-share is a screen question, so it must be SQL-queryable, not buried in JSONB.)
 
 Only `batch.py` writes. App tabs read latest per key. Numpy paths never persisted (deal_committee lesson).
 
