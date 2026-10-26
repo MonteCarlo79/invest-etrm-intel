@@ -25,6 +25,34 @@ def test_review_action_sql_shape():
     with pytest.raises(ValueError):
         store.review_action(eng, 7, "promoted", "")     # promote goes through the brief flow, not review_action
 
+def test_set_status_sql_shape():
+    class Rec:
+        def __init__(self): self.calls = []
+        def execute(self, sql, params=None): self.calls.append((str(sql), params))
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    class Eng:
+        def __init__(self): self.c = Rec()
+        def connect(self): return self.c
+        def begin(self): return self.c
+    eng = Eng()
+    store.set_status(eng, 5, "promoted", note="批准晋升")
+    sql, params = eng.c.calls[0]
+    assert "UPDATE marketdata.option_opportunity_cards" in sql
+    assert "reviewed_at = NOW()" in sql
+    assert params == {"cid": 5, "status": "promoted", "note": "批准晋升"}
+    # note omitted → review_note untouched (never wipes an existing note)
+    eng2 = Eng()
+    store.set_status(eng2, 6, "new")
+    sql2, params2 = eng2.c.calls[0]
+    assert "review_note" not in sql2
+    assert params2 == {"cid": 6, "status": "new"}
+    # full table CHECK vocabulary passes; anything else is rejected
+    for s in ("new", "approved", "rejected", "snoozed", "promoted", "carried"):
+        store.set_status(Eng(), 1, s)
+    with pytest.raises(ValueError):
+        store.set_status(Eng(), 1, "archived")
+
 def test_set_validation_sql_shape():
     class Rec:
         def __init__(self): self.calls = []

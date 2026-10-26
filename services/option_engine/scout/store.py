@@ -24,7 +24,7 @@ _DDL_PATH = (
 )
 
 # 'promoted' is deliberately absent: promotion goes through the promotion
-# flow (store.set_status, a later task), never through review_action.
+# flow (store.set_status), never through review_action.
 _REVIEW_ACTIONS = ("approved", "rejected", "snoozed")
 
 _COLUMNS = (
@@ -56,6 +56,18 @@ _UPDATE_CARRIED = text("""
     WHERE id = :cid
 """)
 
+_UPDATE_STATUS = text("""
+    UPDATE marketdata.option_opportunity_cards
+    SET status = :status, reviewed_at = NOW()
+    WHERE id = :cid
+""")
+
+_UPDATE_STATUS_NOTE = text("""
+    UPDATE marketdata.option_opportunity_cards
+    SET status = :status, review_note = :note, reviewed_at = NOW()
+    WHERE id = :cid
+""")
+
 _UPDATE_VALIDATION = text("""
     UPDATE marketdata.option_opportunity_cards
     SET validation = :verdict,
@@ -67,6 +79,13 @@ _UPDATE_VALIDATION = text("""
 # default. Review-status words ('approved'/'rejected'/...) never pass here —
 # those stay with review_action / the promotion flow.
 _VALIDATION_VERDICTS = ("confirmed", "weakened", "no_evidence", "pending")
+
+# Full status vocabulary of the table CHECK constraint. review_action covers
+# the three human review decisions and mark_carried the scan carry-forward;
+# set_status is the dedicated flow-transition writer — the ONLY path to the
+# terminal 'promoted' status (review_action's guard rightly excludes it).
+_SET_STATUS_ALLOWED = ("new", "approved", "rejected", "snoozed", "promoted",
+                       "carried")
 
 
 def build_signature(card: dict) -> str:
@@ -190,6 +209,28 @@ def mark_carried(eng, card_id: int) -> None:
     """Set status='carried' — card carried forward to the next scan."""
     with eng.begin() as conn:
         conn.execute(_UPDATE_CARRIED, {"cid": card_id})
+
+
+def set_status(eng, card_id: int, status: str, note: str | None = None) -> None:
+    """Flow-transition status setter — the ONLY path to the terminal
+    'promoted' status (the promotion flow calls this after the brief is
+    saved; review_action's guard deliberately excludes 'promoted').
+
+    Allowed statuses are the full table CHECK vocabulary; review_action /
+    mark_carried remain the preferred writers for their own statuses. Always
+    stamps reviewed_at; review_note is written only when ``note`` is given —
+    a bare transition never wipes an existing note."""
+    if status not in _SET_STATUS_ALLOWED:
+        raise ValueError(
+            f"set_status allows {sorted(_SET_STATUS_ALLOWED)}, got {status!r}"
+        )
+    with eng.begin() as conn:
+        if note is None:
+            conn.execute(_UPDATE_STATUS, {"cid": card_id, "status": status})
+        else:
+            conn.execute(_UPDATE_STATUS_NOTE, {
+                "cid": card_id, "status": status, "note": note,
+            })
 
 
 def set_validation(eng, card_id: int, verdict: str, detail: dict) -> None:
