@@ -1,4 +1,12 @@
-"""Tab 5 — Deal Pricing: structure selector, params, payout distribution."""
+"""Tab Deal Pricing: structure selector, params, payout distribution.
+
+Revenue distribution source (post-consolidation contract): the Option Value
+tab's ``ov_result["revenue_paths_yuan"]`` — absolute ¥ per simulated year,
+scaled to ``ov_result["power_mw"]``. This tab's own power_mw input re-scales
+the paths (× dp_power / ov_power) when the deal size differs from the valued
+cell. Snapshot-sourced cells carry no paths (None) — the on-demand recompute
+on the Option Value tab is the only producer.
+"""
 from __future__ import annotations
 import numpy as np
 import plotly.graph_objects as go
@@ -10,17 +18,38 @@ from apps.deal_structurer import session_cache
 
 
 def render() -> None:
-    st.header("5 · Deal Pricing")
-    mc = st.session_state.get("mc_result")
-    if mc is None:
-        st.warning("Run **Tab 4 · Monte Carlo** first to get revenue paths.")
+    st.header("Deal Pricing")
+    ov = st.session_state.get("ov_result")
+    if ov is None:
+        st.warning("请先在 **期权价值** 页选择一个单元（省份 × 资产类型）— "
+                   "Deal Pricing 的收入分布取自该单元的价值结果。")
         return
 
-    revenue_paths = mc.revenue_paths
-    p50_rev = mc.revenue_p50
+    paths_raw = ov.get("revenue_paths_yuan")
+    if paths_raw is None:
+        st.info(
+            f"当前单元（{ov.get('province')} · {ov.get('asset_type')} · "
+            f"快照 {ov.get('asof_date')}）来自快照表，不含收入路径分布。"
+            "请在 **期权价值** 页运行 **「🔄 重算该单元」** 生成路径分布后返回本页。"
+        )
+        return
+
+    ov_power = float(ov.get("power_mw") or 100.0)
 
     col1, col2 = st.columns([1, 2])
     with col1:
+        power_mw = st.number_input(
+            "交易资产功率 power (MW)", 1.0, 2000.0, ov_power, key="dp_power_mw",
+        )
+        scale = float(power_mw) / ov_power
+        revenue_paths = np.asarray(paths_raw, dtype=float) * scale
+        p50_rev = float(np.percentile(revenue_paths, 50))
+        if scale != 1.0:
+            st.caption(
+                f"路径分布由期权价值页的 {ov_power:,.0f} MW 按 ×{scale:.3f} "
+                f"线性缩放至 {power_mw:,.0f} MW（收入与功率近似线性）。"
+            )
+
         structure = st.selectbox("Deal Structure", list_structures(), key="dp_struct")
 
         spec = get(structure)

@@ -6,7 +6,7 @@ Two sections:
    inputs → ``compute_cashflow`` → KPI metrics, P&L table, equity-FCF chart.
    The base-revenue default now comes from the Option Value tab's
    ``ov_result`` (capture_adj [¥/kW/yr] × power_mw × 1000 → absolute ¥/yr)
-   when set — the old ``dispatch_result.p50`` source is retired with the
+   when set — the old dispatch-tab p50 source is retired with the
    pipeline tabs; wind/solar cells (no capture_adj) fall back to
    ``total_yuan_kw``; no ``ov_result`` → the historical 15.0 ¥M default.
 

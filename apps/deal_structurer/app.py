@@ -12,11 +12,8 @@ st.set_page_config(page_title="Deal Structurer", layout="wide", page_icon="📊"
 
 # ── Session state defaults ────────────────────────────────────────────────────
 _DEFAULTS = {
-    "price_paths": None,          # np.ndarray (n_sim, 8760)
-    "price_sim_req": None,        # PriceSimRequest
-    "dispatch_result": None,      # DispatchResult
-    "mc_result": None,            # MCResult
-    "last_dispatch_req": None,    # DispatchRequest
+    "ov_result": None,            # option-value cell dict (option_tab contract)
+    "acq_result": None,           # acquisition panel result (option_tab)
     "last_financials": None,      # ProjectFinancials
     "last_cf_result": None,       # CashFlowResult
     "dp_result": None,            # DealPricingResult
@@ -41,14 +38,13 @@ with st.sidebar:
     st.divider()
     tab_choice = st.radio(
         "Navigate",
-        ["0 · Deal Intake", "1 · Price Simulation", "2 · Dispatch Revenue",
-         "3 · Project Cash Flow", "4 · Monte Carlo", "5 · Deal Pricing",
-         "6 · 投委会", "7 · 新资产筛选", "💬 Structurer"],
+        ["0 · Deal Intake", "期权价值", "项目财务", "Deal Pricing",
+         "价值筛选", "投委会", "💬 Structurer"],
         label_visibility="collapsed",
         key="nav",
     )
     st.divider()
-    st.caption("Province → Price Paths → Dispatch → Cashflow → MC → Deal Pricing")
+    st.caption("Intake → 期权价值 → 项目财务 → Deal Pricing → 投委会")
     st.divider()
     if st.button("🗑 Clear saved session", use_container_width=True):
         _sc.clear()
@@ -59,19 +55,15 @@ with st.sidebar:
 # ── Route to tabs ─────────────────────────────────────────────────────────────
 if tab_choice == "0 · Deal Intake":
     from apps.deal_structurer import intake_tab; intake_tab.render()
-elif tab_choice == "1 · Price Simulation":
-    from apps.deal_structurer import price_tab; price_tab.render()
-elif tab_choice == "2 · Dispatch Revenue":
-    from apps.deal_structurer import dispatch_tab; dispatch_tab.render()
-elif tab_choice == "3 · Project Cash Flow":
+elif tab_choice == "期权价值":
+    from apps.deal_structurer import option_tab; option_tab.render()
+elif tab_choice == "项目财务":
     from apps.deal_structurer import cashflow_tab; cashflow_tab.render()
-elif tab_choice == "4 · Monte Carlo":
-    from apps.deal_structurer import mc_tab; mc_tab.render()
-elif tab_choice == "5 · Deal Pricing":
+elif tab_choice == "Deal Pricing":
     from apps.deal_structurer import deal_tab; deal_tab.render()
-elif tab_choice == "6 · 投委会":
+elif tab_choice == "价值筛选":
+    from apps.deal_structurer import screen_tab; screen_tab.render()
+elif tab_choice == "投委会":
     from apps.deal_structurer import committee_tab; committee_tab.render()
-elif tab_choice == "7 · 新资产筛选":
-    from apps.deal_structurer import screening_tab; screening_tab.render()
 else:
     from apps.deal_structurer import strategist; strategist.render()

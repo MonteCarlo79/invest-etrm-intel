@@ -7,13 +7,10 @@ _CACHE = pathlib.Path("/tmp/deal_structurer_session.pkl")
 
 # Keys to persist (ordered by pipeline step)
 _KEYS = [
-    "price_paths",
-    "price_sim_req",
-    "dispatch_result",
-    "last_dispatch_req",
+    "ov_result",
+    "acq_result",
     "last_financials",
     "last_cf_result",
-    "mc_result",
     "dp_result",
     "agent_messages",
     "agent_display",
@@ -30,16 +27,22 @@ def save(state) -> None:
 
 
 def load(state) -> None:
-    """Restore persisted keys into session state (only if the slot is still at its default)."""
+    """Restore persisted keys into session state (only if the slot is still at its default).
+
+    Only keys in ``_KEYS`` are restored — a pickle written by an older app
+    version may carry retired pipeline keys; they are ignored, never revived.
+    """
     if not _CACHE.exists():
         return
     try:
         data = pickle.loads(_CACHE.read_bytes())
-        for k, v in data.items():
+        for k in _KEYS:
+            if k not in data:
+                continue
             current = state.get(k)
             # Only restore if the slot holds a default (None or empty list)
             if current is None or current == []:
-                state[k] = v
+                state[k] = data[k]
     except Exception:
         pass  # corrupt cache — ignore, user will re-run
 
