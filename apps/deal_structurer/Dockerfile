@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir \
     numpy \
     scipy \
     "psycopg2-binary==2.9.10" \
+    "psycopg[binary]" \
     "sqlalchemy>=2.0" \
     "python-dotenv==1.0.1" \
     "anthropic[bedrock]>=0.40" \
