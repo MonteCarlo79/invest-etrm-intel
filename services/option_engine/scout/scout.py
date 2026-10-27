@@ -16,7 +16,9 @@ Seam rulings honored here (controller, Task-6 dispatch):
 - every card gets ``scan_date`` = the run's date (a NULL scan_date is
   invisible to the delta gate's recency window) and ``scan_params`` =
   {sweep, scan, provinces, thresholds} — the orchestrator pins scan kwargs
-  in ``_scan_plan`` so the thresholds recorded are the ones actually run;
+  in ``_scan_plan`` so the thresholds recorded are the ones actually run,
+  and ``provinces`` comes from the scan's own kwargs (None for scans that
+  take no provinces filter);
 - one scan's or one candidate's exception NEVER kills the sweep: record in
   ``errors`` and continue.
 
@@ -126,35 +128,40 @@ def run_sweep(eng, sweep: str, client=None, provinces: list[str] | None = None,
         out["scans_ran"] += 1
         print(f"[{sweep}] scan {name} -> {len(candidates)} candidate(s)",
               flush=True)
-        thresholds = {k: v for k, v in kwargs.items() if k != "provinces"}
         for cand in candidates:
-            _process(eng, cand, client, sweep, name, provinces, thresholds,
-                     run_date, out)
+            _process(eng, cand, client, sweep, name, kwargs, run_date, out)
     return out
 
 
 def _process(eng, cand: dict, client, sweep: str, scan_name: str,
-             provinces, thresholds: dict, run_date, out: dict) -> None:
+             scan_kwargs: dict, run_date, out: dict) -> None:
     """One candidate through gate → thesis → validate → save (or carry).
 
-    Any exception is recorded (candidate never kills the sweep); a missing
-    scan_key surfaces as a KeyError here — loud-by-intent (Task-1 ruling),
-    but non-fatal to the sweep.
+    Any exception is recorded (candidate never kills the sweep) — the
+    signature derivation sits INSIDE the guard, so a non-dict candidate
+    fails safe and is recorded via repr. A missing scan_key surfaces as a
+    KeyError here — loud-by-intent (Task-1 ruling), but non-fatal.
     """
-    sig = cand.get("signature") or f"{cand.get('scan_key')}:{id(cand)}"
+    sig = None
     try:
         if not cand.get("signature"):
             # Scans attach it via _card; build it for candidates that lack
             # one so the delta gate queries the real key (KeyError on a
             # missing scan_key is loud-by-intent).
             cand["signature"] = store.build_signature(cand)
+        sig = cand["signature"]
         draft, prior = needs_draft(eng, cand)
         if not draft:
             store.mark_carried(eng, prior["id"])
             out["carried"] += 1
             return
-        params = {"sweep": sweep, "scan": scan_name, "provinces": provinces,
-                  "thresholds": thresholds}
+        # scan_params records EXACTLY what ran (final-review ruling):
+        # provinces provenance comes from the scan's own kwargs — scans
+        # that take no provinces filter record None, not the CLI value.
+        params = {"sweep": sweep, "scan": scan_name,
+                  "provinces": scan_kwargs.get("provinces"),
+                  "thresholds": {k: v for k, v in scan_kwargs.items()
+                                 if k != "provinces"}}
         if client is not None:
             thesis_text = draft_thesis(client, cand)
         else:
@@ -167,6 +174,7 @@ def _process(eng, cand: dict, client, sweep: str, scan_name: str,
         store.save_card(eng, card)
         out["saved"] += 1
     except Exception as exc:
-        log.warning("candidate %s failed: %s", sig, exc)
-        out["errors"].append({"candidate": sig, "error": str(exc)})
+        where = sig if sig is not None else repr(cand)[:80]
+        log.warning("candidate %s failed: %s", where, exc)
+        out["errors"].append({"candidate": where, "error": str(exc)})
         out["skipped"] += 1

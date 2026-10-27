@@ -93,3 +93,26 @@ def test_run_sweep_rejects_unknown_sweep():
     import pytest
     with pytest.raises(ValueError):
         scout.run_sweep(None, "weekly", client=None)
+
+def test_sweep_candidate_exception_is_contained(monkeypatch):
+    """Headline invariant (final review): one candidate's exception never
+    kills the sweep — the failure is recorded and the next candidate still
+    saves."""
+    monkeypatch.setattr(scout.scans_trading, "scan_da_rt_basis", lambda eng, **k: [
+        {"kind": "trading", "province": "山东", "asset_type": "bess", "scan_key": "da_rt_basis",
+         "evidence": {"z": 2.4}},
+        {"kind": "trading", "province": "山西", "asset_type": "bess", "scan_key": "da_rt_basis",
+         "evidence": {"z": -2.2}}])
+    monkeypatch.setattr(scout.scans_trading, "scan_nodal_pf_outliers", lambda eng, **k: [])
+    monkeypatch.setattr(scout.scans_trading, "scan_interconnector_windows", lambda eng, **k: [])
+    monkeypatch.setattr(scout.store, "recent_same_signature", lambda *a, **k: None)
+    saved = []
+    monkeypatch.setattr(scout.store, "save_card", lambda eng, card: saved.append(card) or 1)
+    def boom(eng, c):
+        if c["province"] == "山东":
+            raise RuntimeError("validator blew up")
+        return ("no_evidence", {"reason": "t"})
+    monkeypatch.setattr(scout, "validate_candidate", boom)
+    out = scout.run_sweep(None, "trading", client=None)
+    assert out["saved"] == 1 and out["skipped"] == 1 and len(out["errors"]) == 1
+    assert saved[0]["province"] == "山西"

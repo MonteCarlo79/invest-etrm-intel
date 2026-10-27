@@ -336,7 +336,10 @@ def scan_underperformance(eng, threshold_pp: float = -0.15) -> list[dict]:
         FROM marketdata.strategy_experiments
         WHERE scope IN ('bess_capture', 'nodal_agent')
           AND window_end >= CURRENT_DATE - CAST(:days AS integer)
+        ORDER BY scope, province, window_end, model
     """)
+    # ORDER BY: byte-deterministic representative rows when several rows of
+    # one entity collide on signature in the same window (final review).
     with eng.connect() as conn:
         rows = [dict(r) for r in conn.execute(
             sql, {"days": _STRAT_EXP_LOOKBACK_DAYS}).mappings().fetchall()]

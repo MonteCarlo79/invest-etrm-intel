@@ -2,7 +2,15 @@
 """Realized-monetization validator (generative scout, Task 5).
 
 Checks each opportunity candidate against what operating assets ACTUALLY
-banked — the loop that keeps the scout honest. SELECT-only; writes nothing.
+banked. SELECT-only; writes nothing.
+
+Circularity ruling (ratified, plan-3 final review): the capture verdict is
+a FRESHNESS/DRIFT check, not independent statistical validation — it
+compares CURRENT realized capture (trailing 90d) against the card's
+snapshot-time assumption, and both trace to the same underlying price and
+dispatch data. The independent evidence in v1 is the register/retail
+context (empirical comp rate, frequency revenue, retail net margin); it is
+attached to detail only and never moves the verdict.
 
 Hard rule: NEVER fabricate evidence. No comparable data →
 ``validation='no_evidence'`` with ``detail["reason"]``; a register-unsupported

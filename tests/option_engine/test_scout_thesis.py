@@ -20,5 +20,5 @@ def test_draft_thesis_grounded_prompt_and_parse():
     out = thesis.draft_thesis(client, {"kind": "trading", "province": "山东", "evidence": {"z": 2.4}})
     assert "山东" in out
     kwargs = client.messages.create.call_args.kwargs
-    assert kwargs["model"] == "claude-sonnet-4-6" and kwargs["max_tokens"] == 400
+    assert kwargs["model"] == "claude-sonnet-4-6" and kwargs["max_tokens"] == 600
     assert "2.4" in kwargs["messages"][0]["content"]       # evidence pack in the prompt

@@ -25,7 +25,7 @@ from services.option_engine.scout import store
 from shared.usage_meter import usage_tag
 
 MODEL = "claude-sonnet-4-6"
-MAX_TOKENS = 400
+MAX_TOKENS = 600   # CJK 5-section cards can truncate at 400 (final review)
 USAGE_TAG = "deal_scout_thesis"
 DEFAULT_TOLERANCE = 0.05
 
@@ -47,7 +47,7 @@ _SYSTEM = """你是一名新能源投资分析师,为投资委员会撰写投资
 def draft_thesis(client, candidate: dict) -> str:
     """Draft one Chinese opportunity card for a deterministic candidate.
 
-    One grounded ``claude-sonnet-4-6`` call (max_tokens 400): system prompt
+    One grounded ``claude-sonnet-4-6`` call (max_tokens 600): system prompt
     carries the grounding rule + card format; the user message is the JSON
     evidence pack (identity fields + evidence, numpy/pandas-safe via
     ``store._json_safe``). The ≤200-character limit is enforced by the
