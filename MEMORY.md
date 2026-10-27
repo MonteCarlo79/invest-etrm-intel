@@ -243,3 +243,34 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - 福建 LingFeng pipeline fix (separate workstream; repaired series ends 2026-09-15).
 - Open items from intake arc: sysopfee draft queue (needs status column + bess-map wiring) if manual 系统运行费 intake becomes recurring.
 - Infra lessons logged: OneDrive reverts (2 incidents), git classifier flapping (use `!` handoff), silent pipe failures (never trust `| tail` exit codes — check output), Docker Hub/PyPI/apt blocked from China (ECR Public base + Tsinghua mirrors now in Dockerfile), bulk DB writes from Mac die (ECS run-task + S3 transport is the reliable pattern), temp-index plumbing for ALL commits on the shared tree.
+
+## Session Summary, 2026-10-27 (arc span 2026-10-24 → 10-27)
+**Worked on:** Deal Structurer → asset-backed trading system upgrade, full arc: design spec → 3 implementation plans → subagent-driven execution → production deploy.
+
+**Completed:**
+- Spec `docs/superpowers/specs/2026-10-24-asset-backed-trading-design.md`: option-value pricing of dispatchable assets (KYOS intrinsic/extrinsic Jensen split), permit + distressed-M&A decision wrappers, policy-lever stack, generative scout layer, wind/solar negative-extrinsic (cannibalization) economics.
+- Plan 1 (engine core, merged f6ec01d→b58ef21): `libs/option_value/` (curves, PCA simulator v2 with AR(1)+Student-t, vectorized DP dispatch — 1.09% median LP gate, wind/solar copula models, value stack + Greeks, permit/M&A tree with Dixit-Pindyck cross-check) + `services/option_engine/` (readers, snapshot table, batch CLI, calibration). Real-data gates: DP/LP 0.08/0.99/1.08% （山东/蒙西/广东）; calibration all 10 BESS cells in band (energy-only ratio 0.82–1.24); 20-row screen live on RDS.
+- Plan 2 (app surface, merged 8a47564a): deal-structurer consolidated 9 tabs → 7 (Intake → 期权价值 → 项目财务 → Deal Pricing → 价值筛选 → 投委会 → 💬); 期权价值 tab = waterfall + Greeks + permit/M&A acquisition panel; 价值筛选 = margin/IRR screen; 4 agent tools.
+- Plan 3 (generative scout, merged f42fa9bb): `services/option_engine/scout/` — cards table (live), 3 trading + 2 investment scans, delta-gated grounded theses, realized-capture validator, review queue with promote-to-brief (confirmed=False human gate) + agent_memory learning (app='deal_scout'), list_opportunity_cards tool. First live sweep: 3 real cards queued （广东 confirmed, 蒙东/青海 no_evidence); delta gate proven live (carried=1).
+- DEPLOYED deal-structurer v30 / td:34 (rollout COMPLETED, healthy; jq-swap from td:33, 8 env preserved; manifest updated).
+- Schema: option_value_snapshot (18 cols incl. policy_net, extrinsic band, MC-mean volume) + option_opportunity_cards — both live on RDS.
+- knowledge/spot_market/mixed_unit_price_days.md — the per-(day,column) mixed-unit flaw + normalization rule documented.
+
+**In progress:** (nothing — all three plans closed out)
+
+**Decisions made (the load-bearing ones):**
+- Intrinsic = dispatch on the rolling-12m AVERAGE curve (Jensen-clean); extrinsic = MC-mean per-path DP value − intrinsic; capture-adjusted = realized capture × energy + policy (policy not haircut).
+- DP dispatch engine (vectorized, taper-consistent — DP ≤ LP by construction) instead of LP-per-path (3–10h/province was unusable).
+- Wind/solar extrinsic reported SIGNED (negative = cannibalization, never floored); curtailment floor = their positive optionality.
+- BESS bid-grade, wind/solar screen-grade in v1 (thin CF data).
+- Scout cadence: investment monthly + policy-event-driven, trading weekly, LLM delta-gated (user's cost call).
+- Validator verdict = freshness/drift check (current realized vs snapshot-time assumption), NOT independent statistical validation — plan-4 needs an independent anchor (register-realized ¥ vs modeled annuity).
+- Unclipped Gaussian CF marginals (clip's Jensen bias flipped extrinsic positive — destroyed the economics).
+- Per-(day,column) unit normalization (max|values|<5 → ¥/kWh) — whole-column heuristics corrupt mixed windows （山东 flips ~18×/12m).
+
+**Next session:**
+- Pillar-2 capture-pipeline re-run decision (V_hist depressed ~50% 山东 / 25% 山西 / 16% 蒙西 by mixed-unit raw reads — user call, documented in the knowledge note).
+- Plan-4 candidates: independent validator anchor, Feishu card delivery, EventBridge scheduling for the scout (weekly trading/monthly investment), levered tornado basis, strategist/headless prompt guidance for the option tools.
+- MacBook launchd LingFeng fallback capture stage is broken on this Mac (pulp bundled CBC is Intel-only, no Rosetta) — highspy installed in the venv as the test-side workaround; production fix = solver fallback in optimisation_engine or Rosetta.
+- First LLM-drafted thesis cards run on ECS (both Anthropic-direct and Bedrock 400 on origin-country from the Mac).
+- Foreign-session housekeeping: stash@{0} holds an earlier WIP delta on LATEST-IMAGES.md (their committed v39 won the conflict; their draft survives there); 3 rejected 测试省 scout test rows + strategy_experiments.sql untracked in the tree (not mine to commit).
