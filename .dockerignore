@@ -133,6 +133,10 @@ apps/bess-inner-mongolia/
 !libs/deal_models/
 !services/deal_engine/
 !db/ddl/marketdata/deal_committee.sql
+!libs/option_value/
+!services/option_engine/
+!db/ddl/marketdata/option_value_snapshot.sql
+!db/ddl/marketdata/option_opportunity_cards.sql
 
 # asset-risk image exceptions
 !libs/risk/
