@@ -49,12 +49,28 @@ input, labeled as such); ``portfolio_contribution.compute_contribution``
 returns the pairwise correlation, vol-per-MW before/after and the
 diversification benefit.
 
+Scout review queue (top section): the generative scout's opportunity cards
+(``marketdata.option_opportunity_cards``, status 'new') await the desk's
+decision — the machine proposes, the desk disposes. Approve promotes the
+card to a VALID, UNCONFIRMED ``DealBrief`` (``promote_card`` →
+``library.save_brief`` + ``store.set_status(..., 'promoted')`` — the
+committee flow stays human-gated, Tab 0 confirms); reject/snooze go through
+``store.review_action``. Every decision also writes one
+``marketdata.agent_memory`` row (app='deal_scout') so the scout learns; a
+memory-write failure is logged and swallowed — the card status is the system
+of record (pinned ruling). Verdict badges shown as-is (confirmed 🟢 /
+weakened 🟡 / no_evidence ⬜ / pending ⚪); thesis=None cards (LLM-absent
+runs) render the evidence expander as primary content with a "LLM 不可用 —
+证据如下" caption, never a blank card. Cards table absent/unreadable → the
+queue section hides with a note while the screen below still renders.
+
 All data assembly lives in pure functions (no streamlit imports) so it is
 unit-testable; ``render()`` is the only function that imports streamlit.
 """
 from __future__ import annotations
 
 import json
+import logging
 import math
 from datetime import date, datetime
 
@@ -62,6 +78,8 @@ import numpy as np
 import pandas as pd
 
 from libs.option_value.value_stack import annuitize
+
+logger = logging.getLogger(__name__)
 
 # Freshness ruling: asof older than this many days from date.today() is stale.
 _STALE_DAYS = 10
@@ -310,6 +328,122 @@ def _f(v) -> float | None:
 
 
 # ---------------------------------------------------------------------------
+# Scout review queue — pure helpers + DB writers (unit-tested, no streamlit)
+# ---------------------------------------------------------------------------
+
+# Validation verdict badges — displayed as-is per the pinned honesty rule
+# (confirmed 绿 / weakened 黄 / no_evidence 灰 / pending ⚪). ⬜ stands in for
+# gray: no universal gray-circle glyph renders across Streamlit clients.
+_VERDICT_BADGES = {
+    "confirmed": "🟢 confirmed",
+    "weakened": "🟡 weakened",
+    "no_evidence": "⬜ no_evidence",
+    "pending": "⚪ pending",
+}
+
+_KIND_BADGES = {"permit": "🟦 许可", "mna": "🟨 并购", "trading": "🟩 交易"}
+
+# DealBrief.asset_type Literal vocabulary — a card's asset_type outside it
+# (e.g. trading cards) falls back to 'bess' with an explicit note.
+_BRIEF_ASSET_TYPES = {"bess", "wind", "solar", "wind_bess", "solar_bess"}
+
+# Learning-write SQL. Inlined here rather than reusing the app_template
+# memory writers: those are coupled to their own app keys ('gb_market' et
+# al.) and their Haiku-extraction / suggestion-panel flows, while the
+# scout's write is a single decision-record INSERT under app='deal_scout'
+# with fixed category 'review_decision' — reusing them would drag their app
+# scoping and UI flow into a one-row write.
+_MEMORY_INSERT_SQL = """
+    INSERT INTO marketdata.agent_memory (app, category, subject, content, source)
+    VALUES ('deal_scout', 'review_decision', :subject, :content, 'deal_scout')
+"""
+
+
+def verdict_badge(validation: str | None) -> str:
+    """Verdict badge text, shown as-is (pinned honesty rule). Absent →
+    pending; unknown words pass through with ⚪, never relabeled/blank."""
+    if validation is None:
+        return _VERDICT_BADGES["pending"]
+    return _VERDICT_BADGES.get(validation, f"⚪ {validation}")
+
+
+def build_brief_payload(card: dict) -> dict:
+    """Card → parse_brief_json payload (pure). deal_name keys the card by
+    kind/province/asset_type/scan_date; structure_notes = thesis + compact
+    evidence digest (evidence keys stay visible — thesis=None cards still
+    produce a non-empty digest, never a blank brief); confirmed=False keeps
+    the committee flow human-gated (Tab 0 confirms). asset_type outside the
+    DealBrief Literal (trading cards) defaults to bess with a note."""
+    kind = card.get("kind") or "unknown"
+    province = card.get("province") or ""
+    asset = card.get("asset_type") or ""
+    scan_date = card.get("scan_date")
+    brief_asset = asset if asset in _BRIEF_ASSET_TYPES else "bess"
+    notes = []
+    if card.get("thesis"):
+        notes.append(str(card["thesis"]))
+    if brief_asset != asset:
+        notes.append(f"（卡片资产类型 {asset or '未知'} 不在 DealBrief 词表内"
+                     "（交易类卡片），默认 bess 承载）")
+    evidence = card.get("evidence_json") or {}
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except Exception:
+            evidence = {"raw": evidence}
+    notes.append("证据摘要: " + json.dumps(evidence, ensure_ascii=False,
+                                           sort_keys=True, default=str))
+    return {
+        "deal_name": f"{kind}:{province}:{asset}:{scan_date}",
+        "asset_type": brief_asset,
+        "province": province,
+        "structure_notes": "\n".join(notes),
+        "confirmed": False,
+        "field_confidence": {"source": 0.9},
+    }
+
+
+def promote_card(eng, card: dict, note: str = "") -> int:
+    """Approve → promote: save a VALID, UNCONFIRMED DealBrief via
+    parse_brief_json + library.save_brief, then set the card's terminal
+    status 'promoted' via store.set_status (never review_action — its guard
+    rightly excludes 'promoted'). Returns the new brief id."""
+    from services.deal_committee.brief import parse_brief_json
+    from services.deal_committee.library import save_brief
+    from services.option_engine.scout import store
+    brief = parse_brief_json(build_brief_payload(card),
+                             source_files=[f"scout:card:{card.get('id')}"])
+    brief_id = save_brief(eng, brief)
+    store.set_status(eng, int(card["id"]), "promoted", note=note or None)
+    return int(brief_id)
+
+
+def record_review_decision(eng, card: dict, decision: str, note: str = ""
+                           ) -> bool:
+    """Insert one agent_memory row (app='deal_scout') recording the desk's
+    decision — every decision teaches the scout. Pinned ruling: a memory
+    failure must NOT break the review action, so any error is logged and
+    swallowed (returns False); the card status is the system of record."""
+    from sqlalchemy import text
+    try:
+        content = json.dumps({
+            "decision": decision,
+            "note": note,
+            "kind": card.get("kind"),
+            "province": card.get("province"),
+            "asset_type": card.get("asset_type"),
+        }, ensure_ascii=False)
+        with eng.begin() as conn:
+            conn.execute(text(_MEMORY_INSERT_SQL),
+                         {"subject": str(card.get("id")), "content": content})
+        return True
+    except Exception:
+        logger.exception("deal_scout memory write failed (card %s, %s) — "
+                         "review action unaffected", card.get("id"), decision)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Streamlit rendering (the only function that imports streamlit)
 # ---------------------------------------------------------------------------
 
@@ -325,7 +459,10 @@ def render() -> None:
         "排名键为 implied IRR（跨类可比，无量纲），NaN 排末。"
     )
 
-    # ── DB guard (graceful degradation: banner, no traceback) ───────────────
+    # ── engine acquisition (dual-environment: absent → queue hides with a
+    #    note, then the screen's own DB guard fires the banner) ─────────────
+    eng = None
+    db_err: Exception | None = None
     try:
         from sqlalchemy import text
         from services.common.db_utils import get_engine
@@ -333,7 +470,102 @@ def render() -> None:
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception as e:
-        st.warning(f"⚠️ 数据库不可用（PGURL 未配置或 RDS 不可达）：{e}\n\n"
+        eng, db_err = None, e
+
+    # ── scout review queue (top section): cards table unreadable → hidden ──
+    queue = None
+    if eng is None:
+        st.caption("⚠️ 侦察审查队列不可用（数据库未连接）— 本节隐藏。")
+    else:
+        try:
+            from services.option_engine.scout import store as scout_store
+            queue = scout_store.list_cards(eng, status="new", limit=50)
+        except Exception:
+            queue = None
+        if queue is None:
+            st.caption("⚠️ 侦察审查队列不可用（option_opportunity_cards 表缺失或读取失败）"
+                       "— 本节隐藏，下方筛选表不受影响。")
+        elif queue:
+            st.subheader("侦察审查队列 · Scout review queue")
+            st.caption(
+                "机器提出，桌面裁决。批准 → 生成未确认交易要素（Tab 0 人工确认后进入委员会流程）；"
+                "否决 / 暂缓仅改卡片状态。每个决定写入 agent_memory（app=deal_scout）教侦察员；"
+                "校验结论原样展示（🟢 confirmed / 🟡 weakened / ⬜ no_evidence / ⚪ pending）。"
+            )
+            tbl = pd.DataFrame([{
+                "id": c["id"],
+                "类型": _KIND_BADGES.get(c.get("kind"), c.get("kind")),
+                "省份": c.get("province"),
+                "资产": c.get("asset_type"),
+                "校验": verdict_badge(c.get("validation")),
+                "scan_date": None if c.get("scan_date") is None else str(c.get("scan_date")),
+                "thesis": (c.get("thesis") or "")[:80] or "（LLM 不可用 — 无命题）",
+            } for c in queue])
+            st.dataframe(tbl, use_container_width=True, hide_index=True)
+            for card in queue:
+                cid = card["id"]
+                with st.container(border=True):
+                    head = st.columns(4)
+                    head[0].markdown(
+                        f"**#{cid}** {_KIND_BADGES.get(card.get('kind'), card.get('kind'))}")
+                    head[1].markdown(
+                        f"{card.get('province') or '—'} · {card.get('asset_type') or '—'}")
+                    head[2].markdown(verdict_badge(card.get("validation")))
+                    head[3].caption(f"scan {card.get('scan_date') or '—'}")
+                    thesis = card.get("thesis")
+                    if thesis:
+                        st.markdown(str(thesis))
+                    else:
+                        # LLM-absent run: evidence is the primary content,
+                        # never a blank card (pinned honesty rule).
+                        st.caption("LLM 不可用 — 证据如下")
+                    with st.expander("证据 · evidence", expanded=not bool(thesis)):
+                        ev = card.get("evidence_json")
+                        if isinstance(ev, str):
+                            try:
+                                ev = json.loads(ev)
+                            except Exception:
+                                pass
+                        st.json(ev or {})
+                        vd = card.get("validation_detail")
+                        if isinstance(vd, str):
+                            try:
+                                vd = json.loads(vd)
+                            except Exception:
+                                pass
+                        if vd:
+                            st.caption("校验明细 · validation_detail")
+                            st.json(vd)
+                    note = st.text_input("审查备注（可选）", key=f"sc_note_{cid}")
+                    b1, b2, b3 = st.columns(3)
+                    if b1.button("✅ 批准→要素", key=f"sc_approve_{cid}"):
+                        try:
+                            brief_id = promote_card(eng, card, note=note)
+                            record_review_decision(eng, card, "approved", note)
+                            st.success(f"已生成交易要素 brief #{brief_id}"
+                                       "（未确认 — Tab 0 人工确认）。")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"晋升失败：{e}")
+                    if b2.button("❌ 否决", key=f"sc_reject_{cid}"):
+                        try:
+                            scout_store.review_action(eng, cid, "rejected", note)
+                            record_review_decision(eng, card, "rejected", note)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"操作失败：{e}")
+                    if b3.button("⏸️ 暂缓", key=f"sc_snooze_{cid}"):
+                        try:
+                            scout_store.review_action(eng, cid, "snoozed", note)
+                            record_review_decision(eng, card, "snoozed", note)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"操作失败：{e}")
+            st.divider()
+
+    # ── DB guard (graceful degradation: banner, no traceback) ───────────────
+    if eng is None:
+        st.warning(f"⚠️ 数据库不可用（PGURL 未配置或 RDS 不可达）：{db_err}\n\n"
                    "价值筛选页需要数据库连接；本地运行请先加载 config/.env。")
         return
 

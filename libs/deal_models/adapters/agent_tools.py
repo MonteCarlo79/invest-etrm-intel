@@ -19,6 +19,7 @@ import libs.deal_models.deal_structures as _ds_mod  # triggers registration
 from services.option_engine import snapshot as _snapshot
 from services.option_engine import readers as _readers
 from services.option_engine import calibration as _calibration
+from services.option_engine.scout import store as _scout_store
 from apps.deal_structurer import screen_tab as _screen_tab
 
 # Cached last MC result so Strategist can reference it across tool calls
@@ -251,6 +252,30 @@ AGENT_TOOLS = [
             "duration_h": {"type": "number", "description": "BESS duration hours (default 2.0)"},
         }, "required": ["province", "asset_type"]},
     },
+    {
+        "name": "list_opportunity_cards",
+        "description": (
+            "Scout opportunity-card queue (marketdata.option_opportunity_cards) — cards "
+            "produced by the generative scout sweeps, newest first by scan_date. The status "
+            "filter (default 'new') selects the queue slice: 'new' = awaiting review, "
+            "'approved'/'rejected'/'snoozed' = human review decisions, 'carried' = candidate "
+            "re-fired but suppressed by the delta gate, 'promoted' = converted to a deal "
+            "brief. kind optionally narrows to one scan family ('trading', 'permit', 'mna'). "
+            "Each row: id, kind, province, asset_type, validation verdict "
+            "(confirmed/weakened/no_evidence/pending), scan_date (the asof of the scan that "
+            "produced the card), and thesis truncated to its first 120 chars (null when the "
+            "run had no LLM). Returns only DB rows; an empty queue returns a 'no cards' "
+            "note, not an error."
+        ),
+        "input_schema": {"type": "object", "properties": {
+            "status": {"type": "string",
+                       "enum": ["new", "approved", "rejected", "snoozed", "carried",
+                                "promoted"],
+                       "description": "Queue slice (default 'new')"},
+            "kind": {"type": "string",
+                     "description": "Optional scan-kind filter: trading|permit|mna"},
+        }},
+    },
 ]
 
 
@@ -469,6 +494,37 @@ def _tool_get_policy_levers(inputs: dict) -> str:
     })
 
 
+def _tool_list_opportunity_cards(inputs: dict) -> str:
+    """Scout queue reader — DB rows only, newest first (store.list_cards
+    orders by scan_date then id). Engine lazy; DB failures surface as a JSON
+    error string, never raise through dispatch_tool."""
+    status = inputs.get("status") or "new"
+    kind = inputs.get("kind") or None
+    try:
+        eng = _lazy_engine()
+        rows = _scout_store.list_cards(eng, status=status, kind=kind)
+    except Exception as e:
+        return _jo({"error": f"opportunity card read failed: {e}"})
+    if not rows:
+        return _jo({"rows": [], "status": status, "kind": kind,
+                    "note": "no cards in the queue for this filter — run "
+                            "services/option_engine/run_scout.py"})
+    return _jo({
+        "rows": [{
+            "id": r.get("id"),
+            "kind": r.get("kind"),
+            "province": r.get("province"),
+            "asset_type": r.get("asset_type"),
+            "validation": r.get("validation"),
+            "scan_date": r.get("scan_date"),
+            "thesis": (r.get("thesis") or "")[:120] or None,
+        } for r in rows],
+        "n": len(rows),
+        "status": status,
+        "kind": kind,
+    })
+
+
 def dispatch_tool(name: str, inputs: dict) -> str:
     """Route a tool call from the Claude API to the appropriate function."""
     global _last_mc_result, _last_price_paths
@@ -499,6 +555,8 @@ def dispatch_tool(name: str, inputs: dict) -> str:
             return _tool_screen_option_values(inputs)
         if name == "get_policy_levers":
             return _tool_get_policy_levers(inputs)
+        if name == "list_opportunity_cards":
+            return _tool_list_opportunity_cards(inputs)
 
         if name == "run_price_simulation":
             ou = OUParams(
