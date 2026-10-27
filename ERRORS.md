@@ -4,6 +4,18 @@ Check this before suggesting approaches to tasks similar to those logged below. 
 
 ---
 
+## Fresh image rebuild + psycopg2-only + unpinned sqlalchemy = dead DB (3rd occurrence, 2026-10-28)
+
+**What happened:** deal-structurer v30 deployed clean (rollout COMPLETED, health checks pass — the health path never touches the DB), but every DB read in the app failed with `ModuleNotFoundError: No module named 'psycopg'`. The rebuild pulled `sqlalchemy>=2.1.6` fresh (requirements carry `sqlalchemy>=2.0` unpinned); since sqlalchemy 2.0.38, a bare `postgresql://` URL resolves to the **psycopg v3** driver, and the image shipped only `psycopg2-binary`. Prior occurrences: retail-risk v4 (2026-10-07), mengxi-dashboard v32 (2026-10-10), professor v2 (2026-10-11) — same class, three different images.
+
+**Why it keeps recurring:** the pin pair lives per-image (Dockerfile + requirements.txt); each new/rebuilt image re-derives it from history, and nothing shared enforces it. Rollout health checks never catch it — `_stcore/health` doesn't open a DB connection.
+
+**The rule (from now on):** EVERY image that opens a SQLAlchemy engine ships BOTH `psycopg2-binary` AND `psycopg[binary]` in its Dockerfile pip list + requirements.txt (the psycopg[binary] add costs nothing and makes bare postgresql:// work under any sqlalchemy ≥2.0.38). When touching any Dockerfile's pip block, grep for `psycopg` — if only psycopg2 is present, add `psycopg[binary]` in the same commit. Verify in-container BEFORE deploy (the v84 pattern): `docker run --rm --platform linux/amd64 <img> python -c "import psycopg, sqlalchemy; from sqlalchemy import create_engine; create_engine('postgresql://u:p@127.0.0.1:1/x').connect()"` — OperationalError (network refusal) = driver resolved; ModuleNotFoundError = broken. A pre-deploy "health check that opens a DB connection" would catch the whole class at rollout; consider adding one to the Streamlit apps' health path.
+
+**What worked:** v31 hotfix added `psycopg[binary]` (psycopg 3.3.6 in-image), in-container driver verification passed pre-deploy, jq-swap td:34→35, rollout COMPLETED with working DB reads (user-confirmed banner gone).
+
+---
+
 ## `git commit` sweeps the whole index — parallel session's staged work shipped under my message (2026-09-20)
 
 **What happened:** A parallel session had staged (but not committed) a coherent feature REMOVAL (`strategy_experiments`/`quantile_forecast`/leaderboard — code, tests, DDL, UI strings). I ran `git add <my explicit paths> && git commit` — the commit included everything ALREADY in the index, and the push shipped their work to main under my unrelated commit message (2cf7492).
@@ -519,3 +531,9 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 **Detection gap:** zero-log pull failures are invisible to log greps; use CloudTrail lookup-events (RunTask) → taskArn → empty log stream = pull failure signature.
 **Fix:** rule target → family ARN (main.tf + put-targets); backfill 5-day chunks via run-task (memory-proven shape, avoids 19-day single-process OOM risk).
 **Standing hazard:** ECR keep-last-5 reaps the LIVE service image if ≥5 tags are pushed between deploys — batch jobs pulling that image then die silently. Consider raising lifecycle count or pinning deploy-and-batch images to a long-retention rule.
+
+## 2026-10-17 — 蒙西 nodal price saga: exchange RT-sheet outage → 5 failed union variants → materialized table
+**Trigger:** 蒙西 exchange workbook's 实时节点电价 sheet empty from 2026-10-09 (source-side, user-verified 2.59MB file). Fengxing API has the same data independently.
+**Failed approaches (5):** (1) per-day union view + UTC ::date anti-join (64-slot days); (2) slot-level instant-equality anti-join (exchange datetime naive CST wall vs fengxing UTC instants — never matches); (3) slot-number equality (exchange mixes clock conventions across days — UTC-day-aligned vs CST-aligned splits); (4) immutable '+08:00' expression indexes (planner still full-scanned 43M rows; valid indexes unused); (5) ANALYZE (no plan change). Every union-query form cost 10-40min/day.
+**Root lessons:** the exchange table is UTC-day-aligned (CST day D splits across data_date D-1/D/D+1, varying by era) — only RENDERED (UTC→CST wall) windowing + RENDERED slot-merge is safe. A correct-but-unplannable view is production-useless; materialize once daily instead (scripts→services/mengxi_nodal/mnp96_fill.py, EventBridge 23:40 UTC bess-platform-mnp96-fill-daily). View = naive-timestamp wrapper over md_mengxi_nodal_price_96_filled: day queries 0.1-0.3s.
+**Collateral:** (a) `timestamptz AT TIME ZONE text` IS indexable in this PG version (indisvalid=true) — but CREATE OR REPLACE VIEW cannot change a column's type (needs DROP+CREATE); (b) OneDrive served 0-byte placeholders to cp → empty file committed (rescued from run-task override base64); git ops via /tmp clone while the tree is dataless; (c) docker.io egress died mid-deploy — EventBridge rule payloads can EMBED small scripts (base64 in Input) instead of shipping a new image; (d) hermes RECORD_FACT/freshness checks ride the next build, same boat.
