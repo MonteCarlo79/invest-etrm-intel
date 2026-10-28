@@ -27,3 +27,13 @@ def test_dockerfile_copies_both_ddl_files():
     src = pathlib.Path("apps/deal_structurer/Dockerfile").read_text()
     assert "COPY db/ddl/marketdata/deal_committee.sql" in src
     assert "COPY db/ddl/marketdata/option_value_snapshot.sql" in src
+
+def test_no_function_local_pandas_imports():
+    # A function-local `import pandas as pd` makes pd local to the whole
+    # function scope: any pd.* use ABOVE it raises UnboundLocalError
+    # (prod incident on 价值筛选, v31, 2026-10-28). Module-top imports only.
+    for tab in ("intake_tab", "option_tab", "cashflow_tab", "deal_tab", "screen_tab", "committee_tab", "strategist"):
+        src = pathlib.Path(f"apps/deal_structurer/{tab}.py").read_text()
+        for i, line in enumerate(src.splitlines(), 1):
+            if line.strip() == "import pandas as pd":
+                assert line == "import pandas as pd", f"{tab}:{i} function-local pandas import"

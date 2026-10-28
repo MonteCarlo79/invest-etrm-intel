@@ -662,8 +662,6 @@ def render() -> None:
     )
 
     # ── margin bar chart (dual axes: the two unit bases never mix) ───────────
-    import pandas as pd
-
     fig = go.Figure()
     labels = [cell_label(r) for r in df.to_dict("records")]
     for col, name, color, ax in (

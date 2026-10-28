@@ -49,6 +49,7 @@ from __future__ import annotations
 from datetime import date
 
 import numpy as np
+import pandas as pd
 
 from libs.option_value.contracts import PermitInputs, PolicyScenario
 
@@ -468,7 +469,6 @@ def _recompute_row_and_paths(eng, province: str, asset_type: str,
 # ---------------------------------------------------------------------------
 
 def render() -> None:
-    import pandas as pd
     import plotly.graph_objects as go
     import streamlit as st
 
