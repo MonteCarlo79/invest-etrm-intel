@@ -849,13 +849,16 @@ class HermesAgent:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT chunk_text FROM staging.spot_knowledge_chunks
-                        WHERE doc_id = %s ORDER BY chunk_index LIMIT 30
+                        SELECT c.chunk_text, d.title
+                        FROM staging.spot_knowledge_chunks c
+                        JOIN staging.spot_knowledge_docs d ON d.id = c.doc_id
+                        WHERE c.doc_id = %s ORDER BY c.chunk_index LIMIT 30
                         """,
                         (doc_id,),
                     )
                     rows = cur.fetchall()
             if rows:
+                doc_title = rows[0][1] or ""
                 full_text = "\n\n".join(r[0] for r in rows)[:12000]
                 from shared.anthropic_client import make_client as _make_anthropic_client
                 client = _make_anthropic_client(self._api_key)
@@ -865,9 +868,13 @@ class HermesAgent:
                     system=(
                         "You are a research assistant. Summarise the article clearly and concisely. "
                         "Structure: 核心观点 | 主要内容 | 关键数据/结论. "
-                        "Reply in the same language as the article (Chinese if Chinese)."
+                        "Reply in the same language as the article (Chinese if Chinese). "
+                        "The user message begins with the article title — treat its year, month and "
+                        "reporting period as authoritative. Never shift the year or period to a "
+                        "different one (e.g. writing 2024 for a 2026 article), even if the body text "
+                        "omits the year. If the period is unclear, state it as given in the title."
                     ),
-                    messages=[{"role": "user", "content": f"请总结以下文章：\n\n{full_text}"}],
+                    messages=[{"role": "user", "content": f"文章标题：{doc_title}\n\n请总结以下文章：\n\n{full_text}"}],
                 )
                 summary = resp.content[0].text.strip()
                 return f"{status}\n\n{summary}"
