@@ -27,6 +27,23 @@ def _by_notes(items, needle):
     return [it for it in items if needle in (it["notes"] or "")]
 
 
+# 定远 2026-09 终期: one sheet split across two scanned pages — p1 prints the
+# header block (电费合计 / 有功电量) only, p2 the fee block. Neither page
+# reconciles alone; merged they are exact (sum = 645,033.05 = printed 电费合计).
+SEP_P1_HDR = {"format": "电费计算明细", "billing_month": "202609", "settlement_kind": None,
+              "total_cny": 645033.05, "active_kwh": 4450190, "market_energy_cny": None,
+              "transmission_cny": None, "peak_surcharge_cny": None, "line_loss_cny": None,
+              "system_operation_cny": None, "govt_fund_cny": None, "power_factor_adj_cny": None}
+SEP_P2_FEE = {"format": "电费计算明细", "billing_month": "202609", "settlement_kind": "终期",
+              "total_cny": None, "active_kwh": None, "market_energy_cny": 644933.55,
+              "transmission_cny": 49.79, "peak_surcharge_cny": 0, "line_loss_cny": 6.53,
+              "system_operation_cny": 34.76, "govt_fund_cny": 10.38, "power_factor_adj_cny": -1.96}
+SEP_P1_ADV = {"format": "电费计算明细", "billing_month": "202609", "settlement_kind": "第1期",
+              "total_cny": 1775069.69, "active_kwh": 5768170, "market_energy_cny": 1774985.43,
+              "transmission_cny": 44.14, "peak_surcharge_cny": 0, "line_loss_cny": 0.00,
+              "system_operation_cny": 30.87, "govt_fund_cny": 9.25, "power_factor_adj_cny": 0.00}
+
+
 class TestAdvancePlusFinal:
     def test_items_and_signs(self):
         items = build_items_from_page_records([FEB_P1, FEB_P2])
@@ -81,3 +98,37 @@ class TestRefusals:
         assert build_items_from_page_records([ok]) is not None
         bad = dict(FEB_P1, market_energy_cny=FEB_P1["market_energy_cny"] + 500.0)
         assert build_items_from_page_records([bad]) is None
+
+
+class TestSplitSheetMerge:
+    """Pages that fail individually are merged (one sheet spanning pages);
+    the merged record must reconcile exactly. Conflicts still refuse."""
+
+    def test_split_sheet_merges(self):
+        items = build_items_from_page_records([SEP_P1_HDR, SEP_P2_FEE])
+        assert items is not None
+        assert len(items) == 6  # 尖峰加收 0 skipped
+        assert sum(it["amount_cny"] for it in items) == pytest.approx(-645033.05, abs=0.005)
+        e = _by_notes(items, "市场化交易电费 [终期]")[0]
+        assert e["category"] == "charge_energy"
+        assert e["volume_mwh"] == pytest.approx(4450.190)
+        pf = _by_notes(items, "力调电费 [终期]")[0]
+        assert pf["amount_cny"] == pytest.approx(1.96)  # printed -1.96 → stored +1.96
+
+    def test_passing_sheet_plus_split_sheet(self):
+        items = build_items_from_page_records([SEP_P1_ADV, SEP_P1_HDR, SEP_P2_FEE])
+        assert items is not None
+        vols = sorted(it["volume_mwh"] for it in items if it["category"] == "charge_energy")
+        assert vols == [pytest.approx(4450.190), pytest.approx(5768.170)]
+
+    def test_merge_conflict_refused(self):
+        other_total = dict(SEP_P1_HDR, total_cny=999.01)
+        assert build_items_from_page_records([SEP_P1_HDR, other_total, SEP_P2_FEE]) is None
+
+    def test_merge_mixed_months_refused(self):
+        other_month = dict(SEP_P2_FEE, billing_month="202610")
+        assert build_items_from_page_records([SEP_P1_HDR, other_month]) is None
+
+    def test_merged_record_must_reconcile(self):
+        misread = dict(SEP_P2_FEE, market_energy_cny=644933.55 + 500.0)
+        assert build_items_from_page_records([SEP_P1_HDR, misread]) is None

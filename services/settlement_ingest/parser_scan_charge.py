@@ -41,9 +41,12 @@ Extract ONLY these fields as JSON (numbers exactly as printed — negative if pr
   "line_loss_cny": number (上网环节线损费用),
   "system_operation_cny": number (系统运行费用 — the 合计 row of that block ONLY, never sub-items),
   "govt_fund_cny": number (代收政府性基金及附加费 — the 合计 row of that block ONLY),
-  "power_factor_adj_cny": number (力调电费, as printed; 0 if no such row)
+  "power_factor_adj_cny": number (力调电费 — the STANDALONE 力调电费 row only, printed beside
+    参与力调金额/功率因数/调整系数; NEVER 力调电费损益, which is a sub-item inside 系统运行费用; 0 if absent)
 }
-Return raw JSON only, no markdown. If the image is NOT a 电费计算明细 sheet, return {"format": null}."""
+Return raw JSON only, no markdown. If the image is NOT a 电费计算明细 sheet, return {"format": null}.
+A sheet may span multiple pages: if a field is not printed on THIS page, return null for it —
+do not estimate, carry over, or merge values from elsewhere."""
 
 # rows summed by the printed identity, in order
 _IDENTITY_ROWS = ("market_energy_cny", "transmission_cny", "peak_surcharge_cny",
@@ -68,28 +71,67 @@ def _reconcile_ok(rec: dict) -> bool:
     return abs(rows - total) <= max(1.0, 0.0001 * abs(total))
 
 
+def _merge_page_records(recs: list[dict]) -> dict | None:
+    """Merge pages of ONE logical sheet split across PDF pages.
+
+    The 电费计算明细 family can spill: page 1 carries the header block
+    (电费合计 / 有功电量 / meter rows), page 2 the fee block (定远 2026-09 终期).
+    No single page then reconciles, but the merged record must. Fields are
+    NEVER summed across pages — first printed value wins; two pages printing
+    different values for the same field means two sheets got mixed → None
+    (refuse). settlement_kind may be printed on only one of the pages.
+    """
+    merged: dict[str, Any] = {"format": "电费计算明细"}
+    keys = ("billing_month", "settlement_kind", "total_cny", "active_kwh") + tuple(_IDENTITY_ROWS)
+    for key in keys:
+        vals = [r.get(key) for r in recs if r.get(key) is not None and r.get(key) != ""]
+        if not vals:
+            merged[key] = None
+            continue
+        if key in ("billing_month", "settlement_kind"):
+            if len({str(v) for v in vals}) > 1:
+                return None
+            merged[key] = vals[0]
+            continue
+        distinct = {round(float(v), 2) for v in vals}
+        if len(distinct) > 1:
+            return None
+        merged[key] = float(vals[0])
+    return merged
+
+
 def build_items_from_page_records(records: list[dict]) -> list[dict[str, Any]] | None:
     """Apply 分次结算 rules and build charge items from extracted page records.
 
-    Returns None (refuse) when: no records, a record fails format detection or
-    reconciliation, or months are mixed. 合并 sheets supersede 第1期 advance
-    sheets within the same document. stored = −printed (charge = cost).
+    Each page is verified against its own printed 电费合计 first. Pages that
+    fail are merged (split-sheet fallback) and accepted only if the merged
+    record reconciles. Returns None (refuse) when: no records, the merge has
+    field conflicts or fails reconciliation, or months are mixed. 合并 sheets
+    supersede 第1期 advance sheets within the same document.
+    stored = −printed (charge = cost).
     """
     if not records:
         return None
+    passed: list[dict] = []
+    failed: list[dict] = []
     for rec in records:
-        if rec.get("format") != "电费计算明细":
+        if (rec.get("format") == "电费计算明细" and rec.get("billing_month")
+                and _reconcile_ok(rec)):
+            passed.append(rec)
+        else:
+            failed.append(rec)
+    if failed:
+        merged = _merge_page_records(failed)
+        if (merged is None or not merged.get("billing_month")
+                or not _reconcile_ok(merged)):
             return None
-        if not rec.get("billing_month"):
-            return None
-        if not _reconcile_ok(rec):
-            return None
-    months = {str(r["billing_month"]) for r in records}
+        passed.append(merged)
+    months = {str(r["billing_month"]) for r in passed}
     if len(months) != 1:
         return None
 
-    merged = [r for r in records if r.get("settlement_kind") == "合并"]
-    use = merged if merged else records
+    merged_sheets = [r for r in passed if r.get("settlement_kind") == "合并"]
+    use = merged_sheets if merged_sheets else passed
 
     items: list[dict[str, Any]] = []
     for rec in use:

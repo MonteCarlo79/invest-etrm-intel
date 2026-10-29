@@ -409,28 +409,51 @@ _AH_ENERGY_ROWS = {"日前交易", "实时交易"}
 
 
 def is_ah_discharge(text: str) -> bool:
-    """国网安徽 发电侧上网电费账单 (电能量交易电费 + 山黄储能（发电侧）现货 rows)."""
-    return "电能量交易电费" in text and "发电侧）现货" in text and "本期电费明细" in text
+    """国网安徽 发电侧上网电费账单 (电能量交易电费 + 山黄储能（发电侧） detail rows).
+
+    Detail section header is 本期电费明细 (≤2026-08 layout, detail starts on p1)
+    or 账单详情 (2026-09+ layout, detail on p2 after a 费用组成 summary page).
+    Matched with startswith — 山东 bills carry "账单详情" only inside the 备注
+    remark ("…查询账单详情；"), never as a section header. 山黄储能（发电侧） is
+    the 安徽-specific anchor; 山东 bills never contain it.
+    """
+    has_detail = any(
+        l.strip().startswith(("本期电费明细", "账单详情")) for l in text.split("\n")
+    )
+    return "电能量交易电费" in text and "山黄储能（发电侧）" in text and has_detail
 
 
 def parse_ah_discharge(text: str) -> list[dict[str, Any]]:
     """Parse 国网安徽 发电侧上网电费账单 (all pages).
 
+    Parses ONLY the detail section (本期电费明细 / 账单详情 header onward) —
+    the 2026-09+ layout adds a 费用组成 summary page repeating every fee row,
+    which double-counted when all pages were parsed (Sept 2026 vision fallback
+    stored each row 2x).
+
     Drops 电能量交易电费 (energy total — decomposes into 日前/实时交易) and
-    合计; keeps 日前交易/实时交易 (discharge_energy, vol+price) and the fee
-    rows. Zero hierarchy rows skipped. Verify: sum(items) == printed 合计.
+    合计; keeps 日前交易/实时交易 (discharge_energy, vol+price) and top-level
+    fee rows. (一)（二）-prefixed sub-rows are skipped — the new layout prints
+    amounts on them (…小计： X) which would double-count the top-level row.
+    Zero hierarchy rows skipped. Verify: sum(items) == printed 合计.
     """
-    items: list[dict[str, Any]] = []
     lines = [l.strip() for l in text.split("\n")]
-    i = 0
+    start = next(
+        (i for i, l in enumerate(lines)
+         if l.startswith("本期电费明细") or l.startswith("账单详情")),
+        0,
+    )
+    items: list[dict[str, Any]] = []
+    i = start
     while i < len(lines):
         line = lines[i]
         if line.startswith("备注") or "供电公司" in line and "盖章" in line:
             break
-        # energy trade rows: "(1)日前交易" then "山黄储能（发电侧）现货 VOL PRICE AMT"
+        # energy trade rows: "(1)日前交易" then "山黄储能（发电侧）[现货] VOL PRICE AMT"
+        # (现货 suffix dropped from the 2026-09+ layout)
         stripped = re.sub(r"^[（(]?\d+[）)]?\s*", "", line)
         if stripped in _AH_ENERGY_ROWS or stripped.rstrip("交易") in _AH_ENERGY_ROWS:
-            if i + 1 < len(lines) and "现货" in lines[i + 1]:
+            if i + 1 < len(lines) and "发电侧）" in lines[i + 1]:
                 nums = re.findall(_NUM, lines[i + 1])
                 if len(nums) >= 3:
                     label = "日前交易" if "日前" in stripped else "实时交易"
@@ -443,11 +466,15 @@ def parse_ah_discharge(text: str) -> list[dict[str, Any]]:
                     })
                     i += 2
                     continue
-        # fee row with amount on its own line: "两个细则费用 205585.75"
-        m = re.match(rf"^([\D]+?)\s+({_NUM})\s*$", line)
+        # top-level fee row: "两个细则费用 205585.75" (≤2026-08) or
+        # "八、两个细则费用 小计： 152103.16" (2026-09+). (一)-prefixed sub-rows
+        # carry amounts in the new layout — never parse them (double-count).
+        if line.startswith(("（", "(")):
+            i += 1
+            continue
+        m = re.match(rf"^(?:[一二三四五六七八九十]+、)?([^\d（(]+?)(?:\s*小计[：:])?\s+({_NUM})\s*$", line)
         if m:
             label, amt_s = m.group(1).strip(), m.group(2)
-            label = re.sub(r"^[（(][一二三四五六七八九十]+[）)]\s*", "", label)
             if label in _AH_FEE_CAT:
                 amt = float(amt_s)
                 if amt != 0:

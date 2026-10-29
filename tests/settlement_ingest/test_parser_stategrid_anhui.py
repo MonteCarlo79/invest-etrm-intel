@@ -63,6 +63,50 @@ class TestAhDischarge:
         assert sum(it["amount_cny"] for it in items) == pytest.approx(total, abs=0.01)
 
 
+class TestAhDischarge202609Layout:
+    """2026-09+ layout: p1 费用组成 summary + p2 账单详情 detail (小计： rows,
+    (一)-prefixed sub-rows with amounts, 现货 suffix dropped from value lines).
+
+    Regression: the old detector missed this layout → vision fallback stored
+    page-1 summary + page-2 detail (every fee 2x) with 市场运营费用 negated."""
+
+    @pytest.fixture(scope="class")
+    def items(self):
+        return parse_ah_discharge(_load("ah_discharge_202609.txt"))
+
+    def test_detection(self):
+        assert is_ah_discharge(_load("ah_discharge_202609.txt")) is True
+        assert is_ah_discharge(_load("stategrid_discharge_202604.txt")) is False
+
+    def test_exactly_five_items_no_duplicates(self, items):
+        assert len(items) == 5
+
+    def test_energy_rows(self, items):
+        da = _by_notes(items, "日前交易")[0]
+        assert da["category"] == "discharge_energy"
+        assert da["volume_mwh"] == pytest.approx(5343.402)
+        assert da["price_cny_kwh"] == pytest.approx(0.4033)
+        assert da["amount_cny"] == pytest.approx(2154980.79)
+        rt = _by_notes(items, "实时交易")[0]
+        assert rt["volume_mwh"] == pytest.approx(3147.608)
+        assert rt["price_cny_kwh"] == pytest.approx(0.40493)
+        assert rt["amount_cny"] == pytest.approx(1274567.68)
+
+    def test_fee_rows_once_positive(self, items):
+        mo = _by_notes(items, "市场运营费用")
+        assert len(mo) == 1 and mo[0]["amount_cny"] == pytest.approx(238198.99)
+        assert mo[0]["category"] == "other"
+        ts = _by_notes(items, "两个细则费用")
+        assert len(ts) == 1 and ts[0]["amount_cny"] == pytest.approx(152103.16)
+        ot = _by_notes(items, "其他费用")
+        assert len(ot) == 1 and ot[0]["amount_cny"] == pytest.approx(1606770.00)
+
+    def test_summary_page_not_double_counted(self, items):
+        total = parse_ah_discharge_total(_load("ah_discharge_202609.txt"))
+        assert total == pytest.approx(5426620.62)
+        assert sum(it["amount_cny"] for it in items) == pytest.approx(total, abs=0.01)
+
+
 class TestAhSdtc:
     """安徽电力交易中心(统推) 2026-02: 售电侧 from summary, 购电侧 from detail 合计."""
 
