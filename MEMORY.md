@@ -274,3 +274,38 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - MacBook launchd LingFeng fallback capture stage is broken on this Mac (pulp bundled CBC is Intel-only, no Rosetta) — highspy installed in the venv as the test-side workaround; production fix = solver fallback in optimisation_engine or Rosetta.
 - First LLM-drafted thesis cards run on ECS (both Anthropic-direct and Bedrock 400 on origin-country from the Mac).
 - Foreign-session housekeeping: stash@{0} holds an earlier WIP delta on LATEST-IMAGES.md (their committed v39 won the conflict; their draft survives there); 3 rejected 测试省 scout test rows + strategy_experiments.sql untracked in the tree (not mine to commit).
+
+## Session Summary, 2026-10-29
+**Worked on:** Hermes 可靠性三连修——周度巡逻问题、微信摘要年份幻觉、蒙西日报超时；并部署 v20261029/td:191
+**Completed:**
+- 周度巡逻四项（10-12 会话延续）：thinking_agent design prompt 的 md_* 列名改为真实列（information_schema 核实）；spot_ingest_bridge 内层 except 不再静默；market_classifier 支持 HERMES_CLASSIFY_MODEL env；`idx_md_da_data_date`/`idx_md_id_data_date` 索引建成（MAX 10s 超时→0.01s，数据实际新鲜 DA→10-09）
+- 微信摘要 "2024" 年份幻觉：根因=摘要 prompt 只喂正文不喂标题，年份只在标题里；修复=标题 JOIN 注入 + system 反年份平移约束（f8bab39）；doc 8121 本身无污染（错误只在 Feishu 回复）
+- 蒙西 BESS 日报超时：根因=_RANKING_SQL 对 8.8GB/36M 行 seq scan（现有索引全 date-first，YTD 窗口不可用）；建 `idx_md_id_plant_date (plant_name, data_date)`，计划切换 Index Scan，YTD 94.3 万行 99s（原 >600s）；过程经历与并行会话 DDL 死锁 → INVALID 残留 → DROP 重建（ERRORS.md 2026-10-29 条目，d54c6c1）
+- hermes v20261029/td:191 部署：docker.io 全断 + cli.github.com apt 两次 20 分钟零吞吐 → 改 delta 构建 FROM ECR v20261017b + COPY 层，秒级完成；digest 校验、31 env、rollout COMPLETED（5fd1ee98）
+**In progress:**
+- 无代码在途；两项 live 验证待观察：明早 07:05 蒙西日报（新索引首战）、下次微信链接摘要（年份修复首战）
+**Decisions made:**
+- 巡逻建议的 "error 状态重解析" 经核实已存在（非 parsed 即 fall-through），不做无效改动——报告采纳前须先读代码验证
+- delta 构建（FROM 上一版 ECR 镜像 + COPY 代码层）确立为网络恶劣时的合法热修路径；基底=生产在跑的镜像，行为完全继承
+- git archive HEAD 作为构建上下文（确定性 + 免 OneDrive 水合），但注意 gitignored 文件（payloads/agent-reach.zip）需手工补拷
+**Next session:** 先看今早蒙西日报是否成功（07:05 北京）；若再超时把新错误发来。可选：docker.io 长期不可达则把基础镜像 FROM 永久换成 public.ecr.aws/docker/library（待 Dipeng 决定）；ECR keep-last-5 生命周期会回收 5 个 tag 之前的在役镜像（td:186 的 v20261013 已被回收）——批次任务引用的镜像要打 long-retention 标签或调策略。
+
+## Session Summary, 2026-10-28 (continuation of the 10-24→27 arc)
+**Worked on:** Production hardening of the just-deployed asset-backed trading system (deal-structurer v30) — two user-reported prod bugs found and hotfixed same-day.
+
+**Completed:**
+- v31 hotfix (td:35): `psycopg[binary]` added to Dockerfile+requirements — v30's fresh rebuild pulled sqlalchemy 2.1.6 (≥2.0.38 defaults bare postgresql:// to psycopg v3, image had only psycopg2) → every DB read ModuleNotFoundError'd behind a graceful banner. 4th occurrence of this class (retail-risk v4, mengxi v32, professor v2). Verified in-container pre-deploy (driver resolves; OperationalError on fake host = loads).
+- v32 hotfix (td:36): function-local `import pandas as pd` inside screen_tab.render() (line 665, below line-495 usage) → UnboundLocalError on 价值筛选. The T3 reviewer's "cosmetic" deferred minor wasn't. Hoisted to module top in screen_tab/option_tab + `test_no_function_local_pandas_imports` regression pins the rule on ALL tab files.
+- ERRORS.md consolidated rule: every SQLAlchemy-engine image ships BOTH psycopg2-binary AND psycopg[binary]; in-container driver check before every deploy; consider a DB-touching health path someday.
+- Manifest rows through v32/td:36; ECR push fought proxy flap + token expiry (re-login + resume-push loop).
+
+**In progress:** (nothing open on my side)
+
+**Decisions made:**
+- Both hotfixes verified in-container BEFORE deploy (the v84 pattern) — catches the driver class that rollout health checks can't see (health path never opens a DB connection).
+- The review loop's "cosmetic minor" triage has a blind spot for render-path code that tests never execute (no-st-mocks by design) — the import-locality rule is now pinned by a static test instead of judgment.
+
+**Next session:**
+- Watch for user confirmation that 价值筛选 + 期权价值 render on live data post-v32.
+- Deferred from the arc: Pillar-2 capture-pipeline re-run decision (mixed-unit V_hist skew, knowledge note exists); plan-4 items (independent validator anchor, scout Feishu delivery + EventBridge scheduling, levered tornado basis); MacBook launchd LingFeng fallback capture broken on this Mac (no Rosetta/CBC — highspy in venv is the test-side workaround).
+- Foreign-session housekeeping: stash@{0} holds an earlier WIP delta on LATEST-IMAGES.md (their committed v39 won); 3 rejected 测试省 scout test rows on RDS (cosmetic); strategy_experiments.sql untracked in tree (not mine to commit).
