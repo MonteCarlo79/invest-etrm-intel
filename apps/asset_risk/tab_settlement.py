@@ -6,7 +6,7 @@ import json
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 
 def _content_sha256(data: bytes) -> str:
@@ -237,6 +237,32 @@ def _delete_book_month_file(conn, book_id: int, settlement_month, file_name: str
             WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
         )
     """), {"bid": book_id, "month": settlement_month, "fname": file_name})
+
+
+def _delete_voucher_settlements(conn, book_id: int, settlement_month) -> int:
+    """Delete voucher-sourced settlements for book+month, returning count removed.
+
+    The 凭证 fallback (voucher as sole discharge source, 乌海 2026-01/02) has a
+    reverse-order hole: voucher ingested first, then the real 结算单 lands and
+    nothing removes the voucher — both count (乌海 2026-08/09 double-counted
+    现货收入). A 结算单 is authoritative and the voucher is its strict subset,
+    so a successful non-voucher discharge parse supersedes them.
+    """
+    from services.settlement_ingest.scanner import classify_pdf
+    rows = conn.execute(text("""
+        SELECT id, file_name FROM marketdata.rm_settlements
+        WHERE book_id = :bid AND settlement_month = :month
+    """), {"bid": book_id, "month": settlement_month}).fetchall()
+    voucher_ids = [r[0] for r in rows if classify_pdf(r[1] or "") == "voucher"]
+    if not voucher_ids:
+        return 0
+    conn.execute(text(
+        "DELETE FROM marketdata.rm_settlement_items WHERE settlement_id IN :ids"
+    ).bindparams(bindparam("ids", expanding=True)), {"ids": voucher_ids})
+    conn.execute(text(
+        "DELETE FROM marketdata.rm_settlements WHERE id IN :ids"
+    ).bindparams(bindparam("ids", expanding=True)), {"ids": voucher_ids})
+    return len(voucher_ids)
     conn.execute(text("""
         DELETE FROM marketdata.rm_settlements
         WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
@@ -473,6 +499,13 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
     with engine.begin() as conn:
         if overwrite:
             _delete_book_month_file(conn, book_id, settlement_month, uploaded.name)
+        if kind == "discharge":
+            # A real 结算单 supersedes any voucher ingested via the fallback
+            # (凭证-first order hole — 乌海 2026-08/09 double-counted 现货).
+            n_sup = _delete_voucher_settlements(conn, book_id, settlement_month)
+            if n_sup:
+                st.info(f"Superseded {n_sup} voucher settlement(s) for {settlement_month} "
+                        "— the 结算单 now carries the discharge data.")
         result = conn.execute(text("""
             INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
             VALUES (:bid, :month, :fname, 'pdf', 'processed', :rd)
