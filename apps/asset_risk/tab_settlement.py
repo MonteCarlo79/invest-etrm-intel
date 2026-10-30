@@ -1059,7 +1059,7 @@ def _render_merchant_share(book_id: int, engine):
         ("services", "辅助服务", "#7B1FA2"),
     ):
         fig2.add_bar(x=[m["month"]], y=[m[key]], name=label, marker_color=color)
-    fig2.update_layout(barmode="stack", height=280, margin=dict(t=10, b=10),
+    fig2.update_layout(barmode="stack", height=280, margin=dict(t=40, b=10),
                        yaxis_title="金额 (元)", xaxis_title="",
                        title=f"{m['month']} 收入分解（成本扣减项见结算明细）")
     st.plotly_chart(fig2, use_container_width=True)
