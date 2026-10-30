@@ -99,34 +99,44 @@ def render_settlement(engine):
         scan_path = os.path.join(INVOICE_ROOT, invoice_folder)
         st.caption(f"Invoice folder: `{invoice_folder}/`")
 
-        col_scan1, col_scan2 = st.columns([1, 1])
-        with col_scan1:
-            dry_run = st.checkbox("Dry run (preview only)", value=False)
-        with col_scan2:
-            if st.button("Scan & Ingest", type="primary"):
-                with st.spinner(f"Scanning {invoice_folder}..."):
-                    from services.settlement_ingest.scanner import scan_and_ingest
-                    results = scan_and_ingest(root=scan_path, dry_run=dry_run)
-                    ingested = [r for r in results if r.get("status") == "ingested"]
-                    already = [r for r in results if r.get("status") == "already_ingested"]
-                    errors = [r for r in results if r.get("status") == "error"]
-                    skipped = [r for r in results if r.get("status") == "skipped"]
-                    dry = [r for r in results if r.get("status") == "dry_run"]
+        if not os.path.isdir(scan_path):
+            # The image excludes data/ — on ECS the invoice tree never exists.
+            # Say so instead of scanning nothing and reporting 0/0/0.
+            st.warning("Invoice folder not found on this host — Scan & Ingest reads the "
+                       "server's filesystem, so it only works when running locally. "
+                       "On the live app use the upload widget above.")
+        else:
+            col_scan1, col_scan2 = st.columns([1, 1])
+            with col_scan1:
+                dry_run = st.checkbox("Dry run (preview only)", value=False)
+            with col_scan2:
+                if st.button("Scan & Ingest", type="primary"):
+                    with st.spinner(f"Scanning {invoice_folder}..."):
+                        from services.settlement_ingest.scanner import scan_and_ingest
+                        results = scan_and_ingest(root=scan_path, dry_run=dry_run)
+                        fatal = [r for r in results if "status" not in r and r.get("error")]
+                        ingested = [r for r in results if r.get("status") == "ingested"]
+                        already = [r for r in results if r.get("status") == "already_ingested"]
+                        errors = [r for r in results if r.get("status") == "error"]
+                        skipped = [r for r in results if r.get("status") == "skipped"]
+                        dry = [r for r in results if r.get("status") == "dry_run"]
 
-                    if dry_run:
-                        st.info(f"Dry run: {len(dry)} new files, {len(already)} already ingested, {len(skipped)} skipped.")
-                        if dry:
-                            st.dataframe(pd.DataFrame(dry)[["path", "asset", "month", "type"]],
-                                         use_container_width=True, hide_index=True)
-                    else:
-                        st.success(f"Ingested {len(ingested)} files. Already done: {len(already)}. Errors: {len(errors)}.")
-                        if ingested:
-                            st.dataframe(pd.DataFrame(ingested)[["path", "asset", "month", "type", "items"]],
-                                         use_container_width=True, hide_index=True)
-                        if errors:
-                            st.error("Errors:")
-                            st.dataframe(pd.DataFrame(errors)[["path", "asset", "error"]],
-                                         use_container_width=True, hide_index=True)
+                        for r in fatal:
+                            st.error(r["error"])
+                        if dry_run:
+                            st.info(f"Dry run: {len(dry)} new files, {len(already)} already ingested, {len(skipped)} skipped.")
+                            if dry:
+                                st.dataframe(pd.DataFrame(dry)[["path", "asset", "month", "type"]],
+                                             use_container_width=True, hide_index=True)
+                        else:
+                            st.success(f"Ingested {len(ingested)} files. Already done: {len(already)}. Errors: {len(errors)}.")
+                            if ingested:
+                                st.dataframe(pd.DataFrame(ingested)[["path", "asset", "month", "type", "items"]],
+                                             use_container_width=True, hide_index=True)
+                            if errors:
+                                st.error("Errors:")
+                                st.dataframe(pd.DataFrame(errors)[["path", "asset", "error"]],
+                                             use_container_width=True, hide_index=True)
     else:
         st.warning("No invoice folder configured for this asset. Set it in the Asset Config tab.")
 
