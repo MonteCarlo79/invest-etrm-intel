@@ -1,12 +1,5 @@
 # scripts/mnp96_fill.py
-"""v5 materializer for marketdata.md_mengxi_nodal_price_96_filled.
-
-v5 (2026-10-30): render via named zone 'Asia/Shanghai', NOT the interval
-literal '+08:00' — the literal is POSIX-inverted (renders UTC-8 walls).
-Under v4 the exchange branch (naive->timestamptz direction) double-inverted
-and landed CST-correct by luck, while the fengxing branch
-(timestamptz->naive) landed 16h off, so mixed exchange+fengxing days were
-internally incoherent (the Oct-17 class of partial-day failures).
+"""v4 materializer for marketdata.md_mengxi_nodal_price_96_filled.
 
 Final semantics (2026-10-17, after 4 failed variants): window by the RENDERED
 CST time and merge on RENDERED slot identity.
@@ -24,8 +17,7 @@ Per CST day D:
   1. exchange rows whose rendered time falls in D (pulls from data_date D-1,D,D+1
      as needed) — exchange always wins a slot it covers
   2. fengxing rows whose rendered time falls in D, for slots the exchange
-     did NOT deliver FOR DAY D for that node (NOT EXISTS on node+slot,
-     anti-join windowed to D — fixed 2026-10-30)
+     rendered set does NOT cover for that node (NOT EXISTS on node+slot)
 
 Usage: python scripts/mnp96_fill.py [START END]   (YYYY-MM-DD; default: yesterday)
 """
@@ -41,9 +33,9 @@ INSERT INTO marketdata.md_mengxi_nodal_price_96_filled
     (node_name, metric_time, time_order_96, avg_node_price)
 SELECT node_name, mt, slot, price FROM (
     SELECT node_name,
-           ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai') AS mt,
-           (EXTRACT(hour FROM ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')) * 4
-            + EXTRACT(minute FROM ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')) / 15 + 1)::smallint AS slot,
+           (datetime AT TIME ZONE '+08:00') AS mt,
+           (EXTRACT(hour FROM (datetime AT TIME ZONE '+08:00')) * 4
+            + EXTRACT(minute FROM (datetime AT TIME ZONE '+08:00')) / 15 + 1)::smallint AS slot,
            node_price::numeric(12,4) AS price
     FROM marketdata.md_rt_nodal_price
     WHERE data_date BETWEEN :dminus AND :dplus
@@ -52,7 +44,7 @@ WHERE mt >= CAST(:d AS timestamp) AND mt < CAST(:d AS timestamp) + INTERVAL '1 d
 UNION ALL
 SELECT f.node_name, f.mt, f.slot, f.price FROM (
     SELECT node_name,
-           (metric_time AT TIME ZONE 'Asia/Shanghai') AS mt,
+           (metric_time AT TIME ZONE '+08:00') AS mt,
            time_order_96::smallint AS slot,
            avg_node_price::numeric(12,4) AS price
     FROM marketdata.md_shanxi_nodal_price_96
@@ -64,17 +56,12 @@ WHERE f.mt >= CAST(:d AS timestamp) AND f.mt < CAST(:d AS timestamp) + INTERVAL 
   AND NOT EXISTS (
       SELECT 1 FROM (
           SELECT node_name AS n,
-                 ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai') AS mt,
-                 (EXTRACT(hour FROM ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')) * 4
-                  + EXTRACT(minute FROM ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')) / 15 + 1)::smallint AS s
+                 (EXTRACT(hour FROM (datetime AT TIME ZONE '+08:00')) * 4
+                  + EXTRACT(minute FROM (datetime AT TIME ZONE '+08:00')) / 15 + 1)::smallint AS s
           FROM marketdata.md_rt_nodal_price
           WHERE data_date BETWEEN :dminus AND :dplus
       ) r
-      WHERE r.n = f.node_name AND r.s = f.slot
-        -- windowed to day D (2026-10-30 fix): an unwindowed anti-join shadows
-        -- fengxing with ALL 96 slot numbers from ANY full exchange day in
-        -- D-1..D+1, so fengxing could never top up a partial exchange day
-        AND r.mt >= CAST(:d AS timestamp) AND r.mt < CAST(:d AS timestamp) + INTERVAL '1 day')
+      WHERE r.n = f.node_name AND r.s = f.slot)
 ON CONFLICT (node_name, metric_time) DO NOTHING
 """
 

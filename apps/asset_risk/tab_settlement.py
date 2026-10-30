@@ -641,6 +641,34 @@ def _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
     return pd.concat(parts)
 
 
+# Notes markers written by the exchange-settlement parsers (安徽统推 / 山东 SDTC).
+# The 售电侧合计 row is the NET settlement (not gross discharge); 购电侧合计 is
+# its charge component. Keeping them alongside the grid 电费账单/下网明细
+# double-counts the same physical energy (定远 2026: 净利润 inflated by the
+# 统推净额, e.g. Sep +586,750 on 3,006,518).
+_EXCHANGE_SELL_NOTE = "放电结算: 交易中心售电侧合计"
+_EXCHANGE_BUY_NOTE = "充电结算: 交易中心购电侧合计"
+
+
+def prefer_canonical_settlements(items_df):
+    """Drop exchange-settlement rows when a canonical twin exists for the month.
+
+    Per month: canonical discharge rows exist (电费账单 etc.) → drop 售电侧合计;
+    canonical charge rows exist (下网明细 etc.) → drop 购电侧合计. Months where
+    the exchange settlement is the ONLY source keep their rows.
+    Returns (kept_df, exchange_df) — exchange_df feeds the 口径校验 panel.
+    """
+    sell = items_df["notes"] == _EXCHANGE_SELL_NOTE
+    buy = items_df["notes"] == _EXCHANGE_BUY_NOTE
+    is_dis = items_df["category"].isin(["discharge_energy", "generation_revenue"])
+    is_chg = items_df["category"] == "charge_energy"
+    months_dis = set(items_df.loc[is_dis & ~sell, "month"])
+    months_chg = set(items_df.loc[is_chg & ~buy, "month"])
+    drop = (sell & items_df["month"].isin(months_dis)) | (
+        buy & items_df["month"].isin(months_chg))
+    return items_df.loc[~drop].copy(), items_df.loc[drop].copy()
+
+
 def _render_analytics(book_id: int, engine):
     """Render settlement analytics for selected book — monthly breakdown."""
     import plotly.graph_objects as go
@@ -665,7 +693,7 @@ def _render_analytics(book_id: int, engine):
 
     with engine.connect() as conn:
         items_df = pd.read_sql(text("""
-            SELECT si.category, si.volume_mwh, si.amount_cny,
+            SELECT si.category, si.volume_mwh, si.amount_cny, si.notes,
                    si.amount_receivable_cny, si.amount_settled_cny, si.amount_diff_cny,
                    s.settlement_month
             FROM marketdata.rm_settlement_items si
@@ -683,6 +711,10 @@ def _render_analytics(book_id: int, engine):
 
     # Convert settlement_month to period string for display
     items_df["month"] = pd.to_datetime(items_df["settlement_month"]).dt.strftime("%Y-%m")
+
+    # 口径 A (canonical): grid 电费账单 + 下网明细 win over 统推/交易中心结算单
+    # when both exist for a month; the exchange rows feed the 口径校验 panel.
+    items_df, exchange_df = prefer_canonical_settlements(items_df)
 
     # Summary metrics
     revenue_vol = items_df[items_df["category"].isin(["discharge_energy", "generation_revenue"])]["volume_mwh"].sum()
@@ -856,6 +888,25 @@ def _render_analytics(book_id: int, engine):
 
     st.dataframe(styled, use_container_width=True)
 
+    # 口径校验 (cross-check B): 统推结算电费 (exchange net) vs the canonical
+    # 净利润 computed above. Expected gap ≈ 0 — the two sources account the
+    # 购电侧 with a known ~0.01% rounding difference; larger gaps mean the two
+    # sources genuinely disagree and the month needs manual review.
+    if not exchange_df.empty:
+        sell_rows = exchange_df[exchange_df["notes"] == _EXCHANGE_SELL_NOTE]
+        if not sell_rows.empty:
+            check = sell_rows.groupby("month")["amount_cny"].sum().rename("统推结算电费").to_frame()
+            net = pivot.loc[[i for i in pivot.index if "YTD" not in str(i)], "净利润"]
+            check["国网口径净利润"] = net.reindex(check.index)
+            check["差异"] = check["国网口径净利润"] - check["统推结算电费"]
+            check["差异%"] = (check["差异"] / check["统推结算电费"].replace(0, pd.NA))
+            st.caption("口径校验：统推结算电费（交易中心净额）vs 国网口径净利润 — "
+                       "差异应≈0（±0.1% 购电侧舍入差）；超出请人工复核该月两套单据。")
+            st.dataframe(check.style.format({
+                "统推结算电费": "¥{:,.2f}", "国网口径净利润": "¥{:,.2f}",
+                "差异": "¥{:+,.2f}", "差异%": "{:+.3%}",
+            }), use_container_width=True)
+
     # Monthly bar chart (stacked by money category; YTD subtotal rows excluded).
     # 放电收入/充电电费 are excluded: 价差收入 already = 放电收入 + 充电电费 —
     # showing all three triple-counts (user note 2026-08-22).
@@ -1003,7 +1054,7 @@ def _render_merchant_share(book_id: int, engine):
 
     with engine.connect() as conn:
         items_df = pd.read_sql(text("""
-            SELECT si.category, si.amount_cny,
+            SELECT si.category, si.amount_cny, si.notes,
                    to_char(s.settlement_month::date, 'YYYY-MM') AS month
             FROM marketdata.rm_settlement_items si
             JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
@@ -1013,6 +1064,9 @@ def _render_merchant_share(book_id: int, engine):
     if items_df.empty:
         st.info("暂无结算数据——上传结算单后此处显示市场化/合约收入分解。")
         return
+
+    # Same canonical-source rule as Settlement Analytics (口径 A)
+    items_df, _ = prefer_canonical_settlements(items_df)
 
     monthly, latest = compute_merchant_shares(items_df)
     if latest is None:
