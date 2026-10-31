@@ -309,3 +309,30 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Watch for user confirmation that 价值筛选 + 期权价值 render on live data post-v32.
 - Deferred from the arc: Pillar-2 capture-pipeline re-run decision (mixed-unit V_hist skew, knowledge note exists); plan-4 items (independent validator anchor, scout Feishu delivery + EventBridge scheduling, levered tornado basis); MacBook launchd LingFeng fallback capture broken on this Mac (no Rosetta/CBC — highspy in venv is the test-side workaround).
 - Foreign-session housekeeping: stash@{0} holds an earlier WIP delta on LATEST-IMAGES.md (their committed v39 won); 3 rejected 测试省 scout test rows on RDS (cosmetic); strategy_experiments.sql untracked in tree (not mine to commit).
+
+## Session Summary, 2026-10-31
+**Worked on:** Settlement data integrity for asset_risk (定远 book 17 + 乌海 book 10) — skip root-cause, double-count elimination, historical rebuild; 6 production deploys (td:88→93).
+
+**Completed:**
+- 定远 9月 下网(2) skip root cause: scanned 电费计算明细 split across 2 PDF pages (total p1 / fees p2) — per-page reconciliation structurally refused; fixed with split-sheet merge + 安徽 2026-09 账单详情 layout support + 力调电费损益 prompt trap (6992d0d8, 191 tests)
+- 定远 9月 data: 终期 6 charge rows hand-ingested (identity exact vs printed 645,033.05), 上网结算单 8 vision-dupe rows → 5 deterministic, spurious −0.54 basic_fee deleted
+- 乌海康富 8/9月 double-count: 凭证 fallback reverse-order hole (凭证 first, 结算单 later didn't remove it) — deleted settlements 1062/1064, supersede logic added (46ba8365)
+- psycopg v3 incident, 5th occurrence (sqlalchemy≥2.0.38 defaults bare postgresql:// to psycopg v3): asset_risk +psycopg[binary] (14c2f661). **bess-map and hermes-service have the same latent exposure — requirements NOT yet patched**
+- Scan & Ingest absent-folder warning on ECS (was silent 0/0/0) (58ba4a8b)
+- 统推 vs 账单 double-count (every 2026 month): canonical-source preference + 口径校验 panel (87f9969f); Sep 净利润 3,593,268 → 3,006,517.88. Key semantics proven: 统推售电侧合计 = bill 结算电费 NET headline, NOT gross discharge
+- 定远历史重建 2024-01→2026-01: 10 missing 售电侧 gross rows (old-era 统推 parse dropped them — station WAS selling every month, e.g. 2025-11 gross 5.61M), 2026-01 restated net→gross (3,387,225.97→5,869,380.43), 2025-09 vision double → 日前/实时/两个细则, 7 recats, 5 buy-vols. 13/13 month nets exact vs bill headlines (恒等式 售电侧−购电侧==结算电费 per bill)
+
+**In progress:** none — all closed.
+
+**Decisions made:**
+- 口径 A canonical = 国网电费账单+下网明细; 口径 B (统推结算电费) as cross-check panel — all 2026 months reconcile ≤0.012%
+- 统推 sole-source months store 售电侧 section GROSS (not headline net) so columns stay consistent
+- 2024-04 (−675k) / 2024-09 (−578k) are genuine net-negative months — kept as-is
+- Deploy verification upgraded: in-container driver-load check + task-log inspection (rollout COMPLETED + ALB 200 lied during v86 — health path never touches DB)
+- LATEST-IMAGES.md updated in tree but NOT committed (parallel-session edits in same file)
+
+**Next session:**
+- Optional leftovers: 2025-08 下网 scan ingest (fee breakdown only); old-era 统推 parser 售电侧 extraction (only if old bills re-uploaded)
+- Standing offers: net merchant margin metric for BESS (放电−充电); psycopg[binary] preventive fix for bess-map + hermes-service
+- Mac→RDS flaps: DB work via `aws ecs run-task` (asset_risk td + service net config); overrides cap 8,192B → base64-pack pattern (debug/pack_rebuild.py); rebuild audit trail in debug/dingyuan_rebuild_2024_2026.py, backup JSON in task log e7eb3e3b
+- Postgres `AT TIME ZONE '+08:00'` is POSIX-inverted (renders UTC−8, never CST) — trader session fixed nodal views (5f3c1f59); never use numeric TZ offsets

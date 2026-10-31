@@ -322,13 +322,7 @@ def _fetch_wechat_article(url: str) -> tuple[str, str, str]:
         or soup.find("title")
     )
     title = (title_tag.get_text(strip=True) if title_tag else "") or url.split("/s/")[-1][:60]
-    # Preserve article images as [IMG:url] markers so downstream extractors
-    # (e.g. 系统运行费 chart vision-extract) can locate them. WeChat lazy-loads:
-    # the real URL is in data-src; src is usually a placeholder.
-    for img in soup.find_all("img"):
-        src = img.get("data-src") or img.get("src") or ""
-        img.replace_with(f"\n[IMG:{src}]\n" if src.strip() else "")
-    for tag in soup(["script", "style", "nav", "footer", "header", "iframe", "svg"]):
+    for tag in soup(["script", "style", "nav", "footer", "header", "iframe", "img", "svg"]):
         tag.decompose()
     content_div = (
         soup.find("div", id="js_content")
@@ -1444,17 +1438,6 @@ def screen_news_sources(
             try:
                 ai_result = art["ai_result"]
                 doc_id, is_new = _ingest_article(source, art, ai_result, pg_url, api_key)
-
-                # 系统运行费 automation: monthly 代理购电价格 announcements carry
-                # per-province chart images ([IMG:] markers) → vision extract →
-                # province_sysopfee_monthly. No-op for non-price articles.
-                if is_new and api_key:
-                    try:
-                        from services.hermes.sysopfee_extract import process_article_images
-                        process_article_images(art, pg_url=pg_url, api_key=api_key)
-                    except Exception as exc:
-                        logger.warning("sysopfee article hook failed for %s: %s",
-                                       art.get("url", "")[:80], exc)
 
                 all_results.append({
                     "title": art["title"],
