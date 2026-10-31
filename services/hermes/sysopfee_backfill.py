@@ -147,6 +147,8 @@ def main() -> int:
                     help="comma-separated province folder names; empty = all")
     ap.add_argument("--scrolls", default="",
                     help="directory of full-article scroll screenshots (IMG_*.JPG)")
+    ap.add_argument("--describe", default="",
+                    help="debug: describe each chunk of one scroll image (layout probe)")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -164,6 +166,21 @@ def main() -> int:
     if not api_key:
         print("FATAL: ANTHROPIC_API_KEY not set", file=sys.stderr)
         return 2
+
+    if args.describe:
+        from services.hermes.sysopfee_extract import _vision_json, slice_scroll
+        data = Path(args.describe).read_bytes()
+        chunks = slice_scroll(data)
+        print(f"DESCRIBE {args.describe}: {len(chunks)} chunks")
+        for i, ch in enumerate(chunks):
+            r = _vision_json(
+                ch,
+                "用一句话描述这张图片片段的内容类型（如：文章标题/正文段落/全国汇总表格-含省份行/"
+                "单省价格表/图表/二维码/空白）。如果是表格，列出你能看清的省份名。"
+                "输出 JSON：{\"type\": \"...\", \"provinces\": [\"...\"]}",
+                api_key, max_tokens=512)
+            print(f"CHUNK {i}\t{r}")
+        return 0
 
     if args.scrolls:
         months = {int(m) for m in args.months.split(",") if m.strip()}

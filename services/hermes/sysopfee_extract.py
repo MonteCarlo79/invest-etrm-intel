@@ -134,12 +134,17 @@ def extract_from_pdf_bytes(pdf_bytes: bytes, *, api_key: str) -> Optional[float]
         fee = _extract_fee_from_line(line)
         if fee is not None:
             return fee
-    # vision fallback: render first page
+    # vision fallback: render pages until a value is found (the price table is
+    # not always page 1 — 浙江's is page 4)
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        img = pdf.pages[0].to_image(resolution=140).original
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return _vision_extract(buf.getvalue(), "image/png", api_key)
+        for page in pdf.pages[:6]:
+            img = page.to_image(resolution=170).original
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            fee = _vision_extract(buf.getvalue(), "image/png", api_key)
+            if fee is not None:
+                return fee
+    return None
 
 
 def upsert_sysopfee(cur, province: str, year_month: str, fee_yuan_kwh: float,
@@ -225,13 +230,18 @@ _SCROLL_MONTH_PROMPT = (
 )
 
 _SCROLL_CHUNK_PROMPT = (
-    "这是一张长截图的一个片段，内容是某月中国各省份电网代理购电价格汇总表"
-    "（每行一个省份，其中一列是「系统运行费」，表头可能写「系统运行费用折合度电水平」）。\n"
-    "请列出图中所有【完整清晰可读】的省份行：省份短名（山东、蒙西、蒙东、冀北、深圳…"
-    "北京/上海/天津/重庆不要带「市」字）和该省系统运行费数值。\n"
-    "注意单位：有的表用「元/千瓦时」，有的用「分/千瓦时」；分/千瓦时请除以100换算成元/千瓦时。\n"
-    "只输出 JSON 数组：[{\"province\": \"山东\", \"fee\": 0.0357}]。\n"
-    "被截断、模糊、看不清的行【不要】输出，绝对不要猜数字。没有可完整读取的行就输出 []。"
+    "这张图片片段来自一篇汇总文章，包含若干省份的代理购电价格公告"
+    "（每个省一个【独立的小表格】，表格上方标有省名标题；也有省份只在正文备注里"
+    "写「系统运行费用折合度电水平X元/千瓦时」）。\n"
+    "对每个【完整可见】的省份表格或备注，提取：\n"
+    "1. 省份短名（山东、蒙西、蒙东、冀北、河北南网、深圳…；北京/上海/天津/重庆不带「市」字）\n"
+    "2. 该省「系统运行费用折合度电水平」的数值（也可能写作「系统运行费用折价」"
+    "「系统运行费折价」「系统运行费」）。\n"
+    "⚠️ 绝对不要把代理购电价格、上网环节线损、输配电价、政府性基金等其他行/列的数字"
+    "当成系统运行费。找不到该行就不要输出这个省。\n"
+    "单位如为分/千瓦时，除以100换算为元/千瓦时。\n"
+    "只输出 JSON 数组：[{\"province\": \"山东\", \"fee\": 0.0357}]。"
+    "被截断、模糊、看不清的省份【不要】输出。没有可完整读取的省份就输出 []。"
 )
 
 _SCROLL_CHUNK_PX = 2000
@@ -268,6 +278,50 @@ def _vision_json(image_bytes: bytes, prompt: str, api_key: str,
         return json.loads(m.group(0))
     except json.JSONDecodeError:
         return None
+
+
+def extract_from_excel_bytes(xlsx_bytes: bytes) -> dict[int, float]:
+    """Parse a provincial 代理购电价格汇总及分析 workbook → {month: fee_yuan_kwh}.
+
+    Layout (all 33 provincial files share it): a header row with 1月份…12月份
+    columns; a fee row whose 明细 cell is 系统运行费用折价 / 折合度电水平 /
+    折价度电水平. Month columns are located from the header, not hardcoded.
+    #REF! and empty cells are skipped. 广东/深圳 publish in 分/千瓦时 → the
+    >1 guard converts.
+    """
+    import io
+
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows = [list(r) for r in ws.iter_rows(min_row=1, max_row=120, values_only=True)]
+    wb.close()
+
+    month_cols: dict[int, int] = {}  # month -> column index
+    for r in rows:
+        for j, c in enumerate(r):
+            if isinstance(c, str):
+                m = re.fullmatch(r"(\d{1,2})月(?:份)?", c.strip())
+                if m:
+                    month_cols[int(m.group(1))] = j
+        if len(month_cols) >= 12:
+            break
+    if not month_cols:
+        return {}
+
+    label_re = re.compile(r"^\s*系统运行费[用]?(折价度电水平|折合度电水平|折价)\s*$")
+    for r in rows:
+        if not any(isinstance(c, str) and label_re.match(c) for c in r):
+            continue
+        out: dict[int, float] = {}
+        for month, j in month_cols.items():
+            if j >= len(r):
+                continue
+            v = r[j]
+            if isinstance(v, (int, float)):
+                out[month] = _normalize_fee(float(v))
+        return out
+    return {}
 
 
 def identify_scroll_month(image_bytes: bytes, api_key: str) -> Optional[str]:
