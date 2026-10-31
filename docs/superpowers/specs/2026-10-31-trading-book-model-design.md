@@ -1,8 +1,8 @@
 # Trading Book Object Model — Design Spec
 
 **Date:** 2026-10-31
-**Status:** Design approved in dialogue (5 decisions locked); pending written-spec review
-**Apps touched:** mengxi-dashboard (Trader, Pillar 3) primary; retail-risk (RetailBook substrate); deal-structurer (DP engine reuse)
+**Status:** Design approved in dialogue (5 decisions locked) + user review 2026-10-31: **scope = 蒙西 asset books only**
+**Apps touched:** mengxi-dashboard (Trader, Pillar 3) primary; deal-structurer (DP engine reuse)
 
 ---
 
@@ -10,18 +10,13 @@
 
 Model each trading identity as an object — a **TradingBook** — that owns the full chain from forecast to settled cash, so that every P&L number decomposes causally: *what we forecast → what we planned → what cleared → what physically happened → what we were paid*, with each inter-layer delta named and measured.
 
-Two independent families, one interface:
-
-- **AssetBook** — one per physical station (today: the IM BESS stations; later wind/solar)
-- **RetailBook** — one per province's retail business (substrate: retail-risk ingestion, books 21–24)
-
-**Decision 1:** No provincial composite. Asset books and retail books stay independent objects sharing the interface; no cross-book energy netting in v1.
+**Scope (user review 2026-10-31): AssetBook for the 蒙西 (IM) BESS stations only.** No other asset types, no RetailBook, for now. The interface is still designed family-neutral so a RetailBook can attach later without rework — but nothing retail is built.
 
 ## Locked decisions
 
 | # | Decision | Choice |
 |---|----------|--------|
-| 1 | Book scope | Per-station asset book; per-province retail book; independent objects |
+| 1 | Book scope | Per-station asset book only （蒙西）; retail books and other asset types out of scope (user review 2026-10-31) |
 | 2 | Strategy anchor | **Both** — `nodal_agent` (nominated) and `dp_optimal` (option-engine DP) as competing Strategy objects; one marked primary; DP-vs-nominated spread = explicit "strategy selection cost" attribution line |
 | 3 | Settlement source | **Trust the bill's daily breakdown** where the settlement document carries one; monthly-only lumps accrue pro-rata, flagged accrual-grade |
 | 4 | Fleet response model | **Aggregate stack** — provincial price-response curves estimated from history, bounded by per-class optimization floors (coal ≥ variable cost, BESS ≥ negative spread) |
@@ -30,7 +25,7 @@ Two independent families, one interface:
 ## Object model
 
 ```
-TradingBook (interface)
+TradingBook (interface — family-neutral so RetailBook can attach later)
 │   book_id, market, timezone='Asia/Shanghai'
 │   .forecast(d) → ForecastSet         # D-1 16:00 artifact
 │   .strategies(d) → list[Strategy]    # tagged by scope; one .primary
@@ -39,24 +34,17 @@ TradingBook (interface)
 │   .settlement(period) → Settlement
 │   .attribution(period) → Waterfall
 │
-├── AssetBook(station: StationRef)
-│     ForecastSet:  NodalPriceForecast (fundamentals + history)
-│                   FleetResponseForecast (aggregate stack, opt-bounded)
-│                   NetLoadForecast
-│     Strategy:     scope='nodal_agent' | 'dp_optimal' | …
-│     Chain:        cleared (md_id_cleared_energy)
-│                   → actual (ops_bess_dispatch_15min)
-│                   → settled (rm_settlements daily breakdown)
-│
-└── RetailBook(province)
-      ForecastSet:  LoadForecast, ContractCoverageForecast
-      Chain:        forecast load → contracted coverage → spot/forward
-                    procurement → settled invoice
-      Store:        rm_positions / rm_volumes / rm_forward_curves /
-                    rm_settlements (retail-risk substrate)
+└── AssetBook(station: StationRef)     # only family built in v1
+      ForecastSet:  NodalPriceForecast (fundamentals + history)
+                    FleetResponseForecast (aggregate stack, opt-bounded)
+                    NetLoadForecast
+      Strategy:     scope='nodal_agent' | 'dp_optimal' | …
+      Chain:        cleared (md_id_cleared_energy)
+                    → actual (ops_bess_dispatch_15min)
+                    → settled (rm_settlements daily breakdown)
 ```
 
-## The attribution waterfall (both families, same shape)
+## The attribution waterfall (AssetBook v1)
 
 ```
 strategy P&L (primary strategy against actual prices)
@@ -69,8 +57,6 @@ strategy P&L (primary strategy against actual prices)
 = settled P&L (rm_settlements)
 ```
 
-RetailBook same shape, different middle layers: load-forecast error → procurement imbalance → deviation-fee lines → margin.
-
 ## Data sources (all existing)
 
 | Layer | Table(s) |
@@ -82,11 +68,10 @@ RetailBook same shape, different middle layers: load-forecast error → procurem
 | Strategies | `nodal_strategy_daily`, `strategy_experiments` |
 | Settlement | `marketdata.rm_settlements`, `rm_settlement_items` (bill parsers per book) |
 | PF/economics | `reports.nodal_pf_node_daily` |
-| Retail position/MTM | `rm_positions`, `rm_volumes`, `rm_forward_curves`, `rm_pnl_snapshots` |
 
 ## New components to build
 
-1. **`libs/trading_book/`** — the object model (TradingBook interface, AssetBook, RetailBook, Waterfall). Thin: orchestration over existing tables, no new pipelines.
+1. **`libs/trading_book/`** — the object model (TradingBook interface, AssetBook, Waterfall). Thin: orchestration over existing tables, no new pipelines. RetailBook out of scope.
 2. **Fleet-response estimator** — `services/mengxi_nodal/fleet_response.py`: estimate provincial price→response curves from history (observed cleared dispatch vs price), clipped by optimization floors computed per asset class (coal variable-cost floor, BESS spread floor via the existing DP engine).
 3. **D-1 forecast job** — daily 16:00 CST: fundamentals forecast → nodal price forecast (per station node) → FleetResponseForecast → persisted as the day's ForecastSet artifact.
 4. **Settlement bridge** — bill daily-breakdown extraction into per-book daily settled rows; monthly lumps accrue pro-rata with `accrual_grade` flag.
@@ -102,8 +87,8 @@ RetailBook same shape, different middle layers: load-forecast error → procurem
 ## Phasing
 
 - **Phase 1 (D-1 artifact):** object model + AssetBook for the 4 IM stations + settlement bridge + Trader book view. Forecast v1 = existing capture-pipeline models extended to nodal; fleet response v1 = historical stack.
-- **Phase 2:** RetailBook for one province (山东 first — most data); DP-optimal strategy wired as daily comparison scope.
-- **Phase 3:** intraday re-forecast loop; coal unit registry if per-unit granularity ever justified.
+- **Phase 2:** DP-optimal strategy wired as daily comparison scope; intraday re-forecast loop.
+- **Future (not scoped):** RetailBook family; other asset types (wind/solar stations); coal unit registry if per-unit fleet granularity is ever justified.
 
 ## Open follow-ups (flagged, not in scope)
 
