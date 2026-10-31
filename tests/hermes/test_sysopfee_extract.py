@@ -68,19 +68,18 @@ def _tall_image(width=394, height=5300):
 
 
 def test_slice_scroll_geometry():
-    chunks = sx.slice_scroll(_tall_image(), chunk_px=2000, overlap_px=300)
-    # 5300px tall, step 1700 → starts at 0, 1700, 3400; at y=3400 the chunk
-    # reaches the bottom (3400+2000 ≥ 5300) → 3 chunks total
-    assert len(chunks) == 3
+    chunks = sx.slice_scroll(_tall_image())  # defaults: 1000px, 200 overlap, 3× upscale
+    # 5300px tall, step 800 → y=0,800,…,4800; 4800+1000≥5300 → 7 chunks
+    assert len(chunks) == 7
     from PIL import Image
-    h0 = Image.open(io.BytesIO(chunks[0])).size[1]
+    w0, h0 = Image.open(io.BytesIO(chunks[0])).size
+    assert (w0, h0) == (394 * 3, 1000 * 3)   # upscaled
     h_last = Image.open(io.BytesIO(chunks[-1])).size[1]
-    assert h0 == 2000
-    assert h_last == 5300 - 3400  # 1900
+    assert h_last == (5300 - 4800) * 3       # 1500
 
 
 def test_slice_scroll_short_image_single_chunk():
-    chunks = sx.slice_scroll(_tall_image(height=1500), chunk_px=2000, overlap_px=300)
+    chunks = sx.slice_scroll(_tall_image(height=800), upscale=1)
     assert len(chunks) == 1
 
 

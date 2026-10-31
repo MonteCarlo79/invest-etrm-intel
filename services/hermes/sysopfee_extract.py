@@ -244,8 +244,9 @@ _SCROLL_CHUNK_PROMPT = (
     "被截断、模糊、看不清的省份【不要】输出。没有可完整读取的省份就输出 []。"
 )
 
-_SCROLL_CHUNK_PX = 2000
-_SCROLL_OVERLAP_PX = 300  # >2× a table row height so no row is lost at a boundary
+_SCROLL_CHUNK_PX = 1000      # ≈ one province block per chunk
+_SCROLL_OVERLAP_PX = 200
+_SCROLL_UPSCALE = 3          # 394px-wide scrolls need upscaling for legibility
 
 
 def _vision_json(image_bytes: bytes, prompt: str, api_key: str,
@@ -345,8 +346,13 @@ def identify_scroll_month(image_bytes: bytes, api_key: str) -> Optional[str]:
 
 
 def slice_scroll(image_bytes: bytes, *, chunk_px: int = _SCROLL_CHUNK_PX,
-                 overlap_px: int = _SCROLL_OVERLAP_PX) -> list[bytes]:
-    """Slice a tall scroll screenshot into overlapping JPEG chunks."""
+                 overlap_px: int = _SCROLL_OVERLAP_PX,
+                 upscale: int = _SCROLL_UPSCALE) -> list[bytes]:
+    """Slice a tall scroll screenshot into overlapping chunks.
+
+    Scroll captures from the phone are ~394px wide; at that width the API
+    downscales chunks and 6-decimal table cells smear. Each chunk is therefore
+    upscaled `upscale`× and saved as PNG (no JPEG artifacts on digits)."""
     import io
 
     from PIL import Image
@@ -357,8 +363,11 @@ def slice_scroll(image_bytes: bytes, *, chunk_px: int = _SCROLL_CHUNK_PX,
     y = 0
     while y < h:
         box = img.crop((0, y, w, min(y + chunk_px, h)))
+        if upscale != 1:
+            box = box.resize((box.width * upscale, box.height * upscale),
+                             Image.LANCZOS)
         buf = io.BytesIO()
-        box.save(buf, format="JPEG", quality=88)
+        box.save(buf, format="PNG")
         chunks.append(buf.getvalue())
         if y + chunk_px >= h:
             break
