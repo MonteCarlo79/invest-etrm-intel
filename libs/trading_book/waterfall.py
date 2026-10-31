@@ -33,8 +33,14 @@ ladder — so they overlap, and settlement_residual absorbs both the overlap
 and true settlement-only items (capacity compensation, rebates, assessment
 charges) to land exactly on settled.
 
-Attribution asset_code values match the registry codes (suyou, hangjinqi, …)
-— same codes the pnl_attribution writer uses.
+Attribution asset_code values match the registry codes for 5 of 6 stations.
+The exception is 景怡查干哈达储能电站: the attribution stack keys it 'hetao'
+(pnl_attribution/app.py ASSET_CODES, bess_context.py ASSET_PHYSICAL_PARAMS,
+extract_mengxi_settlement.py folder map) while the registry — and the settled
+side, reports.book_settled_daily via the Task 4 bridge — keys it 'bameng'.
+_ATTR_CODE_ALIAS bridges the attribution read only; the settled read stays on
+the registry code. Asymmetric keys are deliberate — same pattern as Task 4's
+_RM_ASSET_NAME.
 """
 from __future__ import annotations
 
@@ -47,7 +53,8 @@ from libs.trading_book.asset_book import AssetBook
 from libs.trading_book.models import Day, Waterfall, WaterfallLine
 
 _ATTRIBUTION_SQL = """
-    SELECT SUM(tt_strategy_pnl)                   AS strategy_pnl,
+    SELECT COUNT(*)                               AS n_rows,
+           SUM(tt_strategy_pnl)                   AS strategy_pnl,
            SUM(forecast_error_loss)               AS forecast_error_loss,
            SUM(nominated_pnl - tt_strategy_pnl)   AS strategy_selection,
            SUM(execution_clearing_loss)           AS execution_clearing_loss,
@@ -57,6 +64,22 @@ _ATTRIBUTION_SQL = """
       AND trade_date >= CAST(:s AS date)
       AND trade_date <= CAST(:e AS date)
 """
+
+_ATTR_CODE_ALIAS: dict[str, str] = {
+    # See module docstring: registry 'bameng' == attribution-stack 'hetao'.
+    "bameng": "hetao",
+}
+
+
+def _attribution_code(asset_code: str) -> str:
+    """Registry asset_code -> reports.bess_asset_daily_attribution code."""
+    return _ATTR_CODE_ALIAS.get(asset_code, asset_code)
+
+
+def _attribution_params(book: AssetBook, start: Day, end: Day) -> dict:
+    """SQL params for _ATTRIBUTION_SQL (alias applied here, only here)."""
+    return {"ac": _attribution_code(book.station.asset_code),
+            "s": start.isoformat(), "e": end.isoformat()}
 
 
 def _map_lines(strategy_pnl: float, forecast_err: float, strat_sel: float,
@@ -95,14 +118,17 @@ def _month_periods(start: date, end: date) -> list[str]:
     return periods
 
 
-def _settled_in_range(book: AssetBook, start: Day, end: Day) -> float:
-    """Settled CNY inside [start, end] via the Task 4 facade, day-filtered."""
-    total = 0.0
+def _settled_in_range(book: AssetBook, start: Day, end: Day) -> tuple[float, int]:
+    """(settled CNY, settled row count) inside [start, end] via the Task 4
+    facade, day-filtered. The count feeds the zero-attribution loud guard."""
+    total, n = 0.0, 0
     for period in _month_periods(start, end):
         s = book.settlement(period)
-        total += sum(amount for day, amount, _ in s.daily
-                     if start <= day <= end)
-    return total
+        for day, amount, _ in s.daily:
+            if start <= day <= end:
+                total += amount
+                n += 1
+    return total, n
 
 
 def _f(value) -> float:
@@ -111,16 +137,29 @@ def _f(value) -> float:
 
 
 def build_waterfall(engine, book: AssetBook, start: Day, end: Day) -> Waterfall:
-    """Aggregate attribution + settled rows over [start, end] -> Waterfall."""
-    df = pd.read_sql(
-        text(_ATTRIBUTION_SQL), engine,
-        params={"ac": book.station.asset_code,
-                "s": start.isoformat(), "e": end.isoformat()})
+    """Aggregate attribution + settled rows over [start, end] -> Waterfall.
+
+    Loud guard: a range with settled rows but ZERO attribution rows degenerates
+    to strategy_pnl=0 / residual=settled (attribution-code mismatch or
+    attribution-pipeline lag) — warn, never degrade silently.
+    """
+    params = _attribution_params(book, start, end)
+    df = pd.read_sql(text(_ATTRIBUTION_SQL), engine, params=params)
     row = df.iloc[0] if not df.empty else {}
+    n_attr = int(_f(row.get("n_rows")))
+    settled, n_settled = _settled_in_range(book, start, end)
+    if n_attr == 0 and n_settled > 0:
+        print(f"WARNING [trading_book.waterfall]: zero attribution rows in "
+              f"reports.bess_asset_daily_attribution for "
+              f"asset_code='{params['ac']}' (registry "
+              f"'{book.station.asset_code}') over {start}..{end} while "
+              f"{n_settled} settled rows exist — waterfall degenerates to "
+              f"residual=settled; check attribution-code alias or "
+              f"attribution-pipeline lag.", flush=True)
     return _map_lines(
         strategy_pnl=_f(row.get("strategy_pnl")),
         forecast_err=-_f(row.get("forecast_error_loss")),
         strat_sel=_f(row.get("strategy_selection")),
         clearing=-_f(row.get("execution_clearing_loss")),
         curtail=-_f(row.get("realisation_gap")),
-        settled=_settled_in_range(book, start, end))
+        settled=settled)
