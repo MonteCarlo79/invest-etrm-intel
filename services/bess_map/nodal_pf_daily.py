@@ -76,8 +76,12 @@ def _price_sql(province: str) -> text:
 def _fetch_prices(engine, province: str, day: date) -> pd.DataFrame:
     # Explicit CST bounds: python dates would be coerced at midnight in the DB
     # session TZ (UTC), shifting the window 8h and dropping slots 1-32.
-    s = f"{day} 00:00:00+08"
-    e = f"{day + timedelta(days=1)} 00:00:00+08"
+    # The 蒙西 view column is TIMESTAMP (naive CST walls since the v5 fill
+    # 2026-10-30): naive CST literals. Other provinces read timestamptz
+    # columns: the +08 suffix is required for the correct absolute comparison.
+    tz_suffix = "" if province == "蒙西" else "+08"
+    s = f"{day} 00:00:00{tz_suffix}"
+    e = f"{day + timedelta(days=1)} 00:00:00{tz_suffix}"
     params = {"s": s, "e": e}
     if province != "蒙西":
         params["prov"] = province
