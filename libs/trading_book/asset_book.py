@@ -28,6 +28,7 @@ from libs.trading_book.models import (
     ActualDispatch,
     ClearedDispatch,
     Day,
+    ForecastSet,
     Settlement,
     Strategy,
     TradingBook,
@@ -91,7 +92,8 @@ class AssetBook(TradingBook):
     """One 蒙西 BESS station's book: cleared/actual/strategy reads.
 
     settlement() delegates to the Task 4 bridge; attribution() delegates to
-    the Task 5 waterfall assembler; forecast() lands in Task 7.
+    the Task 5 waterfall assembler; forecast() delegates to the Task 7
+    forecast artifact reader.
     """
 
     def __init__(self, engine, station: StationRef):
@@ -161,5 +163,14 @@ class AssetBook(TradingBook):
                 "waterfall assembler lands in Task 5") from exc
         return waterfall.build_waterfall(self._engine, self, start, end)
 
-    def forecast(self, day: Day):
-        raise NotImplementedError("forecast lands in Task 7")
+    def forecast(self, day: Day) -> ForecastSet:
+        """Delegates to the Task 7 forecast artifact reader (call-time
+        import, same pattern as settlement()/attribution()). Reads
+        reports.book_forecast_daily — populated by
+        services.mengxi_nodal.book_forecast.run_day."""
+        try:
+            from services.mengxi_nodal import book_forecast
+        except ImportError as exc:
+            raise NotImplementedError(
+                "forecast artifact lands in Task 7") from exc
+        return book_forecast.get_forecast(self._engine, self.station, day)
