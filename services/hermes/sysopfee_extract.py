@@ -183,6 +183,142 @@ def _canon_province_name(name: str) -> Optional[str]:
     return n
 
 
+# ── Scroll-screenshot extraction (monthly 汇总 article photos) ───────────────
+# The 智慧光伏 monthly article is one tall table covering all provinces. Users
+# capture it as a full-page screenshot (~400×30000 px). Vision needs readable
+# text, so the scroll is sliced into overlapping chunks; each chunk yields the
+# rows it can read fully; chunks are merged by province.
+
+_SCROLL_MONTH_PROMPT = (
+    "这是一张微信公众号文章的顶部截图，内容是某年某月中国各省电网代理购电价格汇总。"
+    "请判断这篇文章公布的是哪一年哪一月的代理购电价格（标题或开头会写，如「2026年6月」）。"
+    "只输出 JSON：{\"year\": 2026, \"month\": 6}。看不出来就输出 {}。"
+)
+
+_SCROLL_CHUNK_PROMPT = (
+    "这是一张长截图的一个片段，内容是某月中国各省份电网代理购电价格汇总表"
+    "（每行一个省份，其中一列是「系统运行费」，表头可能写「系统运行费用折合度电水平」）。\n"
+    "请列出图中所有【完整清晰可读】的省份行：省份短名（山东、蒙西、蒙东、冀北、深圳…"
+    "北京/上海/天津/重庆不要带「市」字）和该省系统运行费数值。\n"
+    "注意单位：有的表用「元/千瓦时」，有的用「分/千瓦时」；分/千瓦时请除以100换算成元/千瓦时。\n"
+    "只输出 JSON 数组：[{\"province\": \"山东\", \"fee\": 0.0357}]。\n"
+    "被截断、模糊、看不清的行【不要】输出，绝对不要猜数字。没有可完整读取的行就输出 []。"
+)
+
+_SCROLL_CHUNK_PX = 2000
+_SCROLL_OVERLAP_PX = 300  # >2× a table row height so no row is lost at a boundary
+
+
+def _vision_json(image_bytes: bytes, prompt: str, api_key: str,
+                 max_tokens: int = 2048):
+    """Vision call expecting a JSON payload; returns parsed object or None."""
+    import json
+
+    from shared.anthropic_client import make_client
+    image_bytes = _shrink_image(image_bytes)
+    media_type = _sniff_media_type(image_bytes)
+    client = make_client(api_key)
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image",
+                 "source": {"type": "base64", "media_type": media_type,
+                            "data": base64.standard_b64encode(image_bytes).decode()}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+    text = resp.content[0].text.strip()
+    m = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+def identify_scroll_month(image_bytes: bytes, api_key: str) -> Optional[str]:
+    """Read the article month off the top of a scroll screenshot → 'YYYY-MM-01'."""
+    import io
+
+    from PIL import Image
+    img = Image.open(io.BytesIO(image_bytes))
+    top = img.crop((0, 0, img.width, min(1600, img.height)))
+    buf = io.BytesIO()
+    top.convert("RGB").save(buf, format="JPEG", quality=88)
+    obj = _vision_json(buf.getvalue(), _SCROLL_MONTH_PROMPT, api_key, max_tokens=64)
+    if not isinstance(obj, dict):
+        return None
+    try:
+        y, mo = int(obj["year"]), int(obj["month"])
+        assert 2020 <= y <= 2030 and 1 <= mo <= 12
+        return f"{y}-{mo:02d}-01"
+    except (KeyError, TypeError, ValueError, AssertionError):
+        return None
+
+
+def slice_scroll(image_bytes: bytes, *, chunk_px: int = _SCROLL_CHUNK_PX,
+                 overlap_px: int = _SCROLL_OVERLAP_PX) -> list[bytes]:
+    """Slice a tall scroll screenshot into overlapping JPEG chunks."""
+    import io
+
+    from PIL import Image
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    w, h = img.size
+    step = chunk_px - overlap_px
+    chunks = []
+    y = 0
+    while y < h:
+        box = img.crop((0, y, w, min(y + chunk_px, h)))
+        buf = io.BytesIO()
+        box.save(buf, format="JPEG", quality=88)
+        chunks.append(buf.getvalue())
+        if y + chunk_px >= h:
+            break
+        y += step
+    return chunks
+
+
+def extract_scroll_rows(image_bytes: bytes, api_key: str) -> dict[str, float]:
+    """Slice a scroll and merge per-chunk {province, fee} rows.
+
+    A province reported by two chunks with different fees is DROPPED (boundary
+    misread risk) and logged for manual review — wrong data is worse than a gap.
+    """
+    merged: dict[str, float] = {}
+    conflicts: set[str] = set()
+    for i, chunk in enumerate(slice_scroll(image_bytes)):
+        rows = _vision_json(chunk, _SCROLL_CHUNK_PROMPT, api_key)
+        if not isinstance(rows, list):
+            logger.warning("scroll chunk %d: unparseable response", i)
+            continue
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            province = _canon_province_name(str(r.get("province") or ""))
+            try:
+                fee = _normalize_fee(float(r["fee"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not province:
+                continue
+            if province in conflicts:
+                continue
+            prev = merged.get(province)
+            if prev is None:
+                merged[province] = fee
+            elif abs(prev - fee) > 1e-9:
+                logger.warning("scroll conflict %s: %.6f vs %.6f — dropped",
+                               province, prev, fee)
+                conflicts.add(province)
+                del merged[province]
+    return merged
+
+
 def _vision_extract_province_fee(image_bytes: bytes, media_type: str,
                                  api_key: str) -> tuple[Optional[str], Optional[float]]:
     """One vision call → (province_short_name, fee) or (None, None)."""

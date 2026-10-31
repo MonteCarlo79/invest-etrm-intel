@@ -25,6 +25,8 @@ import psycopg2
 from services.hermes.sysopfee_extract import (
     extract_from_image_bytes,
     extract_from_pdf_bytes,
+    extract_scroll_rows,
+    identify_scroll_month,
     upsert_sysopfee,
 )
 
@@ -73,6 +75,67 @@ def probe(pg_url: str) -> None:
         print(f"PROBE total provinces: {len(rows)}")
 
 
+def run_scrolls(scrolls_dir: Path, months: set[int], year: int,
+                pg_url: str, api_key: str, dry_run: bool) -> int:
+    """Process full-article scroll screenshots (IMG_*.JPG): identify the article
+    month, extract all province rows, upsert. Duplicate months across images:
+    the image with more rows wins (near-duplicate captures of the same article).
+    """
+    imgs = sorted(
+        p for p in scrolls_dir.iterdir()
+        if p.is_file() and p.name.upper().startswith("IMG_")
+        and p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+    )
+    if not imgs:
+        print("no IMG_* scroll files found")
+        return 2
+
+    by_month: dict[str, tuple[str, dict[str, float]]] = {}
+    for f in imgs:
+        data = f.read_bytes()
+        try:
+            month = identify_scroll_month(data, api_key)
+        except Exception as e:  # noqa: BLE001
+            logger.error("FAIL %s: month-id error %s", f.name, e)
+            continue
+        if not month:
+            logger.warning("SKIP %s: no article month identified", f.name)
+            continue
+        if int(month[5:7]) not in months or int(month[:4]) != year:
+            logger.info("SKIP %s: month %s outside requested %s/%s",
+                        f.name, month, year, sorted(months))
+            continue
+        try:
+            rows = extract_scroll_rows(data, api_key)
+        except Exception as e:  # noqa: BLE001
+            logger.error("FAIL %s: extract error %s", f.name, e)
+            continue
+        print(f"SCROLL {f.name}\t{month}\t{len(rows)} provinces")
+        cur = by_month.get(month)
+        if cur is None or len(rows) > len(cur[1]):
+            if cur is not None:
+                logger.info("month %s: %s (%d rows) replaces %s (%d rows)",
+                            month, f.name, len(rows), cur[0], len(cur[1]))
+            by_month[month] = (f.name, rows)
+
+    ok = fail = 0
+    for month, (fname, rows) in sorted(by_month.items()):
+        for prov, fee in sorted(rows.items()):
+            if dry_run:
+                print(f"DRY {prov}\t{month}\t{fee}\t{fname}")
+            else:
+                try:
+                    with psycopg2.connect(pg_url) as conn, conn.cursor() as cur:
+                        upsert_sysopfee(cur, prov, month, fee, fname)
+                    print(f"OK {prov}\t{month}\t{fee}\t{fname}")
+                    ok += 1
+                except Exception as e:  # noqa: BLE001
+                    logger.error("FAIL upsert %s %s: %s", prov, month, e)
+                    fail += 1
+    print(f"DONE scrolls ok={ok} failed={fail} dry_run={dry_run}")
+    return 1 if fail else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="data/raw/各省电网购电信息")
@@ -82,6 +145,8 @@ def main() -> int:
     ap.add_argument("--probe", action="store_true")
     ap.add_argument("--provinces", default="",
                     help="comma-separated province folder names; empty = all")
+    ap.add_argument("--scrolls", default="",
+                    help="directory of full-article scroll screenshots (IMG_*.JPG)")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -99,6 +164,11 @@ def main() -> int:
     if not api_key:
         print("FATAL: ANTHROPIC_API_KEY not set", file=sys.stderr)
         return 2
+
+    if args.scrolls:
+        months = {int(m) for m in args.months.split(",") if m.strip()}
+        return run_scrolls(Path(args.scrolls), months, args.year,
+                           pg_url, api_key, args.dry_run)
 
     root = Path(args.root)
     months = [int(m) for m in args.months.split(",") if m.strip()]

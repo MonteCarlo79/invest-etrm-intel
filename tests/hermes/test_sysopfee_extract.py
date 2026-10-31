@@ -56,6 +56,62 @@ def test_normalize_fee_fen_to_yuan():
     assert sx._normalize_fee(1.0) == 1.0        # boundary: ≤1 stays as-is
 
 
+# ── scroll-screenshot extraction ─────────────────────────────────────────────
+
+def _tall_image(width=394, height=5300):
+    pytest.importorskip("PIL")
+    from PIL import Image
+    img = Image.new("RGB", (width, height), "white")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_slice_scroll_geometry():
+    chunks = sx.slice_scroll(_tall_image(), chunk_px=2000, overlap_px=300)
+    # 5300px tall, step 1700 → starts at 0, 1700, 3400; at y=3400 the chunk
+    # reaches the bottom (3400+2000 ≥ 5300) → 3 chunks total
+    assert len(chunks) == 3
+    from PIL import Image
+    h0 = Image.open(io.BytesIO(chunks[0])).size[1]
+    h_last = Image.open(io.BytesIO(chunks[-1])).size[1]
+    assert h0 == 2000
+    assert h_last == 5300 - 3400  # 1900
+
+
+def test_slice_scroll_short_image_single_chunk():
+    chunks = sx.slice_scroll(_tall_image(height=1500), chunk_px=2000, overlap_px=300)
+    assert len(chunks) == 1
+
+
+def test_extract_scroll_rows_merge_and_conflict(monkeypatch):
+    responses = [
+        [{"province": "山东", "fee": 0.09}, {"province": "蒙西", "fee": 0.0357}],
+        [{"province": "蒙西", "fee": 0.0357}, {"province": "北京市", "fee": 12}],  # 分→元 + suffix
+        [{"province": "山东", "fee": 0.5}],  # conflict with chunk 0 → 山东 dropped
+    ]
+    monkeypatch.setattr(sx, "_vision_json", lambda *a, **k: responses.pop(0))
+    monkeypatch.setattr(sx, "slice_scroll", lambda b: [b"c0", b"c1", b"c2"])
+    rows = sx.extract_scroll_rows(b"img", api_key="k")
+    assert rows == {"蒙西": 0.0357, "北京": 0.12}  # 山东 dropped on conflict
+
+
+def test_extract_scroll_rows_skips_unparseable(monkeypatch):
+    monkeypatch.setattr(sx, "_vision_json", lambda *a, **k: None)
+    monkeypatch.setattr(sx, "slice_scroll", lambda b: [b"c0"])
+    assert sx.extract_scroll_rows(b"img", api_key="k") == {}
+
+
+def test_identify_scroll_month(monkeypatch):
+    monkeypatch.setattr(sx, "_vision_json", lambda *a, **k: {"year": 2026, "month": 6})
+    assert sx.identify_scroll_month(_tall_image(), api_key="k") == "2026-06-01"
+
+
+def test_identify_scroll_month_garbage(monkeypatch):
+    monkeypatch.setattr(sx, "_vision_json", lambda *a, **k: {"year": "x"})
+    assert sx.identify_scroll_month(_tall_image(), api_key="k") is None
+
+
 def test_vision_extract_fen_unit_converted(monkeypatch):
     _patch_client(monkeypatch, "8")  # model missed the 分 unit → guard catches it
     assert sx.extract_from_image_bytes(b"\xff\xd8img", api_key="k") == 0.08
