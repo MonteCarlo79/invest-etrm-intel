@@ -29,11 +29,30 @@ _PROMPT = (
     "只输出一个数字（如 0.0357），不要任何其他文字。找不到就输出 NONE。"
 )
 
-# Text-layer patterns for PDFs (no vision needed when text exists)
-_TEXT_PATTERNS = [
-    re.compile(r"系统运行费[用]?折合度电水平[^\d\-]*(-?\d+\.?\d*)"),
-    re.compile(r"系统运行费[用]?[^\d\-]{0,10}(-?\d+\.\d{3,6})"),
-]
+# Text-layer patterns for PDFs (no vision needed when text exists).
+# NOTE: the table line carries a 计算关系 formula cell between the label and the
+# value, e.g. "8 系统运行费用折合度电水平 8=9+10+11+12+13+14+15+16 0.044318".
+# Capturing the first digit after the label grabs the formula index (the
+# 2026-05 incident: 上海 read as 8.0 instead of 0.044318). So: take the text
+# after the label, strip formula tokens, take the LAST number on the line.
+_LABEL_RE = re.compile(r"系统运行费[用]?折合度电水平(.*)")
+# Formula tokens look like "8=9+10+11" or "+12+13+14" — a bare number ("0" in
+# "0.0357") is NOT a formula; require '=' or at least two consecutive +N terms.
+_FORMULA_TOKEN_RE = re.compile(r"\d+(?:=\d+)+(?:\+\d+)*|(?:\+\d+){2,}")
+_NUMBER_RE = re.compile(r"-?\d+\.\d+|-?\d+")
+
+
+def _extract_fee_from_line(line: str) -> Optional[float]:
+    """Extract the fee value from a text line containing the 折合度电水平 label.
+    Returns None when the line carries no usable number (bare label header)."""
+    m = _LABEL_RE.search(line)
+    if not m:
+        return None
+    rest = _FORMULA_TOKEN_RE.sub(" ", m.group(1))
+    nums = _NUMBER_RE.findall(rest)
+    if not nums:
+        return None
+    return _normalize_fee(float(nums[-1]))
 
 
 _MAX_IMAGE_BYTES = 4_500_000  # API hard limit is 5 MB; leave headroom
@@ -106,15 +125,15 @@ def extract_from_image_bytes(image_bytes: bytes, *, media_type: str = "image/jpe
 
 
 def extract_from_pdf_bytes(pdf_bytes: bytes, *, api_key: str) -> Optional[float]:
-    """Text-layer first; vision fallback via first-page render."""
+    """Text-layer first (line-based, formula-cell aware); vision fallback."""
     import io
     import pdfplumber
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        full = "\n".join((p.extract_text() or "") for p in pdf.pages)
-    for pat in _TEXT_PATTERNS:
-        m = pat.search(full)
-        if m:
-            return _normalize_fee(float(m.group(1)))  # 分/千瓦时 tables exist
+        lines = [l for p in pdf.pages for l in (p.extract_text() or "").splitlines()]
+    for line in lines:
+        fee = _extract_fee_from_line(line)
+        if fee is not None:
+            return fee
     # vision fallback: render first page
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         img = pdf.pages[0].to_image(resolution=140).original
@@ -170,6 +189,16 @@ _STRIP_SUFFIXES = (
     "壮族自治区", "回族自治区", "维吾尔自治区", "特别行政区", "自治区", "省", "市",
 )
 
+# Canonical province set = what's already in province_sysopfee_monthly (DB probe
+# 2026-10-31, 34 names). Anything outside this list (e.g. 闽南, a region of
+# 福建 that scroll tables sometimes split out) is rejected.
+_PROVINCE_CANON = {
+    "北京", "天津", "上海", "重庆", "河北", "冀北", "河北南网", "山西", "山东",
+    "江苏", "浙江", "安徽", "福建", "江西", "河南", "湖北", "湖南", "广东",
+    "深圳", "广西", "海南", "贵州", "云南", "四川", "陕西", "甘肃", "青海",
+    "宁夏", "新疆", "辽宁", "吉林", "黑龙江", "蒙西", "蒙东",
+}
+
 
 def _canon_province_name(name: str) -> Optional[str]:
     """Normalize a model-returned province name to the platform short name."""
@@ -180,7 +209,7 @@ def _canon_province_name(name: str) -> Optional[str]:
             break
     if n in {"内蒙古", ""}:  # ambiguous — must be 蒙西/蒙东
         return None
-    return n
+    return n if n in _PROVINCE_CANON else None
 
 
 # ── Scroll-screenshot extraction (monthly 汇总 article photos) ───────────────

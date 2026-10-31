@@ -184,11 +184,36 @@ def test_pdf_text_layer_variant_label(monkeypatch):
     assert sx.extract_from_pdf_bytes(b"%PDF-fake", api_key="k") == 0.0421
 
 
-def test_pdf_text_layer_fen_unit_normalized(monkeypatch):
-    """Provinces whose tables use 分/千瓦时 must be divided by 100 — this was
-    the 北京/陕西/浙江/上海/吉林/四川/河北 dry-run bug (text path skipped the guard)."""
-    _fake_pdfplumber(monkeypatch, ["系统运行费用折合度电水平  12  分/千瓦时"])
-    assert sx.extract_from_pdf_bytes(b"%PDF-fake", api_key="k") == 0.12
+def test_pdf_text_layer_skips_formula_cell(monkeypatch):
+    """The 2026-05 incident: the 计算关系 formula cell (8=9+10+…) sits between
+    the label and the value; capturing the first digit reads the formula."""
+    _fake_pdfplumber(monkeypatch, [
+        "8 系统运行费用折合度电水平 8=9+10+11+12+13+14+15+16 0.044318",   # 上海
+    ])
+    assert sx.extract_from_pdf_bytes(b"%PDF-fake", api_key="k") == 0.044318
+
+
+def test_pdf_text_layer_plus_formula(monkeypatch):
+    _fake_pdfplumber(monkeypatch, [
+        "8 系统运行费用折合度电水平 +12+13+14 0.00674700",               # 北京
+    ])
+    assert sx.extract_from_pdf_bytes(b"%PDF-fake", api_key="k") == pytest.approx(0.006747)
+
+
+def test_pdf_text_layer_footnote_sentence(monkeypatch):
+    _fake_pdfplumber(monkeypatch, [
+        "3.市场化交易用户执行上网环节线损费用折价0.023756元/千瓦时，"
+        "执行系统运行费用折合度电水平0.050535元/千瓦时。",                  # 河北
+    ])
+    assert sx.extract_from_pdf_bytes(b"%PDF-fake", api_key="k") == 0.050535
+
+
+def test_pdf_text_layer_bare_label_ignored(monkeypatch):
+    """A bare label line (table header) must not swallow a later real row."""
+    _fake_pdfplumber(monkeypatch, [
+        "系统运行费用折合度电水平\n8 系统运行费用折合度电水平 8=9+10 0.150039",  # 吉林
+    ])
+    assert sx.extract_from_pdf_bytes(b"%PDF-fake", api_key="k") == 0.150039
 
 
 def test_pdf_no_match_returns_via_vision(monkeypatch):
@@ -249,6 +274,8 @@ def test_canon_province_name():
     assert sx._canon_province_name("蒙西") == "蒙西"
     assert sx._canon_province_name("内蒙古自治区") is None  # ambiguous 蒙西/蒙东
     assert sx._canon_province_name("") is None
+    assert sx._canon_province_name("闽南") is None      # region of 福建, not canonical
+    assert sx._canon_province_name("豫北") is None      # not in the canonical set
 
 
 def test_article_gate_rejects_non_price_article():
