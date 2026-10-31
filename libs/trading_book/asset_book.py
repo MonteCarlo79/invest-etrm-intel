@@ -17,6 +17,7 @@ Sign convention everywhere: MW, positive = discharge, negative = charge
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import date, timedelta
 
@@ -164,13 +165,37 @@ class AssetBook(TradingBook):
         return waterfall.build_waterfall(self._engine, self, start, end)
 
     def forecast(self, day: Day) -> ForecastSet:
-        """Delegates to the Task 7 forecast artifact reader (call-time
-        import, same pattern as settlement()/attribution()). Reads
-        reports.book_forecast_daily — populated by
-        services.mengxi_nodal.book_forecast.run_day."""
+        """D-1 forecast artifact (Task 7 reader) + Task 8 fleet-response
+        stack, wired end-to-end. Call-time imports, same pattern as
+        settlement()/attribution(). The stack is estimated as_of=day, so
+        its lookback window ends at the forecast day — no lookahead."""
         try:
             from services.mengxi_nodal import book_forecast
         except ImportError as exc:
             raise NotImplementedError(
                 "forecast artifact lands in Task 7") from exc
-        return book_forecast.get_forecast(self._engine, self.station, day)
+        fs = book_forecast.get_forecast(self._engine, self.station, day)
+        return dataclasses.replace(fs, fleet_response=self._fleet_stack(day))
+
+    def _fleet_stack(self, day: Day) -> dict | None:
+        """Task 8 aggregate fleet-response stack; None when there is no
+        usable fleet model.
+
+        Never raises from the book: any import/runtime failure in
+        estimate_stack degrades to None with a stdout warning (the book
+        stays usable without a fleet model). The estimator's loud-empty
+        (bands=[]) is also collapsed to None — "no fleet model" (Task 8's
+        caller contract).
+        """
+        try:
+            from services.mengxi_nodal import fleet_response
+            stack = fleet_response.estimate_stack(self._engine, as_of=day)
+        except Exception as exc:
+            print(f"WARNING [trading_book.asset_book]: fleet_response "
+                  f"estimate_stack failed for {self.station.asset_code} "
+                  f"as_of={day}: {exc!r} — ForecastSet.fleet_response=None",
+                  flush=True)
+            return None
+        if not stack.get("bands"):
+            return None
+        return stack
