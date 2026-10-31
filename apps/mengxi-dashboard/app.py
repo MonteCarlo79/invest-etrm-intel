@@ -436,7 +436,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_trading, tab_data_mgmt, tab_nodal_maps, tab_pypsa, tab_trader, tab_nodal_analysis, tab_nodal_trading = st.tabs([
+tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_trading, tab_data_mgmt, tab_nodal_maps, tab_pypsa, tab_trader, tab_nodal_analysis, tab_nodal_trading, tab_book = st.tabs([
     "Market Fundamentals",
     "BESS Market Ranking",
     "Our BESS Portfolio",
@@ -449,6 +449,7 @@ tab_market, tab_bess_rank, tab_portfolio, tab_cockpit, tab_wind_rank, tab_wind_t
     "Trader",
     "Nodal Analysis",
     "Nodal Trading",
+    "Book",
 ])
 
 # ---------------------------------------------------------------------------
@@ -1854,3 +1855,12 @@ with tab_nodal_analysis:
 with tab_nodal_trading:
     from nodal_trading_tab import render as _render_nodal_trading
     _render_nodal_trading(_get_sqlalchemy_engine)
+
+
+# ---------------------------------------------------------------------------
+# Tab 13: Book — per-station asset book (dispatch chain, attribution
+# waterfall, settled rows; trading-book plan Task 6)
+# ---------------------------------------------------------------------------
+with tab_book:
+    from book_tab import render_book_tab as _render_book_tab
+    _render_book_tab(_get_sqlalchemy_engine())

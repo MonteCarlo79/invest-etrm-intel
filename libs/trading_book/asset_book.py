@@ -31,6 +31,7 @@ from libs.trading_book.models import (
     Settlement,
     Strategy,
     TradingBook,
+    Waterfall,
 )
 from libs.trading_book.registry import StationRef
 
@@ -89,8 +90,8 @@ def _to_96(df: pd.DataFrame, ts_col: str, val_col: str) -> list[float]:
 class AssetBook(TradingBook):
     """One 蒙西 BESS station's book: cleared/actual/strategy reads.
 
-    settlement() delegates to the Task 4 bridge; forecast() lands in Task 7;
-    attribution() stays unimplemented until the waterfall task.
+    settlement() delegates to the Task 4 bridge; attribution() delegates to
+    the Task 5 waterfall assembler; forecast() lands in Task 7.
     """
 
     def __init__(self, engine, station: StationRef):
@@ -147,6 +148,18 @@ class AssetBook(TradingBook):
                 "settlement bridge lands in Task 4") from exc
         return settlement_bridge.get_settlement(
             self._engine, self.station, period)
+
+    def attribution(self, start: Day, end: Day) -> Waterfall:
+        """Delegates to the Task 5 waterfall assembler (call-time import —
+        waterfall.py imports AssetBook, so a module-top import would cycle).
+        Always passes this book's own engine: a mismatched engine would
+        silently mix DBs."""
+        try:
+            from libs.trading_book import waterfall
+        except ImportError as exc:
+            raise NotImplementedError(
+                "waterfall assembler lands in Task 5") from exc
+        return waterfall.build_waterfall(self._engine, self, start, end)
 
     def forecast(self, day: Day):
         raise NotImplementedError("forecast lands in Task 7")
