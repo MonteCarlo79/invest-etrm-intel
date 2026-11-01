@@ -97,6 +97,45 @@ def _stored_count(engine, province: str, day: date) -> int:
         """), {"d": day, "p": province, "pw": POWER_MW, "dur": DURATION_H, "rte": RTE_PCT}).scalar()
 
 
+# 蒙西 discharge-volume compensation (cap-payment rule 2026-11):
+# stations on the 名单 → 350 ¥/MWh; any other node → 280 ¥/MWh (the
+# post-2026 unlisted default a new asset would receive). Other provinces
+# keep 0.0 — their mechanisms are unchanged.
+_MENGXI_DEFAULT_SUBSIDY = 280.0
+
+
+def _expand_price_nodes(nodes: list[str]) -> list[str]:
+    """Expand registry node shorthand: ranges 'X.1M–4M' → [X.1M..X.4M];
+    bare fragments ('2M') continue the previous full prefix."""
+    out, prefix = [], None
+    for raw in nodes:
+        raw = raw.strip()
+        if "–" in raw:
+            head, tail = raw.split("–")
+            base, first = head.rsplit(".", 1)
+            prefix = base
+            a, b = int(first.rstrip("M")), int(tail.rstrip("M"))
+            out.extend(f"{base}.{i}M" for i in range(a, b + 1))
+        elif raw[:1].isdigit() and prefix:
+            out.append(f"{prefix}.{raw}")
+        else:
+            out.append(raw)
+            if "." in raw:
+                prefix = raw.rsplit(".", 1)[0]
+    return out
+
+
+def _mengxi_node_subsidies() -> dict[str, float]:
+    """Listed stations' price nodes (own + parents, expanded) → 350 ¥/MWh."""
+    from libs.trading_book.registry import get_stations
+    out: dict[str, float] = {}
+    for s in get_stations(asset_type="bess"):
+        if s.subsidy_cny_per_mwh and s.subsidy_cny_per_mwh > _MENGXI_DEFAULT_SUBSIDY:
+            for n in _expand_price_nodes(s.price_nodes):
+                out[n] = float(s.subsidy_cny_per_mwh)
+    return out
+
+
 def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[int, str]:
     df = _fetch_prices(engine, province, day)
     if df.empty:
@@ -104,6 +143,9 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
     nodes = df["node_name"].unique()
     if dry_run:
         return len(nodes), f"DRY-RUN {len(nodes)} nodes"
+
+    subsidies = _mengxi_node_subsidies() if province == "蒙西" else {}
+    default_sub = _MENGXI_DEFAULT_SUBSIDY if province == "蒙西" else 0.0
 
     day_start = pd.Timestamp(day.year, day.month, day.day)
     rows = []
@@ -119,6 +161,7 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
             disp, profit = compute_dispatch_from_15min_prices(
                 series, power_mw=POWER_MW, duration_h=DURATION_H,
                 roundtrip_eff=RTE_PCT / 100.0,
+                compensation_yuan_per_mwh=subsidies.get(node, default_sub),
             )
             rows.append({
                 "data_date": day, "province": province, "node_name": node,

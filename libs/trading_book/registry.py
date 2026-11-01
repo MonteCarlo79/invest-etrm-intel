@@ -36,6 +36,9 @@ class StationRef:
     price_nodes: list[str]           # own node (where present) + parent nodes
     asset_type: str = "bess"         # 'bess' | 'wind'
     data_path: str = "full"          # 'full' | 'settlement_only' | 'registry_only'
+    subsidy_cny_per_mwh: float | None = None  # 蒙西 discharge compensation
+                                       # (350 listed / 280 post-2026 default /
+                                       #  None for wind — knowledge/mengxi/cap_payment_list.md)
 
 STATIONS: list[StationRef] = [
     StationRef(
@@ -49,6 +52,7 @@ STATIONS: list[StationRef] = [
             "内蒙.苏尼特站/220kV.1M", "2M", "4M",
             "内蒙.苏尼特站/500kV.1M",
         ],
+        subsidy_cny_per_mwh=350,
     ),
     StationRef(
         asset_code="hangjinqi",
@@ -60,6 +64,7 @@ STATIONS: list[StationRef] = [
             "内蒙.悦杭独贵储能电站/220kV.1M",
             "内蒙.谷山梁站/220kV.1M–4M",
         ],
+        subsidy_cny_per_mwh=350,
     ),
     StationRef(
         asset_code="siziwangqi",
@@ -70,6 +75,7 @@ STATIONS: list[StationRef] = [
         price_nodes=[                  # (无自有节点) — parents only
             "内蒙.杜尔伯特站/220kV.1M–2M",
         ],
+        subsidy_cny_per_mwh=350,
     ),
     StationRef(
         asset_code="gushanliang",
@@ -81,6 +87,7 @@ STATIONS: list[StationRef] = [
             "内蒙.裕昭沙子坝储能电站/220kV.1M",
             "内蒙.谷山梁站/220kV.1M–4M",
         ],
+        subsidy_cny_per_mwh=350,
     ),
     StationRef(
         asset_code="bameng",
@@ -92,6 +99,7 @@ STATIONS: list[StationRef] = [
             "内蒙.景怡查干哈达储能电站/220kV.1M",
             "内蒙.河套站/220kV.1M–4M",
         ],
+        subsidy_cny_per_mwh=350,
     ),
     StationRef(
         asset_code="wulate",
@@ -103,6 +111,7 @@ STATIONS: list[StationRef] = [
             "内蒙.远景乌拉特储能电站/220kV.1M",
             "内蒙.德岭山站/220kV.1M–4M",
         ],
+        subsidy_cny_per_mwh=350,
     ),
     # ── Task 11: BESS +3 ────────────────────────────────────────────────────
     StationRef(
@@ -113,6 +122,7 @@ STATIONS: list[StationRef] = [
         conn_kv=220,
         price_nodes=[],                # node TBD
         data_path="settlement_only",
+        subsidy_cny_per_mwh=350,       # list #8 金湖一标段 (远景能源+中国康富)
     ),
     StationRef(
         asset_code="wuchuan",
@@ -125,6 +135,7 @@ STATIONS: list[StationRef] = [
             "内蒙.武川站/500kV.1M–2M",
         ],
         data_path="registry_only",
+        subsidy_cny_per_mwh=280,       # post-2026 unlisted default (COD 2026-08)
     ),
     StationRef(
         asset_code="alashan",
@@ -136,6 +147,7 @@ STATIONS: list[StationRef] = [
             "内蒙.阿拉腾敖包站/220kV.1M–4M",   # in the price table as of 2026-09
         ],
         data_path="registry_only",
+        subsidy_cny_per_mwh=280,       # post-2026 unlisted default (COD 2026-07)
     ),
     # ── Task 11: wind +3 (settlement/attribution books; no strategy layer) ──
     StationRef(
