@@ -159,7 +159,7 @@ def _main_images_dir(images_dir: str, *, pg_url: str, api_key: str,
 
     files = sorted(
         p for p in Path(images_dir).iterdir()
-        if re.match(r"20\d{2}-\d{2}_\d+$", p.name)
+        if re.match(r"20\d{2}-\d{2}_.+", p.name)
     )
     print(f"IMAGES {len(files)} in {images_dir}")
     seen = written = skipped = 0
