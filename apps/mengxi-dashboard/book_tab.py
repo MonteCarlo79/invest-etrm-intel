@@ -228,10 +228,18 @@ def render_book_tab(engine) -> None:
 
     # ── (a) Dispatch chain ──────────────────────────────────────────────────
     st.header("Dispatch chain — one day")
-    if not book.strategies(chain_day):
-        st.info(f"No nodal-agent strategy row for {chain_day} "
-                f"({station.plant_name}) — chain shows cleared vs actual only.")
-    st.plotly_chart(_chain_fig(book, chain_day), use_container_width=True)
+    if station.data_path != "full":
+        # Task 11: wind / registry_only books have no strategy-dispatch layer —
+        # say so instead of dying on AssetBook's NotImplementedError guard.
+        st.info(f"{station.plant_name} is a {station.data_path} book "
+                f"({station.asset_type}) — no dispatch-chain data path. "
+                f"Settled rows and the attribution waterfall below render "
+                f"from whatever data exists.")
+    else:
+        if not book.strategies(chain_day):
+            st.info(f"No nodal-agent strategy row for {chain_day} "
+                    f"({station.plant_name}) — chain shows cleared vs actual only.")
+        st.plotly_chart(_chain_fig(book, chain_day), use_container_width=True)
 
     # Settled-table gate (see module docstring): sections (b)/(c) both read
     # reports.book_settled_daily, which exists only after Task 4's writer has

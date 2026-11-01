@@ -68,6 +68,11 @@ _ATTRIBUTION_SQL = """
 _ATTR_CODE_ALIAS: dict[str, str] = {
     # See module docstring: registry 'bameng' == attribution-stack 'hetao'.
     "bameng": "hetao",
+    # Task 11 fleet extension verified (pnl_attribution/app.py ASSET_CODES +
+    # bess_context.py ASSET_PHYSICAL_PARAMS): 'wuhai' matches the attribution
+    # stack directly; wuchuan/alashan/lingt46/alashanzuoqi/erlian have no
+    # attribution-stack presence (their books degrade via the zero-row guard).
+    # No new aliases.
 }
 
 

@@ -159,8 +159,8 @@ def test_tab_renders_all_sections():
     assert any("Dispatch chain" in h for h in headers), headers
     assert any("Attribution waterfall" in h for h in headers), headers
     assert any("Settled rows" in h for h in headers), headers
-    # 6-station registry behind the selectbox
-    assert len(at.selectbox[0].options) == 6
+    # 12-station registry behind the selectbox (Task 11 fleet extension)
+    assert len(at.selectbox[0].options) == 12
     # strategy P&L metric from the mocked attribution aggregate
     assert any(m.label == "Strategy P&L" and "10,000" in m.value
                for m in at.metric), [f"{m.label}={m.value}" for m in at.metric]
@@ -175,6 +175,19 @@ def test_tab_warns_on_degenerate_waterfall():
     assert not at.exception, f"render exception: {at.exception}"
     assert any("degenerates" in w.value for w in at.warning), \
         [w.value for w in at.warning]
+
+
+def test_tab_degrades_dispatch_chain_for_non_full_book():
+    # Task 11: a settlement_only wind book has no dispatch chain — the tab
+    # must say so (st.info) instead of dying on AssetBook's NotImplementedError.
+    from libs.trading_book.registry import get_station
+    at = _at(n_attr=0)
+    assert not at.exception, f"render exception: {at.exception}"
+    at.selectbox[0].set_value(get_station("lingt46"))
+    at.run()
+    assert not at.exception, f"render exception: {at.exception}"
+    assert any("no dispatch-chain data path" in i.value for i in at.info), \
+        [i.value for i in at.info]
 
 
 def test_tab_degrades_when_settled_table_missing():

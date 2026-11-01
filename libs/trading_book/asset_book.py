@@ -90,20 +90,41 @@ def _to_96(df: pd.DataFrame, ts_col: str, val_col: str) -> list[float]:
 
 
 class AssetBook(TradingBook):
-    """One 蒙西 BESS station's book: cleared/actual/strategy reads.
+    """One 蒙西 station's book: cleared/actual/strategy reads.
 
     settlement() delegates to the Task 4 bridge; attribution() delegates to
     the Task 5 waterfall assembler; forecast() delegates to the Task 7
     forecast artifact reader.
+
+    Task 11 honest degradation: the strategy/dispatch layer (cleared, actual,
+    strategies, forecast) exists only for data_path='full' stations. For any
+    other station those methods raise NotImplementedError immediately —
+    never a silent all-NaN frame. settlement() and attribution() stay
+    callable on every book: the settled facade returns 0.0/[] when a station
+    has no settled rows, and the waterfall's zero-attribution loud guard
+    covers the degenerate case.
     """
 
     def __init__(self, engine, station: StationRef):
         self._engine = engine
         self.station = station
 
+    def _require_strategy_layer(self) -> None:
+        """Guard for the dispatch/strategy reads (Task 11 data_path tiers)."""
+        dp = self.station.data_path
+        if dp == "full":
+            return
+        code = self.station.asset_code
+        if dp == "registry_only":
+            raise NotImplementedError(f"station {code}: no data path yet")
+        raise NotImplementedError(
+            f"station {code}: no strategy layer "
+            f"({self.station.asset_type} book is settlement_only)")
+
     def cleared(self, day: Day) -> ClearedDispatch:
         """ID-market cleared MW + price, 96 slots (cleared_energy_mwh holds
         per-interval MW — pass through, no unit conversion)."""
+        self._require_strategy_layer()
         s, e = _cst_naive_window(day)
         df = pd.read_sql(
             text(_CLEARED_SQL), self._engine,
@@ -115,6 +136,7 @@ class AssetBook(TradingBook):
 
     def actual(self, day: Day) -> ActualDispatch:
         """Ops nominated + actual dispatch MW, 96 slots (discharge +)."""
+        self._require_strategy_layer()
         s, e = _cst_naive_window(day)
         df = pd.read_sql(
             text(_ACTUAL_SQL), self._engine,
@@ -127,6 +149,7 @@ class AssetBook(TradingBook):
     def strategies(self, day: Day) -> list[Strategy]:
         """Nodal-agent strategy curve for the day ([] when the writer has no
         row). curve_json is a 96-slot signed-MW JSON array, discharge +."""
+        self._require_strategy_layer()
         df = pd.read_sql(
             text(_STRATEGY_SQL), self._engine,
             params={"pn": self.station.plant_name, "day": day})
@@ -169,6 +192,7 @@ class AssetBook(TradingBook):
         stack, wired end-to-end. Call-time imports, same pattern as
         settlement()/attribution(). The stack is estimated as_of=day, so
         its lookback window ends at the forecast day — no lookahead."""
+        self._require_strategy_layer()
         try:
             from services.mengxi_nodal import book_forecast
         except ImportError as exc:

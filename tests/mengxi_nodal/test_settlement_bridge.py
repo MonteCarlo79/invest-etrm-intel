@@ -39,7 +39,43 @@ def test_spread_lump_single_day_and_negative():
     assert rows == [(date(2026, 3, 31), -500.0, "accrual")]
 
 
-def test_book_name_map_covers_registry():
+def test_book_name_map_covers_settlement_capable_stations():
+    # Every station with a settlement read path (full / settlement_only) must
+    # resolve to an rm_assets.name; registry_only stations are pre-mapped only
+    # when an rm entry already exists (wuchuan/alashan) — the refresh writer
+    # skips them loudly either way.
     from libs.trading_book.registry import get_stations
     for s in get_stations():
-        assert _RM_ASSET_NAME[s.asset_code]  # every station resolves to an rm_assets.name
+        if s.data_path != "registry_only":
+            assert _RM_ASSET_NAME[s.asset_code]
+
+
+def test_task11_rm_names():
+    # Verified against the rm_assets probe (task brief).
+    assert _RM_ASSET_NAME["wuhai"] == "乌海康富"
+    assert _RM_ASSET_NAME["wuchuan"] == "武川"
+    assert _RM_ASSET_NAME["alashan"] == "阿拉善储能"
+    assert _RM_ASSET_NAME["lingt46"] == "零碳46风电"
+
+
+def test_wind_without_rm_book_absent_from_map():
+    # W-3/W-4 have no rm_assets entry — deliberately unmapped.
+    assert "alashanzuoqi" not in _RM_ASSET_NAME
+    assert "erlian" not in _RM_ASSET_NAME
+
+
+def test_registry_only_stations_skip_loudly(capsys):
+    # Skip happens before any engine use, so engine=None proves it.
+    from services.mengxi_nodal.settlement_bridge import refresh_settled_daily
+    for code in ("wuchuan", "alashan", "alashanzuoqi", "erlian"):
+        assert refresh_settled_daily(None, code, "2026-10") == 0
+    out = capsys.readouterr().out
+    assert out.count("WARNING") == 4 and out.count("registry_only") == 4
+    assert "erlian" in out
+
+
+def test_unknown_code_raises_before_engine_use():
+    import pytest
+    from services.mengxi_nodal.settlement_bridge import refresh_settled_daily
+    with pytest.raises(KeyError):
+        refresh_settled_daily(None, "nope", "2026-10")

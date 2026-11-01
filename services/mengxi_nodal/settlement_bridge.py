@@ -27,6 +27,12 @@ money; the flag is a recon hint, not an exclusion).
 asset_code → book resolution goes through the rm_assets short name
 (_RM_ASSET_NAME) — the same names services/settlement_ingest/folder_mapper.py
 maps the stations' invoice folders to (book_type='asset').
+
+Task 11 fleet extension: registry_only stations (no data path yet — e.g.
+alashanzuoqi/erlian have no rm_assets entry at all) are skipped LOUDLY
+(print + return 0), never silently zero and never an error; wuchuan/alashan
+are pre-mapped here so their name resolution is ready the day their data
+path upgrades, but the registry_only skip still applies until then.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ from datetime import date, timedelta
 import pandas as pd
 from sqlalchemy import text
 
+from libs.trading_book.registry import get_station
 from libs.trading_book.settlement_bridge import month_bounds
 
 _SCHEMA_DDL = "CREATE SCHEMA IF NOT EXISTS reports"
@@ -53,6 +60,8 @@ CREATE TABLE IF NOT EXISTS reports.book_settled_daily (
 # Registry asset_code -> marketdata.rm_assets.name (short name; matches the
 # folder_mapper fallback values, e.g. "B-11 内蒙四子王旗" -> "四子王旗" — the
 # rm short name is NOT always a substring of the registry plant_name).
+# Task 11: wuhai/wuchuan/alashan/lingt46 verified against the rm_assets probe;
+# alashanzuoqi/erlian have no rm_assets entry and are deliberately absent.
 _RM_ASSET_NAME: dict[str, str] = {
     "suyou": "景蓝乌尔图",
     "hangjinqi": "悦杭独贵",
@@ -60,6 +69,10 @@ _RM_ASSET_NAME: dict[str, str] = {
     "gushanliang": "裕昭沙子坝",
     "bameng": "景怡查干哈达",
     "wulate": "远景乌拉特",
+    "wuhai": "乌海康富",
+    "wuchuan": "武川",
+    "alashan": "阿拉善储能",
+    "lingt46": "零碳46风电",
 }
 
 _BOOK_SQL = """
@@ -110,12 +123,24 @@ def refresh_settled_daily(engine, asset_code: str, month: str) -> int:
 
     Rows from a previous run whose (day, source) is not regenerated this run
     are left in place — supersede/delete of the underlying settlement is an
-    rm-side concern. Unknown asset_code -> KeyError; known code with no rm
-    book -> 0, nothing written.
+    rm-side concern. Unknown asset_code -> KeyError; registry_only station ->
+    loud skip (print + 0, never an error, never silent zeros); known code with
+    no rm book -> 0, nothing written.
     """
+    try:
+        station = get_station(asset_code)
+    except KeyError:
+        raise KeyError(f"unknown asset_code: {asset_code!r}") from None
+    if station.data_path == "registry_only":
+        print(f"WARNING [mengxi_nodal.settlement_bridge]: station "
+              f"'{asset_code}' is registry_only (no settlement data path "
+              f"yet) — skipping refresh_settled_daily for {month}; "
+              f"0 rows written.", flush=True)
+        return 0
     name = _RM_ASSET_NAME.get(asset_code)
     if name is None:
-        raise KeyError(f"unknown asset_code: {asset_code!r}")
+        raise KeyError(f"no rm_assets name mapped for asset_code: "
+                       f"{asset_code!r}")
     month_start, month_end = month_bounds(month)
     with engine.begin() as conn:
         conn.execute(text(_SCHEMA_DDL))
