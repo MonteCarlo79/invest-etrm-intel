@@ -25,8 +25,11 @@ _280_COMP_PLANTS: frozenset[str] = frozenset([
     "荣鑫地房子储能电站",
 ])
 
-# Assets joining the market after this date (and before 2027-01-01) get 280元/MWh
-_NEW_ASSET_COMP_CUTOFF = date(2026, 6, 27)
+# Assets joining the market after this date (and before 2027-01-01) get 280元/MWh.
+# 2026-11-01: boundary set to 2026-01-01 per the 独立新型储能电站名单 rule —
+# listed stations 350; COD after 2026-01-01 and unlisted → 280 by default
+# (knowledge/mengxi/cap_payment_list.md).
+_NEW_ASSET_COMP_CUTOFF = date(2026, 1, 1)
 _NEW_ASSET_COMP_END    = date(2027, 1, 1)
 _DEFAULT_COMP_RATE     = 350.0
 _NEW_COMP_RATE         = 280.0
@@ -644,8 +647,8 @@ def _generate_pdf(
             note_s,
         ),
         Paragraph(
-            "容量补偿标准：350元/MWh（一般项目）；280元/MWh（荣鑫地房子储能电站及2026年6月27日后入市项目）；"
-            "0元/MWh（大航都林储能电站、大航额日和图储能电站）。",
+            "容量补偿标准：350元/MWh（独立新型储能电站名单内项目）；280元/MWh（2026年1月1日后并网且不在名单的项目）；"
+            "0元/MWh（大航都林储能电站、大航额日和图储能电站——非独立储能，不享受补偿）。",
             note_s,
         ),
         Paragraph(
