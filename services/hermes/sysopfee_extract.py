@@ -184,8 +184,10 @@ _PROMPT_PROVINCE_FEE = (
 
 _IMG_MARKER_RE = re.compile(r"\[IMG:(https?://[^\]\s]+)\]")
 _TITLE_MONTH_RE = re.compile(r"(20\d{2})\s*年\s*(\d{1,2})\s*月")
-_ARTICLE_GATE_RE = re.compile(r"代理购电|代购电")
-_QPIC_HOST_RE = re.compile(r"^https?://mmbiz\.q(pic|logo)\.cn/")
+# 智慧光伏/bjx compilations use 代理购电; provincial grid 公告 use 代理工商业用户购电
+_ARTICLE_GATE_RE = re.compile(r"代理购电|代购电|代理工商业用户购电")
+# image CDNs: mmbiz.qpic.cn (classic), mmecoa.qpic.cn (current), qlogo (avatars)
+_QPIC_HOST_RE = re.compile(r"^https?://mm\w+\.q(pic|logo)\.cn/")
 
 _MAX_IMAGES_PER_ARTICLE = 40
 _MIN_IMAGE_BYTES = 15_000  # skip icons / dividers / QR codes

@@ -282,6 +282,19 @@ def test_article_gate_rejects_non_price_article():
     assert sx.process_article_images(art, pg_url="x", api_key="k") == 0
 
 
+def test_article_gate_accepts_grid_announcement_wording():
+    """Provincial grid 公告 use 代理工商业用户购电, not 代理购电 — the 河南 source."""
+    assert sx._ARTICLE_GATE_RE.search("国网河南省电力公司关于2026年11月代理工商业用户购电价格的公告")
+    assert sx._ARTICLE_GATE_RE.search("2026年7月各省市电网代理购电价格汇总")
+    assert not sx._ARTICLE_GATE_RE.search("某风电项目并网")
+
+
+def test_qpic_host_re_covers_mmecoa():
+    assert sx._QPIC_HOST_RE.match("https://mmecoa.qpic.cn/mmecoa_jpg/abc")
+    assert sx._QPIC_HOST_RE.match("https://mmbiz.qpic.cn/mmbiz_png/abc/640")
+    assert not sx._QPIC_HOST_RE.match("https://evil.example.com/x")
+
+
 def test_article_gate_requires_title_month():
     art = {"title": "代理购电价格公告", "body": "代理购电 [IMG:https://mmbiz.qpic.cn/x]"}
     assert sx.process_article_images(art, pg_url="x", api_key="k") == 0
