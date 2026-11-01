@@ -871,6 +871,22 @@ def create_app() -> FastAPI:
             },
         )
 
+        # Monthly 代购价格 scrape: days 29→month-end at 09:00 UTC (17:00 Beijing).
+        # Next month's price articles publish on the 29th; retries daily until
+        # province_sysopfee_monthly carries the next month (early-exit check).
+        from services.hermes.news_screener import screen_price_sources_monthly
+        scheduler.add_job(
+            screen_price_sources_monthly,
+            "cron",
+            day="29-31", hour=9, minute=0,
+            kwargs={
+                "pg_url":          _mengxi_pg_url,
+                "api_key":         os.environ.get("ANTHROPIC_API_KEY", ""),
+                "feishu":          feishu,
+                "owner_open_id":   os.environ.get("FEISHU_OWNER_OPEN_ID", ""),
+            },
+        )
+
         # Exchange monthly report watcher: 06:20 UTC (14:20 Beijing) — scan the
         # OneDrive exchange-monthly-reports folder and ingest any new reports.
         if agent.onedrive:

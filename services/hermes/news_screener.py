@@ -1317,22 +1317,32 @@ def _build_feishu_card(date_str: str, results: list[dict], api_key: str = "") ->
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 @with_usage_tag("news_screener")
+def _cadence_of(source: dict) -> str:
+    """Source scrape cadence: 'daily' (default) or 'monthly' (代购价格 sources —
+    the monthly price articles only appear around the 29th)."""
+    return (source.get("scrape_config") or {}).get("cadence", "daily")
+
+
 def screen_news_sources(
     pg_url: str,
     api_key: str,
     feishu,
     owner_open_id: str,
+    cadence: str = "daily",
 ) -> dict:
     """
     Main entry point. Discovers, fetches, scores, and ingests articles from
-    all active sources. Sends a Feishu digest on completion.
+    active sources with the given cadence (scrape_config.cadence; 'daily'
+    default, 'monthly' for the 代购价格 sources). Sends a Feishu digest on
+    completion.
 
     Returns summary dict: {total_discovered, ingested, skipped, errors, sources_failed}
     """
     _init_db(pg_url)
-    sources = get_sources(pg_url, active_only=True)
+    sources = [s for s in get_sources(pg_url, active_only=True)
+               if _cadence_of(s) == cadence]
     if not sources:
-        logger.info("No active news sources configured — nothing to do")
+        logger.info("No active %s news sources configured — nothing to do", cadence)
         return {"total_discovered": 0, "ingested": 0, "skipped": 0, "errors": 0, "sources_failed": 0}
 
     now_utc = datetime.now(timezone.utc)
@@ -1497,6 +1507,44 @@ def screen_news_sources(
     }
     logger.info("News screener done: %s", summary)
     return summary
+
+
+# ── Monthly 代购价格 scrape (29th 17:00 Beijing + retries through month-end) ──
+
+# The monthly price-announcement articles (next month's 代理购电价格) appear on
+# the 29th; the job fires daily 29th→month-end and stops early once the
+# next-month table is populated from an article.
+_MONTHLY_DONE_MIN_ROWS = 10
+
+
+def _monthly_sysopfee_done(pg_url: str, next_month: str) -> bool:
+    """True when ≥ threshold next-month rows already carry article provenance."""
+    with psycopg2.connect(pg_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM province_sysopfee_monthly "
+            "WHERE year_month = %s AND source_file LIKE '%%mp.weixin%%'",
+            (next_month,),
+        )
+        n = cur.fetchone()[0]
+    return n >= _MONTHLY_DONE_MIN_ROWS
+
+
+def screen_price_sources_monthly(
+    pg_url: str,
+    api_key: str,
+    feishu,
+    owner_open_id: str,
+) -> dict:
+    """Monthly scrape of cadence='monthly' 代购价格 sources. Runs on days
+    29→month-end; exits quietly once next month's fees are ingested."""
+    from datetime import date as _date
+    today = _date.today()
+    nxt = (today.replace(day=28) + timedelta(days=7)).replace(day=1).isoformat()
+    if _monthly_sysopfee_done(pg_url, nxt):
+        logger.info("Monthly price scrape: %s already populated from articles — skip", nxt)
+        return {"skipped": "already_populated", "month": nxt}
+    return screen_news_sources(pg_url, api_key, feishu, owner_open_id,
+                               cadence="monthly")
 
 
 def _fetch_web_article(url: str) -> tuple[str, str]:
