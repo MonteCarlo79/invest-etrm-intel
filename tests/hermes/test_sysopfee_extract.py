@@ -277,6 +277,14 @@ def test_canon_province_name():
     assert sx._canon_province_name("豫北") is None      # not in the canonical set
 
 
+def test_canon_hebei_mapping():
+    """公告「河北」= southern grid → platform canonical 河北南网; 冀北 untouched."""
+    assert sx._canon_province_name("河北") == "河北南网"
+    assert sx._canon_province_name("河北省") == "河北南网"
+    assert sx._canon_province_name("冀北") == "冀北"
+    assert sx._canon_province_name("河北南网") == "河北南网"
+
+
 def test_article_gate_rejects_non_price_article():
     art = {"title": "某地风电项目开工", "body": "正文 [IMG:https://mmbiz.qpic.cn/x]"}
     assert sx.process_article_images(art, pg_url="x", api_key="k") == 0

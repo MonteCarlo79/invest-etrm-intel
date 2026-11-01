@@ -208,12 +208,20 @@ _PROVINCE_CANON = {
 
 
 def _canon_province_name(name: str) -> Optional[str]:
-    """Normalize a model-returned province name to the platform short name."""
+    """Normalize a model-returned province name to the platform short name.
+
+    公告/汇总 label the southern Hebei grid (国网河北省电力公司) as plain
+    「河北」; the platform's canonical name for that grid is 河北南网 (the
+    northern grid publishes as 冀北 = 河北北网). Map at extraction time so
+    sysopfee rows join the spot/ranking data.
+    """
     n = (name or "").strip()
     for suf in _STRIP_SUFFIXES:
         if n.endswith(suf):
             n = n[: -len(suf)]
             break
+    if n == "河北":
+        n = "河北南网"
     if n in {"内蒙古", ""}:  # ambiguous — must be 蒙西/蒙东
         return None
     return n if n in _PROVINCE_CANON else None

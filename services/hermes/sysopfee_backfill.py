@@ -36,11 +36,13 @@ _IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 _MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 
 # Folder name → canonical province name used across the platform (spot tables,
-# sysopfee tab). Identity for the rest; the folders already use these names.
+# sysopfee tab). 河北 folders hold 国网河北省电力公司 (southern grid) data —
+# the platform's canonical name for it is 河北南网; 冀北 is the northern grid.
 _PROVINCE_ALIASES = {
     "蒙西": "蒙西",
     "蒙东": "蒙东",
     "冀北": "冀北",
+    "河北": "河北南网",
 }
 
 
