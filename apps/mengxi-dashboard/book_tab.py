@@ -13,6 +13,15 @@ Sections:
       "balancing", never "settlement items" (carried review ruling).
   (c) Settled rows — reports.book_settled_daily table + bill-vs-accrual
       reconciliation (daily stacked by accrual_grade, cumulative overlay).
+  (d) Backtest / 回测 — the per-day value-loss ladder from
+      reports.bess_asset_daily_attribution over its own date range (default
+      last 30 days): cumulative P&L chart (nominated vs DP-optimal vs cleared
+      actual vs PF grid-feasible), per-day ladder table, and a summary strip
+      (strategy-selection cost, realisation gap, capture rate). Reads only
+      the attribution table, so it sits BEFORE the settled-table gate and
+      renders regardless of reports.book_settled_daily. settlement_only
+      books get an st.info note (no dispatch chain to backtest);
+      registry_only books skip the section entirely.
 
 Degenerate-waterfall guard (carried review ruling): build_waterfall prints a
 stdout warning when a range has settled rows but ZERO attribution rows
@@ -42,6 +51,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
+from libs.trading_book import backtest as _backtest
 from libs.trading_book.asset_book import AssetBook
 from libs.trading_book.models import Waterfall
 from libs.trading_book.registry import StationRef, get_stations
@@ -194,6 +204,75 @@ def _settled_recon_fig(settled_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+# Backtest cumulative chart series — the brief's rung order: nominated vs
+# tt_strategy (DP-optimal) vs cleared_actual vs pf_grid_feasible.
+_BACKTEST_CUM_SERIES = [
+    ("nominated_pnl", "Nominated", "#1f77b4"),
+    ("tt_strategy_pnl", "DP-optimal (tt_strategy)", "#9467bd"),
+    ("cleared_actual_pnl", "Cleared actual", "#2ca02c"),
+    ("pf_grid_feasible_pnl", "PF grid-feasible", "#ff7f0e"),
+]
+
+
+def _backtest_cum_fig(df: pd.DataFrame) -> go.Figure:
+    """Cumulative CNY per ladder rung over the backtest range. cumsum keeps
+    running sums across NaN cells while the NaN days themselves stay gaps —
+    partial scenario coverage shows as a hole, not a fake zero."""
+    fig = go.Figure()
+    for col, name, color in _BACKTEST_CUM_SERIES:
+        fig.add_trace(go.Scatter(
+            x=df["trade_date"], y=df[col].cumsum(), name=name, mode="lines",
+            line={"color": color}))
+    fig.update_layout(
+        height=380, margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        legend={"orientation": "h", "y": 1.12},
+        xaxis={"title": "Trade date"}, yaxis={"title": "Cumulative CNY"})
+    return fig
+
+
+def _render_backtest_section(engine, station: StationRef) -> None:
+    """Backtest body for full-path stations: own 30-day-default range picker,
+    coverage caption, summary strip, cumulative chart, per-day ladder table."""
+    today = date.today()
+    b1, b2 = st.columns(2)
+    with b1:
+        bt_start = st.date_input("Backtest start",
+                                 value=today - timedelta(days=30),
+                                 key="book_bt_start")
+    with b2:
+        bt_end = st.date_input("Backtest end", value=today,
+                               key="book_bt_end")
+    if bt_start > bt_end:
+        st.error("Backtest start must be on or before backtest end.")
+        return
+    bt_df = _backtest.get_backtest(engine, station.asset_code,
+                                   bt_start, bt_end)
+    if bt_df.empty:
+        st.info(f"No rows in reports.bess_asset_daily_attribution for "
+                f"{station.plant_name} over {bt_start}..{bt_end} — check the "
+                f"attribution pipeline "
+                f"(services.monitoring.run_daily_attribution) coverage.")
+        return
+    summary = _backtest.summarise(bt_df)
+    span_days = (bt_end - bt_start).days + 1
+    st.caption(
+        f"Coverage: **{summary['days']}** of {span_days} calendar days have "
+        f"attribution rows; missing days are skipped — totals and ratios "
+        f"cover present days only.")
+    g1, g2, g3 = st.columns(3)
+    ssc = summary["strategy_selection_cost"]
+    g1.metric("Strategy-selection cost (nominated − DP-optimal)",
+              "n/a" if ssc is None else f"¥{ssc:,.0f}")
+    gap = summary["realisation_gap_vs_pf_grid"]
+    g2.metric("Realisation gap (PF-grid − cleared actual)",
+              "n/a" if gap is None else f"¥{gap:,.0f}")
+    cap = summary["capture_nominated_vs_pf_grid"]
+    g3.metric("Capture rate (nominated / PF-grid)",
+              "n/a" if cap is None else f"{cap:.1%}")
+    st.plotly_chart(_backtest_cum_fig(bt_df), use_container_width=True)
+    st.dataframe(bt_df, use_container_width=True, hide_index=True)
+
+
 def render_book_tab(engine) -> None:
     st.title("Asset Book — 蒙西 Stations")
     st.caption(
@@ -240,6 +319,21 @@ def render_book_tab(engine) -> None:
             st.info(f"No nodal-agent strategy row for {chain_day} "
                     f"({station.plant_name}) — chain shows cleared vs actual only.")
         st.plotly_chart(_chain_fig(book, chain_day), use_container_width=True)
+
+    # ── (d) Backtest / 回测 ─────────────────────────────────────────────────
+    # Placed before the settled-table gate: the backtest reads only
+    # reports.bess_asset_daily_attribution (no dependency on
+    # reports.book_settled_daily), so it renders regardless, like the chain.
+    # registry_only books skip the section entirely (carried convention).
+    if station.data_path != "registry_only":
+        st.header("Backtest / 回测")
+        if station.data_path != "full":
+            st.info(f"{station.plant_name} is a {station.data_path} book "
+                    f"({station.asset_type}) — the backtest needs the "
+                    f"dispatch chain (the bess_asset_daily_attribution "
+                    f"ladder); there is nothing to compare for this station.")
+        else:
+            _render_backtest_section(engine, station)
 
     # Settled-table gate (see module docstring): sections (b)/(c) both read
     # reports.book_settled_daily, which exists only after Task 4's writer has

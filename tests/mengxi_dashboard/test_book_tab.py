@@ -108,6 +108,26 @@ _ATTR_AGG = pd.DataFrame({
     "realisation_gap": [400.0 if _N_ATTR else None],
 })
 
+# Task 14 backtest section: per-day ladder rows (4 covered days).
+_BT_DAYS = pd.date_range((_D - timedelta(days=4)).isoformat(), periods=4,
+                         freq="D")
+_BT_ROWS = pd.DataFrame({
+    "trade_date": _BT_DAYS,
+    "pf_unrestricted_pnl": [1100.0, 1200.0, 1300.0, 1400.0],
+    "pf_grid_feasible_pnl": [1000.0, 1000.0, 1000.0, 1000.0],
+    "tt_forecast_optimal_pnl": [950.0, 950.0, 950.0, 950.0],
+    "tt_strategy_pnl": [900.0, 900.0, 900.0, 900.0],
+    "nominated_pnl": [850.0, 850.0, 850.0, 850.0],
+    "cleared_actual_pnl": [800.0, 800.0, 800.0, 800.0],
+    "grid_restriction_loss": [100.0, 200.0, 300.0, 400.0],
+    "forecast_error_loss": [50.0, 50.0, 50.0, 50.0],
+    "strategy_error_loss": [50.0, 50.0, 50.0, 50.0],
+    "nomination_loss": [50.0, 50.0, 50.0, 50.0],
+    "execution_clearing_loss": [50.0, 50.0, 50.0, 50.0],
+    "realisation_gap_vs_pf": [300.0, 400.0, 500.0, 600.0],
+    "realisation_gap_vs_pf_grid": [200.0, 200.0, 200.0, 200.0],
+})
+
 
 def _fake_read_sql(sql, con, params=None):
     s = " ".join(str(getattr(sql, "text", sql)).split())
@@ -127,6 +147,10 @@ def _fake_read_sql(sql, con, params=None):
                              "model_version": ["nodal_agent_v1"]})
     if "SELECT COUNT(*) AS n FROM reports.bess_asset_daily_attribution" in s:
         return pd.DataFrame({"n": [_N_ATTR]})
+    # Task 14 per-day ladder read — must match BEFORE the aggregate branch.
+    if ("SELECT trade_date" in s
+            and "FROM reports.bess_asset_daily_attribution" in s):
+        return _BT_ROWS.copy()
     if "FROM reports.bess_asset_daily_attribution" in s:
         return _ATTR_AGG
     if "SELECT data_date, source" in s:
@@ -202,3 +226,57 @@ def test_tab_degrades_when_settled_table_missing():
     headers = [h.value for h in at.header]
     assert any("Dispatch chain" in h for h in headers), headers
     assert not any("Attribution waterfall" in h for h in headers), headers
+
+
+# ---------------------------------------------------------- backtest (Task 14)
+
+def test_tab_renders_backtest_section():
+    at = _at(n_attr=5)
+    assert not at.exception, f"render exception: {at.exception}"
+    headers = [h.value for h in at.header]
+    assert any("Backtest" in h for h in headers), headers
+    # summary strip: Σ(nominated − tt_strategy) = 4 × (850 − 900) = −200
+    assert any(m.label.startswith("Strategy-selection cost")
+               and "-200" in m.value
+               for m in at.metric), [f"{m.label}={m.value}" for m in at.metric]
+    # capture = Σnominated / Σpf_grid_feasible = 3400 / 4000 = 85.0%
+    assert any(m.label.startswith("Capture rate") and "85.0" in m.value
+               for m in at.metric), [f"{m.label}={m.value}" for m in at.metric]
+    # ladder table joins the waterfall detail + settled tables
+    assert len(at.dataframe) >= 3
+    # coverage caption: 4 covered days out of the 31-day default range
+    assert any("Coverage:" in c.value and "4" in c.value
+               for c in at.caption), [c.value for c in at.caption]
+
+
+def test_tab_backtest_renders_without_settled_table():
+    # The backtest reads only bess_asset_daily_attribution — it sits before
+    # the settled-table gate and must render even when that gate fires.
+    at = _at(n_attr=5, settled_ok=False)
+    assert not at.exception, f"render exception: {at.exception}"
+    headers = [h.value for h in at.header]
+    assert any("Backtest" in h for h in headers), headers
+
+
+def test_tab_backtest_info_for_settlement_only():
+    # settlement_only books have no dispatch chain — the backtest section
+    # must say so (st.info) instead of querying the attribution ladder.
+    from libs.trading_book.registry import get_station
+    at = _at(n_attr=5)
+    assert not at.exception, f"render exception: {at.exception}"
+    at.selectbox[0].set_value(get_station("wuhai"))
+    at.run()
+    assert not at.exception, f"render exception: {at.exception}"
+    assert any("backtest needs the dispatch chain" in i.value
+               for i in at.info), [i.value for i in at.info]
+
+
+def test_tab_backtest_skipped_for_registry_only():
+    # registry_only books skip the backtest section entirely (convention).
+    from libs.trading_book.registry import get_station
+    at = _at(n_attr=5)
+    at.selectbox[0].set_value(get_station("wuchuan"))
+    at.run()
+    assert not at.exception, f"render exception: {at.exception}"
+    headers = [h.value for h in at.header]
+    assert not any("Backtest" in h for h in headers), headers
