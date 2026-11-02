@@ -145,6 +145,46 @@ _T: dict[str, dict[str, str]] = {
         "fund_capacity_unit":   "万kW",
         "fund_generation_unit": "亿kWh",
         "fund_select_prompt":   "Select at least one province.",
+        # market fundamentals — monthly evolution (province_fundamentals_monthly)
+        "fund_province":        "Province",
+        "fund_timeline_note":   "Annual cards: {ay} · Monthly charts: {cy} (rolls forward automatically each year)",
+        "fund_no_rows":         "No confirmed rows in province_fundamentals_monthly yet — run the province-fundamentals backfill first.",
+        "fund_s1_title":        "Installed Capacity by Technology",
+        "fund_s2_title":        "Generation by Source",
+        "fund_s3_title":        "Utilization Hours by Type",
+        "fund_s4_title":        "Electricity Demand",
+        "fund_annual_cards":    "{year} annual",
+        "fund_monthly_chart":   "{year} monthly",
+        "fund_missing":         "No data",
+        "fund_missing_months":  "Missing months: {months}",
+        "fund_derived":         " (derived)",
+        "fund_scope_caption":   "Scope: {scope}",
+        "fund_scope_full":      "full-scope (全口径)",
+        "fund_scope_prov":      "provincial-dispatch (省调)",
+        "fund_scope_src":       "source calibre",
+        "fund_scope_mixed":     "mixed",
+        "fund_benchmark_title": "National benchmark — {label}",
+        "fund_bench_cap":       "{year} capacity growth",
+        "fund_bench_gen":       "{year} generation growth",
+        "fund_bench_demand":    "{year} demand growth",
+        "fund_national":        "National",
+        "fund_tech_thermal":    "Thermal",
+        "fund_tech_hydro":      "Hydro",
+        "fund_tech_nuclear":    "Nuclear",
+        "fund_tech_wind":       "Wind",
+        "fund_tech_solar":      "Solar",
+        "fund_tech_storage":    "Storage",
+        "fund_tech_total":      "Total",
+        "fund_hours_unit":      "hours",
+        "fund_yoy":             "YoY",
+        "fund_yoy_hours_note":  "YoY shown as hour delta (source convention, not %)",
+        "fund_s3_annual_note":  "Annual rows are cumulative-average hours; monthly derived points are single-month estimates — the two are never merged into one line.",
+        "fund_s4_monthly_title":"Monthly demand & YoY — {year}",
+        "fund_s4_split_title":  "Demand by sector — {year}",
+        "fund_demand_p1":       "Primary industry",
+        "fund_demand_p2":       "Secondary industry",
+        "fund_demand_p3":       "Tertiary industry",
+        "fund_demand_res":      "Residential",
         # agent
         "agent_title":          "Spot Market AI Agent",
         "agent_caption":        "Ask questions about prices, trends, inter-provincial flows, or trigger ingestion.",
@@ -468,6 +508,46 @@ _T: dict[str, dict[str, str]] = {
         "fund_capacity_unit":   "万千瓦",
         "fund_generation_unit": "亿千瓦时",
         "fund_select_prompt":   "请至少选择一个省份。",
+        # market fundamentals — monthly evolution (province_fundamentals_monthly)
+        "fund_province":        "省份",
+        "fund_timeline_note":   "年度卡：{ay} 年 · 逐月图：{cy} 年（随日历自动滚动）",
+        "fund_no_rows":         "province_fundamentals_monthly 表暂无已确认数据——请先运行省级基本面回填。",
+        "fund_s1_title":        "分技术装机",
+        "fund_s2_title":        "分电源发电量",
+        "fund_s3_title":        "分类型利用小时",
+        "fund_s4_title":        "用电需求",
+        "fund_annual_cards":    "{year} 年度",
+        "fund_monthly_chart":   "{year} 逐月",
+        "fund_missing":         "数据缺失",
+        "fund_missing_months":  "缺失月份：{months}",
+        "fund_derived":         "（推算）",
+        "fund_scope_caption":   "口径：{scope}",
+        "fund_scope_full":      "全口径",
+        "fund_scope_prov":      "省调",
+        "fund_scope_src":       "源口径",
+        "fund_scope_mixed":     "混合口径",
+        "fund_benchmark_title": "全国基准 — {label}",
+        "fund_bench_cap":       "{year} 装机增速",
+        "fund_bench_gen":       "{year} 发电增速",
+        "fund_bench_demand":    "{year} 用电增速",
+        "fund_national":        "全国",
+        "fund_tech_thermal":    "火电",
+        "fund_tech_hydro":      "水电",
+        "fund_tech_nuclear":    "核电",
+        "fund_tech_wind":       "风电",
+        "fund_tech_solar":      "光伏",
+        "fund_tech_storage":    "储能",
+        "fund_tech_total":      "合计",
+        "fund_hours_unit":      "小时",
+        "fund_yoy":             "同比",
+        "fund_yoy_hours_note":  "同比为小时差值（源口径，非百分比）",
+        "fund_s3_annual_note":  "年度行为累计平均小时；月度推算点为单月口径——两者不并线。",
+        "fund_s4_monthly_title":"逐月用电量与同比 — {year}",
+        "fund_s4_split_title":  "分产业用电 — {year} 年度",
+        "fund_demand_p1":       "第一产业",
+        "fund_demand_p2":       "第二产业",
+        "fund_demand_p3":       "第三产业",
+        "fund_demand_res":      "城乡居民",
         # agent
         "agent_title":          "现货市场策略分析师",
         "agent_caption":        "查询价格、走势、省间交易数据，或触发PDF导入流程。",
@@ -2318,16 +2398,22 @@ with tab_fundamentals:
     from services.market_fundamentals.loader import (
         load_province_data as _load_fund,
         FUEL_EN as _FUEL_EN,
-        FUEL_COLORS as _FUEL_COLORS,
         PROVINCE_EN as _PROVINCE_EN,
     )
+    import fundamentals_tab as _ft
 
     _fund_data = _load_fund()
+
+    # ── Province deep-dive: annual cards + monthly evolution (S1–S4) ─────────
+    # Source: marketdata.province_fundamentals_monthly (confirmed rows only);
+    # renders independently of the legacy Excel summary used below.
+    _ft.render(t=_t, is_zh=st.session_state.get("lang_radio") == "中文")
 
     if not _fund_data:
         st.warning(_t("fund_no_data"))
     else:
-        # ── Controls ──────────────────────────────────────────────────────────
+        # ── Legacy cross-province rankings (controls apply to sections below) ──
+        st.divider()
         _all_provs_cn = sorted(_fund_data.keys(), key=lambda p: _PROVINCE_EN.get(p, p))
         _all_provs_en = [_PROVINCE_EN.get(p, p) for p in _all_provs_cn]
         _prov_cn_to_en = {p: _PROVINCE_EN.get(p, p) for p in _all_provs_cn}
@@ -2350,85 +2436,6 @@ with tab_fundamentals:
             st.info(_t("fund_select_prompt"))
         else:
             _sel_provs_cn = [_prov_en_to_cn[e] for e in _sel_provs_en if e in _prov_en_to_cn]
-
-            # ── Helper: build DataFrame for one metric ─────────────────────
-            def _fund_df(metric: str, year: int) -> pd.DataFrame:
-                """metric = 'capacity' or 'generation'"""
-                rows = []
-                for pcn in _sel_provs_cn:
-                    info  = _fund_data.get(pcn, {})
-                    raw   = info.get(metric, {}).get(year, {})
-                    pen   = _prov_cn_to_en[pcn]
-                    for fuel_cn in ["风电", "光伏", "水电", "核电", "储能", "火电"]:
-                        fuel_en = _FUEL_EN[fuel_cn]
-                        val = raw.get(fuel_cn, {}).get("value")
-                        if val is not None and val > 0:
-                            rows.append({"Province": pen, "Fuel": fuel_en, "Value": val})
-                return pd.DataFrame(rows)
-
-            # ── Helper: stacked-bar chart (multi-province) ─────────────────
-            def _stacked_bar(df: pd.DataFrame, title: str, unit: str) -> go.Figure:
-                fuel_order = ["Wind", "Solar", "Hydro", "Nuclear", "Storage", "Thermal"]
-                fig = go.Figure()
-                for fuel in fuel_order:
-                    sub = df[df["Fuel"] == fuel]
-                    if sub.empty:
-                        continue
-                    fig.add_trace(go.Bar(
-                        name=fuel,
-                        x=sub["Province"],
-                        y=sub["Value"],
-                        marker_color=_FUEL_COLORS.get(fuel, "#aaa"),
-                        hovertemplate=f"<b>%{{x}}</b><br>{fuel}: %{{y:,.1f}} {unit}<extra></extra>",
-                    ))
-                fig.update_layout(
-                    barmode="stack",
-                    title=title,
-                    xaxis_title="",
-                    yaxis_title=unit,
-                    legend_title="Fuel Type",
-                    height=420,
-                    margin=dict(t=50, b=40),
-                )
-                return fig
-
-            # ── Helper: donut chart (single province) ─────────────────────
-            def _donut(df: pd.DataFrame, title: str, unit: str) -> go.Figure:
-                fuel_order = ["Wind", "Solar", "Hydro", "Nuclear", "Storage", "Thermal"]
-                df_sorted = df.set_index("Fuel").reindex(fuel_order).dropna()
-                fig = go.Figure(go.Pie(
-                    labels=df_sorted.index,
-                    values=df_sorted["Value"],
-                    hole=0.45,
-                    marker_colors=[_FUEL_COLORS.get(f, "#aaa") for f in df_sorted.index],
-                    textinfo="label+percent",
-                    hovertemplate="<b>%{label}</b><br>%{value:,.1f} " + unit + "<br>%{percent}<extra></extra>",
-                ))
-                fig.update_layout(title=title, height=380, margin=dict(t=50, b=10))
-                return fig
-
-            # ── Installed Capacity & Generation (side by side) ─────────────
-            _df_cap = _fund_df("capacity", _fund_year)
-            _df_gen = _fund_df("generation", _fund_year)
-
-            _cap_title = f"{_t('fund_capacity_title')} — {_fund_year}"
-            _gen_title = f"{_t('fund_generation_title')} — {_fund_year}"
-
-            _chart_col1, _chart_col2 = st.columns(2)
-
-            if len(_sel_provs_en) == 1 and not _df_cap.empty:
-                with _chart_col1:
-                    st.plotly_chart(_donut(_df_cap, _cap_title, "万kW"), use_container_width=True)
-            elif not _df_cap.empty:
-                with _chart_col1:
-                    st.plotly_chart(_stacked_bar(_df_cap, _cap_title, "万kW"), use_container_width=True)
-
-            if len(_sel_provs_en) == 1 and not _df_gen.empty:
-                with _chart_col2:
-                    st.plotly_chart(_donut(_df_gen, _gen_title, "亿kWh"), use_container_width=True)
-            elif not _df_gen.empty:
-                with _chart_col2:
-                    st.plotly_chart(_stacked_bar(_df_gen, _gen_title, "亿kWh"), use_container_width=True)
 
             # ── Renewables share bar ───────────────────────────────────────
             _renew_fuels = {"Wind", "Solar", "Hydro", "Nuclear"}

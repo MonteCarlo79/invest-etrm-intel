@@ -40,6 +40,7 @@ COPY services/spot_ingest/              ./services/spot_ingest/
 COPY services/spot_mcp/                 ./services/spot_mcp/
 COPY services/knowledge_pool/           ./services/knowledge_pool/
 COPY services/market_fundamentals/      ./services/market_fundamentals/
+COPY services/province_fundamentals/    ./services/province_fundamentals/
 COPY services/common/                   ./services/common/
 COPY services/exchange_reports/         ./services/exchange_reports/
 COPY services/interconnector/           ./services/interconnector/
