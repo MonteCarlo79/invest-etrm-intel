@@ -94,8 +94,8 @@ def test_sql_frame_guard_naive_cst():
         assert "+08" not in sql            # POSIX-inversion guard
         assert "AT TIME ZONE" not in sql   # columns are already CST-naive
     assert "md_mengxi_nodal_price_96_filled" in _PRICE_SQL
-    assert "ops_bess_dispatch_15min" in _DISPATCH_SQL
-    assert "actual_dispatch_mw" in _DISPATCH_SQL
+    assert "md_id_cleared_energy" in _DISPATCH_SQL
+    assert "cleared_energy_mwh" in _DISPATCH_SQL
 
 
 # ── OLS core (pure frames) ────────────────────────────────────────────────────
@@ -152,10 +152,9 @@ def sqlite_engine():
                 avg_node_price NUMERIC,
                 PRIMARY KEY (node_name, metric_time))"""))
         conn.execute(text("""
-            CREATE TABLE marketdata.ops_bess_dispatch_15min (
-                asset_code TEXT, interval_start TEXT,
-                actual_dispatch_mw NUMERIC,
-                PRIMARY KEY (asset_code, interval_start))"""))
+            CREATE TABLE marketdata.md_id_cleared_energy (
+                plant_name TEXT, datetime TEXT,
+                cleared_energy_mwh NUMERIC, cleared_price NUMERIC)"""))
     ensure_table(eng)  # creates reports.station_market_impact
     return eng
 
@@ -175,9 +174,10 @@ def _load_synth(eng, days: int = 12):
                     "(node_name, metric_time, time_order_96, avg_node_price) "
                     "VALUES (:n, :t, 1, :p)"), {"n": name, "t": ts, "p": px})
             conn.execute(text(
-                "INSERT INTO marketdata.ops_bess_dispatch_15min "
-                "(asset_code, interval_start, actual_dispatch_mw) "
-                "VALUES ('suyou', :t, :mw)"), {"t": ts, "mw": net})
+                "INSERT INTO marketdata.md_id_cleared_energy "
+                "(plant_name, datetime, cleared_energy_mwh, cleared_price) "
+                "VALUES ('景蓝乌尔图储能电站', :t, :mwh, 0)"),
+                {"t": ts, "mwh": net / 4.0})
         # A second station's price node (flat at fleet — leaves the mean
         # intact) with NO dispatch rows, for the loud-skip test.
         for ts, _, fleet, _ in rows[::8]:
@@ -205,7 +205,7 @@ def test_estimate_lambda_missing_dispatch_loud_skip(sqlite_engine, capsys):
     est = estimate_lambda(sqlite_engine, "wulate", lookback_days=20,
                           as_of=date(2026, 8, 21))
     assert est["lambda_cny_per_mwh_per_mw"] is None
-    assert "ops_bess_dispatch_15min" in est["reason"]
+    assert "cleared-dispatch" in est["reason"]
     assert "WARNING" in capsys.readouterr().out
 
 

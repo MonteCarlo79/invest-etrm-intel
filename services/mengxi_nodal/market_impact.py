@@ -117,13 +117,17 @@ _PRICE_SQL = """
     ORDER BY n.metric_time
 """
 
+# Dispatch source: md_id_cleared_energy (market-cleared dispatch — current,
+# all stations; ops_bess_dispatch_15min stopped 2026-04). cleared_energy_mwh
+# is interval energy (MWh) with negative = charging; ×4 → average MW
+# (positive = discharge).
 _DISPATCH_SQL = """
-    SELECT interval_start, actual_dispatch_mw
-    FROM marketdata.ops_bess_dispatch_15min
-    WHERE asset_code = :ac
-      AND interval_start >= :s
-      AND interval_start <  :e
-    ORDER BY interval_start
+    SELECT datetime AS interval_start, cleared_energy_mwh * 4.0 AS actual_dispatch_mw
+    FROM marketdata.md_id_cleared_energy
+    WHERE plant_name LIKE :pn
+      AND datetime >= :s
+      AND datetime < :e
+    ORDER BY datetime
 """
 
 # PG-and-SQLite-portable "latest per asset" (no DISTINCT ON).
@@ -267,10 +271,10 @@ def estimate_lambda(engine, asset_code: str, lookback_days: int = _LOOKBACK_DAYS
                     f"in window [{s}, {e})")
 
     disp_df = pd.read_sql(text(_DISPATCH_SQL), engine,
-                          params={"ac": asset_code, "s": s, "e": e})
+                          params={"pn": f"%{station.plant_name}%", "s": s, "e": e})
     if disp_df.empty:
-        return skip(f"{asset_code}: no ops_bess_dispatch_15min rows "
-                    f"in window [{s}, {e})")
+        return skip(f"{asset_code}: no cleared-dispatch rows for "
+                    f"{station.plant_name} in window [{s}, {e})")
 
     out.update(estimate_from_frames(price_df, disp_df))
     lam_d = out["per_regime"]["discharge"]
