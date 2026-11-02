@@ -13,6 +13,8 @@ from services.province_fundamentals.models import FundRow
 FIXTURE = (Path(__file__).parent / "fixtures"
            / "安徽电力市场信息披露月报数据-截至2026年5月.xlsx")
 FIXTURE_B = (Path(__file__).parent / "fixtures" / "2-安徽装机-7月.xlsx")
+FIXTURE_JIAOJIE = (Path(__file__).parent / "fixtures"
+                   / "2025年1-12月各省分类型利用小时.xlsx")
 
 
 def test_known_formats_lists_format_a():
@@ -120,3 +122,38 @@ def test_detect_province_longest_name_wins(monkeypatch):
     registry.register("河北南网", _P)
     rows = registry.parse_file(Path("/x/河北南网月报数据.xlsx"))
     assert rows[0].province == "河北南网"
+
+
+# ── dispatch() + jiaojie 全国册注册 (task 5) ────────────────────────────────────
+
+def test_dispatch_returns_format_name_and_rows():
+    """dispatch = parse_file + 命中格式名 (runner dry-run 判定要打印格式)."""
+    fmt, rows = registry.dispatch(FIXTURE)
+    assert fmt == "format_a"
+    assert rows, "fixture must parse non-empty"
+
+
+def test_dispatch_unknown_returns_none_format(tmp_path):
+    wb = openpyxl.Workbook()
+    wb.active.append(["x"])
+    p = tmp_path / "乱七八糟.xlsx"
+    wb.save(p)
+    fmt, rows = registry.dispatch(p)
+    assert fmt is None
+    assert rows == []
+
+
+def test_jiaojie_registered_as_national_parser():
+    """交接表全国册: 路径无省份名, 仍须命中 (task-5 brief: 注册进 registry)."""
+    assert "jiaojie_2025" in registry.known_formats()
+    fmt, rows = registry.dispatch(FIXTURE_JIAOJIE)
+    assert fmt == "jiaojie_2025"
+    provs = {r.province for r in rows}
+    assert "山东" in provs and "安徽" in provs
+
+
+def test_jiaojie_sniff_rejects_province_workbook():
+    """全国册 sniff 不得误吃省月报 (format A fixture 无交接表三 sheet)."""
+    from services.province_fundamentals.parsers import jiaojie_2025
+    assert not jiaojie_2025.sniff(FIXTURE)
+    assert jiaojie_2025.sniff(FIXTURE_JIAOJIE)

@@ -12,6 +12,10 @@
 Parser 鸭子类型: .parse(path, province) -> list[FundRow], .sniff(path) -> bool,
 .FORMAT_NAME: str. 一个省可注册多个 parser (一省可同时存在多种月报版式,
 如安徽 格式 A 月报数据 + 格式 B 装机-月), 按注册顺序逐个 sniff, 首个命中者解析.
+
+全国册 (单文件多省, 如交接表 2025) 走 register_national: 路径无省份名, 省份
+嗅探不适用 — 省 parser 全部 miss 后 (或本无省份命中时) 由 national parser 补探,
+province 形参传 None (全国册自带省份列, 忽略该形参).
 """
 from __future__ import annotations
 
@@ -29,39 +33,61 @@ class _Parser(Protocol):
 
     def sniff(self, path: Path) -> bool: ...
 
-    def parse(self, path: Path, province: str) -> list[FundRow]: ...
+    def parse(self, path: Path, province: str | None) -> list[FundRow]: ...
 
 
 _REGISTRY: dict[str, list[_Parser]] = {}
+_NATIONAL: list[_Parser] = []
 
 
 def register(province: str, parser: _Parser) -> None:
     _REGISTRY.setdefault(province, []).append(parser)
 
 
+def register_national(parser: _Parser) -> None:
+    _NATIONAL.append(parser)
+
+
 def known_formats() -> list[str]:
-    return sorted({p.FORMAT_NAME for ps in _REGISTRY.values() for p in ps})
+    return sorted({p.FORMAT_NAME for ps in _REGISTRY.values() for p in ps}
+                  | {p.FORMAT_NAME for p in _NATIONAL})
 
 
 def parse_file(path) -> list[FundRow]:
     """嗅探派发. 任何不命中/失败 → [] 并 log (不抛)."""
+    return dispatch(path)[1]
+
+
+def dispatch(path) -> tuple[str | None, list[FundRow]]:
+    """嗅探派发 + 命中格式名 (回填 runner dry-run 判定要打印格式).
+
+    返回 (FORMAT_NAME, rows); 未命中 → (None, []); parser 命中但抛错/空
+    → (FORMAT_NAME, []) 并 log. 首个 sniff 命中者解析, 不fall-through.
+    """
     path = Path(path)
     province = _detect_province(path)
-    if province is None:
-        log.info("parse_file: no registered province in path %s", path)
-        return []
-    for parser in _REGISTRY[province]:
+    parsers: list[_Parser] = []
+    if province is not None:
+        parsers.extend(_REGISTRY[province])
+    parsers.extend(_NATIONAL)
+    if not parsers:
+        log.info("dispatch: no registered province in path %s", path)
+        return None, []
+    for parser in parsers:
         if not parser.sniff(path):
             continue
         try:
-            return parser.parse(path, province)
+            return parser.FORMAT_NAME, parser.parse(path, province)
         except Exception:
-            log.exception("parse_file: %s parser failed on %s",
+            log.exception("dispatch: %s parser failed on %s",
                           parser.FORMAT_NAME, path)
-            return []
-    log.info("parse_file: %s matched province %s but format sniff failed",
-             path.name, province)
-    return []
+            return parser.FORMAT_NAME, []
+    if province is not None:
+        log.info("dispatch: %s matched province %s but format sniff failed",
+                 path.name, province)
+    else:
+        log.info("dispatch: no parser sniff-hit %s", path)
+    return None, []
 
 
 def _detect_province(path: Path) -> str | None:
@@ -73,6 +99,8 @@ def _detect_province(path: Path) -> str | None:
 # 内建注册 (确定性, import 时无 IO)
 from services.province_fundamentals.parsers import format_a as _format_a  # noqa: E402
 from services.province_fundamentals.parsers import format_b as _format_b  # noqa: E402
+from services.province_fundamentals.parsers import jiaojie_2025 as _jiaojie  # noqa: E402
 
 register("安徽", _format_a)
 register("安徽", _format_b)
+register_national(_jiaojie)

@@ -37,6 +37,7 @@ from services.province_fundamentals.models import FundRow
 
 log = logging.getLogger(__name__)
 
+FORMAT_NAME = "jiaojie_2025"
 YEAR = date(2025, 1, 1)
 SHEET_HOURS = "2025各省年度利用小时数"
 SHEET_DEMAND = "全社会用电量"
@@ -107,6 +108,27 @@ def parse_jiaojie(path) -> list[FundRow]:
         wb.close()
     out.sort(key=lambda r: (r.province, r.section, r.metric))
     return out
+
+
+# ── registry 鸭子类型 (task 5: 全国册注册进 registry — 无省份名的路径靠 national
+#    通道派发; province 形参为协议凑位, 本册自带 31 省列, 忽略之) ─────────────────
+
+def sniff(path) -> bool:
+    """结构嗅探: 三个年度 sheet 名齐全. 任何读取失败都视为不命中."""
+    try:
+        wb = load_workbook(Path(path), read_only=True)
+        try:
+            return all(s in wb.sheetnames
+                       for s in (SHEET_HOURS, SHEET_DEMAND, SHEET_GEN))
+        finally:
+            wb.close()
+    except Exception:
+        log.debug("jiaojie_2025 sniff failed: %s", path, exc_info=True)
+        return False
+
+
+def parse(path, province: str | None = None) -> list[FundRow]:
+    return parse_jiaojie(path)
 
 
 # ── sheet: 2025各省年度利用小时数 ─────────────────────────────────────────────
