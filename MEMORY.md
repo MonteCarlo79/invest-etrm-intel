@@ -336,3 +336,23 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Standing offers: net merchant margin metric for BESS (放电−充电); psycopg[binary] preventive fix for bess-map + hermes-service
 - Mac→RDS flaps: DB work via `aws ecs run-task` (asset_risk td + service net config); overrides cap 8,192B → base64-pack pattern (debug/pack_rebuild.py); rebuild audit trail in debug/dingyuan_rebuild_2024_2026.py, backup JSON in task log e7eb3e3b
 - Postgres `AT TIME ZONE '+08:00'` is POSIX-inverted (renders UTC−8, never CST) — trader session fixed nodal views (5f3c1f59); never use numeric TZ offsets
+
+## Session Summary, 2026-10-31 → 2026-11-02
+**Worked on:** 系统运行费 (province_sysopfee_monthly) full pipeline — May 2026 backfill, Jun–Oct actuals replacing year-end forecasts, monthly automation.
+**Completed:**
+- May 2026: 33/33 provinces 公告-verified. 9 fixes after dry-run review — 7 formula-cell captures (计算关系 index read as value, ÷100 guard disguised it), 2 vision misreads (山东/湖南 caught by provincial-Excel cross-check), 浙江 vision page-iteration fix. 青海 kept at 公告 0.038514 (compilation had 2025-05 copy-paste).
+- Jun–Oct actuals: 140 cells from 智慧光伏 articles + 北极星 cross-validation (117/125 exact-match) + 23 gap/fix cells + 河南 official 公告 6 rows (all 5 Jun–Oct EXACT-matched compilations; Nov=0.017261 new) + 山东 Oct 0.0145 (user's official 4-component decomposition) + 海南 Oct/Sep confirmed. **Coverage complete May→Oct for all 33 provinces.**
+- Scroll screenshots (IMG_4957-4966, 394px-wide) failed validation 3× (best 16/33 with digit errors) — abandoned for writes; ERRORS.md postmortem. Working path: article HTML from Mac (WeChat challenge-blocks ECS NAT IP; qpic image CDN open) → full-res per-province images → vision on ECS.
+- 河北→河北南网 canonical rename (23 rows + 1 forecast dropped; 冀北=河北北网 untouched) — user-confirmed, extraction-time mapping in code.
+- Monthly cadence: 5 price sources （北极星/智慧光伏/联合快充/电管小助手/海南充电协会） → scrape_config.cadence='monthly'; new job days 29-31 17:00 Beijing, early-exit when next-month rows ≥10 with article provenance; daily scrape skips them.
+- sysopfee flows into ranking/Geo/IRR/Option Engine automatically (load_sysopfee_latest = latest month per province).
+**In progress:** none. 蒙西 Jun–Oct still missing (its Excel is #REF! past May; needs per-month 公告 files). Flagged low-confidence cells in memory (深圳 Aug/Sep own-series?, 冀北 Oct 2v2, 四川 Jul, 蒙西 Jun, 湖南 Jul).
+**Decisions made:**
+- Never write unverifiable extraction output (scroll path blocked from writes after May validation failed)
+- 公告 PDF text-layer > provincial Excel > compilation articles for authority; Excel Jun–Oct turned out to be forecasts (user intel)
+- Deploys: hermes td:192 (v20261031) → td:193 (v20261101) → td:196 (v20261102b); td:195/v20261102 superseded in minutes (missing parallel session's mengxi_ranking_report.py — caught by td diff before serving alone)
+- Parallel-session sweep repaired: cb780bda deleted my 3 new files → restored in 2a881e12 via temp-index plumbing
+**Next session:**
+- Nov 29 17:00 Beijing: first fully-automatic monthly run (Dec prices); check Feishu digest + tab
+- Standing: tinyproxy (124.221.238.130) still down — WeChat article HTML stays blocked from ECS until revived; Mac-side fetch works as bridge
+- Remaining flagged cells need provincial 公告 checks if the user wants them settled: 深圳 Aug/Sep, 冀北 Oct, 四川 Jul, 蒙西 Jun, 湖南 Jul
