@@ -12,10 +12,12 @@ from services.province_fundamentals.models import FundRow
 
 FIXTURE = (Path(__file__).parent / "fixtures"
            / "安徽电力市场信息披露月报数据-截至2026年5月.xlsx")
+FIXTURE_B = (Path(__file__).parent / "fixtures" / "2-安徽装机-7月.xlsx")
 
 
 def test_known_formats_lists_format_a():
     assert "format_a" in registry.known_formats()
+    assert "format_b" in registry.known_formats()
 
 
 def test_parse_file_dispatches_anhui_fixture():
@@ -25,6 +27,16 @@ def test_parse_file_dispatches_anhui_fixture():
     assert {r.province for r in rows} == {"安徽"}
     by = {(r.month, r.metric): r.value for r in rows}
     assert by[(date(2025, 1, 1), "cap_total")] == pytest.approx(6831.49)
+
+
+def test_parse_file_dispatches_anhui_format_b_fixture():
+    """同省多格式: 装机-月工作簿 (格式 B) 不得落到格式 A — sniff 依次探, 首个命中者解析."""
+    rows = registry.parse_file(FIXTURE_B)
+    assert rows, "format B fixture must parse non-empty"
+    assert {r.province for r in rows} == {"安徽"}
+    by = {(r.month, r.metric): r.value for r in rows}
+    assert by[(date(2025, 1, 1), "cap_total_full")] == pytest.approx(12635.64)
+    assert (date(2025, 1, 1), "cap_total") not in by   # 未误派格式 A
 
 
 def test_parse_file_unknown_format_returns_empty_and_logs(tmp_path, caplog):
