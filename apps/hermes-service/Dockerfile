@@ -7,9 +7,13 @@ ENV PYTHONPATH=/app
 WORKDIR /app
 
 COPY apps/hermes-service/requirements.txt /tmp/requirements.txt
+# China-egress builds: PyPI direct is unreliable from CN networks; Tsinghua mirror
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Chromium for services/common/render_fetch.py (Aliyun-WAF-gated sources like bjx)
+# npmmirror hosts the playwright binaries (playwright CDN is blocked from CN egress)
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright
 RUN playwright install --with-deps chromium
 
 # CJK font for matplotlib Chinese labels
@@ -29,7 +33,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && rm -rf /var/lib/apt/lists/*
 
 # Install agent-reach Python package (includes yt-dlp, feedparser)
-RUN pip install --no-cache-dir "https://github.com/Panniantong/agent-reach/archive/main.zip"
+# Vendored in-repo: github.com archive download is blocked from CN build networks
+COPY vendor/agent-reach /tmp/agent-reach
+RUN pip install --no-cache-dir /tmp/agent-reach
 
 # Install mcporter (Exa search MCP bridge) and bili-cli
 RUN npm install -g mcporter bili-cli 2>/dev/null || true
