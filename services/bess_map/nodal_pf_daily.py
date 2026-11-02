@@ -10,7 +10,10 @@ Price source: 蒙西 reads the EnOS-backed view (md_mengxi_nodal_price_96);
 other provinces read the Fengxing base table filtered by market_name.
 蒙西 nodes belonging to a registered BESS station are additionally constrained
 by that station's nomination-file dispatch zones (task 12: red = no charge,
-yellow = no discharge); all other nodes stay unconstrained.
+yellow = no discharge); all other nodes stay unconstrained. Stations with a
+persisted market-impact estimate (task 13, reports.station_market_impact)
+dispatch at impact-adjusted clearing prices (discharge p − λ·Q, charge
+p + λ·Q); absent or non-positive λ → pure price-taker, unchanged behavior.
 """
 from __future__ import annotations
 
@@ -168,6 +171,31 @@ def _mengxi_zone_masks(engine, day: date) -> tuple[dict, list]:
     return masks, stale
 
 
+def _mengxi_node_impacts(engine) -> dict[str, float]:
+    """Per-node market-impact λ (CNY/MWh per MW) from the stations' latest
+    persisted estimates (task 13): a station's discharge-regime λ applies to
+    its registry price nodes (own + expanded parents). Nodes without an
+    estimate — or with a non-positive one (the reverse-causality sign: no
+    usable impact signal) — stay price-taker by absence from the map. The
+    engine takes a single symmetric λ, so the discharge regime is passed as
+    the dominant revenue channel. Nodes shared by two stations keep the
+    FIRST station's λ in registry order (same rule as the zone masks).
+    """
+    from libs.trading_book.registry import get_stations
+    from services.mengxi_nodal.market_impact import get_latest_lambdas
+    latest = get_latest_lambdas(engine)
+    out: dict[str, float] = {}
+    for s in get_stations(asset_type="bess"):
+        row = latest.get(s.asset_code)
+        lam = row.get("lambda_discharge") if row else None
+        if lam is None or lam <= 0:
+            continue
+        for n in _expand_price_nodes(s.price_nodes):
+            if n not in out:
+                out[n] = float(lam)
+    return out
+
+
 def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[int, str]:
     df = _fetch_prices(engine, province, day)
     if df.empty:
@@ -180,6 +208,7 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
     default_sub = _MENGXI_DEFAULT_SUBSIDY if province == "蒙西" else 0.0
     zone_masks, stale_zones = (
         _mengxi_zone_masks(engine, day) if province == "蒙西" else ({}, []))
+    impact_map = _mengxi_node_impacts(engine) if province == "蒙西" else {}
 
     day_start = pd.Timestamp(day.year, day.month, day.day)
     rows = []
@@ -199,6 +228,7 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
                 compensation_yuan_per_mwh=subsidies.get(node, default_sub),
                 no_charge_slots=zm[0] if zm else None,
                 no_discharge_slots=zm[1] if zm else None,
+                impact_lambda=impact_map.get(node),
             )
             rows.append({
                 "data_date": day, "province": province, "node_name": node,
@@ -221,6 +251,8 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
         if stale_zones:
             msg += f", stale zones: {','.join(stale_zones)}"
         msg += ")"
+    if impact_map:
+        msg += f" ({len(impact_map)} impact-adjusted nodes)"
     return len(rows), msg
 
 

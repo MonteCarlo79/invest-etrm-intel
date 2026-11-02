@@ -52,6 +52,8 @@ def optimise_window(
     solver_time_limit_s: Optional[float] = None,
     no_charge_slots: Optional[set] = None,
     no_discharge_slots: Optional[set] = None,
+    impact_lambda: Optional[float] = None,
+    impact_blocks: int = 8,
 ) -> DispatchResult:
     """
     Solve the BESS arbitrage LP for an arbitrary number of intervals T.
@@ -98,6 +100,27 @@ def optimise_window(
         no_discharge_slots:        Optional set of 0-based window indices where
                                    discharging is forbidden (dis[t] = 0) — e.g.
                                    蒙西 yellow restriction slots.
+        impact_lambda:             Optional market-impact coefficient λ
+                                   (CNY/MWh per MW), task 13: discharging Q MW in
+                                   a slot clears at p − λ·Q, charging at p + λ·Q.
+                                   The quadratic clearing revenue (p − λ·Q)·Q is
+                                   LP-linearised with impact_blocks power blocks
+                                   per slot whose objective coefficients are the
+                                   chord slopes p ∓ 2λ·(k+0.5)·Δ (Δ = power_mw /
+                                   blocks) — the MARGINAL prices (factor 2), not
+                                   the average clearing prices. Block slopes are
+                                   monotone in k, so blocks fill in order with no
+                                   extra constraints — only finer variables (zone
+                                   masks still work: they zero every block's
+                                   upBound). The piecewise-linear objective snaps
+                                   slot optima to block boundaries (Δ granularity).
+                                   None or 0.0 → price-taker, bit-identical to the
+                                   plain path; negative raises ValueError.
+                                   Reported profit is the market cash flow at
+                                   impact-adjusted clearing prices.
+        impact_blocks:             Number of per-slot power blocks for the impact
+                                   linearisation (default 8 → 12.5 MW blocks at
+                                   100 MW rated).
 
     Returns:
         DispatchResult with charge_mw, discharge_mw, soc_mwh arrays (length T),
@@ -108,11 +131,29 @@ def optimise_window(
     eta_d = float(np.sqrt(roundtrip_eff))
     e_cap = float(power_mw * duration_h)
 
+    if impact_lambda is not None and impact_lambda < 0:
+        raise ValueError(f"impact_lambda must be >= 0, got {impact_lambda}")
+    use_impact = bool(impact_lambda)  # None / 0.0 -> plain price-taker path
+    lam = float(impact_lambda) if use_impact else 0.0
+
     prob = pulp.LpProblem("bess_arbitrage_window", pulp.LpMaximize)
 
-    ch = pulp.LpVariable.dicts("ch", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
-    dis = pulp.LpVariable.dicts("dis", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
     soc = pulp.LpVariable.dicts("soc", range(T + 1), lowBound=0, upBound=e_cap, cat="Continuous")
+
+    if use_impact:
+        K = int(impact_blocks)
+        if K < 1:
+            raise ValueError(f"impact_blocks must be >= 1, got {impact_blocks}")
+        delta = float(power_mw) / K
+        ch_b = pulp.LpVariable.dicts("chb", (range(K), range(T)),
+                                     lowBound=0, upBound=delta, cat="Continuous")
+        dis_b = pulp.LpVariable.dicts("disb", (range(K), range(T)),
+                                      lowBound=0, upBound=delta, cat="Continuous")
+        ch = {t: pulp.lpSum(ch_b[k][t] for k in range(K)) for t in range(T)}
+        dis = {t: pulp.lpSum(dis_b[k][t] for k in range(K)) for t in range(T)}
+    else:
+        ch = pulp.LpVariable.dicts("ch", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
+        dis = pulp.LpVariable.dicts("dis", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
 
     # Binary variable prevents simultaneous charge and discharge
     y = pulp.LpVariable.dicts("y", range(T), lowBound=0, upBound=1, cat="Binary")
@@ -120,14 +161,23 @@ def optimise_window(
 
     # Dispatch-restriction hard constraints (蒙西 nomination zones): bound the
     # variable to zero rather than adding LP rows — tighter and free at solve time.
+    # In impact mode the bound lands on every block variable instead.
     if no_charge_slots:
         for t in no_charge_slots:
             if 0 <= t < T:
-                ch[t].upBound = 0
+                if use_impact:
+                    for k in range(K):
+                        ch_b[k][t].upBound = 0
+                else:
+                    ch[t].upBound = 0
     if no_discharge_slots:
         for t in no_discharge_slots:
             if 0 <= t < T:
-                dis[t].upBound = 0
+                if use_impact:
+                    for k in range(K):
+                        dis_b[k][t].upBound = 0
+                else:
+                    dis[t].upBound = 0
 
     # Initial SoC = 0 at the start of the window
     prob += soc[0] == 0
@@ -165,12 +215,25 @@ def optimise_window(
             prob += (dis[t] - ch[t]) - (dis[t - 1] - ch[t - 1]) <= ramp_max
             prob += (dis[t] - ch[t]) - (dis[t - 1] - ch[t - 1]) >= -ramp_max
 
-    # Objective: maximise (discharge + subsidy - charge) revenue × interval duration
-    prob += pulp.lpSum(
-        ((float(prices[t]) + float(compensation_yuan_per_mwh)) * dis[t]
-         - float(prices[t]) * ch[t]) * dt
-        for t in range(T)
-    )
+    # Objective: maximise (discharge + subsidy - charge) revenue × interval duration.
+    # Impact mode: per-block chord slopes of the quadratic clearing revenue
+    # (p ∓ λ·Q)·Q — discharge block k earns p − 2λ·(k+0.5)·Δ (+ subsidy), charge
+    # block k pays p + 2λ·(k+0.5)·Δ. Same "price adjustment inside the objective",
+    # no new constraints.
+    if use_impact:
+        prob += pulp.lpSum(
+            pulp.lpSum(
+                (float(prices[t]) - 2.0 * lam * (k + 0.5) * delta
+                 + float(compensation_yuan_per_mwh)) * dis_b[k][t]
+                - (float(prices[t]) + 2.0 * lam * (k + 0.5) * delta) * ch_b[k][t]
+                for k in range(K)) * dt
+            for t in range(T))
+    else:
+        prob += pulp.lpSum(
+            ((float(prices[t]) + float(compensation_yuan_per_mwh)) * dis[t]
+             - float(prices[t]) * ch[t]) * dt
+            for t in range(T)
+        )
     prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=(solver_time_limit_s or 120)))
 
     status = pulp.LpStatus.get(prob.status, str(prob.status))
@@ -178,7 +241,12 @@ def optimise_window(
     chv = np.array([pulp.value(ch[t]) for t in range(T)], dtype=float)
     disv = np.array([pulp.value(dis[t]) for t in range(T)], dtype=float)
     socv = np.array([pulp.value(soc[t + 1]) for t in range(T)], dtype=float)
-    profit = float(np.nansum(prices * (disv - chv) * dt))
+    if use_impact:
+        # Market cash flow at impact-adjusted clearing prices.
+        profit = float(np.nansum(
+            ((prices - lam * disv) * disv - (prices + lam * chv) * chv) * dt))
+    else:
+        profit = float(np.nansum(prices * (disv - chv) * dt))
 
     return DispatchResult(chv, disv, socv, profit, status)
 
@@ -242,6 +310,7 @@ def compute_dispatch_from_hourly_prices(
     ramp_rate_pct_per_min: Optional[float] = None,
     no_charge_slots: Optional[set] = None,
     no_discharge_slots: Optional[set] = None,
+    impact_lambda: Optional[float] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over every complete day in ``hourly_prices``,
@@ -278,6 +347,10 @@ def compute_dispatch_from_hourly_prices(
                              (1..intervals_per_day) where charging is forbidden,
                              applied to every day of every window.
         no_discharge_slots:  Same, forbidding discharge.
+        impact_lambda:       Optional market-impact coefficient (CNY/MWh per MW)
+                             passed through to optimise_window — discharge clears
+                             at p − λ·Q, charge at p + λ·Q (see optimise_window
+                             docstring for the block linearisation).
 
     Returns:
         dispatch_df:  DataFrame indexed by datetime with columns:
@@ -352,6 +425,7 @@ def compute_dispatch_from_hourly_prices(
             ramp_rate_pct_per_min=ramp_rate_pct_per_min,
             no_charge_slots=w_nc,
             no_discharge_slots=w_nd,
+            impact_lambda=impact_lambda,
         )
 
         for i, d in enumerate(window_dates):
@@ -391,6 +465,7 @@ def compute_dispatch_from_15min_prices(
     ramp_rate_pct_per_min: Optional[float] = None,
     no_charge_slots: Optional[set] = None,
     no_discharge_slots: Optional[set] = None,
+    impact_lambda: Optional[float] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over 15-min price intervals (96 per day).
@@ -410,6 +485,9 @@ def compute_dispatch_from_15min_prices(
                              charging is forbidden (蒙西 red zones).
         no_discharge_slots:  optional 1-based slot numbers where discharging
                              is forbidden (蒙西 yellow zones).
+        impact_lambda:       optional market-impact coefficient (CNY/MWh per
+                             MW): discharge clears at p − λ·Q, charge at
+                             p + λ·Q (task 13; see optimise_window docstring).
         Other args:   same as compute_dispatch_from_hourly_prices.
 
     Returns:
@@ -431,4 +509,5 @@ def compute_dispatch_from_15min_prices(
         ramp_rate_pct_per_min=ramp_rate_pct_per_min,
         no_charge_slots=no_charge_slots,
         no_discharge_slots=no_discharge_slots,
+        impact_lambda=impact_lambda,
     )
