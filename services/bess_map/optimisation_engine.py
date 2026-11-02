@@ -50,6 +50,8 @@ def optimise_window(
     dt: float = 1.0,
     ramp_rate_pct_per_min: Optional[float] = None,
     solver_time_limit_s: Optional[float] = None,
+    no_charge_slots: Optional[set] = None,
+    no_discharge_slots: Optional[set] = None,
 ) -> DispatchResult:
     """
     Solve the BESS arbitrage LP for an arbitrary number of intervals T.
@@ -90,6 +92,12 @@ def optimise_window(
                                    charge/discharge, and the window starts from idle
                                    (|P_grid[0]| ≤ one ramp step). Default None =
                                    unconstrained (valuation-model behaviour).
+        no_charge_slots:           Optional set of 0-based window indices where
+                                   charging is forbidden (cha[t] = 0) — e.g. 蒙西
+                                   red restriction slots.
+        no_discharge_slots:        Optional set of 0-based window indices where
+                                   discharging is forbidden (dis[t] = 0) — e.g.
+                                   蒙西 yellow restriction slots.
 
     Returns:
         DispatchResult with charge_mw, discharge_mw, soc_mwh arrays (length T),
@@ -109,6 +117,17 @@ def optimise_window(
     # Binary variable prevents simultaneous charge and discharge
     y = pulp.LpVariable.dicts("y", range(T), lowBound=0, upBound=1, cat="Binary")
     M = power_mw
+
+    # Dispatch-restriction hard constraints (蒙西 nomination zones): bound the
+    # variable to zero rather than adding LP rows — tighter and free at solve time.
+    if no_charge_slots:
+        for t in no_charge_slots:
+            if 0 <= t < T:
+                ch[t].upBound = 0
+    if no_discharge_slots:
+        for t in no_discharge_slots:
+            if 0 <= t < T:
+                dis[t].upBound = 0
 
     # Initial SoC = 0 at the start of the window
     prob += soc[0] == 0
@@ -221,6 +240,8 @@ def compute_dispatch_from_hourly_prices(
     intervals_per_day: int = 24,
     freq: str = "h",
     ramp_rate_pct_per_min: Optional[float] = None,
+    no_charge_slots: Optional[set] = None,
+    no_discharge_slots: Optional[set] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over every complete day in ``hourly_prices``,
@@ -253,6 +274,10 @@ def compute_dispatch_from_hourly_prices(
                              96 for 15-min).
         freq:                Pandas frequency string for the DatetimeIndex of each day
                              (default "h" for hourly, "15min" for quarter-hourly).
+        no_charge_slots:     Optional set of 1-based per-day slot numbers
+                             (1..intervals_per_day) where charging is forbidden,
+                             applied to every day of every window.
+        no_discharge_slots:  Same, forbidding discharge.
 
     Returns:
         dispatch_df:  DataFrame indexed by datetime with columns:
@@ -308,6 +333,13 @@ def compute_dispatch_from_hourly_prices(
 
     for window_dates in windows:
         all_prices = np.concatenate([complete_days[d] for d in window_dates])
+        # Per-day 1-based masks → window-absolute 0-based indices.
+        w_nc = ({i * intervals_per_day + s - 1
+                 for i in range(len(window_dates)) for s in no_charge_slots}
+                if no_charge_slots else None)
+        w_nd = ({i * intervals_per_day + s - 1
+                 for i in range(len(window_dates)) for s in no_discharge_slots}
+                if no_discharge_slots else None)
         res = optimise_window(
             all_prices,
             power_mw=power_mw,
@@ -318,6 +350,8 @@ def compute_dispatch_from_hourly_prices(
             compensation_yuan_per_mwh=compensation_yuan_per_mwh,
             dt=dt,
             ramp_rate_pct_per_min=ramp_rate_pct_per_min,
+            no_charge_slots=w_nc,
+            no_discharge_slots=w_nd,
         )
 
         for i, d in enumerate(window_dates):
@@ -355,6 +389,8 @@ def compute_dispatch_from_15min_prices(
     compensation_yuan_per_mwh: float = 0.0,
     window_days: int = 1,
     ramp_rate_pct_per_min: Optional[float] = None,
+    no_charge_slots: Optional[set] = None,
+    no_discharge_slots: Optional[set] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over 15-min price intervals (96 per day).
@@ -370,6 +406,10 @@ def compute_dispatch_from_15min_prices(
         ramp_rate_pct_per_min: optional operator ramp limit (%/min of rated),
                              e.g. 3.3 for the 蒙西 rule — at 15-min granularity
                              this caps interval swing at 49.5% of rated.
+        no_charge_slots:     optional 1-based slot numbers (1..96) where
+                             charging is forbidden (蒙西 red zones).
+        no_discharge_slots:  optional 1-based slot numbers where discharging
+                             is forbidden (蒙西 yellow zones).
         Other args:   same as compute_dispatch_from_hourly_prices.
 
     Returns:
@@ -389,4 +429,6 @@ def compute_dispatch_from_15min_prices(
         intervals_per_day=96,
         freq="15min",
         ramp_rate_pct_per_min=ramp_rate_pct_per_min,
+        no_charge_slots=no_charge_slots,
+        no_discharge_slots=no_discharge_slots,
     )

@@ -8,6 +8,9 @@ not copied). Run as:  python -m services.bess_map.nodal_pf_daily [--date D]
 Config fixed: 100 MW / 2h / 85% RTE (matches services.mengxi_nodal.pf_results.CONFIG).
 Price source: 蒙西 reads the EnOS-backed view (md_mengxi_nodal_price_96);
 other provinces read the Fengxing base table filtered by market_name.
+蒙西 nodes belonging to a registered BESS station are additionally constrained
+by that station's nomination-file dispatch zones (task 12: red = no charge,
+yellow = no discharge); all other nodes stay unconstrained.
 """
 from __future__ import annotations
 
@@ -136,6 +139,35 @@ def _mengxi_node_subsidies() -> dict[str, float]:
     return out
 
 
+def _mengxi_zone_masks(engine, day: date) -> tuple[dict, list]:
+    """Per-node dispatch-restriction masks from the stations' nomination zones
+    (task 12): a station's red (no-charge) / yellow (no-discharge) slots apply
+    to its registry price nodes (own + expanded parents); every other node
+    stays unconstrained. Stations with no zones loaded (registry_only /
+    settlement_only, or no nomination file yet) contribute nothing. Nodes
+    shared by two stations (谷山梁 parents: gushanliang + hangjinqi) keep the
+    FIRST station's mask in registry order.
+
+    Returns (node → (no_charge_slots, no_discharge_slots), stale asset_codes).
+    Slot numbers are 1-based, as compute_dispatch_from_15min_prices expects.
+    """
+    from libs.trading_book.registry import get_stations
+    from services.mengxi_nodal.dispatch_zones import get_zones, zones_to_masks
+    masks: dict = {}
+    stale: list = []
+    for s in get_stations(asset_type="bess"):
+        zones, is_stale = get_zones(engine, s.asset_code, day)
+        if not zones:
+            continue
+        if is_stale:
+            stale.append(s.asset_code)
+        m = zones_to_masks(zones)
+        for n in _expand_price_nodes(s.price_nodes):
+            if n not in masks:
+                masks[n] = m
+    return masks, stale
+
+
 def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[int, str]:
     df = _fetch_prices(engine, province, day)
     if df.empty:
@@ -146,6 +178,8 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
 
     subsidies = _mengxi_node_subsidies() if province == "蒙西" else {}
     default_sub = _MENGXI_DEFAULT_SUBSIDY if province == "蒙西" else 0.0
+    zone_masks, stale_zones = (
+        _mengxi_zone_masks(engine, day) if province == "蒙西" else ({}, []))
 
     day_start = pd.Timestamp(day.year, day.month, day.day)
     rows = []
@@ -157,11 +191,14 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
             g["avg_node_price"].astype(float).values,
             index=day_start + pd.to_timedelta((g["time_order_96"].values - 1) * 15, unit="min"),
         )
+        zm = zone_masks.get(node)
         try:
             disp, profit = compute_dispatch_from_15min_prices(
                 series, power_mw=POWER_MW, duration_h=DURATION_H,
                 roundtrip_eff=RTE_PCT / 100.0,
                 compensation_yuan_per_mwh=subsidies.get(node, default_sub),
+                no_charge_slots=zm[0] if zm else None,
+                no_discharge_slots=zm[1] if zm else None,
             )
             rows.append({
                 "data_date": day, "province": province, "node_name": node,
@@ -178,7 +215,13 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
     with engine.begin() as conn:
         for i in range(0, len(rows), 500):
             conn.execute(_UPSERT, rows[i : i + 500])
-    return len(rows), f"{len(rows):,} rows"
+    msg = f"{len(rows):,} rows"
+    if zone_masks:
+        msg += f" ({len(zone_masks)} zone-masked nodes"
+        if stale_zones:
+            msg += f", stale zones: {','.join(stale_zones)}"
+        msg += ")"
+    return len(rows), msg
 
 
 def main() -> None:
