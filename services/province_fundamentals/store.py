@@ -6,8 +6,16 @@ Write rules (spec 2026-11-02, docs/superpowers/specs/2026-11-02-market-fundament
 - Per-row pre-check of the current confirmed value for the natural key:
     no confirmed value                  -> write with default_status
     equal to confirmed value            -> skip (idempotent backfill re-runs)
-    |new-old|/|old| <= 0.5% (or either side None) -> overwrite (upsert, default_status)
+    |new-old|/|old| <= 0.5% (or new None) -> overwrite (upsert, default_status)
     |new-old|/|old| >  0.5%             -> do NOT overwrite; write with status='conflict'
+      AND source tagged '#conflict', so the conflict row is always a NEW row (its
+      unique key differs from the confirmed row's raw source). Without the tag, a
+      same-source restatement would flip the confirmed row in place — destroying the
+      old value and leaving the key with zero confirmed rows (不覆盖 rule broken).
+- Rows are deduped last-wins on the full unique key (province, month, period, section,
+  metric, source) before batching: two identical keys in one INSERT ... ON CONFLICT
+  batch make PostgreSQL reject the whole statement ("ON CONFLICT DO UPDATE command
+  cannot affect row a second time") and roll back everything.
 - Bulk writes via psycopg2.extras.execute_values (never row-by-row INSERT over WAN).
 
 Read rule: confirmed-only, latest-created row per (month, period, metric) via
@@ -67,10 +75,15 @@ def write_rows(rows: list[FundRow], *, pg_url: str,
     stats = {"written": 0, "conflicts": 0, "skipped": 0}
     if not rows:
         return stats
+    # Last-wins dedupe on the full DB unique key — duplicate keys in one batch make
+    # PG reject ON CONFLICT ("cannot affect row a second time") and roll back all.
+    deduped: dict[tuple, FundRow] = {}
+    for r in rows:
+        deduped[(r.province, r.month, r.period, r.section, r.metric, r.source)] = r
     batch: list[tuple] = []
     with psycopg2.connect(pg_url) as conn:
         with conn.cursor() as cur:
-            for r in rows:
+            for r in deduped.values():
                 cur.execute(_CURRENT_CONFIRMED_SQL,
                             (r.province, r.month, r.period, r.section, r.metric))
                 got = cur.fetchone()
@@ -78,10 +91,16 @@ def write_rows(rows: list[FundRow], *, pg_url: str,
                 if verdict == "skip":
                     stats["skipped"] += 1
                     continue
-                status = default_status if verdict == "overwrite" else "conflict"
-                stats["written" if verdict == "overwrite" else "conflicts"] += 1
+                if verdict == "overwrite":
+                    stats["written"] += 1
+                    status, source = default_status, r.source
+                else:
+                    stats["conflicts"] += 1
+                    # '#conflict' tag keeps the row's unique key distinct from the
+                    # confirmed row even when the source filename is identical.
+                    status, source = "conflict", f"{r.source}#conflict"
                 batch.append((r.province, r.month, r.period, r.section, r.metric,
-                              r.value, r.unit, r.source, status))
+                              r.value, r.unit, source, status))
             if batch:
                 psycopg2.extras.execute_values(cur, _INSERT_SQL, batch, page_size=1000)
         conn.commit()

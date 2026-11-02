@@ -112,6 +112,45 @@ def test_restatement_beyond_half_pct_marks_conflict(fake_db):
     assert batch[0][8] == "conflict"
 
 
+def test_same_source_restatement_beyond_half_pct_keeps_confirmed_row(fake_db):
+    """Same natural key AND same source as the existing confirmed row (corrected 月报
+    re-ingested under the same filename): the confirmed row must survive. The conflict
+    row carries a '#conflict'-suffixed source -> new unique key, never an in-place flip."""
+    cur, ev_calls = fake_db
+    cur.fetchone.side_effect = [(Decimal("6831.49"),)]
+    rows = [FundRow(province="安徽", month=date(2025, 1, 1), period="month",
+                    section="capacity", metric="cap_total", value=6900.0,
+                    unit="万千瓦", source="安徽2025年1月月报数据.xlsx")]  # same source as confirmed row
+    result = store.write_rows(rows, pg_url="postgresql://test")
+    assert result == {"written": 0, "conflicts": 1, "skipped": 0}
+    batch = ev_calls[0][2]
+    assert batch[0][5] == 6900.0
+    assert batch[0][7] == "安徽2025年1月月报数据.xlsx#conflict"  # disambiguated -> old row survives
+    assert batch[0][8] == "conflict"
+
+
+def test_duplicate_key_within_one_call_last_wins(fake_db):
+    """Two rows sharing (province, month, period, section, metric, source) in one call
+    must not both enter the batch — PG rejects ON CONFLICT affecting a row twice and
+    rolls back everything. Dedupe to a single write, last value wins."""
+    cur, ev_calls = fake_db
+    cur.fetchone.side_effect = [None, None]  # pre-dedupe code would pre-check twice
+    rows = [
+        FundRow(province="安徽", month=date(2025, 1, 1), period="month",
+                section="capacity", metric="cap_total", value=6831.49,
+                unit="万千瓦", source="dup.xlsx"),
+        FundRow(province="安徽", month=date(2025, 1, 1), period="month",
+                section="capacity", metric="cap_total", value=6832.0,
+                unit="万千瓦", source="dup.xlsx"),
+    ]
+    result = store.write_rows(rows, pg_url="postgresql://test")
+    assert result == {"written": 1, "conflicts": 0, "skipped": 0}
+    assert len(ev_calls) == 1
+    batch = ev_calls[0][2]
+    assert len(batch) == 1
+    assert batch[0][5] == 6832.0  # last wins
+
+
 # ── write_rows: skip / default_status / empty ─────────────────────────────────
 
 def test_equal_value_skips(fake_db):
