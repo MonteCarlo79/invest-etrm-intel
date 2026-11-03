@@ -171,3 +171,76 @@ def test_main_pg_url_from_env(tmp_path, monkeypatch):
     rc = backfill.main(["--dir", str(tmp_path)])
     assert rc == 0
     assert mock_write.call_args.kwargs["pg_url"] == "postgresql://env-dsn"
+
+
+# ── cross-source component-sum sanity check (option A, 2026-11-03) ───────────
+from datetime import date
+from services.province_fundamentals.backfill import _crosscheck_components
+from services.province_fundamentals.models import FundRow
+
+
+def _r(month, metric, value, section="generation", unit="亿千瓦时"):
+    return FundRow(province="安徽", month=month, period="month", section=section,
+                   metric=metric, value=value, unit=unit, source="t.xlsx")
+
+
+def test_crosscheck_flags_component_rows_far_below_total():
+    """2026-01 安徽 vintage-anomaly: components sum ~37 vs total 361.9 (10%).
+    Components must be marked suspect (conflict); total row stays clean."""
+    rows = [
+        _r(date(2026, 1, 1), "gen_total_full", 361.888),
+        _r(date(2026, 1, 1), "gen_thermal_full", 24.017),
+        _r(date(2026, 1, 1), "gen_hydro_full", 0.185),
+        _r(date(2026, 1, 1), "gen_wind_full", 0.495),
+        _r(date(2026, 1, 1), "gen_solar_full", 11.066),
+        _r(date(2026, 1, 1), "gen_nuclear_full", None),
+    ]
+    clean, suspect, warns = _crosscheck_components(rows)
+    clean_metrics = {r.metric for r in clean}
+    suspect_metrics = {r.metric for r in suspect}
+    assert clean_metrics == {"gen_total_full", "gen_nuclear_full"}
+    assert suspect_metrics == {"gen_thermal_full", "gen_hydro_full",
+                               "gen_wind_full", "gen_solar_full"}
+    assert warns and "361.9" in warns[0] or "361.89" in warns[0]
+
+
+def test_crosscheck_passes_normal_month_untouched():
+    """2026-04 components sum 306.2 vs total 306.2 (100%) — nothing flagged."""
+    rows = [
+        _r(date(2026, 4, 1), "gen_total_full", 306.22),
+        _r(date(2026, 4, 1), "gen_thermal_full", 228.7),
+        _r(date(2026, 4, 1), "gen_hydro_full", 7.11),
+        _r(date(2026, 4, 1), "gen_wind_full", 17.24),
+        _r(date(2026, 4, 1), "gen_solar_full", 52.24),
+        _r(date(2026, 4, 1), "gen_nuclear_full", None),
+    ]
+    clean, suspect, warns = _crosscheck_components(rows)
+    assert suspect == [] and warns == []
+    assert len(clean) == len(rows)
+
+
+def test_crosscheck_skips_on_unit_mismatch():
+    """Unit mismatch between a component and the total → check skipped (no flags)."""
+    rows = [
+        _r(date(2026, 1, 1), "gen_total_full", 361.888),
+        _r(date(2026, 1, 1), "gen_thermal_full", 24.017, unit="万kWh"),
+        _r(date(2026, 1, 1), "gen_hydro_full", 0.185),
+        _r(date(2026, 1, 1), "gen_wind_full", 0.495),
+        _r(date(2026, 1, 1), "gen_solar_full", 11.066),
+    ]
+    clean, suspect, warns = _crosscheck_components(rows)
+    assert suspect == [] and warns == [] and len(clean) == len(rows)
+
+
+def test_crosscheck_capacity_section_also_checked():
+    rows = [
+        _r(date(2026, 1, 1), "cap_total_full", 14511.11, section="capacity", unit="万千瓦"),
+        _r(date(2026, 1, 1), "cap_thermal_full", 542.629, section="capacity", unit="万千瓦"),
+        _r(date(2026, 1, 1), "cap_hydro_full", 31.485, section="capacity", unit="万千瓦"),
+        _r(date(2026, 1, 1), "cap_wind_full", 27.845, section="capacity", unit="万千瓦"),
+        _r(date(2026, 1, 1), "cap_solar_full", 1466.036, section="capacity", unit="万千瓦"),
+        _r(date(2026, 1, 1), "cap_storage_full", 400.132, section="capacity", unit="万千瓦"),
+    ]
+    clean, suspect, warns = _crosscheck_components(rows)
+    assert {r.metric for r in clean} == {"cap_total_full", "cap_storage_full"}
+    assert len(suspect) == 4

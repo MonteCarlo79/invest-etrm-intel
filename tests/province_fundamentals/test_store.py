@@ -66,7 +66,7 @@ def test_same_key_different_scope_metrics_coexist(fake_db):
                 unit="万千瓦", source="安徽2025年1月月报数据.xlsx"),
     ]
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 2, "conflicts": 0, "skipped": 0}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (2, 0, 0)
     # pre-check is scoped per metric: each row's lookup carries its own metric
     precheck_params = [c.args[1] for c in cur.execute.call_args_list]
     assert [p[4] for p in precheck_params] == ["cap_total", "cap_total_full"]
@@ -86,7 +86,7 @@ def test_restatement_within_half_pct_overwrites(fake_db):
                     section="capacity", metric="cap_total", value=6831.52,
                     unit="万千瓦", source="安徽2025年1月月报数据.xlsx")]
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 1, "conflicts": 0, "skipped": 0}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (1, 0, 0)
     assert len(ev_calls) == 1
     batch = ev_calls[0][2]
     assert batch[0][5] == 6831.52
@@ -101,7 +101,7 @@ def test_restatement_beyond_half_pct_marks_conflict(fake_db):
                     section="capacity", metric="cap_total", value=6900.0,
                     unit="万千瓦", source="安徽2025年2月月报数据.xlsx")]
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 0, "conflicts": 1, "skipped": 0}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (0, 1, 0)
     # written as an INSERT carrying status='conflict' on the source-scoped key —
     # the old confirmed row (different source) is never overwritten
     assert len(ev_calls) == 1
@@ -122,7 +122,7 @@ def test_same_source_restatement_beyond_half_pct_keeps_confirmed_row(fake_db):
                     section="capacity", metric="cap_total", value=6900.0,
                     unit="万千瓦", source="安徽2025年1月月报数据.xlsx")]  # same source as confirmed row
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 0, "conflicts": 1, "skipped": 0}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (0, 1, 0)
     batch = ev_calls[0][2]
     assert batch[0][5] == 6900.0
     assert batch[0][7] == "安徽2025年1月月报数据.xlsx#conflict"  # disambiguated -> old row survives
@@ -139,7 +139,7 @@ def test_none_restatement_over_confirmed_number_skips(fake_db):
                     section="capacity", metric="cap_total", value=None,
                     unit="万千瓦", source="安徽2025年2月月报数据.xlsx")]  # different source
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 0, "conflicts": 0, "skipped": 1}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (0, 0, 1)
     assert ev_calls == []  # nothing written at all
 
 
@@ -152,7 +152,7 @@ def test_none_value_over_none_confirmed_writes(fake_db):
                     section="capacity", metric="cap_total", value=None,
                     unit="万千瓦", source="安徽2025年1月月报数据.xlsx")]
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 1, "conflicts": 0, "skipped": 0}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (1, 0, 0)
     assert len(ev_calls) == 1
     batch = ev_calls[0][2]
     assert batch[0][5] is None
@@ -174,7 +174,7 @@ def test_duplicate_key_within_one_call_last_wins(fake_db):
                 unit="万千瓦", source="dup.xlsx"),
     ]
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 1, "conflicts": 0, "skipped": 0}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (1, 0, 0)
     assert len(ev_calls) == 1
     batch = ev_calls[0][2]
     assert len(batch) == 1
@@ -191,7 +191,7 @@ def test_equal_value_skips(fake_db):
                     section="capacity", metric="cap_total", value=6831.49,
                     unit="万千瓦", source="安徽2025年1月月报数据.xlsx")]
     result = store.write_rows(rows, pg_url="postgresql://test")
-    assert result == {"written": 0, "conflicts": 0, "skipped": 1}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (0, 0, 1)
     assert ev_calls == []  # nothing written at all
 
 
@@ -203,13 +203,13 @@ def test_write_rows_default_status_override(fake_db):
                     section="demand", metric="demand_total", value=3214.5,
                     unit="亿千瓦时", source="hermes-record-fact-20261102")]
     result = store.write_rows(rows, pg_url="postgresql://test", default_status="draft")
-    assert result == {"written": 1, "conflicts": 0, "skipped": 0}
+    assert (result["written"], result["conflicts"], result["skipped"]) == (1, 0, 0)
     assert ev_calls[0][2][0][8] == "draft"
 
 
 def test_write_rows_empty_returns_zero_counts():
-    assert store.write_rows([], pg_url="postgresql://test") == {
-        "written": 0, "conflicts": 0, "skipped": 0}
+    r = store.write_rows([], pg_url="postgresql://test")
+    assert (r["written"], r["conflicts"], r["skipped"], r["suspect"]) == (0, 0, 0, 0)
 
 
 # ── read_series: confirmed-only, DISTINCT-ON latest, period included ──────────

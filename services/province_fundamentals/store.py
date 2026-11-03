@@ -74,24 +74,80 @@ def _decide(old, new) -> str:
             else "conflict")
 
 
+# ── Cross-source component-sum sanity check (2026-11-03, option A) ────────────
+# 交易中心月报 vintage 错乱时, 分项行会离谱偏离总计行 (安徽 2026-01~03:
+# 分项加总 ≈ 总计的 10%). 规则: 同 (province, month, section) 内,
+# 火电/水电/核电/风电/光伏 加总 < 总计 × 0.6 且 ≥3 个分项非空时,
+# 分项行判为存疑 (写 conflict, 不进入 confirmed 序列), 总计行保留.
+# 单位必须与总计一致才比较 (单位异常则跳过校验, 不误伤).
+
+_FUEL_COMPONENTS = ("thermal", "hydro", "nuclear", "wind", "solar")
+_SUM_RATIO_MIN = 0.6
+
+
+def _crosscheck_components(rows: list[FundRow]):
+    """(clean, suspect, warnings) — 见上注释."""
+    by_key: dict = {}
+    for r in rows:
+        by_key.setdefault((r.province, r.month, r.section), []).append(r)
+    clean, suspect, warns = [], [], []
+    for (prov, month, section), grp in by_key.items():
+        total_row = next(
+            (r for r in grp if r.metric.endswith("total") or r.metric.endswith("total_full")),
+            None)
+        comps = [r for r in grp
+                 if any(r.metric.endswith(f"_{f}") or r.metric.endswith(f"_{f}_full")
+                        for f in _FUEL_COMPONENTS)]
+        present = [r for r in comps if r.value is not None]
+        if total_row is None or total_row.value in (None, 0) or len(present) < 3:
+            clean.extend(grp)
+            continue
+        if any(r.unit != total_row.unit for r in present):
+            clean.extend(grp)  # 单位不一致, 跳过校验
+            continue
+        ratio = sum(r.value for r in present) / total_row.value
+        if ratio < _SUM_RATIO_MIN:
+            suspect.extend(present)
+            clean.extend([r for r in grp if r not in present])
+            warns.append(
+                f"{prov} {month} {section}: 分项加总 "
+                f"{sum(r.value for r in present):.1f} << 总计 {total_row.value:.1f} "
+                f"({ratio:.0%}) — {len(present)} 个分项行标为存疑(源数据 vintage 错乱)")
+        else:
+            clean.extend(grp)
+    return clean, suspect, warns
+
+
 def write_rows(rows: list[FundRow], *, pg_url: str,
                default_status: str = "confirmed") -> dict:
-    """Bulk-write rows with the 0.5% restatement guard.
+    """Bulk-write rows with the 0.5% restatement guard + component-sum crosscheck.
 
-    Returns {"written": n, "conflicts": n, "skipped": n}.
+    Suspect component rows (see _crosscheck_components) are written as conflict
+    regardless of default_status. Returns
+    {"written": n, "conflicts": n, "skipped": n, "suspect": n, "warnings": [...]}.
     """
-    stats = {"written": 0, "conflicts": 0, "skipped": 0}
+    stats = {"written": 0, "conflicts": 0, "skipped": 0,
+             "suspect": 0, "warnings": []}
     if not rows:
         return stats
+    rows, suspect_rows, stats["warnings"] = _crosscheck_components(rows)
+    stats["suspect"] = len(suspect_rows)
     # Last-wins dedupe on the full DB unique key — duplicate keys in one batch make
     # PG reject ON CONFLICT ("cannot affect row a second time") and roll back all.
     deduped: dict[tuple, FundRow] = {}
-    for r in rows:
-        deduped[(r.province, r.month, r.period, r.section, r.metric, r.source)] = r
+    for r in list(rows) + list(suspect_rows):
+        deduped[(r.province, r.month, r.period, r.section, r.metric, r.source,
+                 r in suspect_rows)] = r
     batch: list[tuple] = []
     with psycopg2.connect(pg_url) as conn:
         with conn.cursor() as cur:
-            for r in deduped.values():
+            for key, r in deduped.items():
+                is_suspect = key[6]
+                if is_suspect:
+                    stats["conflicts"] += 1
+                    batch.append((r.province, r.month, r.period, r.section, r.metric,
+                                  r.value, r.unit, f"{r.source}#suspect", "conflict"))
+                    continue
                 cur.execute(_CURRENT_CONFIRMED_SQL,
                             (r.province, r.month, r.period, r.section, r.metric))
                 got = cur.fetchone()

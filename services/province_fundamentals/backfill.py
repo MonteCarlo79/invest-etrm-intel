@@ -38,6 +38,10 @@ def _iter_files(root: Path):
             yield p
 
 
+# ── Cross-source component-sum check lives in store.py (single write path) ───
+from services.province_fundamentals.store import _crosscheck_components
+
+
 def run(dir, *, province: str | None = None, dry_run: bool = False,
         pg_url: str | None = None, out=print) -> dict:
     """遍历 → 派发 → (可选) 写库 → 汇总计数. 任何单文件异常不中断整批."""
@@ -67,29 +71,37 @@ def run(dir, *, province: str | None = None, dry_run: bool = False,
         summary["parsed"] += 1
         summary["formats"][fmt] = summary["formats"].get(fmt, 0) + 1
         kept = [r for r in rows if province is None or r.province == province]
+        clean, suspect, warns = _crosscheck_components(kept)
+        for w in warns:
+            out(f"  ⚠ {w}")
+        summary["suspect"] = summary.get("suspect", 0) + len(suspect)
         summary["rows"] += len(kept)
         summary["filtered"] += len(rows) - len(kept)
         if dry_run:
             out(f"[{fmt}] {rel} — 解析 {len(rows)} 行"
                 + (f", --province {province} 过滤后 {len(kept)} 行"
-                   if province else "") + " (dry-run, 不写库)")
+                   if province else "")
+                + (f", 其中 {len(suspect)} 行存疑(不写 confirmed)" if suspect else "")
+                + " (dry-run, 不写库)")
             continue
         if not kept:
             out(f"[{fmt}] {rel} — 解析 {len(rows)} 行, "
                 f"--province {province} 过滤后 0 行, 不写库")
             continue
-        stats = write_rows(kept, pg_url=pg_url, default_status="confirmed")
+        stats = write_rows(clean + suspect, pg_url=pg_url, default_status="confirmed")
         summary["written"] += stats["written"]
         summary["conflicts"] += stats["conflicts"]
         summary["skipped"] += stats["skipped"]
         out(f"[{fmt}] {rel} — 解析 {len(rows)} 行, 写 {len(kept)} 行: "
             f"written={stats['written']} conflicts={stats['conflicts']} "
-            f"skipped={stats['skipped']}")
+            f"skipped={stats['skipped']} suspect={stats.get('suspect', 0)}"
+            + (f" ⚠{len(stats.get('warnings', []))}组" if stats.get("warnings") else ""))
     out(f"汇总: files={summary['files']} parsed={summary['parsed']} "
         f"unknown={summary['unknown']} empty={summary['empty']} "
         f"rows={summary['rows']} filtered={summary['filtered']} "
         f"written={summary['written']} conflicts={summary['conflicts']} "
-        f"skipped={summary['skipped']} formats={summary['formats']}")
+        f"skipped={summary['skipped']} suspect={summary.get('suspect', 0)} "
+        f"formats={summary['formats']}")
     return summary
 
 
