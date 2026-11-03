@@ -175,11 +175,23 @@ def load_province_data() -> dict[str, dict]:
             }
         }
     """
-    import openpyxl
-
     path = _latest_excel()
     if path is None:
         return {}
+    return load_workbook_data(path)
+
+
+def load_workbook_data(path) -> dict[str, dict]:
+    """Path-taking core of load_province_data() — same return shape.
+
+    Exposed for callers that must parse a specific copy of the workbook
+    (fixture tests, the province_fundamentals summary_2025 national parser)
+    rather than whatever _latest_excel() resolves to. Not cached: callers
+    parse each file once.
+    """
+    import openpyxl
+
+    path = Path(path)
 
     import io as _io, shutil as _shutil, tempfile as _tempfile
     # On Windows with certain Unicode path encodings, io.open() may fail with

@@ -100,7 +100,11 @@ def _detect_province(path: Path) -> str | None:
 from services.province_fundamentals.parsers import format_a as _format_a  # noqa: E402
 from services.province_fundamentals.parsers import format_b as _format_b  # noqa: E402
 from services.province_fundamentals.parsers import jiaojie_2025 as _jiaojie  # noqa: E402
+from services.province_fundamentals.parsers import summary_2025 as _summary  # noqa: E402
+from services.province_fundamentals.parsers import month_rows as _month_rows  # noqa: E402
 
 register("安徽", _format_a)
 register("安徽", _format_b)
+register("山东", _month_rows.shandong_parser)
 register_national(_jiaojie)
+register_national(_summary)
