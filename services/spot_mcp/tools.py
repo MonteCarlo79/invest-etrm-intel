@@ -368,6 +368,120 @@ def get_market_fundamentals(
     return _gfs(provinces=provinces, year=year)
 
 
+# ── Tool: get_province_fundamentals ───────────────────────────────────────────
+
+_FUND_SECTIONS = ("capacity", "generation", "util_hours", "demand")
+
+_CALIBER_HINT = (
+    "口径: full=全口径(全社会/全地域), base=省调口径(无后缀 metric), "
+    "derived=单月推算值; 引用数字时请注明口径 (cite the caliber when quoting)."
+)
+
+
+def _caliber_of(metric: str) -> str:
+    """full | derived | base — _yoy suffix stripped first so cap_total_full_yoy
+    stays in the 全口径 family."""
+    m = metric[:-4] if metric.endswith("_yoy") else metric
+    if m.endswith("_full"):
+        return "full"
+    if m.endswith("_derived"):
+        return "derived"
+    return "base"
+
+
+def get_province_fundamentals(
+    province: str,
+    section: str | None = None,
+    months: int = 24,
+) -> dict:
+    """
+    Fetch a province's power-market fundamentals evolution from
+    marketdata.province_fundamentals_monthly (confirmed rows only).
+
+    Covers four sections, monthly rows plus annual (period='year') rows:
+      - capacity:   分技术装机 (万千瓦) — cap_<thermal|hydro|nuclear|wind|solar|storage>
+      - generation: 分电源发电量 (亿千瓦时) — gen_<...>
+      - util_hours: 分类型利用小时 (小时) — hours_<...> (累计平均) / hours_<...>_derived (单月推算)
+      - demand:     用电需求 (亿千瓦时, %) — demand_total / demand_yoy / sector split
+
+    Grounding: returns table data only. A province with no confirmed rows
+    yields {"rows": [], "note": "无数据"} — never fabricated numbers.
+
+    Args:
+        province: Chinese name (e.g. '安徽', '山东', '全国') or English
+                  (e.g. 'Anhui', 'Shandong', 'National').
+        section:  Optional — capacity | generation | util_hours | demand.
+                  Omit to fetch all four sections.
+        months:   Lookback window in months (default 24).
+
+    Returns:
+        {
+          "province": str, "count": int,
+          "rows": [{"month": "YYYY-MM", "period": "month"|"year",
+                    "section": str, "metric": str, "value": float|None,
+                    "unit": str, "source": str}, ...],
+          "caliber": {section: ["base"|"full"|"derived", ...]},
+          "caliber_hint": str
+        }
+    """
+    import os as _os
+
+    if section is not None and section not in _FUND_SECTIONS:
+        return {"rows": [], "note": f"未知 section: {section}",
+                "valid_sections": list(_FUND_SECTIONS)}
+
+    # Table stores Chinese province names; accept English for agent convenience.
+    from services.market_fundamentals.loader import PROVINCE_EN as _PEN
+    en_to_cn = {v: k for k, v in _PEN.items()} | {"National": "全国"}
+    prov_cn = en_to_cn.get(province, province)
+
+    pg_url = (_os.environ.get("PGURL") or _os.environ.get("DB_URL")
+              or _os.environ.get("DATABASE_URL")
+              or _os.environ.get("MARKETDATA_DB_URL"))
+    if not pg_url:
+        return {"province": prov_cn, "rows": [], "count": 0,
+                "error": "No DB URL found (set PGURL / DB_URL / DATABASE_URL)."}
+
+    from services.province_fundamentals import store as _store
+    sections = [section] if section else list(_FUND_SECTIONS)
+    rows: list[dict] = []
+    try:
+        for sec in sections:
+            for r in _store.read_series(prov_cn, sec, pg_url=pg_url,
+                                        months=months):
+                rows.append({
+                    "month": r["month"].isoformat()[:7],   # YYYY-MM
+                    "period": r["period"],
+                    "section": r["section"],
+                    "metric": r["metric"],
+                    "value": r["value"],
+                    "unit": r["unit"],
+                    "source": r["source"],
+                })
+    except Exception as exc:
+        _log.error("get_province_fundamentals failed: %s", exc, exc_info=True)
+        return {"province": prov_cn, "rows": [], "count": 0, "error": str(exc)}
+
+    if not rows:
+        return {"province": prov_cn, "rows": [], "note": "无数据"}
+
+    caliber: dict[str, list[str]] = {}
+    for r in rows:
+        kinds = caliber.setdefault(r["section"], [])
+        k = _caliber_of(r["metric"])
+        if k not in kinds:
+            kinds.append(k)
+            kinds.sort()
+    return {
+        "province": prov_cn,
+        "months": months,
+        "count": len(rows),
+        "rows": rows,
+        "caliber": caliber,
+        "caliber_hint": _CALIBER_HINT,
+    }
+
+
 # ── Tool: search_reference_docs ───────────────────────────────────────────────
 
 def search_reference_docs(

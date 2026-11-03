@@ -2967,6 +2967,7 @@ the file is already ingested and searchable without calling ingest_kb_document a
 comparison across suyou/hangjinqi/siziwangqi/gushanliang, call get_bess_pnl. \
 It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
 - 储能装机/在库/备案/规划缺口/接入缺口 → get_storage_pipeline（先查表，不足再 search_reference_docs）
+- 某省装机/发电量/利用小时/用电量演变（月度+年度，区分全口径/省调口径）→ get_province_fundamentals（表内 confirmed 数据；无数据直说，不编造）
 """
 
     def _build_spot_system(query: str = "") -> str:
@@ -3177,6 +3178,38 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
             },
         },
         {
+            "name": "get_province_fundamentals",
+            "description": (
+                "Fetch one province's power-market fundamentals evolution from "
+                "marketdata.province_fundamentals_monthly (confirmed rows only): "
+                "分技术装机 capacity (万千瓦), 分电源发电量 generation (亿千瓦时), "
+                "分类型利用小时 util_hours (小时, 累计平均 + 单月推算 derived), "
+                "用电需求 demand (亿千瓦时 / %). Returns monthly rows plus annual "
+                "(period='year') rows over the last N months. Metrics ending _full "
+                "are 全口径; no suffix is 省调口径 — cite the caliber when quoting. "
+                "Use for 某省装机/发电量/利用小时/用电量演变 questions. "
+                "Empty province returns 无数据 — never invent numbers."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "province": {
+                        "type": "string",
+                        "description": "Chinese province name, e.g. '安徽', '山东', '全国' (English like 'Anhui' also accepted).",
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": "Optional: capacity | generation | util_hours | demand. Omit for all four.",
+                    },
+                    "months": {
+                        "type": "integer",
+                        "description": "Lookback window in months (default 24).",
+                    },
+                },
+                "required": ["province"],
+            },
+        },
+        {
             "name": "get_storage_pipeline",
             "description": (
                 "Fetch per-province energy-storage pipeline statistics collected from market "
@@ -3269,6 +3302,7 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
             get_market_summaries as _gms,
             run_pipeline as _rp,
             get_market_fundamentals as _gmf,
+            get_province_fundamentals as _gpf,
             ingest_kb_document as _ikd,
         )
         try:
@@ -3282,6 +3316,8 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                 result = _rp(**inputs)
             elif name == "get_market_fundamentals":
                 result = _gmf(**inputs)
+            elif name == "get_province_fundamentals":
+                result = _gpf(**inputs)
             elif name == "get_storage_pipeline":
                 from services.knowledge_pool.intake_routes import read_storage_pipeline as _rsp
                 result = _rsp(_conn(), inputs.get("provinces"), inputs.get("metric"))
@@ -3454,6 +3490,7 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         "get_market_summaries":   "📝",
         "run_pipeline":           "⚙️",
         "get_market_fundamentals": "🏭",
+        "get_province_fundamentals": "📈",
         "search_reference_docs":  "🔍",
         "ingest_kb_document":     "📥",
         "get_bess_pnl":           "⚡",
