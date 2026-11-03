@@ -19,13 +19,14 @@ from services.knowledge_pool.intake_routes import (
     write_ancillary_draft,
     write_capcomp_draft,
     write_fr_market_draft,
+    write_fundamentals_draft,
     write_pipeline_rows,
 )
 
 logger = logging.getLogger(__name__)
 
 FACT_TYPES = ("fr_pool", "fr_price", "cap_comp", "ancillary_revenue",
-              "storage_stat", "sysopfee", "other")
+              "storage_stat", "sysopfee", "fundamentals_stat", "other")
 
 _EXTRACT_MODEL = "claude-haiku-4-5-20251001"
 
@@ -45,12 +46,14 @@ _SUBMIT_FACT_TOOL = {
             "effective_date": {"type": ["string", "null"],
                                 "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
                                 "description": "政策/数据生效日期 YYYY-MM-DD(无法判断为 null,严禁占位符)"},
-            "metric": {"type": ["string", "null"], "description": "指标名(仅 storage_stat/ancillary_revenue 需要)"},
+            "metric": {"type": ["string", "null"], "description": "指标名(仅 storage_stat/ancillary_revenue/fundamentals_stat 需要)"},
+            "section": {"type": ["string", "null"],
+                         "description": "段落(仅 fundamentals_stat 需要): capacity | generation | util_hours | demand"},
             "note": {"type": "string", "description": "用户原话的关键限定(如 规则未发布/零和/未传导用户侧)"},
             "kb_title": {"type": "string", "description": "一句话知识库标题(省份+主题+关键数字)"},
         },
         "required": ["province", "fact_type", "value", "unit", "as_of_date",
-                     "effective_date", "metric", "note", "kb_title"],
+                     "effective_date", "metric", "section", "note", "kb_title"],
     },
 }
 
@@ -63,9 +66,11 @@ fact_type 定义与单位归一规则:
 - ancillary_revenue: 辅助服务/调频已结算收入 → 元(万元 ×10000)
 - storage_stat: 储能装机/在库/备案统计 → 数值与单位保持原文(如 GW)
 - sysopfee: 系统运行费 → 元/kWh
+- fundamentals_stat: 分省电力基本面统计(装机/发电量/利用小时/用电量,非价格非补偿) → 数值与单位保持原文(万千瓦/亿千瓦时/小时/%),必须同时给 section 与 metric。词表: section=capacity(装机): cap_total/cap_thermal/cap_hydro/cap_nuclear/cap_wind/cap_solar/cap_storage(全口径加 _full 后缀);section=generation(发电量): gen_total/gen_thermal/gen_hydro/gen_nuclear/gen_wind/gen_solar;section=util_hours(利用小时): hours_total/hours_thermal/hours_hydro/hours_nuclear/hours_wind/hours_solar;section=demand(用电量): demand_total/demand_p1/demand_p2/demand_p3/demand_residential;以上同比类 metric 加 _yoy 后缀、单位 %(如 全社会用电量同比 → demand_yoy)。数据所属月份填 effective_date(YYYY-MM-01)。调频资金池/容量补偿/辅助服务收入分别走 fr_pool/cap_comp/ancillary_revenue,不归此类型。
 - other: 不属于以上(只进知识库,不写结构化表)
 as_of_date: 信息获得日期(用户未说明用今天);effective_date: 政策/数据生效日期(无法判断为 null)。两个日期字段都必须是 YYYY-MM-DD 或 null — 严禁输出 "<UNKNOWN>"、"未知" 等占位符。
-metric: 仅 storage_stat/ancillary_revenue 需要(如 registry_gw / 调频收入);其余为 null。
+metric: 仅 storage_stat/ancillary_revenue/fundamentals_stat 需要(如 registry_gw / 调频收入 / demand_yoy);其余为 null。
+section: 仅 fundamentals_stat 需要(capacity | generation | util_hours | demand);其余为 null。
 note: 用户原话中的关键限定(如"规则未发布""两个细则零和""未传导用户侧"),简洁保留。
 kb_title: 省份+主题+关键数字的一句话标题。
 
@@ -124,7 +129,7 @@ def extract_fact(text: str, client) -> dict:
 def write_fact_drafts(fact: dict, *, pg_url: str, source: str) -> list[str]:
     """Route the fact to the matching province_* draft writer. Returns labels.
 
-    storage_stat / sysopfee / other → no structured write in v1 (KB only):
+    storage_stat / sysopfee / other → no structured write (KB only):
     pipeline stats belong to the document-backed Intel Intake path (source_doc_id
     lineage), and sysopfee has its own monthly ETL.
     """
@@ -151,6 +156,17 @@ def write_fact_drafts(fact: dict, *, pg_url: str, source: str) -> list[str]:
             metric=fact.get("metric") or "调频收入",
             amount_yuan=v, source_file=source)
         out.append(f"province_ancillary_revenue: {r}")
+    elif ft == "fundamentals_stat":
+        # 数据所属月: effective_date(提示词钉为 YYYY-MM-01),缺时沿 _fact_dates
+        # 链落到 as_of 所在月。section/metric/unit 缺失由 writer 计 malformed。
+        month = eff[:7] + "-01"
+        r = write_fundamentals_draft(
+            province=prov,
+            rows=[{"month": month, "section": fact.get("section"),
+                   "metric": fact.get("metric"), "value": v,
+                   "unit": fact.get("unit")}],
+            source=source)
+        out.append(f"province_fundamentals_monthly: {r}")
     return out
 
 
@@ -170,6 +186,14 @@ def pending_writes_for(fact: dict, source: str) -> list[dict]:
         return [{"table": "marketdata.province_ancillary_revenue",
                  "key": {"province": prov, "month": month,
                          "metric": fact.get("metric") or "调频收入"}}]
+    if ft == "fundamentals_stat":
+        if not fact.get("section") or not fact.get("metric"):
+            return []          # 行只会计 malformed、不落库 — 无可翻
+        month = eff[:7] + "-01"
+        return [{"table": "marketdata.province_fundamentals_monthly",
+                 "key": {"province": prov, "month": month,
+                         "section": fact["section"], "metric": fact["metric"],
+                         "source": source}}]
     return []
 
 
