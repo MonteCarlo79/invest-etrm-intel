@@ -95,17 +95,69 @@ def _write_checkpoint(ts: float) -> None:
     STATE_FILE.write_text(str(ts))
 
 
-def _monthly_target(station_dir: Path, filename: str, month: int) -> Path:
-    """Place the newest monthly version in root; demote older same-month versions."""
-    root_file = station_dir / filename
-    for old in station_dir.glob(f"*调度计划表{month}月*.xlsx"):
-        if old.name == filename:
+_DAY_SHEET_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
+
+
+def monthly_max_day(path: Path) -> float:
+    """Highest day-sheet number in a monthly nomination file (completeness key)."""
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True)
+    except Exception:
+        return 0.0
+    days = []
+    for s in wb.sheetnames:
+        m = _DAY_SHEET_RE.match(s.strip())
+        if m:
+            days.append(int(m.group(1)) + int(m.group(2)) / 100.0)
+    return max(days) if days else 0.0
+
+
+def _monthly_target(station_dir: Path, filename: str, month: int, src: Path) -> Path:
+    """Root holds the MOST COMPLETE version per month (max day sheet), not the
+    last-copied one. A new file replaces root only if it covers more days;
+    otherwise it goes to archived/ itself."""
+    new_day = monthly_max_day(src)
+    root_candidates = list(station_dir.glob(f"*调度计划表{month}月*.xlsx"))
+    arch = station_dir / "archived"
+    arch.mkdir(exist_ok=True)
+    for old in root_candidates:
+        old_day = monthly_max_day(old)
+        if new_day > old_day:
+            shutil.move(str(old), arch / old.name)
+            logger.info("demoted %s (day %.2f) for %s (day %.2f)",
+                        old.name, old_day, filename, new_day)
+        elif new_day < old_day:
+            # older-or-equal completeness in root already → archive the new one
+            logger.info("archived %s (day %.2f ≤ root day %.2f)",
+                        filename, new_day, old_day)
+            return arch / filename
+        # equal day: likely the same file — leave in place
+    return station_dir / filename
+
+
+def replace_monthly(dry_run: bool = False) -> dict:
+    """Re-place every monthly-classified file in the cache by completeness.
+    Independent of the checkpoint: converges to the fullest version per
+    (station, month) in root, all weaker versions in archived/."""
+    files = []
+    for f in sorted(CACHE_ROOT.rglob("*"), key=lambda p: p.stat().st_mtime):
+        if not f.is_file() or f.name.startswith("."):
             continue
-        arch = station_dir / "archived"
-        arch.mkdir(exist_ok=True)
-        shutil.move(str(old), arch / old.name)
-        logger.info("demoted %s → archived/", old.name)
-    return root_file
+        cls = classify(f.name)
+        if cls.kind == "monthly" and cls.station:
+            files.append((f, cls))
+    moved = 0
+    for f, cls in files:
+        dest = _monthly_target(NOMINATION_ROOT / cls.station, f.name, cls.month or 0, f)
+        if not dry_run:
+            NOMINATION_ROOT.joinpath(cls.station).mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                shutil.copy2(f, dest)
+                moved += 1
+        else:
+            logger.info("DRY %s → %s", f.name, dest)
+    return {"monthly_files": len(files), "copied": moved}
 
 
 def collect(since: float | None = None, dry_run: bool = False) -> dict:
@@ -139,7 +191,7 @@ def collect(since: float | None = None, dry_run: bool = False) -> dict:
             continue
         station_dir.mkdir(parents=True, exist_ok=True)
         if cls.kind == "monthly":
-            dest = _monthly_target(station_dir, f.name, cls.month or 0)
+            dest = _monthly_target(station_dir, f.name, cls.month or 0, f)
             stats["demoted"] += 0  # demotions logged inside _monthly_target
         elif cls.kind == "daily":
             dest = station_dir / "client-reports"
