@@ -78,6 +78,12 @@ def classify(filename: str) -> Classification:
         # monthly nomination (调度计划表X月) — the daily variant 调度计划表09.29 is excluded
         if not re.search(r"调度计划表\d{2}\.\d{2}", filename):
             return Classification(plant, "monthly", int(m.group("mm")))
+    # daily-versioned nomination: 调度计划表DD.MM — same accumulating monthly
+    # file, named by version date rather than month. Treat as monthly with the
+    # version's month (retention keeps the fullest version via monthly_max_day).
+    dv = re.search(r"调度计划表(\d{2})\.(\d{2})", filename)
+    if dv:
+        return Classification(plant, "monthly", int(dv.group(1)))
     if any(r.search(filename) for r in _DAILY_DATE_RES):
         return Classification(plant, "daily")
     return Classification(plant, "other")
@@ -118,7 +124,9 @@ def _monthly_target(station_dir: Path, filename: str, month: int, src: Path) -> 
     last-copied one. A new file replaces root only if it covers more days;
     otherwise it goes to archived/ itself."""
     new_day = monthly_max_day(src)
-    root_candidates = list(station_dir.glob(f"*调度计划表{month}月*.xlsx"))
+    # same-month candidates: both 调度计划表X月 and 调度计划表MM.DD (daily-versioned)
+    pats = [f"*调度计划表{month}月*.xlsx", f"*调度计划表{month:02d}.*.xlsx"]
+    root_candidates = sorted({p for pat in pats for p in station_dir.glob(pat)})
     arch = station_dir / "archived"
     arch.mkdir(exist_ok=True)
     for old in root_candidates:
