@@ -71,6 +71,9 @@ class MonthRowsConfig:
     cumulative_gen: True → generation section 按年内累计差分 (format_a 规则).
     unit_map:      metric → unit 覆盖 (默认见 _default_unit).
     skip_labels:   月份列中跳过且不计数的标签串 (如 "合计").
+    ignore_notes:  括号注记白名单 — 注记是限定语而非单位时 (蒙西 "光伏(含光热)"
+                   / "储能(含配储)"), 剥空白后命中此表的注记视同无注记,
+                   不进单位闸门 (否则整列被误判跳过).
     """
     province: str
     sheet_select: Union[str, Callable[[str], bool]]
@@ -80,6 +83,7 @@ class MonthRowsConfig:
     cumulative_gen: bool = False
     unit_map: Mapping[str, str] = field(default_factory=dict)
     skip_labels: tuple[str, ...] = ()
+    ignore_notes: tuple[str, ...] = ()
 
 
 def parse_month_rows(path, cfg: MonthRowsConfig) -> list[FundRow]:
@@ -162,6 +166,154 @@ SHANDONG_DEMAND = MonthRowsConfig(
 )
 
 shandong_parser = MonthRowsParser([SHANDONG_CAP_GEN, SHANDONG_DEMAND])
+
+
+# ── 山西内建配置 (格式图 §5, 对 fixture 实勘) ─────────────────────────────────
+# datetime 月份单元格; 表头 R1 (无标题行). 发电量当月/累计双表 — 只取当月表
+# (月度发电量), 累计表不解析 (避免同 metric 双写). 月度水电 2026-04 = −2.53
+# (累计重述倒挤), 原样出.
+
+SHANXI_CAP = MonthRowsConfig(
+    province="山西",
+    sheet_select="装机容量",
+    header_markers=("月份", "常规火电", "风电"),
+    month_col=("月份",),
+    fuel_col_map={
+        "总装机": "cap_total_full",
+        "常规火电": "cap_thermal_full",
+        "水电": "cap_hydro_full",
+        "风电": "cap_wind_full",
+        "光伏": "cap_solar_full",
+        "储能": "cap_storage_full",
+        # 抽水蓄能/燃气/高炉尾气 不在六燃料词表, 暂不映射 (加一行即可扩展)
+    },
+    cumulative_gen=False,
+)
+
+SHANXI_GEN = MonthRowsConfig(
+    province="山西",
+    sheet_select="月度发电量",
+    header_markers=("月份", "月度总发电量", "火电"),
+    month_col=("月份",),
+    fuel_col_map={
+        "月度总发电量": "gen_total_full",
+        "火电": "gen_thermal_full",
+        "水电": "gen_hydro_full",
+        "风电": "gen_wind_full",
+        "光伏": "gen_solar_full",
+        "储能": "gen_storage_full",
+    },
+    cumulative_gen=False,                        # 当月表直取; 累计表不解析
+)
+
+shanxi_parser = MonthRowsParser([SHANXI_CAP, SHANXI_GEN])
+
+
+# ── 陕西内建配置 (格式图 §6, 对 fixture 实勘) ─────────────────────────────────
+# 表头行漂移: 装机规模/全网发电量 R3, 全社会用电 R2 (扫描窗 R1..R6 覆盖).
+# 装机规模 2025-04~08 空行 (跳过不计数以外处理); R44 备注说明行 (月份列不可解析,
+# 自动跳过); 2026-05 断行搁浅在 R45 备注之下 — _collect 不停于首个空行, 照收.
+# 同比列数值即百分数 (非江苏的小数分数). "—" em-dash 经 _num → None.
+
+SHAANXI_CAP = MonthRowsConfig(
+    province="陕西",
+    sheet_select="装机规模",
+    header_markers=("月份", "水电", "火电", "新型储能"),
+    month_col=("月份",),
+    fuel_col_map={
+        "水电": "cap_hydro_full",
+        "火电": "cap_thermal_full",
+        "风电": "cap_wind_full",
+        "太阳能": "cap_solar_full",
+        "新型储能": "cap_storage_full",
+        "合计": "cap_total_full",
+    },
+    cumulative_gen=False,
+)
+
+SHAANXI_GEN = MonthRowsConfig(
+    province="陕西",
+    sheet_select="全网发电量",
+    header_markers=("月份", "火电电量", "合计电量"),
+    month_col=("月份",),
+    fuel_col_map={
+        "火电电量": "gen_thermal_full",
+        "风电电量": "gen_wind_full",
+        "光伏电量": "gen_solar_full",
+        "水电电量": "gen_hydro_full",
+        "合计电量": "gen_total_full",
+        "火电同比%": "gen_thermal_full_yoy",
+        "风电同比%": "gen_wind_full_yoy",
+        "光伏同比%": "gen_solar_full_yoy",
+        "水电同比%": "gen_hydro_full_yoy",
+        "合计同比%": "gen_total_full_yoy",
+        # 其他电量 不在六燃料词表, 不映射
+    },
+    cumulative_gen=False,
+)
+
+SHAANXI_DEMAND = MonthRowsConfig(
+    province="陕西",
+    sheet_select="全社会用电",
+    header_markers=("月份", "第一产业电量", "合计电量"),
+    month_col=("月份",),
+    fuel_col_map={
+        "合计电量": "demand_total",
+        "合计同比%": "demand_yoy",
+    },
+    cumulative_gen=False,
+)
+
+shaanxi_parser = MonthRowsParser([SHAANXI_CAP, SHAANXI_GEN, SHAANXI_DEMAND])
+
+
+# ── 蒙西内建配置 (格式图 §3, 对 fixture 实勘) ─────────────────────────────────
+# 行预留 2022-01→2026-05, 2025-03 及之前全空 (整行跳过); 2025-04/05 仅风电有值
+# (其余出 None, 绝不写 0); 2025-06 起全填. 光伏(含光热)/储能(含配储) 括号为
+# 限定语非单位 → ignore_notes, 否则单位闸门误杀整列. province 恒为 "蒙西"
+# (cfg.province 决定, sheet 内容如 "内蒙古" 字样不影响).
+
+MENGXI_CAP = MonthRowsConfig(
+    province="蒙西",
+    sheet_select="1_电网概况",
+    header_markers=("月份", "总装机", "火电", "储能"),
+    month_col=("月份",),
+    fuel_col_map={
+        "总装机": "cap_total_full",
+        "火电": "cap_thermal_full",
+        "水电": "cap_hydro_full",
+        "风电": "cap_wind_full",
+        "光伏": "cap_solar_full",
+        "储能": "cap_storage_full",
+        # 环比变化(总装机) 不映射
+    },
+    cumulative_gen=False,
+    ignore_notes=("含光热", "含配储"),
+)
+
+mengxi_parser = MonthRowsParser([MENGXI_CAP])
+
+
+# ── 辽宁内建配置 (格式图 §7, 对 fixture 实勘) ─────────────────────────────────
+# 总量版: 无分燃料列 (按设计). 只出总量 metric; 全社会最大电力 无标准 metric
+# 词表对应 (且单位为 万kW 与 demand 默认单位冲突), 不映射. 2025-05 全空行跳过.
+
+LIAONING_OVERVIEW = MonthRowsConfig(
+    province="辽宁",
+    sheet_select="月度概况",
+    header_markers=("月份", "全社会用电量", "全省发电量"),
+    month_col=("月份",),
+    fuel_col_map={
+        "全社会用电量": "demand_total",
+        "用电量同比": "demand_yoy",
+        "全省发电量": "gen_total_full",
+        "发电量同比": "gen_total_full_yoy",
+        "发电装机容量": "cap_total_full",
+    },
+    cumulative_gen=False,
+)
+
+liaoning_parser = MonthRowsParser([LIAONING_OVERVIEW])
 
 
 # ── internals ─────────────────────────────────────────────────────────────────
@@ -263,6 +415,8 @@ def _map_columns(header, cfg: MonthRowsConfig):
             continue                            # 占比等未映射列: 忽略
         unit = cfg.unit_map.get(metric) or _default_unit(metric)
         note = _header_unit_note(h)
+        if note is not None and note in cfg.ignore_notes:
+            note = None                         # 限定语注记 (非单位): 视同无注记
         if note is not None:
             canonical = _UNIT_NOTES.get(note)
             if canonical is None or canonical != unit:
