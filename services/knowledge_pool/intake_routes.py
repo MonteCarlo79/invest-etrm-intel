@@ -1,7 +1,10 @@
 """Intake route writers — one connection per writer so route failures stay isolated."""
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
+
+import psycopg2
 
 from services.knowledge_pool.knowledge_docs import get_conn
 
@@ -162,6 +165,98 @@ def write_ancillary_draft(*, province, month, metric, amount_yuan, source_file) 
                  "amount_yuan": amount_yuan, "source_file": source_file,
                  "status": "draft"},
     )
+
+
+# ── fundamentals_stat (province_fundamentals_monthly, spec 2026-11-02 写入路径 2) ──
+
+_FUND_CONFIRMED_SQL = """
+SELECT EXISTS(SELECT 1 FROM marketdata.province_fundamentals_monthly
+              WHERE province = %s AND month = %s AND period = %s
+                AND section = %s AND metric = %s
+                AND status IN ('confirmed','superseded'))
+"""
+
+
+def _pg_url() -> str:
+    from services.knowledge_pool.db import _get_url
+    return _get_url()[0]
+
+
+def _fund_natkey(fr) -> tuple:
+    return (fr.province, fr.month, fr.period, fr.section, fr.metric)
+
+
+def _fund_confirmed_keys(rows, *, pg_url: str) -> set[tuple]:
+    """Natural keys already holding a confirmed/superseded row.
+
+    Source-agnostic on purpose (same semantics as _write_rate_draft's EXISTS
+    guard): a draft must never flip a confirmed row, even a same-source one —
+    store.write_rows' within-0.5% "overwrite" verdict would otherwise upsert a
+    same-source confirmed row down to status='draft'.
+    """
+    blocked: set[tuple] = set()
+    if not rows:
+        return blocked
+    with psycopg2.connect(pg_url) as conn:
+        with conn.cursor() as cur:
+            for fr in rows:
+                cur.execute(_FUND_CONFIRMED_SQL, _fund_natkey(fr))
+                if cur.fetchone()[0]:
+                    blocked.add(_fund_natkey(fr))
+    return blocked
+
+
+def _as_month(v) -> date:
+    s = str(v)[:10]
+    if len(s) == 7:                      # bare "YYYY-MM" → month start
+        s += "-01"
+    return date.fromisoformat(s)
+
+
+def write_fundamentals_draft(*, province: str, rows: list[dict], source: str) -> str:
+    """Land fundamentals_stat rows as status='draft'; never touch confirmed rows.
+
+    rows: dicts shaped like the route's structured payload —
+    {month (YYYY-MM-01 or YYYY-MM), period (month|year, default month), section,
+    metric, value (None ok), unit, source? , province?}. Per-row province/source
+    override the call-level fallbacks (registry-parsed national workbooks carry
+    their own province; vision rows fall back to the route/doc province and
+    "intake:<title>" source). Rows missing month/section/metric/unit are counted
+    as malformed, not written. Returns "written N, skipped M[, malformed K]".
+    """
+    from services.province_fundamentals import store as _store      # lazy: route isolation
+    from services.province_fundamentals.models import FundRow
+
+    prepared, malformed = [], 0
+    for r in rows:
+        try:
+            fr = FundRow(province=r.get("province") or province,
+                         month=_as_month(r["month"]),
+                         period=r.get("period") or "month",
+                         section=r["section"], metric=r["metric"],
+                         value=r.get("value"), unit=r.get("unit") or "",
+                         source=r.get("source") or source)
+            if not fr.unit or not fr.province:
+                raise ValueError("unit/province required")
+        except (KeyError, ValueError, TypeError):
+            malformed += 1
+            continue
+        prepared.append(fr)
+    if not prepared:
+        return f"written 0, skipped 0" + (f", malformed {malformed}" if malformed else "")
+
+    url = _pg_url()
+    blocked = _fund_confirmed_keys(prepared, pg_url=url)
+    survivors = [fr for fr in prepared if _fund_natkey(fr) not in blocked]
+    stats = (_store.write_rows(survivors, pg_url=url, default_status="draft")
+             if survivors else {"written": 0, "conflicts": 0, "skipped": 0})
+    skipped = len(prepared) - len(survivors) + stats["skipped"]
+    out = f"written {stats['written']}, skipped {skipped}"
+    if malformed:
+        out += f", malformed {malformed}"
+    if stats["conflicts"]:
+        out += f", conflicts {stats['conflicts']}"
+    return out
 
 
 def read_storage_pipeline(conn, provinces: Optional[list[str]] = None,

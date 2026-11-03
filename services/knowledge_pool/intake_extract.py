@@ -18,7 +18,9 @@ PROVINCES = [
 ]
 
 ROUTE_TYPES = ("capacity_comp_rate", "fr_market_params", "ancillary_revenue",
-               "pipeline_stat", "spot_note", "quant_note")
+               "pipeline_stat", "fundamentals_stat", "spot_note", "quant_note")
+
+WORKBOOK_EXTS = {"xlsx", "xls"}
 
 CATEGORIES_ALLOWED = ("market_rules", "annual_report", "policy_doc", "technical_spec",
                       "research_report", "market_intel", "capacity_pipeline",
@@ -67,6 +69,40 @@ def batch_hash(pages_bytes: list[bytes]) -> str:
     return h.hexdigest()
 
 
+def try_registry_parse(filename: str, data: bytes) -> tuple[Optional[str], list[dict]]:
+    """Registry-first workbook parse (spec 2026-11-02, write path 2).
+
+    Bytes are written to a temp dir under the ORIGINAL filename — the registry
+    sniffs the province from the path (安徽月报/交接表 workbook 命名), so a random
+    temp name would blind it. A registered-format hit returns (FORMAT_NAME, rows)
+    with rows as plain dicts shaped exactly like the vision fundamentals_stat
+    structured rows (month ISO string), so both paths feed one writer. Any miss
+    or failure → (None, []): the caller falls back to the vision path.
+    """
+    import tempfile
+    from pathlib import Path
+
+    try:
+        from services.province_fundamentals import registry  # lazy: pulls openpyxl
+    except Exception:
+        return None, []                      # container without openpyxl → vision
+
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / Path(filename).name
+        try:
+            path.write_bytes(data)
+            fmt, fund_rows = registry.dispatch(path)
+        except Exception:
+            return None, []
+    if not fund_rows:
+        return None, []
+    rows = [{"province": r.province, "month": r.month.isoformat(), "period": r.period,
+             "section": r.section, "metric": r.metric, "value": r.value,
+             "unit": r.unit, "source": r.source}
+            for r in fund_rows]
+    return fmt, rows
+
+
 _PROMPT_TMPL = """你在分析一组中文电力市场情报文件（同一主题，共 {n_pages} 页）。
 阅读每一页，然后通过 submit_extraction 工具提交结构化提取结果。字段要求：
 - title: 文档标题（主题+省份+日期，如可得）
@@ -92,6 +128,14 @@ _PROMPT_TMPL = """你在分析一组中文电力市场情报文件（同一主�
      installed_thermal_gw 火电装机; installed_renewables_gw 风光合计装机; peak_load_gw 统调最高负荷;
      pumped_storage_target_gw 抽水蓄能规划
   b) metric 名中禁止出现日期/年份 —— 时间一律进 as_of_date；同一指标多个时点 = 同一 metric 多行
+- fundamentals_stat: 分省电力基本面月度/年度统计（全口径装机、发电量、利用小时、用电量/负荷）→ structured: {{"rows": [{{"month": "YYYY-MM-01", "period": "month|year", "section": "capacity|generation|util_hours|demand", "metric": "...", "value": 数值或null, "unit": "万千瓦|亿千瓦时|小时|%"}}]}}
+  section 判定: 装机→capacity；发电量→generation；利用小时→util_hours；用电/负荷→demand
+  metric 命名: 装机 cap_total/cap_thermal/cap_hydro/cap_nuclear/cap_wind/cap_solar/cap_storage；
+  发电量 gen_total/gen_thermal/gen_hydro/gen_nuclear/gen_wind/gen_solar；
+  利用小时 hours_total/hours_thermal/...（同比加 _yoy 后缀，单位 %）；
+  用电 demand_total（亿千瓦时）/demand_yoy（%）/demand_p1/demand_p2/demand_p3/demand_residential
+  时间口径: 月度 period="month" + month=当月1日；年度 period="year" + month=YYYY-01-01
+  与 pipeline_stat 分工: 储能在库/备案/规划/缺口/新型储能装机 → pipeline_stat；全口径电源结构、发电量、利用小时、用电量基本面 → fundamentals_stat
 - spot_note: 给现货策略分析师的供需/格局解读（structured 留空 {{}}）
 - quant_note: 给储能量化分析师的收益机制/约束/需求体量解读（structured 留空 {{}}）
 

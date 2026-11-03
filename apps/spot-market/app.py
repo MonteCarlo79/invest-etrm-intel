@@ -938,6 +938,12 @@ def _commit_routes(sel_routes, doc_id: int, province: str | None, title: str) ->
                     amount_yuan=r.structured["amount_yuan"],
                     source_file=f"intake:{title[:60]}")
                 outcomes.append((r.type, "ok", s))
+            elif r.type == "fundamentals_stat":
+                s = _ir.write_fundamentals_draft(
+                    province=r.province or province,
+                    rows=r.structured.get("rows", []),
+                    source=f"intake:{title[:60]}")
+                outcomes.append((r.type, "ok", s))
         except Exception as exc:
             outcomes.append((r.type, "failed", str(exc)[:200]))
     return outcomes
@@ -4000,13 +4006,17 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
             from services.knowledge_pool.intake_extract import (
                 Page as _IntakePage, extract_batch as _ib_extract,
                 PROVINCES as _IB_PROVINCES, IMAGE_EXTS as _IB_IMG_EXTS,
+                WORKBOOK_EXTS as _IB_WB_EXTS, try_registry_parse as _ib_registry,
+                RouteProposal as _RouteProposal, IntakeProposal as _IntakeProposal,
+                batch_hash as _ib_hash,
             )
             from services.knowledge_pool import intake_routes as _ir
 
             st.caption(_t("intake_caption"))
             _ib_files = st.file_uploader(
                 _t("intake_upload_label"),
-                type=["pdf", "pptx", "txt", "docx", "png", "jpg", "jpeg", "webp"],
+                type=["pdf", "pptx", "txt", "docx", "xlsx", "xls",
+                      "png", "jpg", "jpeg", "webp"],
                 accept_multiple_files=True, key="intake_uploader",
             )
             _api_key_ib = _os.environ.get("ANTHROPIC_API_KEY")
@@ -4014,11 +4024,24 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
             if st.button(_t("intake_extract_btn"), key="intake_extract_btn",
                          disabled=not _ib_files):
                 _pages = []
+                _registry_routes = []   # registry-parsed workbooks bypass vision
+                _all_bytes = []         # dup-guard hash must cover registry-hit files too
                 for _f in _ib_files:
                     _b = _f.read()
+                    _all_bytes.append(_b)
                     _ext = _f.name.rsplit(".", 1)[-1].lower()
+                    # 注册表优先: workbook 命中注册格式 → 确定性解析, 不进 vision (零误读)
+                    _fmt, _frows = (_ib_registry(_f.name, _b) if _ext in _IB_WB_EXTS
+                                    else (None, None))
                     if _ext in _IB_IMG_EXTS:
                         _pages.append(_IntakePage(filename=_f.name, data=_b, kind="image"))
+                    elif _frows:
+                        _rprovs = {r["province"] for r in _frows if r.get("province")}
+                        _registry_routes.append(_RouteProposal(
+                            type="fundamentals_stat",
+                            province=_rprovs.pop() if len(_rprovs) == 1 else None,
+                            content=f"{_f.name} — 注册格式 {_fmt} 确定性解析 {len(_frows)} 行",
+                            structured={"rows": _frows}))
                     else:
                         try:
                             from services.knowledge_pool.knowledge_docs import _extract_pages as _exp
@@ -4032,11 +4055,21 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                 _failed_pages = [p.filename for p in _pages if p.error]
                 if _failed_pages:
                     st.warning(f"{len(_failed_pages)} 个文件解析失败（已跳过）：" + "、".join(_failed_pages))
-                if any(not p.error for p in _pages):   # skip extract when ALL failed
+                if any(not p.error for p in _pages) or _registry_routes:
                     with st.spinner("Claude reading…"):
                         try:
-                            st.session_state["intake_proposal"] = _ib_extract(
-                                _pages, api_key=_api_key_ib)
+                            if any(not p.error for p in _pages):
+                                _prop = _ib_extract(_pages, api_key=_api_key_ib)
+                                _prop.routes = _registry_routes + _prop.routes
+                                _prop.batch_hash = _ib_hash(_all_bytes)
+                            else:
+                                # all files hit the registry — no vision call needed
+                                _prop = _IntakeProposal(
+                                    title=_ib_files[0].name, province=None,
+                                    category="market_intel", summary="",
+                                    pages=[], routes=list(_registry_routes),
+                                    batch_hash=_ib_hash(_all_bytes))
+                            st.session_state["intake_proposal"] = _prop
                             st.session_state.pop("intake_route_outcomes", None)
                             st.session_state.pop("intake_last_commit", None)
                             for _k in [k for k in list(st.session_state)
