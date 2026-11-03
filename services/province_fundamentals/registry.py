@@ -102,6 +102,9 @@ from services.province_fundamentals.parsers import format_b as _format_b  # noqa
 from services.province_fundamentals.parsers import jiaojie_2025 as _jiaojie  # noqa: E402
 from services.province_fundamentals.parsers import summary_2025 as _summary  # noqa: E402
 from services.province_fundamentals.parsers import month_rows as _month_rows  # noqa: E402
+from services.province_fundamentals.parsers import prov_guangdong as _prov_gd  # noqa: E402
+from services.province_fundamentals.parsers import prov_guangxi as _prov_gx  # noqa: E402
+from services.province_fundamentals.parsers import prov_jiangsu as _prov_js  # noqa: E402
 
 register("安徽", _format_a)
 register("安徽", _format_b)
@@ -114,5 +117,8 @@ register("河北南网", _month_rows.jinan_parser)
 register("蒙东", _month_rows.mengdong_parser)
 register("甘肃", _month_rows.gansu_parser)
 register("冀北", _month_rows.jibei_parser)
+register("广东", _prov_gd)
+register("广西", _prov_gx)
+register("江苏", _prov_js)
 register_national(_jiaojie)
 register_national(_summary)
