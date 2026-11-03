@@ -356,3 +356,38 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Nov 29 17:00 Beijing: first fully-automatic monthly run (Dec prices); check Feishu digest + tab
 - Standing: tinyproxy (124.221.238.130) still down — WeChat article HTML stays blocked from ECS until revived; Mac-side fetch works as bridge
 - Remaining flagged cells need provincial 公告 checks if the user wants them settled: 深圳 Aug/Sep, 冀北 Oct, 四川 Jul, 蒙西 Jun, 湖南 Jul
+
+## Session Summary, 2026-11-02 → 2026-11-03
+**Worked on:** 蒙西 trading-book system + compensation/zones/impact layers + WeCom nomination automation.
+
+**Completed:**
+- **POSIX-inversion root cause** (the week's big one): `AT TIME ZONE '+08:00'` renders UTC−8 walls, NOT CST (POSIX sign inversion). Verified with literals; v5 fill rewrote md_mengxi_nodal_price_96_filled Oct 1→28 in the correct frame (mnp96_fill.py restored, 0-byte since v4 saga; anti-join windowed to day D). 蒙西 PF stuck-since-Oct-14 diagnosed: fill/pf frame mismatch.
+- **Trading-book system** (spec docs/superpowers/specs/2026-10-31-trading-book-model-design.md, plan same-name): AssetBook for 9 BESS + 3 wind with full/settlement_only/registry_only data-path tiers; settlement bridge (book_settled_daily 24,720 rows), 5-delta waterfall, Book tab (13th tab) + backtest section (ladder reader + cumulative chart); D-1 forecast artifact (book_forecast_daily) + fleet-response estimator; 14 tasks all spec+quality reviewed.
+- **蒙西 compensation** (名单.et + 正文页.ofd): 7 listed stations → 350 ¥/MWh, wuchuan/alashan (post-2026 unlisted) → 280 default; core.asset_monthly_compensation populated (9 rows); registry subsidy_cny_per_mwh per station; PF ranking subsidy-inclusive (v42/td:57).
+- **Ownership in daily report**: station_master 5 fills from 名单 + 武川/阿拉善储能电站 inserted owner=远景 (enter report when cleared data lands); hermes footnote → 名单 rule + boundary 2026-01-01 (td:194).
+- **WeCom automation**: collector reads the client local cache (~/Library/Containers/.../Caches/Files/) — no UI driving needed (CDP/electron dead ends; assistive access granted); classify monthly/daily/summary → station root/archived/client-reports conventions; completeness-based monthly placement (fullest version in root — the 四子王旗 10.28→10.31 bug the user caught); daily launchd 11:00+16:00 CST.
+- **Zones**: bess_dispatch_zones 114,528 file rows (6 colored stations Apr 20→Nov 2) + 37,824 fleet-consensus rows (bameng/wulate — their files carry no coloring; operator assigns uniform fleet zones, colored subset's map = the day's truth). Red=no charge, yellow=no discharge, green=free. LP hard constraints wired into PF.
+- **Zone forecast**: recency-weighted day-type mode per slot; walk-forward validated (median 60–88% per-slot accuracy); daily D+1 write at 16:00 CST alongside price forecasts (bess-platform-book-forecast-daily combined runner).
+- **λ market impact**: charge λ positive (~+0.005, r²≈0.29, usable); discharge λ negative → price-taker by design (reverse-causality; v2 needs instrumented discharge via nominated/zone-forced dispatch).
+- **Subsidized PF recompute** running (Oct 1→28, delete-first, ~5-day ETA — subsidy hardens LPs).
+- Deploys this session: mengxi-dashboard td:56 (v41 trading book) → td:57 (v42 subsidy) → td:58 (v43 zones/λ/backtest); hermes td:194. Manifest rows + spec/plan committed and pushed.
+
+**In progress:**
+- Subsidized PF recompute (Oct 1–28) — ~4.4h/day at the 10s LP cap (subsidy hardens the solves); ~5 days ETA
+- Peer incidents managed: bess-platform-12's reset --hard on the shared worktree (no loss on my side — everything pushed; their staged edits recoverable from dangling blobs); bess-platform-c9's stale-file sweep reverted my Dockerfile (re-applied, committed verified content 551c4136)
+
+**Decisions made:**
+- Books: 蒙西 asset books only (no retail, no other asset types); independent objects, shared interface
+- Strategy anchors: BOTH nominated + DP-optimal (strategy-selection cost as its own delta line)
+- Settlement: trust bill daily breakdown; monthly lumps pro-rata with accrual flag
+- Fleet response: aggregate stack from history (per-unit deferred); isotonic only if an optimizer consumes it
+- Zones: file-based for colored stations; fleet-consensus for uncolored (bameng/wulate); forecast via recency day-type mode
+- λ: apply when positive (charge side), price-taker when negative/unidentified (discharge side)
+- WeCom: read the client cache, never the UI; quit/relaunch client only if window-driving ever needed
+
+**Next session:**
+- Subsidized PF recompute completion → verify 蒙西 ranking subsidy-inclusive
+- λ v2: instrumented discharge impact (nominated/zone-forced dispatch as exogenous variation)
+- 武川/阿拉善 enter the daily report when their cleared data flows; wuchuan/alashan upgrade from registry_only when data paths land
+- bameng/wulate: if colored files ever arrive, they override the fleet-consensus rows
+- Follow-ups on books: test_pf_results.py staleness; wuhai price node TBD; hermes mengxi_ranking_report frame review; W-3/W-4 wind invoice ingestion; LP degeneracy root cause (zone-mask fix helps but the zero-price-stretch pathology in Quant's engine stays open)
