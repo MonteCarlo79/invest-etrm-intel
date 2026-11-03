@@ -158,15 +158,19 @@ def write_fact_drafts(fact: dict, *, pg_url: str, source: str) -> list[str]:
         out.append(f"province_ancillary_revenue: {r}")
     elif ft == "fundamentals_stat":
         # 数据所属月: effective_date(提示词钉为 YYYY-MM-01),缺时沿 _fact_dates
-        # 链落到 as_of 所在月。section/metric/unit 缺失由 writer 计 malformed。
-        month = eff[:7] + "-01"
-        r = write_fundamentals_draft(
-            province=prov,
-            rows=[{"month": month, "section": fact.get("section"),
-                   "metric": fact.get("metric"), "value": v,
-                   "unit": fact.get("unit")}],
-            source=source)
-        out.append(f"province_fundamentals_monthly: {r}")
+        # 链落到 as_of 所在月。section/metric 为 None 时 FundRow 校验挡不住(只查
+        # period/unit/province),会直到 INSERT 撞 NOT NULL → IntegrityError 炸掉
+        # 调用方后续的 KB 写入 — 与 pending 守卫同判:跳过结构化写,只进 KB。
+        # (unit 缺失才是 writer 计 malformed 的情形。)
+        if fact.get("section") and fact.get("metric"):
+            month = eff[:7] + "-01"
+            r = write_fundamentals_draft(
+                province=prov,
+                rows=[{"month": month, "section": fact["section"],
+                       "metric": fact["metric"], "value": v,
+                       "unit": fact.get("unit")}],
+                source=source)
+            out.append(f"province_fundamentals_monthly: {r}")
     return out
 
 
@@ -188,7 +192,7 @@ def pending_writes_for(fact: dict, source: str) -> list[dict]:
                          "metric": fact.get("metric") or "调频收入"}}]
     if ft == "fundamentals_stat":
         if not fact.get("section") or not fact.get("metric"):
-            return []          # 行只会计 malformed、不落库 — 无可翻
+            return []          # 写库分支同判跳过(KB-only)— 无可翻
         month = eff[:7] + "-01"
         return [{"table": "marketdata.province_fundamentals_monthly",
                  "key": {"province": prov, "month": month,

@@ -195,6 +195,19 @@ def test_pending_writes_for_fundamentals_stat_natural_key():
 
 
 def test_pending_writes_for_fundamentals_missing_keys_returns_empty():
-    """section/metric 缺失时 writer 只会计 malformed、不落行 — 确认翻无可翻。"""
+    """section/metric 缺失时写库分支跳过(KB-only)— 确认翻无可翻。"""
     assert rf.pending_writes_for(dict(_CANNED_FUND, section=None), "s") == []
     assert rf.pending_writes_for(dict(_CANNED_FUND, metric=None), "s") == []
+
+
+def test_write_fact_drafts_fundamentals_missing_keys_kb_only():
+    """词表外输入(如「山东7月电网负荷创新高」)haiku 可能给出 section/metric=null
+    → 跳过结构化写、不报错,事实仍走 KB(调用方 agent._record_fact 在
+    write_fact_drafts 之后做 KB ingest,前提是不抛异常)。
+    回归:None section/metric 曾穿过 writer 的 FundRow 校验(只查
+    period/unit/province)直到 INSERT 撞 NOT NULL → IntegrityError 炸掉 KB 写入。"""
+    with patch("services.hermes.record_fact.write_fundamentals_draft") as m_fund:
+        for bad in (dict(_CANNED_FUND, section=None),
+                    dict(_CANNED_FUND, metric=None)):
+            assert rf.write_fact_drafts(bad, pg_url="pg", source="s") == []
+    m_fund.assert_not_called()
