@@ -1,8 +1,12 @@
-"""Tests for the 蒙西 market-impact λ pipeline (plan task 13). No RDS:
+"""Tests for the 蒙西 market-impact λ pipeline (plan task 13 + λ v2). No RDS:
 - OLS core on synthetic frames with a KNOWN λ (recovery + charge/discharge
   sign split + identification gate);
+- IV (2SLS) core on synthetic frames WITH REVERSE CAUSALITY (dispatch
+  follows the price shock): OLS attenuates/flips, the nomination-instrumented
+  IV recovers the true λ; weak-instrument gate stays honestly None;
 - estimate_lambda / persist_lambda / get_latest_lambdas end-to-end on a
-  sqlite-ATTACH harness with synthetic filled-price and dispatch tables;
+  sqlite-ATTACH harness with synthetic filled-price, dispatch and nomination
+  tables;
 - engine impact on tiny synthetic LPs (HiGHS monkeypatch — pulp's bundled
   CBC is an x86_64 binary and cannot execute on this arm64 Mac; same
   workaround as T12, production Fargate keeps CBC).
@@ -17,6 +21,7 @@ from sqlalchemy import create_engine, text
 from services.mengxi_nodal.market_impact import (
     _DDL,
     _DISPATCH_SQL,
+    _MIN_FIRST_STAGE_F,
     _MIN_REGIME_OBS,
     _NODE_PROBE_SQL,
     _PRICE_SQL,
@@ -31,6 +36,9 @@ from services.bess_map.nodal_pf_daily import _mengxi_node_impacts
 from services.bess_map.optimisation_engine import (
     compute_dispatch_from_15min_prices,
     optimise_window,
+)
+from services.mengxi_nodal.nomination_curves import (
+    ensure_table as ensure_nomination_table,
 )
 
 # ── synthetic data with a known impact coefficient ───────────────────────────
@@ -84,7 +92,8 @@ def test_ddl_shape():
     assert "reports.station_market_impact" in _DDL
     for col in ("asset_code", "estimated_at", "lambda_discharge",
                 "lambda_charge", "n_obs", "r2", "se_discharge", "se_charge",
-                "lookback_days"):
+                "lookback_days", "method", "lambda_discharge_ols",
+                "lambda_charge_ols", "f_discharge", "f_charge"):
         assert col in _DDL
     assert "PRIMARY KEY (asset_code, estimated_at)" in _DDL
 
@@ -134,6 +143,87 @@ def test_regime_min_obs_gate():
     assert est["per_regime"]["charge"] == pytest.approx(_LAM_C, abs=0.01)
 
 
+# ── IV core: reverse-causality DGP ───────────────────────────────────────────
+# net = z + δ·u + ν   (nomination z exogenous; dispatch also follows the
+#                      price shock u with strength δ — the reverse-causality
+#                      channel that biases OLS)
+# price_dev = −λ·net + u + hour_fx
+# OLS of price_dev on net attenuates toward zero by δ·var(u)/var(net); the
+# nomination-instrumented IV recovers λ.
+
+_IV_LAM_D, _IV_LAM_C, _IV_DELTA = 0.8, 0.3, 1.5
+
+
+def _synth_iv_frames(days: int = 20, weak: bool = False, seed: int = 11,
+                     start: date = date(2026, 8, 1)):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for d in range(days):
+        day = start + timedelta(days=d)
+        for slot in range(96):
+            ts = pd.Timestamp(day) + pd.Timedelta(minutes=15 * slot)
+            h = ts.hour
+            u = rng.normal(0, 10.0)
+            if 18 <= h < 22:                 # discharge window
+                z = (float(rng.uniform(40.0, 120.0)) if not weak
+                     else 80.0 + rng.normal(0, 0.5))
+                net = z + _IV_DELTA * u + rng.normal(0, 2.0)
+                lam = _IV_LAM_D
+            elif h < 6 or 11 <= h < 14:      # charge window
+                z = (-float(rng.uniform(40.0, 120.0)) if not weak
+                     else -80.0 + rng.normal(0, 0.5))
+                net = z + _IV_DELTA * u + rng.normal(0, 2.0)
+                lam = _IV_LAM_C
+            else:
+                z, net, lam = 0.0, 0.0, 0.0
+            hour_fx = 4.0 * np.sin(2 * np.pi * h / 24.0)
+            dev = -lam * net + u + hour_fx
+            fleet = 300.0 + rng.normal(0, 5.0)
+            rows.append((ts.strftime("%Y-%m-%d %H:%M:%S"), net, z,
+                         fleet, fleet + dev))
+    price_df = pd.DataFrame([(r[0], r[4], r[3]) for r in rows],
+                            columns=["metric_time", "node_price", "fleet_price"])
+    disp_df = pd.DataFrame([(r[0], r[1]) for r in rows],
+                           columns=["interval_start", "actual_dispatch_mw"])
+    nom_df = pd.DataFrame([(r[0], r[2]) for r in rows],
+                          columns=["interval_start", "nominated_mw"])
+    return price_df, disp_df, nom_df
+
+
+def test_iv_recovers_lambda_under_reverse_causality():
+    price_df, disp_df, nom_df = _synth_iv_frames()
+    est = estimate_from_frames(price_df, disp_df, nom_df)
+    # OLS is attenuated by the δ channel (0.606 with this seed, ~24% below
+    # the true 0.8); IV recovers the true λ.
+    assert est["per_regime"]["discharge"] < 0.8 * _IV_LAM_D
+    assert est["per_regime_iv"]["discharge"] == pytest.approx(_IV_LAM_D, abs=0.06)
+    assert est["per_regime_iv"]["charge"] == pytest.approx(_IV_LAM_C, abs=0.06)
+    assert est["f_discharge"] > _MIN_FIRST_STAGE_F
+    assert est["f_charge"] > _MIN_FIRST_STAGE_F
+    assert est["method_discharge"] == "iv_nomination"
+    assert est["method_charge"] == "iv_nomination"
+    assert est["n_iv_discharge"] >= _MIN_REGIME_OBS
+
+
+def test_iv_weak_instrument_gate():
+    price_df, disp_df, nom_df = _synth_iv_frames(weak=True)
+    est = estimate_from_frames(price_df, disp_df, nom_df)
+    # Nomination carries no dispatch signal -> honestly unidentified, never
+    # a garbage headline. OLS diagnostics still land.
+    assert est["per_regime_iv"]["discharge"] is None
+    assert est["per_regime_iv"]["charge"] is None
+    assert est["method_discharge"] is None
+    assert est["per_regime"]["discharge"] is not None  # OLS still computed
+
+
+def test_iv_absent_instrument_stays_none():
+    price_df, disp_df = _synth_frames()
+    est = estimate_from_frames(price_df, disp_df)  # no nomination frame
+    assert est["per_regime_iv"]["discharge"] is None
+    assert est["per_regime_iv"]["charge"] is None
+    assert est["per_regime"]["discharge"] == pytest.approx(_LAM_D, abs=0.01)
+
+
 # ── sqlite-ATTACH harness ─────────────────────────────────────────────────────
 
 _SUYOU_OWN = "内蒙.景蓝乌尔图储能电站/220kV.1M"
@@ -156,13 +246,16 @@ def sqlite_engine():
                 plant_name TEXT, datetime TEXT,
                 cleared_energy_mwh NUMERIC, cleared_price NUMERIC)"""))
     ensure_table(eng)  # creates reports.station_market_impact
+    ensure_nomination_table(eng)  # creates marketdata.bess_nomination_96
     return eng
 
 
 def _load_synth(eng, days: int = 12):
     """Insert synth prices (suyou own node + 2 fleet nodes constructed so the
-    cross-sectional AVG equals the intended fleet series exactly) and suyou
-    dispatch rows."""
+    cross-sectional AVG equals the intended fleet series exactly), suyou
+    dispatch rows, and nomination rows (nominated = net + small noise — a
+    strong instrument, so the IV headline identifies)."""
+    rng = np.random.default_rng(3)
     rows = _synth_series(days=days)
     with eng.begin() as conn:
         for ts, net, fleet, node in rows:
@@ -178,6 +271,14 @@ def _load_synth(eng, days: int = 12):
                 "(plant_name, datetime, cleared_energy_mwh, cleared_price) "
                 "VALUES ('景蓝乌尔图储能电站', :t, :mwh, 0)"),
                 {"t": ts, "mwh": net / 4.0})
+            ts_dt = pd.to_datetime(ts)
+            slot = ts_dt.hour * 4 + ts_dt.minute // 15 + 1
+            conn.execute(text(
+                "INSERT INTO marketdata.bess_nomination_96 "
+                "(asset_code, data_date, slot, nominated_mw, source_file) "
+                "VALUES ('suyou', :d, :s, :mw, 'test.xlsx')"),
+                {"d": ts[:10], "s": slot,
+                 "mw": net + float(rng.normal(0, 1.0))})
         # A second station's price node (flat at fleet — leaves the mean
         # intact) with NO dispatch rows, for the loud-skip test.
         for ts, _, fleet, _ in rows[::8]:
@@ -196,7 +297,12 @@ def test_estimate_lambda_sqlite_end_to_end(sqlite_engine):
     assert est["node"] == _SUYOU_OWN  # own node preferred over parents
     assert est["lambda_cny_per_mwh_per_mw"] == pytest.approx(_LAM_D, abs=0.01)
     assert est["per_regime"]["charge"] == pytest.approx(_LAM_C, abs=0.01)
-    assert est["r2"] == est["r2_discharge"] and est["se"] == est["se_discharge"]
+    # Headline is now the IV estimate; OLS rides along as diagnostic.
+    assert est["per_regime_iv"]["discharge"] == pytest.approx(_LAM_D, abs=0.01)
+    assert est["per_regime_iv"]["charge"] == pytest.approx(_LAM_C, abs=0.01)
+    assert est["method_discharge"] == "iv_nomination"
+    assert est["f_discharge"] > _MIN_FIRST_STAGE_F
+    assert est["r2"] == est["r2_discharge"] and est["se"] == est["se_iv_discharge"]
     assert est["n_obs"] > 0
 
 
@@ -239,11 +345,14 @@ def test_persist_upsert_and_latest_read(sqlite_engine):
             "estimated_at": datetime(2026, 8, 20, 10, 0, 0),
             "lambda_discharge": 9.9, "lambda_charge": 9.9,
             "n_obs": 1, "r2": 0.1, "se_discharge": 1.0, "se_charge": 1.0,
-            "lookback_days": 20})
+            "lookback_days": 20, "method": "iv_nomination",
+            "lambda_discharge_ols": 9.9, "lambda_charge_ols": 9.9,
+            "f_discharge": 99.0, "f_charge": 99.0})
     latest = get_latest_lambdas(sqlite_engine)
     assert set(latest) == {"suyou"}
     assert latest["suyou"]["lambda_discharge"] == pytest.approx(_LAM_D, abs=0.01)
     assert latest["suyou"]["lambda_charge"] == pytest.approx(_LAM_C, abs=0.01)
+    assert latest["suyou"]["method"] == "iv_nomination"
 
 
 def test_persist_loud_skip_writes_nothing(sqlite_engine):
@@ -267,13 +376,17 @@ def test_mengxi_node_impacts_mapping(sqlite_engine):
             "estimated_at": datetime(2026, 8, 21, 10, 0, 0),
             "lambda_discharge": 0.55, "lambda_charge": 0.2,
             "n_obs": 100, "r2": 0.5, "se_discharge": 0.01, "se_charge": 0.02,
-            "lookback_days": 90})
+            "lookback_days": 90, "method": "iv_nomination",
+            "lambda_discharge_ols": 0.5, "lambda_charge_ols": 0.18,
+            "f_discharge": 42.0, "f_charge": 37.0})
         conn.execute(_UPSERT, {
             "asset_code": "wulate",  # reverse-causality sign -> excluded
             "estimated_at": datetime(2026, 8, 21, 10, 0, 0),
             "lambda_discharge": -0.4, "lambda_charge": None,
             "n_obs": 100, "r2": 0.5, "se_discharge": 0.01, "se_charge": None,
-            "lookback_days": 90})
+            "lookback_days": 90, "method": None,
+            "lambda_discharge_ols": -0.4, "lambda_charge_ols": None,
+            "f_discharge": 3.0, "f_charge": None})
     impacts = _mengxi_node_impacts(sqlite_engine)
     assert impacts[_SUYOU_OWN] == pytest.approx(0.55)
     # expanded parent fragments share the station λ

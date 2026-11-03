@@ -1,7 +1,11 @@
-"""Daily WeCom nomination pipeline: collect → parse zones → ship to RDS.
+"""Daily WeCom nomination pipeline: collect → parse zones + nominated MW →
+ship to RDS.
 
 Schedule: launchd ai.pjh-etrm.wecom-nominations-daily, 11:00 + 16:00 CST
 (files land in the group post-midnight → morning, occasionally afternoon).
+
+Nominated MW (交易员申报计划 column C) feeds market_impact's λ v2 instrument
+(marketdata.bess_nomination_96); zones feed marketdata.bess_dispatch_zones.
 """
 from __future__ import annotations
 
@@ -15,6 +19,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from services.mengxi_nodal.dispatch_zones import parse_nomination_zones
+from services.mengxi_nodal.nomination_curves import (
+    _DDL as _NOM_DDL,
+    dedupe_rows,
+    parse_nomination_curves,
+)
 from services.wecom_nominations.collector import collect
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -25,6 +34,26 @@ FOLDERS = {"谷山梁": "gushanliang", "苏右": "suyou", "杭锦旗": "hangjinq
 S3_KEY_PREFIX = "zones/"
 BUCKET = "bess-uploader-data-chen-singp-2026"
 TD = "bess-platform-mengxi-dashboard:58"
+
+
+def _launch_writer(writer: str) -> None:
+    """Base64-wrap a python payload and launch it as a one-off ECS task."""
+    import base64
+    b64 = base64.b64encode(writer.encode()).decode()
+    overrides = json.dumps({"containerOverrides": [{
+        "name": "mengxi-dashboard",
+        "command": ["sh", "-c", f"echo {b64} | base64 -d | python -u"]}]})
+    out = subprocess.run([
+        "aws", "ecs", "run-task", "--cluster", "bess-platform-cluster",
+        "--task-definition", TD, "--launch-type", "FARGATE",
+        "--region", "ap-southeast-1",
+        "--network-configuration",
+        "awsvpcConfiguration={subnets=[subnet-08e93f99a9c0aa3a9,subnet-0e8ae30466a9f72b5],"
+        "securityGroups=[sg-08576f2bea0274a81],assignPublicIp=DISABLED}",
+        "--overrides", overrides,
+        "--query", "tasks[0].taskArn", "--output", "text"],
+        check=True, capture_output=True, text=True)
+    logger.info("ECS writer launched: %s", out.stdout.strip())
 
 
 def ship_zones(rows: list[dict], tag: str) -> None:
@@ -56,40 +85,67 @@ with engine.begin() as c:
         c.execute(UPSERT, rows[i:i+5000]); n += len(rows[i:i+5000])
 print('DONE', n, flush=True)
 """
-    import base64
-    b64 = base64.b64encode(writer.encode()).decode()
-    overrides = json.dumps({"containerOverrides": [{
-        "name": "mengxi-dashboard",
-        "command": ["sh", "-c", f"echo {b64} | base64 -d | python -u"]}]})
-    out = subprocess.run([
-        "aws", "ecs", "run-task", "--cluster", "bess-platform-cluster",
-        "--task-definition", TD, "--launch-type", "FARGATE",
-        "--region", "ap-southeast-1",
-        "--network-configuration",
-        "awsvpcConfiguration={subnets=[subnet-08e93f99a9c0aa3a9,subnet-0e8ae30466a9f72b5],"
-        "securityGroups=[sg-08576f2bea0274a81],assignPublicIp=DISABLED}",
-        "--overrides", overrides,
-        "--query", "tasks[0].taskArn", "--output", "text"],
-        check=True, capture_output=True, text=True)
-    logger.info("ECS writer launched: %s", out.stdout.strip())
+    _launch_writer(writer)
+
+
+def ship_nominations(rows: list[dict], tag: str) -> None:
+    """Upload nominated-MW JSON to S3 and trigger the ECS upsert writer.
+    The DDL is injected from the Mac-side module so the payload is
+    self-contained (no image-version coupling)."""
+    if not rows:
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(rows, fh, ensure_ascii=False, default=str)
+        tmp = fh.name
+    key = f"{S3_KEY_PREFIX}nominations_daily_{tag}.json"
+    subprocess.run(["aws", "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+                    "--region", "ap-southeast-1"], check=True, capture_output=True)
+    writer = f"""
+import json, os, boto3
+from sqlalchemy import create_engine, text
+rows = json.loads(boto3.client('s3', region_name='ap-southeast-1').get_object(
+    Bucket='{BUCKET}', Key='{key}')['Body'].read())
+engine = create_engine(os.environ['PGURL'])
+DDL = '''{_NOM_DDL}'''
+UPSERT = text('''INSERT INTO marketdata.bess_nomination_96 (asset_code, data_date, slot, nominated_mw, source_file)
+    VALUES (:asset_code, :data_date, :slot, :nominated_mw, :source_file)
+    ON CONFLICT (asset_code, data_date, slot) DO UPDATE SET nominated_mw = EXCLUDED.nominated_mw, source_file = EXCLUDED.source_file''')
+with engine.begin() as c:
+    for stmt in DDL.split(';'):
+        if stmt.strip():
+            c.execute(text(stmt))
+    n = 0
+    for i in range(0, len(rows), 5000):
+        c.execute(UPSERT, rows[i:i+5000]); n += len(rows[i:i+5000])
+print('DONE', n, flush=True)
+"""
+    _launch_writer(writer)
 
 
 def main() -> None:
     stats = collect()
     logger.info("collect: %s", stats)
-    rows: list[dict] = []
+    zone_rows: list[dict] = []
+    nom_rows: list[dict] = []
     for folder, code in FOLDERS.items():
         d = Path("data/raw/nomination") / folder
         if not d.is_dir():
             continue
         for f in sorted(d.glob("*.xlsx")):
             try:
-                rows.extend(parse_nomination_zones(f, code))
+                zone_rows.extend(parse_nomination_zones(f, code))
             except Exception as ex:
-                logger.warning("parse failed %s: %s", f.name, ex)
-    logger.info("parsed %d zone rows; shipping", len(rows))
+                logger.warning("zone parse failed %s: %s", f.name, ex)
+            try:
+                nom_rows.extend(parse_nomination_curves(f, code))
+            except Exception as ex:
+                logger.warning("nomination parse failed %s: %s", f.name, ex)
+    logger.info("parsed %d zone rows, %d nomination rows; shipping",
+                len(zone_rows), len(nom_rows))
     from datetime import date
-    ship_zones(rows, date.today().isoformat())
+    tag = date.today().isoformat()
+    ship_zones(zone_rows, tag)
+    ship_nominations(dedupe_rows(nom_rows), tag)
 
 
 if __name__ == "__main__":
