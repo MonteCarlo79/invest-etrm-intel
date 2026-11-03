@@ -141,6 +141,42 @@ def zones_to_masks(zones: list[str]) -> tuple[set[int], set[int]]:
     return no_charge, no_discharge
 
 
+# Zone-severity order for consensus tie-breaks: with an even voter count a
+# 2-2 tie resolves toward the more restrictive label (estimation noise errs
+# toward compliance, not opportunity).
+_SEVERITY = {"red": 2, "yellow": 1, "green": 0}
+
+
+def consensus_zone_rows(voter_rows: list[dict], target_codes,
+                        min_voters: int = 2) -> list[dict]:
+    """Fleet-consensus zones for stations whose own files carry no usable
+    colouring (bameng's red marks 出清偏差, wulate's files are unpainted).
+
+    voter_rows: parsed zone rows from the COLOURED stations only. For each
+    (data_date, slot) with at least min_voters labels, the majority zone
+    wins (ties → most restrictive). One output row per target code with
+    source_file='fleet_consensus'. The operator issues a uniform fleet
+    schedule per day (user-confirmed 2026-11-02), so the vote is the
+    targets' zone map.
+    """
+    votes: dict[tuple, list[str]] = {}
+    for r in voter_rows:
+        votes.setdefault((str(r["data_date"])[:10], int(r["slot"])), []).append(
+            r["zone"])
+    out: list[dict] = []
+    for (d, slot), labels in sorted(votes.items()):
+        if len(labels) < min_voters:
+            continue
+        counts = {z: labels.count(z) for z in set(labels)}
+        best = max(counts.values())
+        winners = [z for z, n in counts.items() if n == best]
+        zone = max(winners, key=lambda z: _SEVERITY[z])  # tie -> restrictive
+        for code in target_codes:
+            out.append({"asset_code": code, "data_date": d, "slot": slot,
+                        "zone": zone, "source_file": "fleet_consensus"})
+    return out
+
+
 def ensure_table(engine) -> None:
     with engine.begin() as conn:
         conn.execute(text(_DDL))

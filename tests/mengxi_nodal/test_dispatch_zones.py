@@ -212,3 +212,39 @@ def test_get_zones_no_data(sqlite_engine):
     assert get_zones(sqlite_engine, "gushanliang", date(2026, 8, 1)) == ([], False)
     # Unknown station → unconstrained signal.
     assert get_zones(sqlite_engine, "wulate", date(2026, 9, 2)) == ([], False)
+
+
+# ── fleet consensus (bameng/wulate carry no usable file colouring) ──────────
+
+from services.mengxi_nodal.dispatch_zones import consensus_zone_rows
+
+
+def test_consensus_majority_and_targets():
+    voters = [
+        *[{"asset_code": c, "data_date": "2026-11-01", "slot": 30, "zone": z,
+           "source_file": "f"}
+          for c, z in (("gushanliang", "red"), ("suyou", "red"),
+                       ("hangjinqi", "yellow"), ("siziwangqi", "red"))],
+    ]
+    rows = consensus_zone_rows(voters, {"bameng", "wulate"})
+    assert len(rows) == 2
+    assert all(r["zone"] == "red" for r in rows)
+    assert {r["asset_code"] for r in rows} == {"bameng", "wulate"}
+    assert all(r["source_file"] == "fleet_consensus" for r in rows)
+
+
+def test_consensus_tie_goes_restrictive():
+    voters = [
+        *[{"asset_code": c, "data_date": "2026-11-01", "slot": 31, "zone": z,
+           "source_file": "f"}
+          for c, z in (("gushanliang", "yellow"), ("suyou", "yellow"),
+                       ("hangjinqi", "red"), ("siziwangqi", "red"))],
+    ]
+    [row] = consensus_zone_rows(voters, {"bameng"})
+    assert row["zone"] == "red"
+
+
+def test_consensus_min_voters_gate():
+    voters = [{"asset_code": "gushanliang", "data_date": "2026-11-01",
+               "slot": 32, "zone": "red", "source_file": "f"}]
+    assert consensus_zone_rows(voters, {"bameng"}) == []

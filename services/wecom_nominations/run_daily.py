@@ -18,7 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from services.mengxi_nodal.dispatch_zones import parse_nomination_zones
+from services.mengxi_nodal.dispatch_zones import (
+    consensus_zone_rows,
+    parse_nomination_zones,
+)
 from services.mengxi_nodal.nomination_curves import (
     _DDL as _NOM_DDL,
     dedupe_rows,
@@ -31,6 +34,10 @@ logger = logging.getLogger("wecom_nominations")
 
 FOLDERS = {"谷山梁": "gushanliang", "苏右": "suyou", "杭锦旗": "hangjinqi",
            "四子王旗": "siziwangqi", "巴盟": "bameng", "乌拉特中旗": "wulate"}
+# Stations whose own files carry no usable zone colouring (bameng's red
+# marks 出清偏差, wulate's sheets are unpainted): their file rows are NOT
+# zone data — they vote nothing and get the fleet consensus instead.
+NO_ZONE_FILES = {"bameng", "wulate"}
 S3_KEY_PREFIX = "zones/"
 BUCKET = "bess-uploader-data-chen-singp-2026"
 TD = "bess-platform-mengxi-dashboard:58"
@@ -125,23 +132,27 @@ print('DONE', n, flush=True)
 def main() -> None:
     stats = collect()
     logger.info("collect: %s", stats)
-    zone_rows: list[dict] = []
+    voter_rows: list[dict] = []
     nom_rows: list[dict] = []
     for folder, code in FOLDERS.items():
         d = Path("data/raw/nomination") / folder
         if not d.is_dir():
             continue
         for f in sorted(d.glob("*.xlsx")):
-            try:
-                zone_rows.extend(parse_nomination_zones(f, code))
-            except Exception as ex:
-                logger.warning("zone parse failed %s: %s", f.name, ex)
+            if code not in NO_ZONE_FILES:
+                try:
+                    voter_rows.extend(parse_nomination_zones(f, code))
+                except Exception as ex:
+                    logger.warning("zone parse failed %s: %s", f.name, ex)
             try:
                 nom_rows.extend(parse_nomination_curves(f, code))
             except Exception as ex:
                 logger.warning("nomination parse failed %s: %s", f.name, ex)
-    logger.info("parsed %d zone rows, %d nomination rows; shipping",
-                len(zone_rows), len(nom_rows))
+    zone_rows = voter_rows + consensus_zone_rows(voter_rows, NO_ZONE_FILES)
+    logger.info("parsed %d zone rows (%d fleet-consensus), %d nomination "
+                "rows; shipping",
+                len(zone_rows), len(zone_rows) - len(voter_rows),
+                len(nom_rows))
     from datetime import date
     tag = date.today().isoformat()
     ship_zones(zone_rows, tag)
