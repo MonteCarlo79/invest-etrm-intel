@@ -22,6 +22,16 @@
   其余月份 = 本月累计 − 上月累计 (同年), source = 文件名 + "(差分)";
   任一端为空 → value=None. 山东为当月值 (cumulative_gen=False).
 
+双列复合月键 (year_col 非空时, 蒙东/甘肃族):
+  年份列 (int 2025 / "2025") + 月份列 (int 4 / "4" / "4月") 合成月初 date;
+  任一列不可解析 → 行跳过并计数. 单列 'YYYY-MM'/datetime 解析路径不变.
+
+燃料透视列 (pivot_col/pivot_map 非空时, 冀北 新能源保障性收购族):
+  月份×电源类型 长表 — 燃料在行值而非列名. pivot_col 定位类型列,
+  pivot_map 行值→metric 词干 ({"风电": "wind"}); fuel_col_map 的 metric 含
+  "{pivot}" 占位符, 逐行替换. 未知类型行跳过并计数. 同月多行 (风行+光行)
+  series 合并写入: 同 metric 后写覆盖, 不同 metric 并存 (非 pivot 单写不变).
+
 空燃料列 (山东 水电/核电 2025 全年为空): value=None 原样出, 绝不写 0.
 空行 / 月份不可解析 / 全指标空行: 跳过并计数, 结束 log 一行.
 skip_labels: 月份列中的已知标签串 (如 "合计"), 跳过且不计入 skip 数.
@@ -74,6 +84,11 @@ class MonthRowsConfig:
     ignore_notes:  括号注记白名单 — 注记是限定语而非单位时 (蒙西 "光伏(含光热)"
                    / "储能(含配储)"), 剥空白后命中此表的注记视同无注记,
                    不进单位闸门 (否则整列被误判跳过).
+    year_col:      双列复合月键的年份列候选名 (蒙东/甘肃: "年份"). 非空时
+                   月份列单元格允许 int/"4"/"4月", 年份列 int/"2025".
+    pivot_col:     燃料透视列候选名 (冀北: "电源类型") — 燃料在行值非列名.
+    pivot_map:     透视行值 (剥空白) → metric 词干 ({"风电": "wind"});
+                   fuel_col_map 的 metric 用 "{pivot}" 占位, 逐行替换.
     """
     province: str
     sheet_select: Union[str, Callable[[str], bool]]
@@ -84,19 +99,27 @@ class MonthRowsConfig:
     unit_map: Mapping[str, str] = field(default_factory=dict)
     skip_labels: tuple[str, ...] = ()
     ignore_notes: tuple[str, ...] = ()
+    year_col: tuple[str, ...] = ()
+    pivot_col: tuple[str, ...] = ()
+    pivot_map: Mapping[str, str] = field(default_factory=dict)
 
 
 def parse_month_rows(path, cfg: MonthRowsConfig) -> list[FundRow]:
     path = Path(path)
     source = path.name
     header, data = _read_sheet(path, cfg)
-    month_col, colmap, bad_units = _map_columns(header, cfg)
+    month_col, year_col, pivot_col, colmap, bad_units = _map_columns(header, cfg)
     if month_col is None or not colmap:
         raise ValueError(f"{path}: header lacks 月份 or any known metric column")
+    if cfg.year_col and year_col is None:
+        raise ValueError(f"{path}: header lacks 年份 column {cfg.year_col}")
+    if cfg.pivot_col and pivot_col is None:
+        raise ValueError(f"{path}: header lacks pivot column {cfg.pivot_col}")
     if bad_units:
         log.info("%s: skipped %d columns on unit gate: %s",
                  source, len(bad_units), ", ".join(sorted(bad_units)))
-    series, skipped = _collect(data, month_col, colmap, cfg)
+    series, skipped = _collect(data, month_col, colmap, cfg,
+                               year_col=year_col, pivot_col=pivot_col)
     if skipped:
         log.info("%s [%s]: skipped %d empty/unparseable rows",
                  source, _sheet_label(cfg), skipped)
@@ -316,6 +339,147 @@ LIAONING_OVERVIEW = MonthRowsConfig(
 liaoning_parser = MonthRowsParser([LIAONING_OVERVIEW])
 
 
+# ── 冀南(河北南网)内建配置 (格式图 §8, 对 fixture 实勘) ─────────────────────────
+# 纯交易册: 10 sheet 无装机/发电/用电主题 (全书关键词扫描 "装机/发电量/用电量/
+# 利用小时/全社会/统调" 仅 建设违规 文本 1 命中). 0.综合概览 列 = 注册主体数 +
+# 合同/交易/结算电量电费, 均不在 fundamentals 词表 (结算口径同蒙西批 A 不映射).
+# 注册目的 = 确定性识别此册 (sniff 命中), 但一行不出 (绝不编造): fuel_col_map
+# 留空 → parse 必抛 ValueError → registry 接住返回 ("month_rows", []).
+# 省名用区域本名 河北南网 (registry 路径检测词; 工作簿更新说明 省份=河北南网).
+# 装机在册外单文件 (2-冀南装机-7月.xlsx), 不在本 parser 范围.
+
+JINAN_OVERVIEW = MonthRowsConfig(
+    province="河北南网",
+    sheet_select="0.综合概览",
+    header_markers=("月份", "年度合同分月", "月度交易合计"),
+    month_col=("月份",),
+    fuel_col_map={},                             # 纯交易册: 无 fundamentals 列
+)
+
+jinan_parser = MonthRowsParser([JINAN_OVERVIEW])
+
+
+# ── 蒙东内建配置 (格式图 §9, 对 fixture 实勘) ─────────────────────────────────
+# 年份(int)+月份(int) 双列复合键; 表头 R1 (无标题行); 2025-04 起共 14 数据行.
+# 新能源合并列无风光拆分 → cap_newenergy_full (词表新项: 新能源合并口径).
+# 2026-01 装机 5 列全空 (仅注册计数列有值) → 整行跳过; 2026-02 储能空 /
+# 2026-05 水电储能空 → None 原样出. 注册企业/用户计数列 (家) 不映射.
+# 口径断点 2026-04→05 (总装机 4809.972→6574.73, 火电 889.55→2447.17) 为原册
+# 重述, 原样出 — 消费方须知断点前后不可比 (见批次报告).
+# 发电/用电主题本册不存在 (发电无分燃料; 用电在册外 3-蒙东社会用电-6月.xlsx).
+
+MENGDONG_CAP = MonthRowsConfig(
+    province="蒙东",
+    sheet_select="电网装机情况",
+    header_markers=("年份", "月份", "总装机", "新能源", "储能"),
+    month_col=("月份",),
+    year_col=("年份",),
+    fuel_col_map={
+        "总装机": "cap_total_full",
+        "火电": "cap_thermal_full",
+        "新能源": "cap_newenergy_full",
+        "水电": "cap_hydro_full",
+        "储能": "cap_storage_full",
+        # 新能源占比 / 注册*(家) 列不映射
+    },
+    cumulative_gen=False,
+)
+
+mengdong_parser = MonthRowsParser([MENGDONG_CAP])
+
+
+# ── 甘肃内建配置 (格式图 §11, 对 fixture 实勘) ────────────────────────────────
+# 年份(int)+月份("1月") 双列复合键; 表头 R1 (无标题行); 17 个月 2025-01→2026-05.
+# 上网电量为上网口径 → _ongrid 后缀 (与 _full 全口径分键, FundRow 口径分
+# metric 约定); 月度/累计双表只取当月表 (_累计 sheet 不解析, 山西批 A 同规).
+# 核心指标总览 与三主题表重复 (同值) → 不解析避免双写. 其它/一体化燃料列
+# 不在六燃料词表 → 不映射. 发电利用小时_累计 为累计口径 (差分对小时无意义)
+# → 不解析 (批 A 山西/陕西 hours 表亦未挂).
+
+GANSU_CAP = MonthRowsConfig(
+    province="甘肃",
+    sheet_select="装机容量",
+    header_markers=("年份", "月份", "总装机", "光电"),
+    month_col=("月份",),
+    year_col=("年份",),
+    fuel_col_map={
+        "总装机": "cap_total_full",
+        "水电": "cap_hydro_full",
+        "火电": "cap_thermal_full",
+        "风电": "cap_wind_full",
+        "光电": "cap_solar_full",
+        # 其它/一体化 不在六燃料词表; 同比增长及各燃料同比列不映射
+    },
+    cumulative_gen=False,
+)
+
+GANSU_GEN = MonthRowsConfig(
+    province="甘肃",
+    sheet_select="上网电量_月度",
+    header_markers=("年份", "月份", "总上网", "购火电"),
+    month_col=("月份",),
+    year_col=("年份",),
+    fuel_col_map={
+        "总上网": "gen_total_ongrid",
+        "购火电": "gen_thermal_ongrid",
+        "购水电": "gen_hydro_ongrid",
+        "购风电": "gen_wind_ongrid",
+        "购光电": "gen_solar_ongrid",
+        "同比": "gen_total_ongrid_yoy",
+        "火电同比": "gen_thermal_ongrid_yoy",
+        "水电同比": "gen_hydro_ongrid_yoy",
+        "风电同比": "gen_wind_ongrid_yoy",
+        "光电同比": "gen_solar_ongrid_yoy",
+        # 购一体化/购其它/其它同比 不在词表
+    },
+    cumulative_gen=False,                        # 当月表直取; _累计 表不解析
+)
+
+GANSU_DEMAND = MonthRowsConfig(
+    province="甘肃",
+    sheet_select="全社会用电量_月度",
+    header_markers=("年份", "月份", "全社会", "第一产业"),
+    month_col=("月份",),
+    year_col=("年份",),
+    fuel_col_map={
+        "全社会": "demand_total",
+        "同比": "demand_yoy",
+        "第一产业": "demand_p1",
+        "第二产业": "demand_p2",
+        "第三产业": "demand_p3",
+        "居民生活": "demand_residential",
+        # 各产业同比列不映射 (无词表项)
+    },
+    cumulative_gen=False,
+)
+
+gansu_parser = MonthRowsParser([GANSU_CAP, GANSU_GEN, GANSU_DEMAND])
+
+
+# ── 冀北内建配置 (格式图 §10, 对 fixture 实勘) ────────────────────────────────
+# 装机/用电主题本册不存在 (按设计不出行). 唯一可取 = 新能源保障性收购:
+# 月份×电源类型 长表 (风电/光伏 各一行) → pivot_col 透视; 上网口径 → _ongrid.
+# 只取当月上网电量列: 年累计列不取 (避免与当月双写); 保障性收购/交易电量
+# 不在 fundamentals 词表. 2026-03~05 保障性收购/交易列为 NOT_FOUND 文本
+# (不映射, _num → None 与本列无关). 统调发受电量 (发+受混合口径) 与最大负荷
+# 无标准词表项 (辽宁批 A 最大电力同规不映射) → 电网运行数据 整表不取.
+
+JIBEI_GEN = MonthRowsConfig(
+    province="冀北",
+    sheet_select="新能源保障性收购",
+    header_markers=("月份", "电源类型", "当月上网电量"),
+    month_col=("月份",),
+    pivot_col=("电源类型",),
+    pivot_map={"风电": "wind", "光伏": "solar"},
+    fuel_col_map={
+        "当月上网电量": "gen_{pivot}_ongrid",
+    },
+    cumulative_gen=False,
+)
+
+jibei_parser = MonthRowsParser([JIBEI_GEN])
+
+
 # ── internals ─────────────────────────────────────────────────────────────────
 
 def _sheet_label(cfg: MonthRowsConfig) -> str:
@@ -399,20 +563,32 @@ def _section_of(metric: str) -> str:
 
 def _map_columns(header, cfg: MonthRowsConfig):
     """表头按名称匹配列, 不按下标.
-    返回 (月份列下标, {列下标: (metric, unit)}, {被单位闸门拦下的表头名})."""
+    返回 (月份列下标, 年份列下标|None, 透视列下标|None,
+          {列下标: (metric或模板, unit)}, {被单位闸门拦下的表头名}).
+    metric 含 "{pivot}" 占位符时 pivot_col 必须配置 (否则 ValueError)."""
     month_col = None
+    year_col = None
+    pivot_col = None
     colmap: dict[int, tuple[str, str]] = {}
     bad_units: set[str] = set()
     for idx, h in enumerate(header):
         if h is None:
             continue
         n = _norm_header(h)
+        if cfg.year_col and year_col is None and n in cfg.year_col:
+            year_col = idx
+            continue
+        if cfg.pivot_col and pivot_col is None and n in cfg.pivot_col:
+            pivot_col = idx
+            continue
         if month_col is None and n in cfg.month_col:
             month_col = idx
             continue
         metric = cfg.fuel_col_map.get(n)
         if metric is None:
             continue                            # 占比等未映射列: 忽略
+        if "{pivot}" in metric and not cfg.pivot_col:
+            raise ValueError(f"metric {metric!r} has {{pivot}} but no pivot_col")
         unit = cfg.unit_map.get(metric) or _default_unit(metric)
         note = _header_unit_note(h)
         if note is not None and note in cfg.ignore_notes:
@@ -423,7 +599,7 @@ def _map_columns(header, cfg: MonthRowsConfig):
                 bad_units.add(n)                # 单位不认可/冲突: 整列跳过
                 continue
         colmap[idx] = (metric, unit)
-    return month_col, colmap, bad_units
+    return month_col, year_col, pivot_col, colmap, bad_units
 
 
 def _parse_month(v) -> date | None:
@@ -438,6 +614,39 @@ def _parse_month(v) -> date | None:
             if 1 <= mo <= 12:
                 return date(y, mo, 1)
     return None
+
+
+_MONTH_NUM_RE = re.compile(r"^(\d{1,2})\s*月?$")
+
+
+def _parse_year(v) -> int | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return int(f) if f.is_integer() and 1900 < f < 2200 else None
+    s = str(v).strip()
+    return int(s) if s.isdigit() and len(s) == 4 else None
+
+
+def _parse_month_num(v) -> int | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return int(f) if f.is_integer() and 1 <= f <= 12 else None
+    m = _MONTH_NUM_RE.match(str(v).strip())
+    if m and 1 <= int(m.group(1)) <= 12:
+        return int(m.group(1))
+    return None
+
+
+def _parse_composite_month(yv, mv) -> date | None:
+    """双列复合键: 年份单元格 (int/"2025") + 月份单元格 (int/"4"/"4月")."""
+    y, mo = _parse_year(yv), _parse_month_num(mv)
+    if y is None or mo is None:
+        return None
+    return date(y, mo, 1)
 
 
 def _num(v) -> float | None:
@@ -455,8 +664,10 @@ def _num(v) -> float | None:
         return None
 
 
-def _collect(data, month_col, colmap, cfg: MonthRowsConfig):
-    """月份 → {metric: (原值, unit)}. 空行/NaT/全空行跳过并计数; skip_labels 不计."""
+def _collect(data, month_col, colmap, cfg: MonthRowsConfig,
+             year_col=None, pivot_col=None):
+    """月份 → {metric: (原值, unit)}. 空行/NaT/全空行跳过并计数; skip_labels 不计.
+    同月多行 (pivot 风行+光行) 合并: 同 metric 后写覆盖, 不同 metric 并存."""
     series: dict[date, dict[str, tuple[float | None, str]]] = {}
     skipped = 0
     skip_labels = set(cfg.skip_labels)
@@ -464,13 +675,27 @@ def _collect(data, month_col, colmap, cfg: MonthRowsConfig):
         raw = row[month_col] if month_col < len(row) else None
         if isinstance(raw, str) and raw.strip() in skip_labels:
             continue
-        m = _parse_month(raw)
+        if year_col is not None:
+            yv = row[year_col] if year_col < len(row) else None
+            m = _parse_composite_month(yv, raw)
+        else:
+            m = _parse_month(raw)
         if m is None:
             skipped += 1
             continue
+        stem = None
+        if pivot_col is not None:
+            pv = row[pivot_col] if pivot_col < len(row) else None
+            key = _WS_RE.sub("", str(pv)) if pv is not None else ""
+            stem = cfg.pivot_map.get(key)
+            if stem is None:
+                skipped += 1                    # 未知燃料类型行
+                continue
         vals: dict[str, tuple[float | None, str]] = {}
         present = 0
         for idx, (metric, unit) in colmap.items():
+            if stem is not None and "{pivot}" in metric:
+                metric = metric.replace("{pivot}", stem)
             v = _num(row[idx] if idx < len(row) else None)
             vals[metric] = (v, unit)
             if v is not None:
@@ -478,7 +703,7 @@ def _collect(data, month_col, colmap, cfg: MonthRowsConfig):
         if present == 0:
             skipped += 1
             continue
-        series[m] = vals                        # 同月重复行: 后写覆盖
+        series.setdefault(m, {}).update(vals)   # 同月重复行: 合并, 同 metric 后写覆盖
     return series, skipped
 
 
