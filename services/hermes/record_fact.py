@@ -66,7 +66,7 @@ fact_type 定义与单位归一规则:
 - ancillary_revenue: 辅助服务/调频已结算收入 → 元(万元 ×10000)
 - storage_stat: 储能装机/在库/备案统计 → 数值与单位保持原文(如 GW)
 - sysopfee: 系统运行费 → 元/kWh
-- fundamentals_stat: 分省电力基本面统计(装机/发电量/利用小时/用电量,非价格非补偿) → 数值与单位保持原文(万千瓦/亿千瓦时/小时/%),必须同时给 section 与 metric。词表: section=capacity(装机): cap_total/cap_thermal/cap_hydro/cap_nuclear/cap_wind/cap_solar/cap_storage(全口径加 _full 后缀);section=generation(发电量): gen_total/gen_thermal/gen_hydro/gen_nuclear/gen_wind/gen_solar;section=util_hours(利用小时): hours_total/hours_thermal/hours_hydro/hours_nuclear/hours_wind/hours_solar;section=demand(用电量): demand_total/demand_p1/demand_p2/demand_p3/demand_residential;以上同比类 metric 加 _yoy 后缀、单位 %(如 全社会用电量同比 → demand_yoy)。数据所属月份填 effective_date(YYYY-MM-01)。调频资金池/容量补偿/辅助服务收入分别走 fr_pool/cap_comp/ancillary_revenue,不归此类型。
+- fundamentals_stat: 分省电力基本面统计(装机/发电量/利用小时/用电量,非价格非补偿) → 数值与单位保持原文(万千瓦/亿千瓦时/小时/%),必须同时给 section 与 metric。词表: section=capacity(装机): cap_total/cap_thermal/cap_hydro/cap_nuclear/cap_wind/cap_solar/cap_storage(全口径加 _full 后缀);section=generation(发电量): gen_total/gen_thermal/gen_hydro/gen_nuclear/gen_wind/gen_solar(全口径同样加 _full 后缀);section=util_hours(利用小时): hours_total/hours_thermal/hours_hydro/hours_nuclear/hours_wind/hours_solar(无口径区分,不加后缀);section=demand(用电量): demand_total/demand_p1/demand_p2/demand_p3/demand_residential;以上同比类 metric 加 _yoy 后缀、单位 %(如 全社会用电量同比 → demand_yoy)。数据所属月份填 effective_date(YYYY-MM-01)。调频资金池/容量补偿/辅助服务收入分别走 fr_pool/cap_comp/ancillary_revenue,不归此类型。
 - other: 不属于以上(只进知识库,不写结构化表)
 as_of_date: 信息获得日期(用户未说明用今天);effective_date: 政策/数据生效日期(无法判断为 null)。两个日期字段都必须是 YYYY-MM-DD 或 null — 严禁输出 "<UNKNOWN>"、"未知" 等占位符。
 metric: 仅 storage_stat/ancillary_revenue/fundamentals_stat 需要(如 registry_gw / 调频收入 / demand_yoy);其余为 null。

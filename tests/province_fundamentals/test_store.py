@@ -129,6 +129,36 @@ def test_same_source_restatement_beyond_half_pct_keeps_confirmed_row(fake_db):
     assert batch[0][8] == "conflict"
 
 
+def test_none_restatement_over_confirmed_number_skips(fake_db):
+    """Later cumulative workbook blanks a prior month's cell: incoming None over a
+    confirmed number must NOT overwrite — a different-source row would shadow the
+    confirmed value via DISTINCT-ON, a same-source row would null it via ON CONFLICT."""
+    cur, ev_calls = fake_db
+    cur.fetchone.side_effect = [(Decimal("6831.49"),)]  # existing confirmed value
+    rows = [FundRow(province="安徽", month=date(2025, 1, 1), period="month",
+                    section="capacity", metric="cap_total", value=None,
+                    unit="万千瓦", source="安徽2025年2月月报数据.xlsx")]  # different source
+    result = store.write_rows(rows, pg_url="postgresql://test")
+    assert result == {"written": 0, "conflicts": 0, "skipped": 1}
+    assert ev_calls == []  # nothing written at all
+
+
+def test_none_value_over_none_confirmed_writes(fake_db):
+    """No confirmed value yet + incoming None -> the record-empty-cell path stays
+    writable (None→None healing is not blocked by the blanking guard)."""
+    cur, ev_calls = fake_db
+    cur.fetchone.side_effect = [None]
+    rows = [FundRow(province="安徽", month=date(2025, 1, 1), period="month",
+                    section="capacity", metric="cap_total", value=None,
+                    unit="万千瓦", source="安徽2025年1月月报数据.xlsx")]
+    result = store.write_rows(rows, pg_url="postgresql://test")
+    assert result == {"written": 1, "conflicts": 0, "skipped": 0}
+    assert len(ev_calls) == 1
+    batch = ev_calls[0][2]
+    assert batch[0][5] is None
+    assert batch[0][8] == "confirmed"
+
+
 def test_duplicate_key_within_one_call_last_wins(fake_db):
     """Two rows sharing (province, month, period, section, metric, source) in one call
     must not both enter the batch — PG rejects ON CONFLICT affecting a row twice and

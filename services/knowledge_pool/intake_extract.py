@@ -134,6 +134,7 @@ _PROMPT_TMPL = """你在分析一组中文电力市场情报文件（同一主�
   发电量 gen_total/gen_thermal/gen_hydro/gen_nuclear/gen_wind/gen_solar；
   利用小时 hours_total/hours_thermal/...（同比加 _yoy 后缀，单位 %）；
   用电 demand_total（亿千瓦时）/demand_yoy（%）/demand_p1/demand_p2/demand_p3/demand_residential
+  口径后缀: 全口径装机/发电量用 *_full 后缀(cap_total_full, gen_total_full)；利用小时无口径区分不加后缀
   时间口径: 月度 period="month" + month=当月1日；年度 period="year" + month=YYYY-01-01
   与 pipeline_stat 分工: 储能在库/备案/规划/缺口/新型储能装机 → pipeline_stat；全口径电源结构、发电量、利用小时、用电量基本面 → fundamentals_stat
 - spot_note: 给现货策略分析师的供需/格局解读（structured 留空 {{}}）

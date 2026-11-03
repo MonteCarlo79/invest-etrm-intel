@@ -6,7 +6,10 @@ Write rules (spec 2026-11-02, docs/superpowers/specs/2026-11-02-market-fundament
 - Per-row pre-check of the current confirmed value for the natural key:
     no confirmed value                  -> write with default_status
     equal to confirmed value            -> skip (idempotent backfill re-runs)
-    |new-old|/|old| <= 0.5% (or new None) -> overwrite (upsert, default_status)
+    new None over a confirmed number    -> skip (blanking restatement must not
+      erase the confirmed value; None over None still writes so reported-but-empty
+      cells can land)
+    |new-old|/|old| <= 0.5%             -> overwrite (upsert, default_status)
     |new-old|/|old| >  0.5%             -> do NOT overwrite; write with status='conflict'
       AND source tagged '#conflict', so the conflict row is always a NEW row (its
       unique key differs from the confirmed row's raw source). Without the tag, a
@@ -56,7 +59,12 @@ def _decide(old, new) -> str:
     if old is None:
         return "overwrite"                       # no confirmed value yet -> fresh write
     if new is None:
-        return "overwrite"                       # deviation undefined -> let writer through
+        # None over a confirmed number is a blanking restatement (later cumulative
+        # workbook empties a prior month's cell) — never let it erase the number:
+        # a different-source row would shadow it via DISTINCT-ON, a same-source
+        # row would null it via ON CONFLICT. None->None stays writable so the
+        # record-empty-cell path keeps working.
+        return "overwrite" if old is None else "skip"
     old_f, new_f = float(old), float(new)
     if old_f == new_f:
         return "skip"

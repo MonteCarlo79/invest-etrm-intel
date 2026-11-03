@@ -374,7 +374,8 @@ _FUND_SECTIONS = ("capacity", "generation", "util_hours", "demand")
 
 _CALIBER_HINT = (
     "口径: full=全口径(全社会/全地域), base=省调口径(无后缀 metric), "
-    "derived=单月推算值; 引用数字时请注明口径 (cite the caliber when quoting)."
+    "derived=单月推算值; 利用小时无口径区分(全口径), 且 hours_*_yoy 可能为小时差值"
+    "(unit=小时)而非 %; 引用数字时请注明口径 (cite the caliber when quoting)."
 )
 
 
@@ -443,6 +444,9 @@ def get_province_fundamentals(
                 "error": "No DB URL found (set PGURL / DB_URL / DATABASE_URL)."}
 
     from services.province_fundamentals import store as _store
+    # Clamp the lookback window: a negative months would build a future-window
+    # interval in read_series; an absurd one scans the whole table.
+    months = max(1, min(120, months))
     sections = [section] if section else list(_FUND_SECTIONS)
     rows: list[dict] = []
     try:

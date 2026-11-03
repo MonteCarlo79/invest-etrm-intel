@@ -170,6 +170,16 @@ def test_months_passthrough(fake_read):
     assert calls[0]["months"] == 12
 
 
+def test_months_clamped_to_1_120(fake_read):
+    """months is clamped to 1..120 before reaching read_series — a negative value
+    would otherwise build a future-window interval, an absurd one a full scan."""
+    calls, _ = fake_read
+    tools.get_province_fundamentals("安徽", section="capacity", months=-5)
+    assert calls[0]["months"] == 1
+    tools.get_province_fundamentals("安徽", section="capacity", months=999)
+    assert calls[1]["months"] == 120
+
+
 # ── error path: error != empty (不编造 applies to failures too) ────────────────
 
 def test_db_error_returns_error_dict_not_no_data(fake_read, monkeypatch):

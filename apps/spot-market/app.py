@@ -3186,7 +3186,9 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
                 "分类型利用小时 util_hours (小时, 累计平均 + 单月推算 derived), "
                 "用电需求 demand (亿千瓦时 / %). Returns monthly rows plus annual "
                 "(period='year') rows over the last N months. Metrics ending _full "
-                "are 全口径; no suffix is 省调口径 — cite the caliber when quoting. "
+                "are 全口径; unsuffixed capacity/generation metrics are 省调口径, "
+                "while 利用小时 hours_* are 无口径区分(全口径) and hours_*_yoy may be "
+                "小时差值 (unit=小时) not % — cite the caliber when quoting. "
                 "Use for 某省装机/发电量/利用小时/用电量演变 questions. "
                 "Empty province returns 无数据 — never invent numbers."
             ),
