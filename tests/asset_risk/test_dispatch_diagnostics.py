@@ -278,3 +278,64 @@ def test_month_asset_matrix_totals(sqlite_engine):
 
 def test_plant_map_covers_six_assets():
     assert len(PLANT_MAP) == 6
+
+
+# --- auto-scraped nomination overlay (bess_nomination_96, WeCom pipeline) ---
+
+def _add_mapped_asset(eng):
+    """A registry-mapped asset (裕昭沙子坝 ↔ gushanliang) with one chain row,
+    an overlapping auto nomination, and an auto-only slot beyond the chain."""
+    with eng.connect() as conn:
+        conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
+                          "(7, '裕昭沙子坝', 'bess', 'test', 500, 4.0)"))
+        conn.execute(text(
+            "INSERT INTO marketdata.rm_dispatch_chain "
+            "(asset_id, interval_start, nominated_mw, da_cleared_mw, "
+            "rt_cleared_mw, actual_mw, source_file) "
+            "VALUES (7, '2026-09-01 00:00:00', 10, 10, 8, 9, 'xlsx')"))
+        conn.execute(text(
+            "INSERT INTO marketdata.md_id_cleared_energy "
+            "(plant_name, datetime, cleared_price, cleared_energy_mwh) "
+            "VALUES ('裕昭沙子坝储能电站', '2026-09-01 00:15:00', 300.0, -2.5)"))
+        conn.commit()
+    from services.mengxi_nodal.nomination_curves import ensure_table as en
+    en(eng)
+    with eng.begin() as conn:
+        # overlap slot (00:00): auto nomination −99 must win over chain's 10
+        conn.execute(text(
+            "INSERT INTO marketdata.bess_nomination_96 "
+            "(asset_code, data_date, slot, nominated_mw, source_file) "
+            "VALUES ('gushanliang', '2026-09-01', 1, -99, 'auto.xlsx')"))
+        # extension slot (00:15): no chain row; rt fills from cleared energy
+        conn.execute(text(
+            "INSERT INTO marketdata.bess_nomination_96 "
+            "(asset_code, data_date, slot, nominated_mw, source_file) "
+            "VALUES ('gushanliang', '2026-09-01', 2, 55, 'auto.xlsx')"))
+
+
+def test_auto_nomination_overlay_wins_on_overlap(sqlite_engine):
+    _add_mapped_asset(sqlite_engine)
+    df = _load_chain(sqlite_engine, [7], None, None)
+    row = df[df["ts"] == pd.Timestamp("2026-09-01 00:00:00")].iloc[0]
+    assert row["nominated_mw"] == -99        # auto wins
+    assert row["rt_cleared_mw"] == 8         # chain value kept, not filled
+    assert row["actual_mw"] == 9
+
+
+def test_auto_nomination_extends_chain_with_rt_fill(sqlite_engine):
+    _add_mapped_asset(sqlite_engine)
+    df = _load_chain(sqlite_engine, [7], None, None)
+    ext = df[df["ts"] == pd.Timestamp("2026-09-01 00:15:00")]
+    assert len(ext) == 1
+    ext = ext.iloc[0]
+    assert ext["nominated_mw"] == 55
+    assert ext["rt_cleared_mw"] == -10.0     # −2.5 MWh × 4
+    assert pd.isna(ext["actual_mw"])         # honest gap, not zero
+    assert ext["asset"] == "裕昭沙子坝"        # identity filled
+    assert ext["capacity_mw"] == 500
+
+
+def test_auto_nomination_noop_for_unmapped_assets(sqlite_engine):
+    before = _load_chain(sqlite_engine, [1], None, None)
+    assert len(before) == 39                 # A1 maps to no registry code
+    assert set(before["asset"]) == {"A1"}
