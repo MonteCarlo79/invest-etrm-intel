@@ -565,3 +565,16 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 2. Scratch clones live at `~/bess-push` (home dir survives reboots), never /tmp.
 3. On the shared OneDrive tree: object-level plumbing only (hash-object/read-tree/write-tree/commit-tree/update-ref); nothing that writes the worktree.
 4. Recovery order when it happens: stop touching the tree → notify other sessions → git fsck dangling blobs for staged content → OneDrive Version History (web) for unstaged → stashes are unaffected by reset.
+
+---
+
+## 2026-11-04 — Province keys: `spot_prices_hourly`/`bess_capture_daily` use Chinese names; silent SKIP on wrong key
+
+**Context:** 安徽 capture-pipeline NaN-day heal (user-reported 4 NaN days on Quant tab). First Fargate run printed `[SKIP] anhui: no hourly prices`, wrote nothing, and the wrapper still claimed "ALL NaN HEALED".
+
+**Root cause chain:** (1) Province key conventions differ per codepath — `services/spot_ingest/provinces.py` maps 安徽→`Anhui`, `services/lingfeng/ingest_province_clearing.py` maps 安徽→`anhui`, but the actual `marketdata.spot_prices_hourly` + `marketdata.bess_capture_daily` rows are keyed by the **Chinese name** (`安徽`). Even the CLAUDE.md example (`--province shandong`) is wrong case/style for these tables. (2) `fetch_hourly_prices` returns empty for an unknown province and the pipeline prints `[SKIP]` and exits 0 — no error. (3) My verification query filtered the same wrong key (`province='anhui'`), saw zero rows, and read it as "no NaN" instead of "no data at all". (4) First ERRORS.md entry was written from the spot_ingest map ("keys are Title Case English") before the probe result came back — that claim was also wrong; probe of DISTINCT province settled it.
+
+**Rules from now on:**
+1. Before any single-province pipeline run, confirm the key with `SELECT DISTINCT province` on the target table (one probe task) — do not trust slug maps in any one ingestion module.
+2. A `[SKIP] <province>: no hourly prices` line is a FAILED run for backfill purposes — treat exit 0 as success only when the verify query shows the target rows exist.
+3. Verify queries must match the write key; zero rows returned = investigate, never "clean".
