@@ -59,11 +59,14 @@ def run(dir, *, province: str | None = None, dry_run: bool = False,
             summary["unknown"] += 1
             out(f"[unknown] {rel} — 非 xlsx 工作簿, 跳过")
             continue
-        fmt, rows = registry.dispatch(f)
-        if fmt is None:
+        hits = registry.dispatch_all(f)
+        if not hits:
             summary["unknown"] += 1
             out(f"[unknown] {rel} — 省份未注册且全国册嗅探不命中, 跳过")
             continue
+        # 一个工作簿可命中多类解析器 (聚合册的披露 + 省间); 合并所有命中的行.
+        rows = [r for _, rs in hits for r in rs]
+        fmt = "+".join(h for h, _ in hits)
         if not rows:
             summary["empty"] += 1
             out(f"[{fmt}] {rel} — 格式命中但解析 0 行 (失败细节见 log), 跳过")

@@ -91,11 +91,13 @@ def try_registry_parse(filename: str, data: bytes) -> tuple[Optional[str], list[
         path = Path(td) / Path(filename).name
         try:
             path.write_bytes(data)
-            fmt, fund_rows = registry.dispatch(path)
+            hits = registry.dispatch_all(path)
         except Exception:
             return None, []
+    fund_rows = [r for _, rs in hits for r in rs]
     if not fund_rows:
         return None, []
+    fmt = "+".join(h for h, _ in hits)
     rows = [{"province": r.province, "month": r.month.isoformat(), "period": r.period,
              "section": r.section, "metric": r.metric, "value": r.value,
              "unit": r.unit, "source": r.source}

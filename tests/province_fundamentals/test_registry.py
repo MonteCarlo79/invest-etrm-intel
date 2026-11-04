@@ -157,3 +157,24 @@ def test_jiaojie_sniff_rejects_province_workbook():
     from services.province_fundamentals.parsers import jiaojie_2025
     assert not jiaojie_2025.sniff(FIXTURE)
     assert jiaojie_2025.sniff(FIXTURE_JIAOJIE)
+
+
+# ── dispatch_all (2026-11-04, wave-2 fix): aggregate workbooks carry multiple ──
+# content types; first-hit-wins starved interprov parsers of 聚合册.
+
+def test_dispatch_all_returns_every_matching_parser():
+    from services.province_fundamentals import registry
+    f = Path("tests/province_fundamentals/fixtures/蒙东-电力交易市场信息披露数据_截至2026年5月.xlsx")
+    all_hits = registry.dispatch_all(f)
+    fmts = [fmt for fmt, _ in all_hits]
+    # the aggregate workbook must hit BOTH its disclosure parser AND interprov2
+    assert any("month_rows" in x or "format" in x for x in fmts), fmts
+    assert any("interprov" in x for x in fmts), fmts
+    # first-hit dispatch still returns just one
+    one_fmt, _ = registry.dispatch(f)
+    assert one_fmt == fmts[0]
+
+
+def test_dispatch_all_unknown_file_returns_empty():
+    from services.province_fundamentals import registry
+    assert registry.dispatch_all(Path("/tmp/不存在的文件.xlsx")) == []
