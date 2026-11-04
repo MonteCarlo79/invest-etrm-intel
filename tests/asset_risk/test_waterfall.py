@@ -237,3 +237,69 @@ def test_attribution_decomposition_identities():
         assert std + d1 == pytest.approx(nom)
         assert nom + d2 == pytest.approx(clr)
         assert clr + d3 == pytest.approx(act)
+
+
+# ---------- benchmark LP price fallback (2026-10 cleared-price gap) ----------
+
+@pytest.fixture()
+def lp_solver(monkeypatch):
+    """HiGHS instead of pulp's bundled x86_64 CBC (cannot run on this arm64
+    Mac; production Fargate keeps CBC). Same workaround as test_market_impact."""
+    import pulp
+    monkeypatch.setattr(
+        pulp, "PULP_CBC_CMD",
+        lambda **kw: pulp.HiGHS(msg=False, timeLimit=kw.get("timeLimit")))
+
+
+def test_benchmark_leg_falls_back_to_filled_nodal(sqlite_engine, lp_solver):
+    """When the cleared-price feed has no complete 96-slot day in the month,
+    benchmark_leg falls back to md_mengxi_nodal_price_96_filled (the
+    station's own registry node) and flags note='节点填充电价'."""
+    from apps.asset_risk.tab_waterfall import benchmark_leg
+
+    with sqlite_engine.connect() as conn:
+        conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
+                          "(7, '裕昭沙子坝', 'bess', 'test', 500, 4.0, '2025-12-25')"))
+        conn.execute(text("CREATE TABLE marketdata.md_mengxi_nodal_price_96_filled "
+                          "(node_name TEXT, metric_time TEXT, time_order_96 INTEGER, "
+                          "avg_node_price REAL)"))
+        # cleared feed: rows exist but price is NULL (the 2026-10 gap shape)
+        conn.execute(text("INSERT INTO marketdata.md_id_cleared_energy "
+                          "(plant_name, datetime, cleared_price, cleared_energy_mwh) "
+                          "VALUES ('裕昭沙子坝储能电站', '2026-10-01 00:15:00', NULL, 1.0)"))
+        for slot in range(1, 97):
+            ts = pd.Timestamp("2026-10-01") + pd.Timedelta(minutes=15 * (slot - 1))
+            px = 10.0 if slot <= 48 else 100.0
+            conn.execute(text("INSERT INTO marketdata.md_mengxi_nodal_price_96_filled "
+                              "VALUES ('内蒙.裕昭沙子坝储能电站/220kV.1M', :t, :s, :p)"),
+                         {"t": str(ts), "s": slot, "p": px})
+        conn.commit()
+
+    res = benchmark_leg(sqlite_engine, 7, "2026-10", 500.0, 4.0, "2025-12-25",
+                        350.0, "裕昭沙子坝储能电站", asset_name="裕昭沙子坝")
+    assert res["days_solved"] == 1
+    assert res["arb_cny"] > 0
+    assert res["note"] == "节点填充电价"
+
+
+def test_benchmark_leg_no_fallback_when_cleared_complete(sqlite_engine, lp_solver):
+    """Complete cleared-price days keep the original source (note stays '')."""
+    from apps.asset_risk.tab_waterfall import benchmark_leg
+
+    with sqlite_engine.connect() as conn:
+        conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
+                          "(8, '裕昭沙子坝', 'bess', 'test', 500, 4.0, '2025-12-25')"))
+        for n in range(96):
+            ts = pd.Timestamp("2026-06-02") + pd.Timedelta(minutes=15 * (n + 1))
+            px = 10.0 if n < 48 else 100.0
+            conn.execute(text("INSERT INTO marketdata.md_id_cleared_energy "
+                              "(plant_name, datetime, cleared_price, cleared_energy_mwh) "
+                              "VALUES ('裕昭沙子坝储能电站', :t, :p, 1.0)"),
+                         {"t": str(ts), "p": px})
+        conn.commit()
+
+    res = benchmark_leg(sqlite_engine, 8, "2026-06", 500.0, 4.0, "2025-12-25",
+                        350.0, "裕昭沙子坝储能电站", asset_name="裕昭沙子坝")
+    assert res["days_solved"] == 1
+    assert res["arb_cny"] > 0
+    assert res["note"] == ""

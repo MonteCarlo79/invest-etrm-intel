@@ -23,6 +23,7 @@ from sqlalchemy import bindparam, text
 
 from apps.asset_risk.standard_params import params_for_asset
 from apps.asset_risk.tab_diagnostics import (
+    AUTO_NOM_CODE,
     CAPCOMP_RATE,
     CAPCOMP_RATE_DEFAULT,
     PLANT_MAP,
@@ -127,10 +128,39 @@ def stage_capacity(dis_mwh: pd.Series, assets: pd.Series) -> pd.Series:
     )
 
 
+def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str) -> pd.Series:
+    """Filled nodal RT price (md_mengxi_nodal_price_96_filled.avg_node_price)
+    for the station's own registry node — the same market price, complete
+    96-slot days. metric_time stamps interval START (no −15min shift, unlike
+    md_id_cleared_energy.cleared_price which stamps period end). Empty series
+    when the asset has no registry mapping/node."""
+    from libs.trading_book.registry import get_station
+
+    code = AUTO_NOM_CODE.get(asset_name)
+    if not code:
+        return pd.Series(dtype=float)
+    station = get_station(code)
+    if not station.price_nodes:
+        return pd.Series(dtype=float)
+    df = pd.read_sql(text("""
+        SELECT metric_time, avg_node_price
+        FROM marketdata.md_mengxi_nodal_price_96_filled
+        WHERE node_name = :node AND metric_time >= :s AND metric_time < :e
+        ORDER BY metric_time
+    """), engine, params={"node": station.price_nodes[0], "s": start, "e": end})
+    if df.empty:
+        return pd.Series(dtype=float)
+    s = pd.Series({pd.Timestamp(t): float(v)
+                   for t, v in zip(df["metric_time"], df["avg_node_price"])
+                   if pd.notna(v)})
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
 @st.cache_data(show_spinner=False)
 def benchmark_leg(_engine, asset_id: int, month: str, capacity_mw: float,
                   duration_h: float, commission_iso: str | None,
-                  capcomp_rate: float, plant: str) -> dict:
+                  capcomp_rate: float, plant: str,
+                  asset_name: str = "") -> dict:
     """Investment-standard leg: LP perfect-foresight with standard params for one
     asset-month. Cached on (asset_id, month, ...) — historical inputs immutable.
 
@@ -152,16 +182,35 @@ def benchmark_leg(_engine, asset_id: int, month: str, capacity_mw: float,
     s = s[~s.index.duplicated(keep="last")].sort_index()
     s.index = pd.DatetimeIndex(s.index)
 
-    dispatch_df, profit_s = compute_dispatch_from_15min_prices(
-        s, power_mw=capacity_mw, duration_h=params["duration_h"] * params["dod"] * params["soh"],
-        roundtrip_eff=params["roundtrip_eff"], window_days=1,
-        ramp_rate_pct_per_min=3.3, max_cycles_per_day=1.5,
-        # 蒙西 operator rules: ramp 3.3%/min + max 1.5 cycles/day per asset (user 2026-09).
-        # capacity subsidy NOT internalised in the objective: it makes the MILP
-        # ~25-500x slower (every discharge marginally profitable explodes the binary
-        # search) while changing discharge volume by only ~0.2% (measured 2026-06,
-        # 悦杭独贵: 903.1 vs 904.6 MWh). Subsidy is added outside as dis_mwh x rate.
-    )
+    def _run(series):
+        return compute_dispatch_from_15min_prices(
+            series, power_mw=capacity_mw,
+            duration_h=params["duration_h"] * params["dod"] * params["soh"],
+            roundtrip_eff=params["roundtrip_eff"], window_days=1,
+            ramp_rate_pct_per_min=3.3, max_cycles_per_day=1.5,
+            # 蒙西 operator rules: ramp 3.3%/min + max 1.5 cycles/day per asset (user 2026-09).
+            # capacity subsidy NOT internalised in the objective: it makes the MILP
+            # ~25-500x slower (every discharge marginally profitable explodes the binary
+            # search) while changing discharge volume by only ~0.2% (measured 2026-06,
+            # 悦杭独贵: 903.1 vs 904.6 MWh). Subsidy is added outside as dis_mwh x rate.
+        )
+
+    dispatch_df, profit_s = _run(s)
+    price_note = ""
+    if len(profit_s) == 0:
+        # Cleared-price feed has no COMPLETE 96-slot day this month (the engine
+        # skips any day with a NaN slot; 2026-10: ~32% nulls). Fall back to the
+        # filled nodal price — the same market price, complete days.
+        s2 = _load_nodal_prices_filled(_engine, asset_name,
+                                       month_start.strftime("%Y-%m-%d"), month_end)
+        if not s2.empty:
+            dispatch_df, profit_s = _run(s2)
+            price_note = "节点填充电价"
+    if len(profit_s) == 0:
+        return {"arb_cny": 0.0, "dis_mwh": 0.0, "chg_mwh": 0.0, "cap_cny": 0.0,
+                "days_solved": 0,
+                "days_skipped": int(s.groupby(s.index.date).ngroups) if not s.empty else 0,
+                "age": params["age"], "note": "no complete price day"}
     dis_mwh = float((dispatch_df["discharge_mw"] * 0.25).sum()) if not dispatch_df.empty else 0.0
     chg_mwh = float((dispatch_df["charge_mw"] * 0.25).sum()) if not dispatch_df.empty else 0.0
     arb = float(profit_s.sum()) if len(profit_s) else 0.0
@@ -169,7 +218,7 @@ def benchmark_leg(_engine, asset_id: int, month: str, capacity_mw: float,
     return {"arb_cny": arb, "dis_mwh": dis_mwh, "chg_mwh": chg_mwh,
             "cap_cny": dis_mwh * capcomp_rate,
             "days_solved": int(len(profit_s)), "days_skipped": days_in_month - int(len(profit_s)),
-            "age": params["age"], "note": ""}
+            "age": params["age"], "note": price_note}
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +467,8 @@ _CAVEATS_MD = """
 - 费用项（系统运行费、线损、其他费用）仅存在于实际段（结算单），前两腿为零 — 这是 Δ执行与费用 的组成部分，不是错误。
 - commission_date 缺失的资产按 Year 0（最新参数）处理，并在下方列出警告。
 - 偏差归因的预测最优采用 ols_rt_time_v1 小时级预测调度、按实际小时均价结算（沿用 strategy_comparison 口径；与 15 分钟口径存在基差）。
-- LP 窗口 1 天、SOC 窗口起点为 0；价格或调度链缺失的日期跳过（见数据覆盖）。
+- LP 窗口 1 天、SOC 窗口起点为 0；价格或调度链缺失的日期跳过（见数据覆盖）。引擎跳过任何含空槽的日期；当月出清电价（md_id_cleared_energy.cleared_price）无完整日时，投资标准回退至节点填充电价（md_mengxi_nodal_price_96_filled.avg_node_price，同一节点市场价、完整 96 槽），并在页面标注。
+- 申报腿数据来源：2026-09 起为企业微信自动抓取的调度计划表（marketdata.bess_nomination_96，每日两次自动更新）；此前为人工上传的调度计划表（rm_dispatch_chain，止于 2026-08-30）。重叠时段以自动抓取为准；9 月以后的出清腿由交易所出清电量（md_id_cleared_energy ×4）补齐。
 """
 
 
@@ -492,7 +542,7 @@ def render_waterfall(engine):
         rate = CAPCOMP_RATE.get(a["name"], CAPCOMP_RATE_DEFAULT)
         r = benchmark_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
                           float(a["bess_duration_h"]), commission_iso, rate,
-                          PLANT_MAP[a["name"]])
+                          PLANT_MAP[a["name"]], asset_name=a["name"])
         fr = forecast_optimal_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
                                   float(a["bess_duration_h"]), commission_iso,
                                   PLANT_MAP[a["name"]])
@@ -515,6 +565,10 @@ def render_waterfall(engine):
         columns=["asset", "month", "arb_cny", "dis_mwh", "cap_cny"])
     if missing_commission:
         st.warning(f"以下资产 commission_date 缺失，按 Year 0 参数计算：{'、'.join(missing_commission)}")
+    noted = sorted({b["asset"] for b in bench_rows if b.get("note")})
+    if noted:
+        st.caption("投资标准价格回退：以下资产当月出清电价无完整日（缺口 ~32%），"
+                   f"投资标准按节点填充电价计算：{'、'.join(noted)}")
 
     actual_has_bills = not actual.empty and len(actual) > 0
     if not actual_has_bills:
