@@ -423,17 +423,22 @@ def upsert_capture_daily(
     realized_profit_by_day: pd.Series,
     theoretical_profit_by_day: pd.Series
 ):
-    if theoretical_profit_by_day.empty:
+    if theoretical_profit_by_day.empty and realized_profit_by_day.empty:
         return
 
     e_cap = float(power_mw * duration_h)
 
-    idx = theoretical_profit_by_day.index
+    # Union index: a realized-only recompute (theoretical branch skipped as
+    # up-to-date) must still upsert its days — driving off the theoretical
+    # index alone silently discarded them (安徽 2026-10-05/07/10 fossil NaN,
+    # healed only via --force --force-theoretical).
+    idx = theoretical_profit_by_day.index.union(realized_profit_by_day.index)
+    t = theoretical_profit_by_day.reindex(idx)
     r = realized_profit_by_day.reindex(idx)
 
     df = pd.DataFrame({
         "date": pd.to_datetime(idx).date,
-        "theoretical_profit": pd.to_numeric(theoretical_profit_by_day.values, errors="coerce"),
+        "theoretical_profit": pd.to_numeric(t.values, errors="coerce"),
         "realized_profit": pd.to_numeric(r.values, errors="coerce"),
     })
 
@@ -461,6 +466,25 @@ def upsert_capture_daily(
         "capture_rate", "capturable_profit_per_mwh_day"
     ]].itertuples(index=False, name=None))
 
+    # Overwrite only what this run recomputed — a branch that was skipped
+    # (e.g. theoretical up-to-date) has NULLs in the frame; writing them on
+    # conflict would erase good values. capture_rate needs both sides.
+    set_clauses = []
+    if not realized_profit_by_day.empty:
+        set_clauses += [
+            "realized_profit = EXCLUDED.realized_profit",
+            "realized_profit_per_mwh_day = EXCLUDED.realized_profit_per_mwh_day",
+            "capturable_profit_per_mwh_day = EXCLUDED.capturable_profit_per_mwh_day",
+        ]
+    if not theoretical_profit_by_day.empty:
+        set_clauses += [
+            "theoretical_profit = EXCLUDED.theoretical_profit",
+            "theoretical_profit_per_mwh_day = EXCLUDED.theoretical_profit_per_mwh_day",
+        ]
+    if not realized_profit_by_day.empty and not theoretical_profit_by_day.empty:
+        set_clauses.append("capture_rate = EXCLUDED.capture_rate")
+    set_clauses.append("updated_at = NOW()")
+
     sql = f"""
         INSERT INTO {schema}.bess_capture_daily
           (province, date, model, duration_h, power_mw, roundtrip_eff,
@@ -470,13 +494,7 @@ def upsert_capture_daily(
         VALUES %s
         ON CONFLICT (province, date, model, duration_h, power_mw, roundtrip_eff)
         DO UPDATE SET
-          realized_profit = EXCLUDED.realized_profit,
-          realized_profit_per_mwh_day = EXCLUDED.realized_profit_per_mwh_day,
-          theoretical_profit = EXCLUDED.theoretical_profit,
-          theoretical_profit_per_mwh_day = EXCLUDED.theoretical_profit_per_mwh_day,
-          capture_rate = EXCLUDED.capture_rate,
-          capturable_profit_per_mwh_day = EXCLUDED.capturable_profit_per_mwh_day,
-          updated_at = NOW()
+          {", ".join(set_clauses)}
     """
     with engine.begin() as conn:
         _execute_values(conn, sql, rows)
