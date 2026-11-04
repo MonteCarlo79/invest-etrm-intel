@@ -450,6 +450,7 @@ _CMP_METRICS = {
     "util_hours": [("hours_total",), ("hours_thermal",), ("hours_hydro",),
                    ("hours_nuclear",), ("hours_wind",), ("hours_solar",)],
     "demand": [("demand_total",), ("demand_yoy",)],
+    "interprov": [("import_gwh",), ("export_gwh",)],
 }
 _CMP_STEM_LABEL = {
     "cap_total": "fund_metric_total", "cap_thermal": "fund_metric_thermal",
@@ -463,9 +464,11 @@ _CMP_STEM_LABEL = {
     "hours_hydro": "fund_metric_hydro", "hours_nuclear": "fund_metric_nuclear",
     "hours_wind": "fund_metric_wind", "hours_solar": "fund_metric_solar",
     "demand_total": "fund_metric_demand", "demand_yoy": "fund_metric_demand_yoy",
+    "import_gwh": "fund_metric_import", "export_gwh": "fund_metric_export",
 }
 _CMP_STEM_UNIT = {"capacity": "fund_capacity_unit", "generation": "fund_generation_unit",
-                  "util_hours": "fund_hours_unit", "demand": "fund_generation_unit"}
+                  "util_hours": "fund_hours_unit", "demand": "fund_generation_unit",
+                  "interprov": "fund_generation_unit"}
 
 
 def _comparison_section(t, prov: str, annual_year: int, pg_url: str) -> None:
@@ -557,8 +560,42 @@ def load_section_all_monthly_preflight(section: str, pg_url: str) -> list[dict]:
     except Exception:
         return []
 
+# ── S6 省间受入/外送 ─────────────────────────────────────────────────────────
+
+def _interprov_section(t, prov: str, prov_label: str, cur_year: int,
+                       today: date, pg_url: str) -> None:
+    """Monthly 受入/外送电量 bars + net line for the selected province."""
+    rows = load_series(prov, "interprov", pg_url, months=24)
+    monthly = [r for r in rows if r["period"] == "month"]
+    if not monthly:
+        return
+    st.divider()
+    st.subheader(t("fund_s6_title", prov=prov_label))
+    imp = hours_map(monthly, "import_gwh")
+    exp = hours_map(monthly, "export_gwh")
+    months = sorted(set(imp) | set(exp))
+    months = [m for m in months if m <= (today.year, today.month)]
+    if not months:
+        return
+    labels = [f"{y}-{m:02d}" for y, m in months]
+    fig = go.Figure()
+    fig.add_bar(x=labels, y=[imp.get(m) for m in months],
+                name=t("fund_s6_import"), marker_color="#4C9BE8")
+    fig.add_bar(x=labels, y=[exp.get(m) for m in months],
+                name=t("fund_s6_export"), marker_color="#E8A44C")
+    net = [(exp.get(m) or 0) - (imp.get(m) or 0)
+           if (exp.get(m) is not None or imp.get(m) is not None) else None
+           for m in months]
+    fig.add_trace(go.Scatter(x=labels, y=net, name=t("fund_s6_net"),
+                             mode="lines+markers", line=dict(color="#F5C842", dash="dot")))
+    fig.update_layout(height=300, margin=dict(t=20, b=40), barmode="group",
+                      yaxis_title=t("fund_generation_unit"), legend_title="")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(t("fund_s6_note"))
+
+
 def render(t, is_zh: bool, pg_url: str | None = None) -> None:
-    """Province selector + S1–S4. `t` is the app's bilingual _t callable."""
+    """Province selector + S1–S6. `t` is the app's bilingual _t callable."""
     pg_url = pg_url or _pg_url()
     today = date.today()
     cur_year, annual_year = today.year, today.year - 1
@@ -582,3 +619,4 @@ def render(t, is_zh: bool, pg_url: str | None = None) -> None:
     _hours_section(t, prov, annual_year, cur_year, today, pg_url)
     _demand_section(t, prov, prov_label, annual_year, cur_year, today, pg_url)
     _comparison_section(t, prov, annual_year, pg_url)
+    _interprov_section(t, prov, prov_label, cur_year, today, pg_url)
