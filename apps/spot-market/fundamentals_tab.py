@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 from datetime import date
 
+import pandas as pd
 import plotly.graph_objects as go
 import psycopg2
 import streamlit as st
@@ -91,6 +92,18 @@ def load_series(province: str, section: str, pg_url: str, months: int = 24) -> l
         return []
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_section_all(section: str, pg_url: str, year: int | None = None,
+                     month: date | None = None) -> list[dict]:
+    """Cached wrapper over store.read_section_all_provinces (one period, all provinces)."""
+    from services.province_fundamentals import store
+    try:
+        return store.read_section_all_provinces(section, pg_url=pg_url,
+                                                year=year, month=month)
+    except Exception:
+        return []
+
+
 # ── pure data-shaping helpers ─────────────────────────────────────────────────
 
 def pick_scope(present: set[str], base_map: dict[str, str],
@@ -131,6 +144,30 @@ def hours_map(rows: list[dict], metric: str) -> dict[tuple[int, int], float | No
     """period='month' values keyed by (year, month) — for the two-year S3 chart."""
     return {(r["month"].year, r["month"].month): r["value"] for r in rows
             if r["period"] == "month" and r["metric"] == metric}
+
+
+# ── S5 省际对比 helpers ──────────────────────────────────────────────────────
+
+def common_month(rows: list[dict]) -> date | None:
+    """统一公共月: 各省最新月的最小值 (各省有月度数据的集合内可比口径)."""
+    per_prov: dict[str, date] = {}
+    for r in rows:
+        if r["period"] != "month":
+            continue
+        cur = per_prov.get(r["province"])
+        if cur is None or r["month"] > cur:
+            per_prov[r["province"]] = r["month"]
+    return min(per_prov.values()) if per_prov else None
+
+
+def pivot_rows(rows: list[dict], province_order: list[str] | None = None):
+    """pivot comparison rows → (provinces, metrics, {prov: {metric: value}})."""
+    metrics = sorted({r["metric"] for r in rows})
+    grid: dict[str, dict[str, float | None]] = {}
+    for r in rows:
+        grid.setdefault(r["province"], {})[r["metric"]] = r["value"]
+    provs = province_order or sorted(grid)
+    return provs, metrics, grid
 
 
 def annual_growth(rows: list[dict], metrics: list[str], year: int) -> float | None:
@@ -400,7 +437,125 @@ def _demand_section(t, prov: str, prov_label: str, annual_year: int,
                annual_year, t("fund_bench_demand", year=annual_year), pg_url)
 
 
-# ── entry point ───────────────────────────────────────────────────────────────
+# ── S5 省际对比 ──────────────────────────────────────────────────────────────
+
+_CMP_METRICS = {
+    "capacity": [("cap_total_full", "cap_total"), ("cap_thermal_full", "cap_thermal"),
+                 ("cap_hydro_full", "cap_hydro"), ("cap_nuclear_full", "cap_nuclear"),
+                 ("cap_wind_full", "cap_wind"), ("cap_solar_full", "cap_solar"),
+                 ("cap_storage_full", "cap_storage")],
+    "generation": [("gen_total_full", "gen_total"), ("gen_thermal_full", "gen_thermal"),
+                   ("gen_hydro_full", "gen_hydro"), ("gen_nuclear_full", "gen_nuclear"),
+                   ("gen_wind_full", "gen_wind"), ("gen_solar_full", "gen_solar")],
+    "util_hours": [("hours_total",), ("hours_thermal",), ("hours_hydro",),
+                   ("hours_nuclear",), ("hours_wind",), ("hours_solar",)],
+    "demand": [("demand_total",), ("demand_yoy",)],
+}
+_CMP_STEM_LABEL = {
+    "cap_total": "fund_metric_total", "cap_thermal": "fund_metric_thermal",
+    "cap_hydro": "fund_metric_hydro", "cap_nuclear": "fund_metric_nuclear",
+    "cap_wind": "fund_metric_wind", "cap_solar": "fund_metric_solar",
+    "cap_storage": "fund_metric_storage",
+    "gen_total": "fund_metric_total", "gen_thermal": "fund_metric_thermal",
+    "gen_hydro": "fund_metric_hydro", "gen_nuclear": "fund_metric_nuclear",
+    "gen_wind": "fund_metric_wind", "gen_solar": "fund_metric_solar",
+    "hours_total": "fund_metric_total", "hours_thermal": "fund_metric_thermal",
+    "hours_hydro": "fund_metric_hydro", "hours_nuclear": "fund_metric_nuclear",
+    "hours_wind": "fund_metric_wind", "hours_solar": "fund_metric_solar",
+    "demand_total": "fund_metric_demand", "demand_yoy": "fund_metric_demand_yoy",
+}
+_CMP_STEM_UNIT = {"capacity": "fund_capacity_unit", "generation": "fund_generation_unit",
+                  "util_hours": "fund_hours_unit", "demand": "fund_generation_unit"}
+
+
+def _comparison_section(t, prov: str, annual_year: int, pg_url: str) -> None:
+    """S5: province × metric comparison table at one period (年度 or 公共月)."""
+    st.divider()
+    st.subheader(t("fund_cmp_title"))
+    c1, c2, c3 = st.columns([2, 1.4, 1.4])
+    with c1:
+        section = st.selectbox(
+            t("fund_cmp_section"),
+            list(_CMP_METRICS),
+            format_func=lambda s: t(f"fund_cmp_sec_{s}"),
+            key="fund_cmp_section")
+    with c2:
+        period_mode = st.radio(t("fund_cmp_period"),
+                               ["year", "month"], horizontal=True,
+                               format_func=lambda m: t(f"fund_cmp_period_{m}"),
+                               key="fund_cmp_period")
+
+    if period_mode == "year":
+        rows = load_section_all(section, pg_url, year=annual_year)
+        period_label = str(annual_year)
+        month = None
+    else:
+        all_monthly = load_section_all_monthly_preflight(section, pg_url)
+        month = common_month(all_monthly)
+        if month is None:
+            st.info(t("fund_cmp_no_monthly"))
+            return
+        period_label = month.strftime("%Y-%m")
+        rows = [r for r in all_monthly if r["month"] == month]
+        st.caption(t("fund_cmp_common_note", month=period_label))
+
+    if not rows:
+        st.info(t("fund_missing"))
+        return
+
+    provs, metrics, grid = pivot_rows(rows)
+    unit = t(_CMP_STEM_UNIT[section])
+    header = [t("fund_cmp_province")] + [
+        f"{t(_CMP_STEM_LABEL.get(next(iter(mkey)), ''))} ({unit})"
+        if section != "demand" or next(iter(mkey)) != "demand_yoy"
+        else f"{t(_CMP_STEM_LABEL['demand_yoy'])} (%)"
+        for mkey in metrics_of(_CMP_METRICS[section], {r["metric"] for r in rows})]
+
+    body = []
+    for p in provs:
+        mark = "▶ " if p == prov else ""
+        cells = [mark + p]
+        for mkey in metrics_of(_CMP_METRICS[section], {r["metric"] for r in rows}):
+            v = pick_first(grid.get(p, {}), mkey)
+            cells.append(f"{v:,.1f}" if v is not None else "—")
+        body.append(cells)
+    st.dataframe(pd.DataFrame(body, columns=header), use_container_width=True,
+                 hide_index=True)
+    st.caption(t("fund_cmp_scope_note"))
+
+
+def metrics_of(pairs: list[tuple[str, ...]], present: set[str]) -> list[tuple[str, ...]]:
+    """Ordered metric candidates whose any variant is present (full or plain)."""
+    return [pair for pair in pairs if any(m in present for m in pair)]
+
+
+def pick_first(grid_row: dict[str, float | None], pair: tuple[str, ...]):
+    for m in pair:
+        if m in grid_row:
+            return grid_row[m]
+    return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_section_all_monthly_preflight(section: str, pg_url: str) -> list[dict]:
+    """All confirmed monthly rows for a section (drives the 公共月 computation)."""
+    import psycopg2 as _p
+    try:
+        with _p.connect(pg_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT province, month, period, section, metric, value, unit,"
+                " source, created_at FROM marketdata.province_fundamentals_monthly"
+                " WHERE section = %s AND period = 'month' AND status = 'confirmed'",
+                (section,))
+            rows = cur.fetchall()
+        return [
+            {"province": p, "month": m, "period": per, "section": sec,
+             "metric": met, "value": float(v) if v is not None else None,
+             "unit": u, "source": src, "created_at": ts}
+            for p, m, per, sec, met, v, u, src, ts in rows
+        ]
+    except Exception:
+        return []
 
 def render(t, is_zh: bool, pg_url: str | None = None) -> None:
     """Province selector + S1–S4. `t` is the app's bilingual _t callable."""
@@ -426,3 +581,4 @@ def render(t, is_zh: bool, pg_url: str | None = None) -> None:
     _generation_section(t, prov, prov_label, annual_year, cur_year, today, pg_url)
     _hours_section(t, prov, annual_year, cur_year, today, pg_url)
     _demand_section(t, prov, prov_label, annual_year, cur_year, today, pg_url)
+    _comparison_section(t, prov, annual_year, pg_url)

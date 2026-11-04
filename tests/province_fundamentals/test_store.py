@@ -256,3 +256,41 @@ def test_ddl_file_defines_table_and_expression_unique_index():
     assert "period" in ddl
     assert "CREATE UNIQUE INDEX IF NOT EXISTS" in ddl
     assert "(province, month, period, section, metric, COALESCE(source, ''))" in ddl
+
+
+# ── Cross-province comparison read (comparison table, 2026-11-04) ────────────
+def test_read_section_all_provinces_month_mode(fake_db):
+    cur, _ = fake_db
+    cur.fetchall.return_value = [
+        ("山东", date(2026, 5, 1), "month", "capacity", "cap_total_full",
+         Decimal("25000.0"), "万千瓦", "s", datetime(2026, 6, 10, 8, 0)),
+        ("安徽", date(2026, 5, 1), "month", "capacity", "cap_total_full",
+         Decimal("7752.14"), "万千瓦", "s", datetime(2026, 6, 10, 8, 0)),
+    ]
+    out = store.read_section_all_provinces("capacity", pg_url="postgresql://test",
+                                           month=date(2026, 5, 1))
+    assert len(out) == 2
+    sql, params = cur.execute.call_args.args
+    assert "status = 'confirmed'" in sql
+    assert "month = %s" in sql
+    assert list(params) == ["capacity", "month", date(2026, 5, 1)]
+    assert out[1]["province"] == "安徽"
+
+
+def test_read_section_all_provinces_year_mode(fake_db):
+    cur, _ = fake_db
+    cur.fetchall.return_value = [
+        ("山西", date(2025, 1, 1), "year", "generation", "gen_total_full",
+         Decimal("4405.8"), "亿千瓦时", "s", datetime(2026, 1, 20, 8, 0)),
+    ]
+    out = store.read_section_all_provinces("generation", pg_url="postgresql://test",
+                                           year=2025)
+    assert len(out) == 1
+    sql, params = cur.execute.call_args.args
+    assert "period = %s" in sql
+    assert list(params) == ["generation", "year", date(2025, 1, 1)]
+
+
+def test_read_section_requires_one_of_month_year():
+    with pytest.raises(ValueError):
+        store.read_section_all_provinces("capacity", pg_url="postgresql://test")

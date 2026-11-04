@@ -275,3 +275,47 @@ ft.render(t=_t, is_zh=False, pg_url="postgresql://unused")
     for key in ("fund_s1_title", "fund_s2_title", "fund_s3_title", "fund_s4_title"):
         assert key in subs, f"section {key} missing: {subs}"
     assert len(at.metric) >= 6, f"annual metric cards missing: {len(at.metric)}"
+
+
+# ── S5 省际对比 helpers (2026-11-04) ─────────────────────────────────────────
+
+def test_common_month_is_min_of_province_max():
+    rows = [
+        {"province": "山东", "month": date(2026, 5, 1), "period": "month", "metric": "m"},
+        {"province": "山东", "month": date(2026, 4, 1), "period": "month", "metric": "m"},
+        {"province": "安徽", "month": date(2026, 7, 1), "period": "month", "metric": "m"},
+        {"province": "安徽", "month": date(2025, 1, 1), "period": "year", "metric": "m"},
+    ]
+    assert ft.common_month(rows) == date(2026, 5, 1)  # min(山东 5月, 安徽 7月)
+
+
+def test_common_month_empty_when_no_monthly():
+    rows = [{"province": "安徽", "month": date(2025, 1, 1), "period": "year", "metric": "m"}]
+    assert ft.common_month(rows) is None
+
+
+def test_pivot_rows_grid_shape_and_missing():
+    rows = [
+        {"province": "山东", "metric": "cap_total_full", "value": 25000.0, "period": "month",
+         "month": date(2026, 5, 1)},
+        {"province": "山东", "metric": "cap_thermal_full", "value": 19000.0, "period": "month",
+         "month": date(2026, 5, 1)},
+        {"province": "安徽", "metric": "cap_total_full", "value": 7752.14, "period": "month",
+         "month": date(2026, 5, 1)},
+    ]
+    provs, metrics, grid = ft.pivot_rows(rows)
+    assert provs == ["安徽", "山东"] and metrics == ["cap_thermal_full", "cap_total_full"]
+    assert grid["山东"]["cap_total_full"] == 25000.0
+    assert grid["安徽"].get("cap_thermal_full") is None  # missing stays missing
+
+
+def test_metrics_of_filters_absent_variants():
+    pairs = [("cap_total_full", "cap_total"), ("cap_wind_full", "cap_wind")]
+    assert ft.metrics_of(pairs, {"cap_total_full"}) == [("cap_total_full", "cap_total")]
+
+
+def test_pick_first_prefers_full():
+    assert ft.pick_first({"cap_total_full": 5.0, "cap_total": 4.0},
+                         ("cap_total_full", "cap_total")) == 5.0
+    assert ft.pick_first({"cap_total": 4.0}, ("cap_total_full", "cap_total")) == 4.0
+    assert ft.pick_first({}, ("cap_total_full", "cap_total")) is None

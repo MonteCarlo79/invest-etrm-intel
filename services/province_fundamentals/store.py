@@ -27,6 +27,7 @@ the year row share month=YYYY-01-01 and must not collapse into each other.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
 
 import psycopg2
@@ -169,6 +170,40 @@ def write_rows(rows: list[FundRow], *, pg_url: str,
                 psycopg2.extras.execute_values(cur, _INSERT_SQL, batch, page_size=1000)
         conn.commit()
     return stats
+
+
+def read_section_all_provinces(section: str, *, pg_url: str,
+                               month: Optional[date] = None,
+                               year: Optional[int] = None) -> list[dict]:
+    """Cross-province read for the comparison table: one period, all provinces.
+
+    Exactly one of month (period='month') or year (period='year') is required.
+    Latest-created confirmed row per (province, metric). Same dict shape as
+    read_series.
+    """
+    if (month is None) == (year is None):
+        raise ValueError("exactly one of month= or year= is required")
+    if month is not None:
+        period_sql, pval = "month", month
+    else:
+        period_sql, pval = "year", date(year, 1, 1)
+    sql = f"""
+SELECT DISTINCT ON (province, metric)
+    province, month, period, section, metric, value, unit, source, created_at
+FROM {_TABLE}
+WHERE section = %s AND period = %s AND month = %s AND status = 'confirmed'
+ORDER BY province, metric, created_at DESC
+"""
+    with psycopg2.connect(pg_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (section, period_sql, pval))
+            rows = cur.fetchall()
+    return [
+        {"province": p, "month": m, "period": per, "section": sec, "metric": met,
+         "value": float(v) if v is not None else None,
+         "unit": u, "source": src, "created_at": ts}
+        for p, m, per, sec, met, v, u, src, ts in rows
+    ]
 
 
 def read_series(province: str, section: str, metrics: Optional[list[str]] = None,
