@@ -551,3 +551,17 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 **Bug 2 (vision sub-row misreads):** vision on per-province 公告 images misread 山东 (0.09 vs true 0.0705) and 湖南 (0.03 vs 0.050746) — only caught because the provincial 汇总 Excel disagreed. 蒙西=0.0357 exact-match proves vision CAN be exact, but single-file vision is not self-validating. **Cross-check new extraction paths against an independent compilation before writing.**
 **Failed approach (2 iterations, abandoned):** extracting monthly values from 394px-wide full-article scroll screenshots (IMG_*.JPG). Describe-probe showed the scroll = 31 per-province mini-tables; at that width the API's downscale makes 6-decimal cells illegible — May validation scored 1/33 then 4/33 (3 bad) across two prompt variants. Scroll code kept in repo (tests pass) but must not feed writes. **Working alternatives:** provincial 汇总及分析.xlsx (deterministic, 5/5 PDF-validated) or per-province monthly 公告 files.
 **Data notes:** 青海 provincial+national compilations carry a 2025-05 copy-paste (0.005072); 公告 PDF says 0.038514 — 公告 wins. 蒙西 provincial Excel has #REF! past May → Jun-Oct 2026 蒙西 absent everywhere locally. DB Jun-Oct were already populated from the provincial Excels by an earlier session — verify source coverage before building a backfill.
+
+## 2026-11-02 — Chained `cd` failure ran `git reset --hard` on the shared OneDrive tree (strategist session)
+
+**What happened:** A deploy-prep command `cd /tmp/bess-push && git fetch ... ; git reset --hard FETCH_HEAD && ...` — the Mac had rebooted (Darwin 25.6→27.0), /tmp was wiped, the clone was gone, `cd` failed — and because the rest of the chain was separated by `;` (not `&&`), everything after ran IN THE REPO ROOT: fetch → **reset --hard** on the shared tree → commit+push from the wrong worktree.
+
+**Damage:** local main moved to remote tip + a new commit (the intended spec commit, ironically correct content); unstaged worktree edits overwritten; trader's staged WIP survived as dangling blobs (index had hashed them); stashes untouched.
+
+**Root cause chain:** (1) `cd X && a; b` — the `;` defeats the `&&` guard: when cd fails, `b` runs in the wrong cwd. (2) Reused a /tmp clone path without checking it still exists after reboot (macOS wipes /tmp; memory warned: "NEVER /tmp — macOS wipes on reboot" for worktrees, same for push clones). (3) OneDrive worktree: any reset is content-destructive by default.
+
+**Rules from now on:**
+1. NEVER put `git reset --hard` (or any destructive op) in a chain where a prior `cd` can fail — if a scratch dir is needed, `mkdir -p` it first, then `cd` with `|| exit 1` as its own statement.
+2. Scratch clones live at `~/bess-push` (home dir survives reboots), never /tmp.
+3. On the shared OneDrive tree: object-level plumbing only (hash-object/read-tree/write-tree/commit-tree/update-ref); nothing that writes the worktree.
+4. Recovery order when it happens: stop touching the tree → notify other sessions → git fsck dangling blobs for staged content → OneDrive Version History (web) for unstaged → stashes are unaffected by reset.
