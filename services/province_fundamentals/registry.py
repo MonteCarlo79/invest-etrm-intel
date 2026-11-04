@@ -105,6 +105,7 @@ from services.province_fundamentals.parsers import month_rows as _month_rows  # 
 from services.province_fundamentals.parsers import prov_guangdong as _prov_gd  # noqa: E402
 from services.province_fundamentals.parsers import prov_guangxi as _prov_gx  # noqa: E402
 from services.province_fundamentals.parsers import prov_jiangsu as _prov_js  # noqa: E402
+from services.province_fundamentals.parsers import prov_interprov as _prov_ip  # noqa: E402
 
 register("安徽", _format_a)
 register("安徽", _format_b)
@@ -120,5 +121,11 @@ register("冀北", _month_rows.jibei_parser)
 register("广东", _prov_gd)
 register("广西", _prov_gx)
 register("江苏", _prov_js)
+# 省间旁册 wave 1 (专用 side files): 注册在披露 parser 之后 — 披露册由前者命中,
+# 旁册 sheet 集与披露册互不相同 (sniff 隔离, 见 prov_interprov docstring)
+register("安徽", _prov_ip.anhui_parser)
+register("江苏", _prov_ip.jiangsu_parser)
+register("河北南网", _prov_ip.jinan_parser)
+register("冀北", _prov_ip.jibei_parser)
 register_national(_jiaojie)
 register_national(_summary)
