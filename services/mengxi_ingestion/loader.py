@@ -223,7 +223,14 @@ def _copy_df_to_postgres(df: pd.DataFrame, table_name: str, engine: Engine, sche
             f"COPY {_quote_ident(schema)}.{_quote_ident(table_name)} ({cols}) "
             f"FROM STDIN WITH (FORMAT CSV, NULL '')"
         )
-        cur.copy_expert(sql, buf)
+        if hasattr(cur, "copy_expert"):
+            cur.copy_expert(sql, buf)  # psycopg2
+        else:
+            # psycopg3 — SQLAlchemy ≥2.1's default for bare postgresql:// when
+            # both drivers are installed (v44 image regression, 2026-11-04).
+            with cur.copy(sql) as copy:
+                while chunk := buf.read(65536):
+                    copy.write(chunk)
         raw.commit()
     except Exception:
         raw.rollback()
