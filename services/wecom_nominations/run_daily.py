@@ -28,6 +28,12 @@ from services.mengxi_nodal.nomination_curves import (
     parse_nomination_curves,
 )
 from services.wecom_nominations.collector import collect
+from services.wecom_nominations.status import (
+    _DDL as _STATUS_DDL,
+    _UPSERT_SQL as _STATUS_UPSERT_SQL,
+    file_stat,
+    parse_error_stat,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("wecom_nominations")
@@ -132,11 +138,46 @@ print('DONE', n, flush=True)
     _launch_writer(writer)
 
 
+def ship_status(stats: list[dict], tag: str) -> None:
+    """Upload per-file status JSON to S3 and trigger the ECS upsert writer
+    (self-contained payload: DDL + upsert interpolated Mac-side)."""
+    if not stats:
+        return
+    from datetime import datetime, timezone
+    stamped = [{**s, "shipped_at": datetime.now(timezone.utc).isoformat(),
+                "tag": tag} for s in stats]
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(stamped, fh, ensure_ascii=False, default=str)
+        tmp = fh.name
+    key = f"{S3_KEY_PREFIX}nomination_file_status_{tag}.json"
+    subprocess.run(["aws", "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+                    "--region", "ap-southeast-1"], check=True, capture_output=True)
+    writer = f"""
+import json, os, boto3
+from sqlalchemy import create_engine, text
+rows = json.loads(boto3.client('s3', region_name='ap-southeast-1').get_object(
+    Bucket='{BUCKET}', Key='{key}')['Body'].read())
+engine = create_engine(os.environ['PGURL'])
+DDL = '''{_STATUS_DDL}'''
+UPSERT = text('''{_STATUS_UPSERT_SQL}''')
+with engine.begin() as c:
+    for stmt in DDL.split(';'):
+        if stmt.strip():
+            c.execute(text(stmt))
+    n = 0
+    for i in range(0, len(rows), 500):
+        c.execute(UPSERT, rows[i:i+500]); n += len(rows[i:i+500])
+print('DONE', n, flush=True)
+"""
+    _launch_writer(writer)
+
+
 def main() -> None:
     stats = collect()
     logger.info("collect: %s", stats)
     voter_rows: list[dict] = []
     nom_rows: list[dict] = []
+    file_stats: list[dict] = []
     for folder, code in FOLDERS.items():
         d = Path("data/raw/nomination") / folder
         if not d.is_dir():
@@ -151,9 +192,12 @@ def main() -> None:
                 except Exception as ex:
                     logger.warning("zone parse failed %s: %s", f.name, ex)
             try:
-                nom_rows.extend(parse_nomination_curves(f, code))
+                rows = parse_nomination_curves(f, code)
+                nom_rows.extend(rows)
+                file_stats.append(file_stat(code, f, rows))
             except Exception as ex:
                 logger.warning("nomination parse failed %s: %s", f.name, ex)
+                file_stats.append(parse_error_stat(code, f, ex))
     zone_rows = voter_rows + consensus_zone_rows(voter_rows, NO_ZONE_FILES)
     logger.info("parsed %d zone rows (%d fleet-consensus), %d nomination "
                 "rows; shipping",
@@ -163,6 +207,7 @@ def main() -> None:
     tag = date.today().isoformat()
     ship_zones(zone_rows, tag)
     ship_nominations(dedupe_rows(nom_rows), tag)
+    ship_status(file_stats, tag)
 
 
 if __name__ == "__main__":

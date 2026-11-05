@@ -33,7 +33,6 @@ from services.mengxi_nodal.dispatch_zones import (
     _FIRST_ROW,
     _LAST_ROW,
     _SHEET_RE,
-    _sheet_date,
 )
 
 _DDL = """
@@ -79,6 +78,35 @@ def _stale_a2_detect(a2_dates: list, tab_mds: set, day_sheets: list) -> bool:
             and len(tab_mds) == len(day_sheets))
 
 
+# A single sheet's A2 vs its tab name: beyond this distance the A2 is treated
+# as a stale-template artifact regardless of the workbook-level detection
+# (bameng's 11.02 file has only 3 sheets — below the bulk rule's threshold —
+# with July A2s on November tabs, silently dropping Nov 1–2 until 2026-11-05).
+_STALE_A2_MAX_DRIFT_DAYS = 45
+
+
+def _sheet_date_guarded(a2_date: date | None, tab_md: tuple[int, int] | None,
+                        fallback_year: int | None, warn_ctx: str) -> date | None:
+    """Per-sheet date: A2 wins within the drift bound, tab name wins beyond it.
+    Year comes from the workbook's fallback year (A2s share it even when
+    stale). Returns None when neither source resolves."""
+    tab_date = None
+    if tab_md and fallback_year:
+        try:
+            tab_date = date(fallback_year, tab_md[0], tab_md[1])
+        except ValueError:
+            tab_date = None
+    if a2_date is not None and tab_date is not None:
+        if abs((a2_date - tab_date).days) > _STALE_A2_MAX_DRIFT_DAYS:
+            print(f"WARNING nomination_curves: {warn_ctx} — A2 {a2_date} "
+                  f"{abs((a2_date - tab_date).days)}d from tab date "
+                  f"{tab_date} (> {_STALE_A2_MAX_DRIFT_DAYS}d drift bound); "
+                  f"dating by tab name")
+            return tab_date
+        return a2_date
+    return a2_date or tab_date
+
+
 def _parse_xls(path: Path, asset_code: str) -> list[dict]:
     """Legacy .xls workbook via pandas/xlrd (values only — no cell fills;
     wulate's operator switched to .xls from July 2026 and its files carry no
@@ -109,15 +137,16 @@ def _parse_xls(path: Path, asset_code: str) -> list[dict]:
     rows: list[dict] = []
     for name, df in frames.items():
         m = _SHEET_RE.match(name)
-        d = None
         if stale_a2 and fallback_year:
             d = date(fallback_year, int(m.group(1)), int(m.group(2)))
         else:
             try:
-                d = pd.to_datetime(df.iloc[1, 0]).date()
+                a2 = pd.to_datetime(df.iloc[1, 0]).date()
             except (ValueError, TypeError, IndexError, AttributeError):
-                if fallback_year:
-                    d = date(fallback_year, int(m.group(1)), int(m.group(2)))
+                a2 = None
+            d = _sheet_date_guarded(
+                a2, (int(m.group(1)), int(m.group(2))), fallback_year,
+                f"{path.name} sheet {name!r}")
         if d is None:
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
                   f"no parseable date, sheet skipped")
@@ -191,12 +220,18 @@ def parse_nomination_curves(path: Path | str, asset_code: str) -> list[dict]:
     rows: list[dict] = []
     for name in day_sheets:
         ws = wb[name]
+        m = _SHEET_RE.match(name)
         if stale_a2:
-            m = _SHEET_RE.match(name)
             d = (date(fallback_year, int(m.group(1)), int(m.group(2)))
                  if fallback_year else None)
         else:
-            d = _sheet_date(ws, name, fallback_year)
+            try:
+                a2 = pd.to_datetime(ws.cell(row=_FIRST_ROW, column=1).value).date()
+            except (ValueError, TypeError, AttributeError):
+                a2 = None
+            d = _sheet_date_guarded(
+                a2, (int(m.group(1)), int(m.group(2))), fallback_year,
+                f"{path.name} sheet {name!r}")
         if d is None:
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
                   f"no parseable date, sheet skipped")

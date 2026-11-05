@@ -840,6 +840,63 @@ with tab_data_mgmt:
 
     st.markdown("---")
 
+    # ── Section 5b: Nomination file coverage (WeCom 调度计划表) ──────────────
+    st.subheader("Nomination File Coverage — WeCom 调度计划表")
+    st.caption(
+        "Per nomination workbook: days in file (local parse, written by the "
+        "daily WeCom pipeline) vs days ingested (marketdata.bess_nomination_96 "
+        "by source_file). Overlapping mega-files legitimately credit days to "
+        "their own-month file (nearest-covering dedupe) — judge completeness "
+        "at the station level."
+    )
+
+    def _render_nomination_coverage(engine):
+        from services.wecom_nominations.status import (
+            _DB_SIDE_SQL,
+            _STATUS_SIDE_SQL,
+            ensure_table as _ensure_status,
+        )
+        _ensure_status(engine)
+        status = pd.read_sql(text(_STATUS_SIDE_SQL), engine)
+        db = pd.read_sql(text(_DB_SIDE_SQL), engine)
+        if status.empty:
+            st.info("No nomination file status yet — the next daily WeCom "
+                    "pipeline run (11:00 / 16:00 CST) populates it.")
+            return
+        db = db.rename(columns={"source_file": "filename"})
+        m = status.merge(db, on=["asset_code", "filename"], how="left")
+        m["days_db"] = m["days_db"].fillna(0).astype(int)
+        def _badge(r):
+            if r["rows_parsed"] == -1:
+                return "⚠️ PARSE-ERROR"
+            if r["days_db"] == 0:
+                return "❌ NOT-INGESTED"
+            if r["days_db"] >= r["days_in_file"]:
+                return "✅ INGESTED"
+            return "🟡 PARTIAL"
+        m["状态"] = m.apply(_badge, axis=1)
+        for c in ("first_day", "last_day", "db_first", "db_last"):
+            m[c] = m[c].astype(str).str[:10].replace("NaT", "—")
+        m["shipped_at"] = pd.to_datetime(m["shipped_at"]).dt.strftime("%m-%d %H:%M")
+        show = m.sort_values(["asset_code", "filename"])[
+            ["asset_code", "filename", "fmt", "days_in_file", "days_db",
+             "first_day", "last_day", "shipped_at", "状态"]]
+        st.dataframe(
+            show.rename(columns={
+                "asset_code": "站", "filename": "文件", "fmt": "格式",
+                "days_in_file": "文件天数", "days_db": "入库天数",
+                "first_day": "首日", "last_day": "末日", "shipped_at": "最近回传",
+            }),
+            use_container_width=True, hide_index=True, height=420)
+        # station-level completeness strip
+        latest = m.groupby("asset_code")["db_last"].max()
+        st.caption("各站入库最新日：" + "；".join(
+            f"{a} {d}" for a, d in latest.items()))
+
+    _render_nomination_coverage(_get_sqlalchemy_engine())
+
+    st.markdown("---")
+
     # ── Section 6 & 7 (combined): Nodal Prices — Fengxing API ───────────────
     st.subheader("Nodal Prices — Fengxing API")
     st.caption(

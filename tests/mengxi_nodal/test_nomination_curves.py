@@ -194,3 +194,22 @@ def test_parse_legacy_xls_workbook():
     assert by[(date(2026, 10, 13), 1)] == 32.0  # sheet 10.13 row 2 (screenshot-verified)
     assert all(1 <= r["slot"] <= 96 for r in rows)
     assert all(r["source_file"] == WULATE_XLS.name for r in rows)
+
+
+def test_parse_short_workbook_stale_a2_dates_by_tab(tmp_path, capsys):
+    """bameng's 11.02 file: only 3 sheets (below the bulk stale rule's
+    threshold) with July A2s on November tabs — the per-sheet drift guard
+    must date by tab regardless."""
+    f = tmp_path / "景怡查干哈达储能电站电力交易调度计划表11.02.xlsx"
+    sheets = {}
+    for i, tab in enumerate(["10.31", "11.01", "11.02"]):
+        sheets[tab] = _day_rows("2026-07-05", [float(i)] + [0.0] * 95)  # stale A2
+    _make_workbook(f, sheets)
+    rows = parse_nomination_curves(f, "bameng")
+    out = capsys.readouterr().out
+    assert "drift bound" in out
+    by = {(r["data_date"], r["slot"]): r["nominated_mw"] for r in rows}
+    assert by[(date(2026, 10, 31), 1)] == 0.0
+    assert by[(date(2026, 11, 1), 1)] == 1.0
+    assert by[(date(2026, 11, 2), 1)] == 2.0
+    assert all(r["data_date"].month >= 10 for r in rows)
