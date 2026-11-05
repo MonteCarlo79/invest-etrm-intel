@@ -142,6 +142,7 @@ apps/bess-inner-mongolia/
 !libs/risk/
 !libs/settlement/
 !libs/options/
+!libs/trading_book/
 !services/forward_curve/
 !services/operating_assets/
 !apps/asset_risk/
