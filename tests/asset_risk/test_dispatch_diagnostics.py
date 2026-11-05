@@ -329,7 +329,7 @@ def test_auto_nomination_extends_chain_with_rt_fill(sqlite_engine):
     assert len(ext) == 1
     ext = ext.iloc[0]
     assert ext["nominated_mw"] == 55
-    assert ext["rt_cleared_mw"] == -10.0     # −2.5 MWh × 4
+    assert ext["rt_cleared_mw"] == -2.5      # column holds average MW (unit fix 2026-11-05)
     assert pd.isna(ext["actual_mw"])         # honest gap, not zero
     assert ext["asset"] == "裕昭沙子坝"        # identity filled
     assert ext["capacity_mw"] == 500

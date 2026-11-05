@@ -154,11 +154,13 @@ _PRICE_SQL = """
 """
 
 # Dispatch source: md_id_cleared_energy (market-cleared dispatch — current,
-# all stations; ops_bess_dispatch_15min stopped 2026-04). cleared_energy_mwh
-# is interval energy (MWh) with negative = charging; ×4 → average MW
-# (positive = discharge).
+# all stations; ops_bess_dispatch_15min stopped 2026-04).
+# UNIT CONTRACT (verified 2026-11-05 against nomination files + fleet-total
+# sheet + settlement bills): the exchange's per-plant 中标电量 is the interval
+# AVERAGE POWER in MW — cleared_energy_mwh is MW despite the name; negative =
+# charging. Use it as MW directly (no ×4). True interval energy = value × 0.25.
 _DISPATCH_SQL = """
-    SELECT datetime AS interval_start, cleared_energy_mwh * 4.0 AS actual_dispatch_mw
+    SELECT datetime AS interval_start, cleared_energy_mwh AS actual_dispatch_mw
     FROM marketdata.md_id_cleared_energy
     WHERE plant_name LIKE :pn
       AND datetime >= :s

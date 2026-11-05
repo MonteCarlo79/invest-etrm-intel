@@ -110,6 +110,9 @@ When filling gaps:
   The correct LP forecast model is ols_rt_time_v1 (not ols_da_time_v1).
 - cleared_energy_mwh in md_id_cleared_energy is intraday-cleared TRADING volume,
   NOT physical dispatch. Do not conflate with actual_dispatch_mw from ops files.
+  UNIT TRAP (verified 2026-11-05): despite the name, cleared_energy_mwh stores
+  the interval AVERAGE POWER in MW (the exchange publishes 电力, not 电量).
+  Use the value as MW directly; true interval energy = value × 0.25.
 - Prices are in CNY/MWh. Dispatch is in MW. P&L is in CNY.
 - gushanliang is 500 MW / 4h; the other 3 assets are 100 MW / 4h.
 

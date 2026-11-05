@@ -112,7 +112,8 @@ def _load_auto_nominations(engine, asset_ids: list[int],
     (data_date + (slot−1)·15min — the same frame the PG branch of _load_chain
     renders). Empty frame when no requested asset maps to a registry code.
 
-    auto_rt_cleared_mw is md_id_cleared_energy.cleared_energy_mwh × 4 — used
+    auto_rt_cleared_mw is md_id_cleared_energy.cleared_energy_mwh (MW-scale,
+    per the 2026-11-05 unit verification) — used
     ONLY to fill chain-uncovered slots (the manual chain ingest stopped
     2026-08-30), never to override the chain's own values.
     """
@@ -157,11 +158,13 @@ def _load_auto_nominations(engine, asset_ids: list[int],
         out["auto_rt_cleared_mw"] = np.nan
 
     # RT-cleared fill for the extension rows (chain has no Sep+ slots at all).
+    # UNIT: md_id_cleared_energy.cleared_energy_mwh is average MW per interval
+    # (mislabeled name, verified 2026-11-05) — no ×4.
     plants = {i: PLANT_MAP[n] for i, n in zip(names["id"], names["name"])
               if int(i) in id_to_code and n in PLANT_MAP}
     if plants:
         sql = """
-            SELECT plant_name, datetime, cleared_energy_mwh * 4.0 AS rt_mw
+            SELECT plant_name, datetime, cleared_energy_mwh AS rt_mw
             FROM marketdata.md_id_cleared_energy
             WHERE plant_name IN :plants
         """

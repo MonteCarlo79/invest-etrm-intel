@@ -269,8 +269,8 @@ def _load_synth(eng, days: int = 12):
             conn.execute(text(
                 "INSERT INTO marketdata.md_id_cleared_energy "
                 "(plant_name, datetime, cleared_energy_mwh, cleared_price) "
-                "VALUES ('景蓝乌尔图储能电站', :t, :mwh, 0)"),
-                {"t": ts, "mwh": net / 4.0})
+                "VALUES ('景蓝乌尔图储能电站', :t, :mw, 0)"),
+                {"t": ts, "mw": net})  # column stores average MW per interval
             ts_dt = pd.to_datetime(ts)
             slot = ts_dt.hour * 4 + ts_dt.minute // 15 + 1
             conn.execute(text(
