@@ -51,7 +51,7 @@ async def inspect():
         inputs = page.locator("input")
         await inputs.nth(0).fill(USERNAME)
         await inputs.nth(1).fill(PASSWORD)
-        await page.locator("button", has_text="登录").first.click()
+        await page.locator("input[type="password"]").first.press("Enter")  # label-independent (登 录 rename 2026-11)
         await page.wait_for_load_state("networkidle")
         await page.wait_for_timeout(2_000)
         await page.screenshot(path=str(_DEBUG_DIR / "02_after_login.png"))

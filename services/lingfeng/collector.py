@@ -100,7 +100,11 @@ async def _collect_async(
         inputs = page.locator("input")
         await inputs.nth(0).fill(username)
         await inputs.nth(1).fill(password)
-        await page.locator("button", has_text="登录").first.click()
+        # Submit via Enter in the password field, not a button click:
+        # LingFeng renamed the submit label 登录 → 登 录 (Nov 2026), so
+        # button:has-text("登录") matched only the 账号登录/手机登录 tabs and
+        # the click silently no-op'd (all 29 markets failing login since).
+        await page.locator("input[type='password']").first.press("Enter")
         await page.wait_for_load_state("networkidle")
         logger.info("Login submitted — waiting for redirect …")
 
@@ -156,19 +160,18 @@ async def _collect_async(
         await page.goto(_DATA_URL)
         await page.wait_for_load_state("networkidle")
 
-        # Wait for the page form to render (交易市场 dropdown + tab bar)
+        # Wait for the page form to render (交易市场 dropdown)
+        # Rebuilt page (2026-11): no .ant-select-selector child — root is .ant-select
         logger.info("Waiting for form to render …")
-        await page.wait_for_selector(".ant-select-selector", timeout=30_000)
+        await page.wait_for_selector(".ant-select", timeout=30_000)
         await page.wait_for_timeout(500)
         logger.info("On market data page.")
 
         # ── 3. Click indicator tab ────────────────────────────────────────
-        # Indicator is now a top tab (市场供需数据 / 节点价格对比 / etc.)
-        _tab_btn = page.locator(".ant-tabs-tab-btn", has_text=indicator)
+        # Rebuilt page: top tabs are custom divs (class *._tabItem_*), default is 市场供需数据
+        _tab_btn = page.locator("div[class*='_tabItem']", has_text=indicator)
         if await _tab_btn.count() > 0:
-            _tab_active = await _tab_btn.first.evaluate(
-                "el => el.closest('.ant-tabs-tab')?.classList.contains('ant-tabs-tab-active') ?? false"
-            )
+            _tab_active = "_tabItemActive" in (await _tab_btn.first.get_attribute("class") or "")
             if not _tab_active:
                 await _tab_btn.first.click()
                 await page.wait_for_timeout(400)
@@ -179,47 +182,38 @@ async def _collect_async(
             logger.warning(f"Tab '{indicator}' not found — using default tab.")
         logger.info(f"Indicator: {indicator}")
 
-        # ── 4. Select market (交易市场) — first ant-select ────────────────
-        current_market = await page.locator(
-            ".ant-select-selection-item"
-        ).nth(0).inner_text()
-        if current_market.strip() != market.strip():
+        # ── 4. Select market (交易市场) — first .ant-select; combobox search ──
+        try:
+            current_market = (await page.locator(".ant-select-content").nth(0).get_attribute("title") or "").strip()
+        except Exception:
+            current_market = ""
+        if current_market != market.strip():
             logger.info(f"Current market '{current_market}' ≠ '{market}' — selecting …")
-            await page.locator(".ant-select-selector").nth(0).click()
-            await page.wait_for_selector(".ant-select-dropdown:not(.ant-select-dropdown-hidden)", timeout=10_000)
-            await page.wait_for_timeout(300)
-            # Scroll through the virtual list until the target option is rendered
-            _list = page.locator(".rc-virtual-list-holder").first
-            _found = False
-            for _step in range(50):
-                _opt = page.locator(".ant-select-item-option-content").filter(has_text=market)
-                if await _opt.count() > 0:
-                    await _opt.first.click()
-                    _found = True
-                    break
-                await _list.evaluate("el => { el.scrollTop += 120; }")
-                await page.wait_for_timeout(80)
-            if not _found:
-                raise RuntimeError(f"Market '{market}' not found in dropdown after scrolling")
-            await page.wait_for_timeout(400)
+            _sel = page.locator(".ant-select").first
+            await _sel.click()
+            await _sel.locator("input.ant-select-input").fill(market)
+            await page.wait_for_timeout(800)
+            _opt = page.locator(f".ant-select-item-option[title='{market}']")
+            if await _opt.count() == 0:
+                await page.keyboard.press("Escape")
+                raise RuntimeError(f"Market '{market}' not found in dropdown search")
+            await _opt.first.click()
+            await page.wait_for_timeout(600)
         else:
             logger.info(f"Market already set to '{market}' — no change needed.")
         logger.info(f"Market: {market}")
 
         # ── 5. Set date range ─────────────────────────────────────────────
-        # Ant Design range picker: input[date-range="start"] and input[date-range="end"]
-        start_input = page.locator("input[date-range='start']").first
-        end_input   = page.locator("input[date-range='end']").first
+        # Rebuilt page: range picker inputs live under .ant-picker
+        pin = page.locator(".ant-picker").first.locator("input")
 
-        await start_input.click()
+        await pin.nth(0).click()
         await page.wait_for_timeout(300)
-        await start_input.fill(start_str)
-        await start_input.press("Tab")
+        await pin.nth(0).fill(start_str)
         await page.wait_for_timeout(300)
 
-        await end_input.click()
-        await end_input.fill(end_str)
-        await end_input.press("Enter")
+        await pin.nth(1).fill(end_str)
+        await pin.nth(1).press("Enter")
         await page.wait_for_timeout(400)
 
         # Close any open date picker popup by clicking outside
@@ -227,39 +221,36 @@ async def _collect_async(
         await page.wait_for_timeout(300)
         logger.info(f"Date range set: {start_str} → {end_str}")
 
+        # 时点: hourly export — the rebuilt page defaults to 96点
+        _seg = page.locator("text=24点").first
+        if await _seg.count() > 0:
+            await _seg.click()
+            await page.wait_for_timeout(300)
+
         # ── 6 + 7. Query + export ─────────────────────────────────────────
-        # New page (/powerTrading/market): two-step — click 查询, then click
-        #   span.down-load-container (not .mr-10 = comparison drawer)
-        # Old page (/sass/data-consultation): single 导出 button acts as both
-        #   query and download trigger — wrap it directly in expect_download.
-        _export_span = page.locator("span.down-load-container:not(.mr-10)")
-        _is_new_page = await _export_span.count() > 0
-        if _is_new_page:
-            logger.info("Clicking 查询 (ant-btn-primary) …")
-            await page.locator("button.ant-btn-primary").first.click()
-            # Export handler no-ops until query data has rendered into the
-            # store — fixed short waits are unreliable on slow networks.
-            try:
-                await page.wait_for_load_state("networkidle", timeout=20_000)
-            except PWTimeout:
-                pass
-            await page.wait_for_timeout(1_000)
-            logger.info("Clicking 导出 (span.down-load-container) …")
-            # JS click (trusted .click() is silently swallowed on some renders)
-            # + retry loop: the export builds a client-side blob, no network
-            # request fires, so a too-early click fails silently.
-            download_future = asyncio.ensure_future(
-                page.wait_for_event("download", timeout=60_000)
-            )
-            while not download_future.done():
-                await _export_span.first.evaluate("el => el.click()")
-                await page.wait_for_timeout(5_000)
-            download = await download_future
-        else:
-            logger.info("Old-page detected — clicking 导出 (button.ant-btn-primary) …")
-            async with page.expect_download(timeout=60_000) as dl_info:
-                await page.locator("button.ant-btn-primary").first.click()
-            download = await dl_info.value
+        # Rebuilt page (2026-11): 查询 is a primary button; 导出 is a plain
+        # visible button. Old span.down-load-container is gone.
+        logger.info("Clicking 查询 …")
+        await page.locator("button:visible", has_text="查询").first.click()
+        # Export handler no-ops until query data has rendered into the
+        # store — fixed short waits are unreliable on slow networks.
+        try:
+            await page.wait_for_load_state("networkidle", timeout=20_000)
+        except PWTimeout:
+            pass
+        await page.wait_for_timeout(1_500)
+        logger.info("Clicking 导出 …")
+        _export_btn = page.locator("button:visible", has_text="导出").first
+        # JS click (trusted .click() is silently swallowed on some renders)
+        # + retry loop: the export builds a client-side blob, no network
+        # request fires, so a too-early click fails silently.
+        download_future = asyncio.ensure_future(
+            page.wait_for_event("download", timeout=60_000)
+        )
+        while not download_future.done():
+            await _export_btn.evaluate("el => el.click()")
+            await page.wait_for_timeout(5_000)
+        download = await download_future
 
         suggested = download.suggested_filename or ""
         dest_name = suggested if suggested.endswith(".xlsx") else (
@@ -319,7 +310,11 @@ async def _collect_province_async(
         inputs = page.locator("input")
         await inputs.nth(0).fill(username)
         await inputs.nth(1).fill(password)
-        await page.locator("button", has_text="登录").first.click()
+        # Submit via Enter in the password field, not a button click:
+        # LingFeng renamed the submit label 登录 → 登 录 (Nov 2026), so
+        # button:has-text("登录") matched only the 账号登录/手机登录 tabs and
+        # the click silently no-op'd (all 29 markets failing login since).
+        await page.locator("input[type='password']").first.press("Enter")
         await page.wait_for_load_state("networkidle")
         logger.info(f"[{market}] Login submitted — waiting for redirect …")
 
@@ -371,52 +366,39 @@ async def _collect_province_async(
         async def _goto_data_page() -> None:
             await page.goto(_DATA_URL)
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_selector(".ant-select-selector", timeout=30_000)
+            await page.wait_for_selector(".ant-select", timeout=30_000)
             await page.wait_for_timeout(800)  # extra time for form to fully initialise
 
-            # Click indicator tab (indicator is now a top tab, not a dropdown)
-            _tab_btn = page.locator(".ant-tabs-tab-btn", has_text=indicator)
+            # Click indicator tab (rebuilt page 2026-11: custom divs, not ant-tabs;
+            # default tab is already 市场供需数据)
+            _tab_btn = page.locator("div[class*='_tabItem']", has_text=indicator)
             if await _tab_btn.count() > 0:
-                _tab_active = await _tab_btn.first.evaluate(
-                    "el => el.closest('.ant-tabs-tab')?.classList.contains('ant-tabs-tab-active') ?? false"
-                )
+                _tab_active = "_tabItemActive" in (await _tab_btn.first.get_attribute("class") or "")
                 if not _tab_active:
                     await _tab_btn.first.click()
                     await page.wait_for_timeout(400)
             else:
                 logger.warning(f"[{market}] Tab '{indicator}' not found — using default tab.")
 
-            # Select market (交易市场) — only dropdown on the page
+            # Select market (交易市场) — first .ant-select on the rebuilt page.
+            # Combobox search instead of virtual-list scrolling: type the market
+            # name, click the exact-title option.
             _current_market = ""
             try:
-                _current_market = (await page.locator(".ant-select-selection-item").nth(0).inner_text()).strip()
+                _current_market = (await page.locator(".ant-select-content").nth(0).get_attribute("title") or "").strip()
             except Exception:
                 pass
             if _current_market != market.strip():
-                await page.locator(".ant-select-selector").nth(0).click()
-                # Wait for dropdown AND at least one option to be rendered
-                await page.wait_for_selector(".ant-select-dropdown:not(.ant-select-dropdown-hidden)", timeout=10_000)
-                await page.wait_for_selector(".ant-select-item-option-content", timeout=10_000)
-                await page.wait_for_timeout(500)
-                _list = page.locator(".rc-virtual-list-holder")
-                # Scroll to top first so we start searching from the beginning
-                if await _list.count() > 0:
-                    await _list.first.evaluate("el => { el.scrollTop = 0; }")
-                    await page.wait_for_timeout(200)
-                _found = False
-                for _step in range(80):
-                    _opt = page.locator(".ant-select-item-option-content").filter(has_text=market)
-                    if await _opt.count() > 0:
-                        await _opt.first.click()
-                        _found = True
-                        break
-                    if await _list.count() > 0:
-                        await _list.first.evaluate("el => { el.scrollTop += 100; }")
-                    await page.wait_for_timeout(100)
-                if not _found:
+                _sel = page.locator(".ant-select").first
+                await _sel.click()
+                await _sel.locator("input.ant-select-input").fill(market)
+                await page.wait_for_timeout(800)
+                _opt = page.locator(f".ant-select-item-option[title='{market}']")
+                if await _opt.count() == 0:
                     await page.keyboard.press("Escape")
-                    raise RuntimeError(f"Market '{market}' not found in dropdown after scrolling")
-                await page.wait_for_timeout(400)
+                    raise RuntimeError(f"Market '{market}' not found in dropdown search")
+                await _opt.first.click()
+                await page.wait_for_timeout(600)
 
         # ── 2. Navigate to Market Data page and set indicator tab + market ─
         await _goto_data_page()
@@ -429,52 +411,47 @@ async def _collect_province_async(
             logger.info(f"[{market}] Chunk {idx+1}/{len(chunks)}: {start_str} → {end_str}")
 
             try:
-                start_input = page.locator("input[date-range='start']").first
-                end_input   = page.locator("input[date-range='end']").first
-
-                await start_input.click()
+                # Rebuilt page (2026-11): range picker inputs live under .ant-picker
+                pin = page.locator(".ant-picker").first.locator("input")
+                await pin.nth(0).click()
                 await page.wait_for_timeout(300)
-                await start_input.fill(start_str)
-                await start_input.press("Tab")
-                await page.wait_for_timeout(300)
-
-                await end_input.click()
-                await end_input.fill(end_str)
-                await end_input.press("Enter")
+                await pin.nth(0).fill(start_str)
+                await pin.nth(1).fill(end_str)
+                await pin.nth(1).press("Enter")
                 await page.wait_for_timeout(400)
 
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(300)
 
-                # New page: click 查询 then span.down-load-container
-                # Old page: single 导出 button — wrap directly in expect_download
-                _export_span = page.locator("span.down-load-container:not(.mr-10)")
-                _is_new_page = await _export_span.count() > 0
-                if _is_new_page:
-                    logger.info(f"[{market}] Clicking 查询 (ant-btn-primary) …")
-                    await page.locator("button.ant-btn-primary").first.click()
-                    # Export handler no-ops until query data has rendered into
-                    # the store — fixed short waits are unreliable on slow networks.
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=20_000)
-                    except PWTimeout:
-                        pass
-                    await page.wait_for_timeout(1_000)
-                    logger.info(f"[{market}] Clicking 导出 (span.down-load-container) …")
-                    # JS click + retry loop: export builds a client-side blob;
-                    # a too-early click fails silently (no network request).
-                    download_future = asyncio.ensure_future(
-                        page.wait_for_event("download", timeout=60_000)
-                    )
-                    while not download_future.done():
-                        await _export_span.first.evaluate("el => el.click()")
-                        await page.wait_for_timeout(5_000)
-                    download = await download_future
-                else:
-                    logger.info(f"[{market}] Old-page detected — clicking 导出 (button.ant-btn-primary) …")
-                    async with page.expect_download(timeout=60_000) as dl_info:
-                        await page.locator("button.ant-btn-primary").first.click()
-                    download = await dl_info.value
+                # 时点: hourly export — the rebuilt page defaults to 96点
+                _seg = page.locator("text=24点").first
+                if await _seg.count() > 0:
+                    await _seg.click()
+                    await page.wait_for_timeout(300)
+
+                # Rebuilt page: click 查询 (primary button), then the visible 导出
+                # button. Old span.down-load-container is gone; old single-button
+                # page branch retired with the /sass/data-consultation sunset.
+                logger.info(f"[{market}] Clicking 查询 …")
+                await page.locator("button:visible", has_text="查询").first.click()
+                # Export handler no-ops until query data has rendered into the
+                # store — fixed short waits are unreliable on slow networks.
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=20_000)
+                except PWTimeout:
+                    pass
+                await page.wait_for_timeout(1_500)
+                logger.info(f"[{market}] Clicking 导出 …")
+                _export_btn = page.locator("button:visible", has_text="导出").first
+                # JS click + retry loop: export builds a client-side blob;
+                # a too-early click fails silently (no network request).
+                download_future = asyncio.ensure_future(
+                    page.wait_for_event("download", timeout=60_000)
+                )
+                while not download_future.done():
+                    await _export_btn.evaluate("el => el.click()")
+                    await page.wait_for_timeout(5_000)
+                download = await download_future
 
                 # Always include date range in filename to avoid collisions across chunks
                 suggested = download.suggested_filename or ""
