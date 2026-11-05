@@ -105,14 +105,19 @@ _DAY_SHEET_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
 
 
 def monthly_max_day(path: Path) -> float:
-    """Highest day-sheet number in a monthly nomination file (completeness key)."""
-    import openpyxl
+    """Highest day-sheet number in a monthly nomination file (completeness key).
+    openpyxl for .xlsx; pandas/xlrd for legacy .xls (wulate since July 2026)."""
     try:
-        wb = openpyxl.load_workbook(path, read_only=True)
+        if path.suffix.lower() == ".xls":
+            import pandas as pd
+            sheetnames = pd.ExcelFile(path).sheet_names
+        else:
+            import openpyxl
+            sheetnames = openpyxl.load_workbook(path, read_only=True).sheetnames
     except Exception:
         return 0.0
     days = []
-    for s in wb.sheetnames:
+    for s in sheetnames:
         m = _DAY_SHEET_RE.match(s.strip())
         if m:
             days.append(int(m.group(1)) + int(m.group(2)) / 100.0)
@@ -124,8 +129,10 @@ def _monthly_target(station_dir: Path, filename: str, month: int, src: Path) -> 
     last-copied one. A new file replaces root only if it covers more days;
     otherwise it goes to archived/ itself."""
     new_day = monthly_max_day(src)
-    # same-month candidates: both 调度计划表X月 and 调度计划表MM.DD (daily-versioned)
-    pats = [f"*调度计划表{month}月*.xlsx", f"*调度计划表{month:02d}.*.xlsx"]
+    # same-month candidates: both 调度计划表X月 and 调度计划表MM.DD (daily-versioned),
+    # .xlsx and legacy .xls
+    pats = [f"*调度计划表{month}月*.xlsx", f"*调度计划表{month:02d}.*.xlsx",
+            f"*调度计划表{month}月*.xls", f"*调度计划表{month:02d}.*.xls"]
     root_candidates = sorted({p for pat in pats for p in station_dir.glob(pat)})
     arch = station_dir / "archived"
     arch.mkdir(exist_ok=True)

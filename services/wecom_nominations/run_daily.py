@@ -138,8 +138,11 @@ def main() -> None:
         d = Path("data/raw/nomination") / folder
         if not d.is_dir():
             continue
-        for f in sorted(d.glob("*.xlsx")):
-            if code not in NO_ZONE_FILES:
+        # .xlsx AND legacy .xls (wulate's operator switched to .xls from July
+        # 2026 — xlsx-only globbing silently ended its feed at Jun 30)
+        files = sorted(set(d.glob("*.xlsx")) | set(d.glob("*.xls")))
+        for f in files:
+            if code not in NO_ZONE_FILES and f.suffix.lower() == ".xlsx":
                 try:
                     voter_rows.extend(parse_nomination_zones(f, code))
                 except Exception as ex:

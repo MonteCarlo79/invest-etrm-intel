@@ -4,6 +4,7 @@ tmp_path, SQL on a sqlite-ATTACH harness (same pattern as dispatch_zones /
 market_impact tests).
 """
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -173,3 +174,23 @@ def test_load_and_get_roundtrip(sqlite_engine, tmp_path):
                            date(2026, 9, 2), date(2026, 9, 3)).empty
     assert get_nominations(sqlite_engine, "suyou",
                            date(2026, 9, 1), date(2026, 9, 2)).empty
+
+
+# ── legacy .xls path (wulate operator sends .xls since July 2026) ────────────
+
+_REPO = Path(__file__).resolve().parents[2]
+WULATE_XLS = (_REPO / "data" / "raw" / "nomination" / "乌拉特中旗"
+              / "远景乌拉特储能电站电力交易调度计划表10月.xls")
+
+
+@pytest.mark.skipif(not WULATE_XLS.exists(), reason="wulate .xls fixture absent")
+def test_parse_legacy_xls_workbook():
+    rows = parse_nomination_curves(WULATE_XLS, "wulate")
+    days = {r["data_date"] for r in rows}
+    assert min(days) == date(2026, 10, 1)
+    assert max(days) == date(2026, 10, 13)     # the October file stops at 10.13
+    assert len(days) == 13
+    by = {(r["data_date"], r["slot"]): r["nominated_mw"] for r in rows}
+    assert by[(date(2026, 10, 13), 1)] == 32.0  # sheet 10.13 row 2 (screenshot-verified)
+    assert all(1 <= r["slot"] <= 96 for r in rows)
+    assert all(r["source_file"] == WULATE_XLS.name for r in rows)

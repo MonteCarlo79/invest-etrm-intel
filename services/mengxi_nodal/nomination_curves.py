@@ -69,11 +69,89 @@ def _nomination_column(ws) -> int | None:
     return None
 
 
+def _stale_a2_detect(a2_dates: list, tab_mds: set, day_sheets: list) -> bool:
+    """Shared stale-template detection: operator copied a sheet forward
+    without updating the A2 timestamp (bameng's files serve ~3 distinct A2
+    dates across 200+ tabs). Fire when distinct A2 dates < half the parseable
+    sheets while tab names are all distinct."""
+    return (len(a2_dates) >= 4
+            and len(set(a2_dates)) <= len(a2_dates) // 2
+            and len(tab_mds) == len(day_sheets))
+
+
+def _parse_xls(path: Path, asset_code: str) -> list[dict]:
+    """Legacy .xls workbook via pandas/xlrd (values only — no cell fills;
+    wulate's operator switched to .xls from July 2026 and its files carry no
+    zone colouring anyway). Same conventions: day sheets MM.DD, header row 1,
+    col A timestamps, first 申报 column, row 2 = slot 1."""
+    xl = pd.ExcelFile(path)
+    day_sheets = [n for n in xl.sheet_names if _SHEET_RE.match(n)]
+    frames: dict[str, pd.DataFrame] = {}
+    a2_dates, years = [], []
+    for name in day_sheets:
+        df = pd.read_excel(xl, name, header=None, nrows=100)
+        frames[name] = df
+        try:
+            ts = pd.to_datetime(df.iloc[1, 0])
+            years.append(ts.year)
+            a2_dates.append(ts.date())
+        except (ValueError, TypeError, IndexError, AttributeError):
+            continue
+    fallback_year = years[0] if years else None
+    stale_a2 = _stale_a2_detect(a2_dates,
+                                {_SHEET_RE.match(n).groups() for n in day_sheets},
+                                day_sheets)
+    if stale_a2:
+        print(f"WARNING nomination_curves: {path.name} — stale A2 timestamps "
+              f"({len(set(a2_dates))} distinct across {len(a2_dates)} sheets); "
+              f"dating by tab names, year {fallback_year}")
+
+    rows: list[dict] = []
+    for name, df in frames.items():
+        m = _SHEET_RE.match(name)
+        d = None
+        if stale_a2 and fallback_year:
+            d = date(fallback_year, int(m.group(1)), int(m.group(2)))
+        else:
+            try:
+                d = pd.to_datetime(df.iloc[1, 0]).date()
+            except (ValueError, TypeError, IndexError, AttributeError):
+                if fallback_year:
+                    d = date(fallback_year, int(m.group(1)), int(m.group(2)))
+        if d is None:
+            print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
+                  f"no parseable date, sheet skipped")
+            continue
+        col = next((c for c in range(1, min(10, df.shape[1]))
+                    if _NOM_HEADER_KEY in str(df.iloc[0, c])), None)
+        if col is None:
+            print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
+                  f"no 申报 column, sheet skipped")
+            continue
+        for r in range(1, min(97, len(df))):
+            v = df.iloc[r, col]
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                continue
+            try:
+                mw = float(v)
+            except (ValueError, TypeError):
+                continue
+            rows.append({
+                "asset_code": asset_code,
+                "data_date": d,
+                "slot": r,  # df row 1 = sheet row 2 = slot 1 (00:00–00:15)
+                "nominated_mw": mw,
+                "source_file": path.name,
+            })
+    return rows
+
+
 def parse_nomination_curves(path: Path | str, asset_code: str) -> list[dict]:
     """Walk the day sheets of one monthly nomination workbook and return one
     row per (data_date, slot) with a numeric nomination: {asset_code,
     data_date, slot, nominated_mw, source_file}. Sheets without a 申报
-    header are skipped loudly.
+    header are skipped loudly. .xlsx workbooks go through openpyxl (fills +
+    values); legacy .xls through pandas/xlrd (values only).
 
     Date authority: dispatch_zones._sheet_date (A2 timestamp wins) — EXCEPT
     when the workbook's A2s are stale (operator copied a template forward
@@ -82,6 +160,9 @@ def parse_nomination_curves(path: Path | str, asset_code: str) -> list[dict]:
     parseable sheets while tab names are all distinct → tab name (MM.DD) is
     the date authority and A2 supplies only the year.
     """
+    path = Path(path)
+    if path.suffix.lower() == ".xls":
+        return _parse_xls(path, asset_code)
     from openpyxl import load_workbook
 
     path = Path(path)
