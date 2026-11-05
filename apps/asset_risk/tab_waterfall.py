@@ -39,6 +39,11 @@ _COMPONENT_COLORS = {"arb_cny": "#3498db", "cap_cny": "#9b59b6",
 _COMPONENT_CN = {"arb_cny": "套利", "cap_cny": "容量补偿", "fee_cny": "系统运行费+线损", "other_cny": "其他费用"}
 _STAGES = ["投资标准", "Δ策略与预测", "申报", "Δ出清校核", "出清", "Δ执行与费用", "实际"]
 
+# 出清腿降级阈值 (user-set 2026-11-05): 查干哈达 2026-09 cleared 294k MWh vs
+# billed 107k MWh (2.76×; synthetic ±834 MWh/15min rows) — a broken 出清 feed
+# shows as a huge Δ出清校核 that Δ执行与费用 mirrors back by construction.
+CLEARED_VOLUME_TOLERANCE = 0.30
+
 
 # ---------------------------------------------------------------------------
 # Loaders
@@ -63,7 +68,7 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
     start, end = _month_token_bounds(start, end)
     sql = """
         SELECT a.id AS asset_id, a.name AS asset, s.settlement_month AS month,
-               si.category, si.amount_cny
+               si.category, si.amount_cny, si.volume_mwh
         FROM marketdata.rm_settlement_items si
         JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
         JOIN marketdata.rm_books b ON b.id = s.book_id
@@ -81,11 +86,13 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
     with engine.connect() as conn:
         df = pd.read_sql(stmt, conn, params=params)
     if df.empty:
-        return pd.DataFrame(columns=["asset", "month", "arb_cny", "cap_cny", "fee_cny", "other_cny"])
+        return pd.DataFrame(columns=["asset", "month", "arb_cny", "cap_cny", "fee_cny",
+                                     "other_cny", "dis_mwh", "chg_mwh"])
     df["month"] = df["month"].astype(str).str[:7]
     rows = []
     for (asset, month), g in df.groupby(["asset", "month"]):
         amt = g.groupby("category")["amount_cny"].sum()
+        vol = g.groupby("category")["volume_mwh"].sum()
         fee = float(amt.get("coal_capacity_charge", 0.0) + amt.get("system_operation", 0.0))
         cap = float(amt.get("capacity_compensation", 0.0))
         arb = float(amt.get("discharge_energy", 0.0) + amt.get("generation_revenue", 0.0)
@@ -95,7 +102,10 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
                                                "charge_energy", "capacity_compensation",
                                                "coal_capacity_charge", "system_operation")]).sum())
         rows.append({"asset": asset, "month": month, "arb_cny": arb, "cap_cny": cap,
-                     "fee_cny": fee, "other_cny": other})
+                     "fee_cny": fee, "other_cny": other,
+                     "dis_mwh": float(vol.get("discharge_energy", 0.0)
+                                      + vol.get("generation_revenue", 0.0)),
+                     "chg_mwh": float(abs(vol.get("charge_energy", 0.0)))})
     return pd.DataFrame(rows)
 
 
@@ -126,6 +136,37 @@ def stage_capacity(dis_mwh: pd.Series, assets: pd.Series) -> pd.Series:
         [float(d) * CAPCOMP_RATE.get(a, CAPCOMP_RATE_DEFAULT) for d, a in zip(dis_mwh, assets)],
         index=dis_mwh.index,
     )
+
+
+def guard_cleared_leg(cleared: pd.DataFrame, actual: pd.DataFrame,
+                      tolerance: float = CLEARED_VOLUME_TOLERANCE) -> tuple[pd.DataFrame, list]:
+    """Downgrade 出清 legs whose discharge volume diverges from billed > tolerance.
+
+    The 出清 leg feeds from exchange cleared energy (auto-extension after the
+    manual chain ingest stopped 2026-08-30). When that feed breaks, the
+    waterfall shows a phantom Δ出清校核 that Δ执行与费用 mirrors back by
+    construction — pure noise. Affected legs are replaced with billed values
+    (arb/cap/volumes) and returned in the untrusted list for the page banner.
+    Months with no billed discharge volume (b ≤ 0 / absent) are left as-is —
+    no ground truth to check against.
+    """
+    if cleared.empty or actual.empty or "dis_mwh" not in actual.columns:
+        return cleared, []
+    billed = actual.set_index(["asset", "month"])[["dis_mwh", "chg_mwh", "arb_cny", "cap_cny"]]
+    out = cleared.copy()
+    untrusted: list[tuple[str, str]] = []
+    for idx, row in out.iterrows():
+        key = (row["asset"], row["month"])
+        if key not in billed.index:
+            continue
+        b = billed.loc[key]
+        if not b["dis_mwh"] or b["dis_mwh"] <= 0:
+            continue
+        if abs(row["dis_mwh"] - b["dis_mwh"]) / b["dis_mwh"] > tolerance:
+            untrusted.append(key)
+            out.loc[idx, ["dis_mwh", "chg_mwh", "arb_cny", "cap_cny"]] = \
+                [b["dis_mwh"], b["chg_mwh"], b["arb_cny"], b["cap_cny"]]
+    return out, untrusted
 
 
 def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str) -> pd.Series:
@@ -469,6 +510,7 @@ _CAVEATS_MD = """
 - 偏差归因的预测最优采用 ols_rt_time_v1 小时级预测调度、按实际小时均价结算（沿用 strategy_comparison 口径；与 15 分钟口径存在基差）。
 - LP 窗口 1 天、SOC 窗口起点为 0；价格或调度链缺失的日期跳过（见数据覆盖）。引擎跳过任何含空槽的日期；当月出清电价（md_id_cleared_energy.cleared_price）无完整日时，投资标准回退至节点填充电价（md_mengxi_nodal_price_96_filled.avg_node_price，同一节点市场价、完整 96 槽），并在页面标注。
 - 申报腿数据来源：2026-09 起为企业微信自动抓取的调度计划表（marketdata.bess_nomination_96，每日两次自动更新）；此前为人工上传的调度计划表（rm_dispatch_chain，止于 2026-08-30）。重叠时段以自动抓取为准；9 月以后的出清腿由交易所出清电量（md_id_cleared_energy ×4）补齐。
+- 出清腿校验：出清放电量与账单放电量偏差 >30% 的 (资产, 月) 判为出清数据不可信，该腿按账单口径降级展示并在页面标注（2026-11-05 用户确认阈值；触发例：查干哈达 2026-09 出清 294k MWh vs 账单 107k MWh）。
 """
 
 
@@ -524,6 +566,11 @@ def render_waterfall(engine):
     actual = _load_settlement_actuals(engine, assets["id"].tolist(),
                                       min(sel_months), None)
     actual = actual[actual["month"].isin(sel_months)] if not actual.empty else actual
+
+    cleared, cleared_untrusted = guard_cleared_leg(cleared, actual)
+    if cleared_untrusted:
+        st.warning("出清数据不可信（出清电量与账单放电量偏差 >30%，出清腿已按账单口径降级展示）: "
+                   + "、".join(f"{a} {m}" for a, m in cleared_untrusted))
 
     bench_rows = []
     missing_commission = []

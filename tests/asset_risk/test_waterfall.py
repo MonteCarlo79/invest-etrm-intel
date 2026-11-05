@@ -17,9 +17,61 @@ from apps.asset_risk.tab_waterfall import (
     _load_settlement_actuals,
     attribution_rows,
     build_waterfall,
+    guard_cleared_leg,
     stage_arbitrage,
     stage_capacity,
 )
+
+
+# ---------- 出清腿降级守卫 (cleared-vs-billed volume, >30% downgrade) ----------
+
+def _cleared_frame(dis_mwh, month="2026-09", asset="景怡查干哈达"):
+    return pd.DataFrame({"asset": [asset], "month": [month], "dis_mwh": [dis_mwh],
+                         "chg_mwh": [dis_mwh * 1.06], "arb_cny": [dis_mwh * 400.0],
+                         "cap_cny": [dis_mwh * 350.0]})
+
+
+def _actual_frame(dis_mwh, month="2026-09", asset="景怡查干哈达"):
+    return pd.DataFrame({"asset": [asset], "month": [month], "arb_cny": [12301035.0],
+                         "cap_cny": [37305119.0], "fee_cny": [-5113078.0],
+                         "other_cny": [-522071.0], "dis_mwh": [dis_mwh],
+                         "chg_mwh": [117940.6]})
+
+
+def test_guard_cleared_leg_triggers_on_176pct_divergence():
+    # 查干哈达 2026-09 real figures: cleared 294,457 vs billed 106,589 → 176%
+    cleared, untrusted = guard_cleared_leg(_cleared_frame(294456.669), _actual_frame(106589.03))
+    assert untrusted == [("景怡查干哈达", "2026-09")]
+    row = cleared.iloc[0]
+    assert row["dis_mwh"] == pytest.approx(106589.03)
+    assert row["arb_cny"] == pytest.approx(12301035.0)
+    assert row["cap_cny"] == pytest.approx(37305119.0)
+
+
+def test_guard_cleared_leg_healthy_month_untouched():
+    cleared, untrusted = guard_cleared_leg(_cleared_frame(100000.0), _actual_frame(106589.03))
+    assert untrusted == []
+    assert cleared.iloc[0]["dis_mwh"] == pytest.approx(100000.0)
+
+
+def test_guard_cleared_leg_no_ground_truth_leaves_as_is():
+    # billed discharge 0/absent → cannot verify → keep cleared as-is
+    cleared, untrusted = guard_cleared_leg(_cleared_frame(294456.669), _actual_frame(0.0))
+    assert untrusted == []
+    assert cleared.iloc[0]["dis_mwh"] == pytest.approx(294456.669)
+
+
+def test_guard_cleared_leg_empty_actual_noop():
+    cleared = _cleared_frame(50000.0)
+    out, untrusted = guard_cleared_leg(cleared, pd.DataFrame())
+    assert untrusted == [] and out.equals(cleared)
+
+
+def test_load_settlement_actuals_volumes(sqlite_engine):
+    df = _load_settlement_actuals(sqlite_engine, [1], None, None)
+    june = df[df["month"] == "2026-06"].iloc[0]
+    assert "dis_mwh" in df.columns and "chg_mwh" in df.columns
+    assert june["dis_mwh"] > 0 and june["chg_mwh"] > 0
 
 
 # ---------- standard params (pure, no fixture needed) ----------
