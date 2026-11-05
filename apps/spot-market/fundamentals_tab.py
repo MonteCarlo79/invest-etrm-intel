@@ -508,11 +508,15 @@ def _comparison_section(t, prov: str, annual_year: int, pg_url: str) -> None:
 
     provs, metrics, grid = pivot_rows(rows)
     unit = t(_CMP_STEM_UNIT[section])
-    header = [t("fund_cmp_province")] + [
-        f"{t(_CMP_STEM_LABEL.get(next(iter(mkey)), ''))} ({unit})"
-        if section != "demand" or next(iter(mkey)) != "demand_yoy"
-        else f"{t(_CMP_STEM_LABEL['demand_yoy'])} (%)"
-        for mkey in metrics_of(_CMP_METRICS[section], {r["metric"] for r in rows})]
+    present = {r["metric"] for r in rows}
+    header = [t("fund_cmp_province")]
+    for mkey in metrics_of(_CMP_METRICS[section], present):
+        stem = stem_label_key(mkey)
+        if section == "demand" and stem == "demand_yoy":
+            header.append(f"{t(_CMP_STEM_LABEL['demand_yoy'])} (%)")
+        else:
+            header.append(f"{t(_CMP_STEM_LABEL.get(stem, ''))} ({unit})" if stem in _CMP_STEM_LABEL
+                          else f"{stem} ({unit})")
 
     body = []
     for p in provs:
@@ -530,6 +534,18 @@ def _comparison_section(t, prov: str, annual_year: int, pg_url: str) -> None:
 def metrics_of(pairs: list[tuple[str, ...]], present: set[str]) -> list[tuple[str, ...]]:
     """Ordered metric candidates whose any variant is present (full or plain)."""
     return [pair for pair in pairs if any(m in present for m in pair)]
+
+
+def stem_label_key(pair: tuple[str, ...]) -> str:
+    """Label-map key for a metric candidate tuple: first variant that has a
+    label, else the raw first variant. capacity/generation pairs list the
+    _full variant first, but _CMP_STEM_LABEL is keyed by the base name —
+    next(iter(pair)) alone resolves to '' and every column header collapses
+    to the bare unit (duplicate-column crash, 2026-11-05)."""
+    for m in pair:
+        if m in _CMP_STEM_LABEL:
+            return m
+    return pair[0]
 
 
 def pick_first(grid_row: dict[str, float | None], pair: tuple[str, ...]):
