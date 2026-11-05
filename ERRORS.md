@@ -578,3 +578,9 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 1. Before any single-province pipeline run, confirm the key with `SELECT DISTINCT province` on the target table (one probe task) — do not trust slug maps in any one ingestion module.
 2. A `[SKIP] <province>: no hourly prices` line is a FAILED run for backfill purposes — treat exit 0 as success only when the verify query shows the target rows exist.
 3. Verify queries must match the write key; zero rows returned = investigate, never "clean".
+
+## 2026-11-05 — v93 waterfall ModuleNotFoundError (libs.trading_book)
+**Symptom:** 收益瀑布 tab crashed on October with ModuleNotFoundError: libs.trading_book (the LP nodal-price fallback import).
+**Root cause:** the shared root .dockerignore excludes libs/ globally and re-includes subdirs per image (!libs/risk/ etc. for asset_risk). libs/trading_book (created 2026-11-02 for the trading-book work) had no asset_risk exception, so the v93 image silently lacked the package. mengxi-dashboard was unaffected (its exception set covers it).
+**Lesson:** when a change adds a NEW top-level package import to an app, verify the built image actually contains it before deploy: `docker run --rm --platform linux/amd64 --entrypoint python <img> -c "import <pkg>"` (or ls the dir). Image COPY layers can also silently serve a stale dockerignore-filtered context — the import-time crash is post-deploy, not build-time.
+**Fix:** added !libs/trading_book/ to the asset_risk exceptions; v94/td:96.
