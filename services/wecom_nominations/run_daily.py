@@ -40,7 +40,10 @@ FOLDERS = {"谷山梁": "gushanliang", "苏右": "suyou", "杭锦旗": "hangjinq
 NO_ZONE_FILES = {"bameng", "wulate"}
 S3_KEY_PREFIX = "zones/"
 BUCKET = "bess-uploader-data-chen-singp-2026"
-TD = "bess-platform-mengxi-dashboard:58"
+# Bare family name: run-task resolves the latest registered revision. Pinning a
+# revision breaks on the ECR keep-5 lifecycle (td:58's v43 image was reaped
+# 2026-11-05 → CannotPullContainerError on every ship).
+TD = "bess-platform-mengxi-dashboard"
 
 
 def _launch_writer(writer: str) -> None:
