@@ -414,3 +414,17 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - exchange cleared 文件缺日（9月 Fri/Sat 模式，~32% 覆盖缺口）——trader 侧独立问题
 - 部署前必查 manifest 当前行：`git show origin/main:LATEST-IMAGES.md`(v92 号段差点撞车，trader 拦下）
 - 长期待办：净市场化价差指标（储能版）;bess-map / hermes-service psycopg[binary] 预防修；LATEST-IMAGES.md 与并行 session 合流提交
+
+## Session Summary, 2026-11-05 (cont. from 11-04 λ arc)
+**Worked on:** λ v2 instrumented market-impact, WeCom nomination pipeline hardening, waterfall nomination wiring, exchange-file manual ingestion, and the cleared_energy_mwh unit saga (peer-flagged).
+**Completed:**
+- λ v2 LIVE (v44→v47): nomination-instrumented 2SLS (Stock–Yogo F≥10), daily refresh in book-forecast rule 16:00 CST; corrected-scale fleet λ — suyou 1.05, hangjinqi 0.16, wulate 0.09 ¥/MWh/MW
+- marketdata.bess_nomination_96 built (交易员申报计划 from WeCom files): 106k rows, 6 stations, Apr 20→Nov 2; .xls legacy support (wulate was silently truncated at Jun 30 — operator switched formats in July); per-sheet A2 drift guard (bameng 11.02 stale-template file recovered Nov 1–2); nearest-covering-version dedupe
+- Zone pollution fix: bameng/wulate file rows excluded from zone ship; daily fleet-consensus recompute (they were never polluted in DB — verified before delete)
+- Waterfall (asset_risk v92/v93/v94): 申报 leg reads auto nominations (overlay+extension), 出清 extends from md_id_cleared_energy, LP benchmark falls back to filled nodal price when cleared-price month has no complete day; v94 hotfix for .dockerignore missing libs/trading_book
+- mengxi_ingestion loader psycopg3 COPY fix (v45; SQLAlchemy 2.1 driver-default change had broken Section 5 uploads in prod); manual enos-portal files ingested for Oct 31 + Nov 1 → md_id_cleared_energy continuous through Nov 1
+- Nomination File Coverage panel in mengxi-dashboard Data Mgmt 5b (v46): per-file days-in-file vs days-ingested, 48 files, zero un-ingested
+- **UNIT CONTRACT (the big one, peer-reported):** md_id_cleared_energy.cleared_energy_mwh stores interval average MW, not MWh (verified 3-way). Fixed the two ×4 consumers (market_impact, waterfall rt-fill); documented in agent brief + module docstrings. Storage kept as-is (two live daily writers); contract codified
+**In progress:** subsidized PF recompute at Oct 24/28 (ETA ~Nov 7); asset_risk v95 (peer's guard + my unit fix) pending peer's deploy; October bills land ~Nov 10–15
+**Decisions made:** no server-side WeCom file deletion (no API, irreversible, unknown driver) — offered cache-cleanup instead, user redirected to visibility (coverage panel); storage repair of the unit column rejected in favor of contract documentation + consumer fixes
+**Next session:** verify PF recompute completion + 蒙西 subsidy-inclusive ranking; check asset_risk v95 landed (peer); PyPSA/wind_farm_tab unit fixes if user approves; enos collector repair decision; October bill ingestion when received
