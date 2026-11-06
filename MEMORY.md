@@ -391,3 +391,26 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - 武川/阿拉善 enter the daily report when their cleared data flows; wuchuan/alashan upgrade from registry_only when data paths land
 - bameng/wulate: if colored files ever arrive, they override the fleet-consensus rows
 - Follow-ups on books: test_pf_results.py staleness; wuhai price node TBD; hermes mengxi_ranking_report frame review; W-3/W-4 wind invoice ingestion; LP degeneracy root cause (zone-mask fix helps but the zero-price-stretch pathology in Quant's engine stays open)
+
+## Session Summary, 2026-11-06
+**Worked on:** asset_risk 收益瀑布 出清腿失真（查干哈达 Δ出清校核 +106M / Δ执行与费用 −110M 镜像）的根因、修复与部署 v95。
+
+**Completed:**
+- 机制定性：Δ执行与费用 ≡ 实际 − 出清，是构造残差——出清腿数据失真必然形成正负镜像，不是两个独立经济现象
+- 数据排查：9月出清腿全部走自动扩展源（cleared ×4，人工 chain 止于 2026-08-30)；查干哈达 cleared 294,457 vs 账单 106,589 MWh(2.76×)。初步误判为"人工填充/数据损坏"，证据包转 trader
+- **真根因（trader 三角验证）**:`md_id_cleared_energy.cleared_energy_mwh` 列存的是区间平均功率 MW，不是 MWh——建表首日就标错。±834 = 满载充电块（与提名文件逐格一致）。修复两个 ×4 消费者（1b8226d2);列名保留（百万行活表双日更写者，改名代价>固化口径）
+- 防御层：guard_cleared_leg——出清放电量 vs 账单量偏差 >30%(用户定阈值）的 （资产，月） 按账单口径降级 + 页顶标注；无账单真值的月份不动。5 测试（1e31ec7e)
+- 部署 v95/td:97(origin/main 构建，容器内驱动+守卫+×4 移除验证；manifest 更新未提交）
+
+**In progress:** none.
+
+**Decisions made:**
+- 守卫阈值 30%（用户拍板，非我提议的 20%)
+- 单位列不改名，口径写进消费者 + decision_models agent brief；新消费者规则：能量 = 值 × 0.25h
+- 我的"人工填充"判断错误已更正进 memory(unit trap 全貌：reports λ 4× 低估、PyPSA 面板同类未修）
+
+**Next session:**
+- mengxi-dashboard v47(market_impact λ 尺度修复）在 trader session 排队等用户确认；PyPSA 面板 + legacy inner_pipeline 同类 ×4 仅标记未修
+- exchange cleared 文件缺日（9月 Fri/Sat 模式，~32% 覆盖缺口）——trader 侧独立问题
+- 部署前必查 manifest 当前行：`git show origin/main:LATEST-IMAGES.md`(v92 号段差点撞车，trader 拦下）
+- 长期待办：净市场化价差指标（储能版）;bess-map / hermes-service psycopg[binary] 预防修；LATEST-IMAGES.md 与并行 session 合流提交
