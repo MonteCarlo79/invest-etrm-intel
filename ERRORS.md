@@ -584,3 +584,25 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 **Root cause:** the shared root .dockerignore excludes libs/ globally and re-includes subdirs per image (!libs/risk/ etc. for asset_risk). libs/trading_book (created 2026-11-02 for the trading-book work) had no asset_risk exception, so the v93 image silently lacked the package. mengxi-dashboard was unaffected (its exception set covers it).
 **Lesson:** when a change adds a NEW top-level package import to an app, verify the built image actually contains it before deploy: `docker run --rm --platform linux/amd64 --entrypoint python <img> -c "import <pkg>"` (or ls the dir). Image COPY layers can also silently serve a stale dockerignore-filtered context — the import-time crash is post-deploy, not build-time.
 **Fix:** added !libs/trading_book/ to the asset_risk exceptions; v94/td:96.
+
+---
+
+## 2026-11-06 — LingFeng page rebuild broke the whole collector fleet; two-layer capture fossilization
+
+**Symptom:** 4 provinces dark since 10-06~10 （蒙东/福建/河北南网/安徽）, then ALL 29 markets failing nightly since ~11-03. ops_log: `lingfeng_ingest` failed daily with "Failed chunks". Capture NaN days would not heal despite the 2026-10-05 freshness-guard fix.
+
+**Root cause chain (three independent layers):**
+1. **Login no-op:** LingFeng renamed the submit button 登录 → 登 录 (UI rebuild). `button:has-text("登录").first` then matched only the 账号登录/手机登录 tab buttons — click succeeded, no XHR fired, no redirect, 15s timeout. Reproduced locally from the Mac; Enter-key submit in the password field works and is label-independent.
+2. **Rebuilt market page:** `.ant-select-selector` gone (now `.ant-select`), `span.down-load-container` gone (导出 is a plain visible button), `input[date-range]` gone (now `.ant-picker input`), tabs are custom `div._tabItem*`, and the page now **defaults to 96点** (hourly ingest needs 24点 → must click explicitly). Market select now supports combobox search — far more robust than virtual-list scrolling.
+3. **Upsert fossilization (second half of the 2026-10-05 bug):** the freshness guard made NaN-realized days recompute-eligible, but `upsert_capture_daily` returned early when the theoretical series was empty (theo branch skips as up-to-date) — recomputed realized values were discarded. Fixed: union index + branch-scoped SET (`61f9c8be`, tests in tests/bess_map/test_upsert_capture_daily.py).
+
+**Also this session:**
+- 安徽 3 Oct NaN days healed via `--force --force-theoretical` full recompute (Fargate, old image); 2025-01-01 stays NaN (series day 1, no training window — structural).
+- `docker push | tail` masked a broken pipe AGAIN — "push exit 0" with nothing in ECR. Crane push + `describe-images` server-side verify is the only acceptable pattern.
+- Province keys in spot_prices_hourly/bess_capture_daily are Chinese (`安徽`), contradicting every slug map in code (`Anhui`/`anhui` elsewhere) — probe DISTINCT before any single-province run (entry 2026-11-04).
+
+**Rules from now on:**
+1. When a scrape fleet fails, check ops_log per-market first, then reproduce login locally headless — screenshot + request-capture beats reading CloudWatch tea leaves.
+2. Never trust a UI label selector for form submit — submit via Enter in the last input, or select by id.
+3. After any page rebuild: re-verify granularity defaults (24点 vs 96点) before ingest.
+4. A realized-side heal needs theo present for the upsert to fire — post-fix this no longer matters, but on old images `--force --force-theoretical` is required.
