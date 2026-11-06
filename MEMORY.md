@@ -428,3 +428,29 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **In progress:** subsidized PF recompute at Oct 24/28 (ETA ~Nov 7); asset_risk v95 (peer's guard + my unit fix) pending peer's deploy; October bills land ~Nov 10–15
 **Decisions made:** no server-side WeCom file deletion (no API, irreversible, unknown driver) — offered cache-cleanup instead, user redirected to visibility (coverage panel); storage repair of the unit column rejected in favor of contract documentation + consumer fixes
 **Next session:** verify PF recompute completion + 蒙西 subsidy-inclusive ranking; check asset_risk v95 landed (peer); PyPSA/wind_farm_tab unit fixes if user approves; enos collector repair decision; October bill ingestion when received
+
+## Session Summary, 2026-11-06 (spot-market / LingFeng arc)
+**Worked on:** spot-market S5 崩溃修复 + LingFeng 采集器全舰队故障的根因修复与部署；安徽 capture NaN 清零。
+
+**Completed:**
+- **LingFeng 平台改版 (~11-03) 三连断**: 登录按钮改名 登 录 → has_text("登录") 只匹配到页签 → 静默无操作，29 市场全灭；市场页表单重构 (.ant-select-selector/down-load-container/date-range 全灭, 时点默认改 96点)；采集器全链路重写为 Enter 提交 + 下拉搜索选省 + .ant-picker 日期 + 显式 24点 + 文本化查询/导出 (f4870e91)。蒙东/福建/河北南网/安徽 10-06~10 相继断流即改版灰度
+- **upsert_capture_daily 第二半化石 bug**: 理论序列为空即 early-return → realized-only 重算被丢弃 (安徽 10-05/07/10 永远补不上)。修为并集索引 + 分支级 SET (61f9c8be, 5 测试)
+- **安徽 4 NaN 天清零**: --force --force-theoretical 全量重算 (老镜像 v10 上), 3 天修复, 2025-01-01 结构性保留 (序列首日无训练窗)
+- **S5 省际对比表崩溃**: 表头取 next(iter(pair)) 命中无标签的 _full 变体 → 全列名塌成 " (万kW)" → pyarrow 重复列 ValueError (Annual+装机容量, 生产环境)。stem_label_key 取首个有标签变体 (52f51c9d, 2 测试)
+- **部署**: spot-market v57/td:158 (S5 修复); lingfeng-ingest v11/td:13 (采集器+upsert+playwright==1.50.0 pin 治 chromium CDN 超时)。两服务 digest 核验一致
+- 省份键陷阱定案: spot_prices_hourly/bess_capture_daily 用中文键 (安徽), 与代码里 Anhui/anhui 映射并存 — ERRORS.md 已录
+- ERRORS.md/CLAUDE.md/LATEST-IMAGES.md 全部提交 (68dc3eea/4c8a22a1)
+
+**In progress:** none.
+
+**Decisions made:**
+- 登录提交走 Enter 键而非按钮选择器 — 标签不可信 (改版第一牺牲品)
+- 采集器选择器全部改为 文本+可见性 优先, 类名兜底 (类名是改版首先重写的对象)
+- playwright pin 1.50.0 与基础镜像同版 → chromium install 变 no-op (中国网络 30min 超时的根治)
+- docker push 只信 describe-images 服务端核验 — tail 管道掩盖 broken pipe 又一次 (v11 推了个寂寞)
+
+**Next session:**
+- 验明早 20:00 UTC cron (v11 首跑): Data Patrol 卡 29 市场全绿, 蒙东/福建/河北南网/安徽 缺口开始自动回补
+- 若仍有市场失败 → 该省页面选择器单独看
+- 安徽 LingFeng 数据其实从未缺 — 页面一直好着, 断的是采集器; 若 patrol 显示回补完成, 安徽 capture 序列自动延伸
+- 待定: hermes 下一窗口部署需原子携带 record_fact.py + intake_routes.py + intake_extract.py + province_fundamentals (final review Critical #1, 自上会话遗留)
