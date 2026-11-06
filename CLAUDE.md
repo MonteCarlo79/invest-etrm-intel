@@ -176,7 +176,7 @@ Automated daily data collection from LingFeng SaaS (`https://lingfeng-saas.tradi
 **29 markets:** 河南, 新疆, 吉林, 海南, 湖北, 四川, 黑龙江, 福建, 浙江, 江苏, 广西, 安徽, 陕西, 贵州, 云南, 广东, 蒙东, 湖南, 宁夏, 辽宁, 河北南网, 甘肃, 蒙西, 山东, 山西, 冀北, 广州, 青海, 江西
 
 **Scheduled runs:**
-- **Primary — ECS** `bess-platform-lingfeng-ingest-svc`: daily 20:00 UTC (04:00 CST); trigger check every 15 min (Feishu/Telegram backfills). Image **v9 / td:11** (2026-10-01): folder-scan guard in services/bess_map/run_all_provinces.py — files whose stem doesn't resolve to a known province are skipped loudly (运行数据披露 section-name entity incident); v8/td:10 has the auto-cols 电量-exclusion fix; v7/td:9 the placeholder-zero-day guard
+- **Primary — ECS** `bess-platform-lingfeng-ingest-svc`: daily 20:00 UTC (04:00 CST); trigger check every 15 min (Feishu/Telegram backfills). Image **v11 / td:13** (2026-11-06): collector adapted to LingFeng's rebuilt market page (Enter-key login submit — label renamed 登 录 broke has_text("登录"); combobox market search-select; .ant-picker date inputs; explicit 24点; text-based visible 查询/导出) + upsert_capture_daily realized-only heal (union index, branch-scoped SET) + playwright==1.50.0 pin; v10/td:12 quantile bands; v9/td:11 folder-scan guard; v8/td:10 auto-cols 电量-exclusion; v7/td:9 placeholder-zero-day guard
 - **Fallback — MacBook launchd** agent `ai.pjh-etrm.lingfeng-daily`: daily 04:00 local, all 29 markets + 3 models. Register with `bash services/lingfeng/setup_schedule_launchd.sh`. Prereq: venv at `~/.venvs/bess-platform` + `python -m playwright install chromium`
 - Windows Task Scheduler version (`setup_schedule.ps1`) retired 2026-08-06 with the workstation move
 
@@ -226,7 +226,7 @@ The capture pipeline (`run_capture_pipeline.py`) simulates RT realized revenue b
 
 **Re-run if data is stale or wrong model:** Data Management tab → Capture Pipeline Runner → select model → Run. Or:
 ```bash
-python services/bess_map/run_capture_pipeline.py --province shandong --model ols_rt_time_v1 --force
+python services/bess_map/run_capture_pipeline.py --province 山东 --model ols_rt_time_v1 --force
 ```
 
 ---
