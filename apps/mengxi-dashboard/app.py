@@ -850,15 +850,23 @@ with tab_data_mgmt:
         "at the station level."
     )
 
-    def _render_nomination_coverage(engine):
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_nomination_coverage_frames(_engine):
+        """Panel queries, cached 5 min — st.tabs executes every section on
+        every rerun, so without this each rerun of ANY tab hits RDS twice."""
+        from sqlalchemy import text as _sql_text
         from services.wecom_nominations.status import (
             _DB_SIDE_SQL,
             _STATUS_SIDE_SQL,
             ensure_table as _ensure_status,
         )
-        _ensure_status(engine)
-        status = pd.read_sql(text(_STATUS_SIDE_SQL), engine)
-        db = pd.read_sql(text(_DB_SIDE_SQL), engine)
+        _ensure_status(_engine)
+        status = pd.read_sql(_sql_text(_STATUS_SIDE_SQL), _engine)
+        db = pd.read_sql(_sql_text(_DB_SIDE_SQL), _engine)
+        return status, db
+
+    def _render_nomination_coverage(engine):
+        status, db = _load_nomination_coverage_frames(engine)
         if status.empty:
             st.info("No nomination file status yet — the next daily WeCom "
                     "pipeline run (11:00 / 16:00 CST) populates it.")
