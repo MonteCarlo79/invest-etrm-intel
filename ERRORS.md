@@ -606,3 +606,9 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 2. Never trust a UI label selector for form submit — submit via Enter in the last input, or select by id.
 3. After any page rebuild: re-verify granularity defaults (24点 vs 96点) before ingest.
 4. A realized-side heal needs theo present for the upsert to fire — post-fix this no longer matters, but on old images `--force --force-theoretical` is required.
+
+## 2026-11-07 — v46/v47 panel NameError crashed all tabs
+**Symptom:** mengxi-dashboard every tab crashed with NameError: name 'text' is not defined (found on Book tab).
+**Root cause:** the Section 5b nomination-coverage panel used bare `text()`; app.py's convention is lazy alias imports (`from sqlalchemy import text as _sql_text`) per section — `text` never exists at module scope. st.tabs executes ALL sections on every rerun, so a section-local NameError is app-global. The v46 probe verified the query logic but never the app's own scope.
+**Lesson:** (1) in this mega-app, any code added to app.py must use the alias-import pattern for sqlalchemy text (or import at use site); (2) an ECS probe of the query path does not prove the app renders — after app.py edits, at minimum `python -c "import py_compile"` plus a grep that every bare `text(` call has a visible import; better: run the panel function against a sqlite harness. (3) Uncached queries in app.py run on every rerun of every tab — wrap with @st.cache_data(ttl=...) on the read helper.
+**Fix:** v48/td:63 — alias import + cached panel loader.
