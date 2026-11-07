@@ -23,8 +23,11 @@ from services.mengxi_nodal.dispatch_zones import (
     parse_nomination_zones,
 )
 from services.mengxi_nodal.nomination_curves import (
+    _ACTUAL_DDL,
+    _ACTUAL_UPSERT_SQL,
     _DDL as _NOM_DDL,
     dedupe_rows,
+    parse_actual_curves,
     parse_nomination_curves,
 )
 from services.wecom_nominations.collector import collect
@@ -172,11 +175,43 @@ print('DONE', n, flush=True)
     _launch_writer(writer)
 
 
+def ship_actuals(rows: list[dict], tag: str) -> None:
+    """Upload metered-actual MW JSON to S3 and trigger the ECS upsert writer
+    (bess_actual_96 — replaces ops_bess_dispatch_15min, dead since 2026-04)."""
+    if not rows:
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(rows, fh, ensure_ascii=False, default=str)
+        tmp = fh.name
+    key = f"{S3_KEY_PREFIX}actuals_daily_{tag}.json"
+    subprocess.run(["aws", "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+                    "--region", "ap-southeast-1"], check=True, capture_output=True)
+    writer = f"""
+import json, os, boto3
+from sqlalchemy import create_engine, text
+rows = json.loads(boto3.client('s3', region_name='ap-southeast-1').get_object(
+    Bucket='{BUCKET}', Key='{key}')['Body'].read())
+engine = create_engine(os.environ['PGURL'])
+DDL = '''{_ACTUAL_DDL}'''
+UPSERT = text('''{_ACTUAL_UPSERT_SQL}''')
+with engine.begin() as c:
+    for stmt in DDL.split(';'):
+        if stmt.strip():
+            c.execute(text(stmt))
+    n = 0
+    for i in range(0, len(rows), 5000):
+        c.execute(UPSERT, rows[i:i+5000]); n += len(rows[i:i+5000])
+print('DONE', n, flush=True)
+"""
+    _launch_writer(writer)
+
+
 def main() -> None:
     stats = collect()
     logger.info("collect: %s", stats)
     voter_rows: list[dict] = []
     nom_rows: list[dict] = []
+    act_rows: list[dict] = []
     file_stats: list[dict] = []
     for folder, code in FOLDERS.items():
         d = Path("data/raw/nomination") / folder
@@ -198,15 +233,20 @@ def main() -> None:
             except Exception as ex:
                 logger.warning("nomination parse failed %s: %s", f.name, ex)
                 file_stats.append(parse_error_stat(code, f, ex))
+            try:
+                act_rows.extend(parse_actual_curves(f, code))
+            except Exception as ex:
+                logger.warning("actual parse failed %s: %s", f.name, ex)
     zone_rows = voter_rows + consensus_zone_rows(voter_rows, NO_ZONE_FILES)
     logger.info("parsed %d zone rows (%d fleet-consensus), %d nomination "
-                "rows; shipping",
+                "rows, %d actual rows; shipping",
                 len(zone_rows), len(zone_rows) - len(voter_rows),
-                len(nom_rows))
+                len(nom_rows), len(act_rows))
     from datetime import date
     tag = date.today().isoformat()
     ship_zones(zone_rows, tag)
     ship_nominations(dedupe_rows(nom_rows), tag)
+    ship_actuals(dedupe_rows(act_rows), tag)
     ship_status(file_stats, tag)
 
 

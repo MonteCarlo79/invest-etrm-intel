@@ -135,16 +135,42 @@ class AssetBook(TradingBook):
             cleared_price=_to_96(df, "datetime", "cleared_price"))
 
     def actual(self, day: Day) -> ActualDispatch:
-        """Ops nominated + actual dispatch MW, 96 slots (discharge +)."""
+        """Ops nominated + actual dispatch MW, 96 slots (discharge +).
+
+        Source since 2026-11-07: the WeCom workbooks' own 交易员申报计划 /
+        实际执行功率 columns (bess_nomination_96 / bess_actual_96 — the
+        WeCom collector path). ops_bess_dispatch_15min died 2026-04-21 and
+        remains only as the pre-2026-04-20 fallback.
+        """
         self._require_strategy_layer()
-        s, e = _cst_naive_window(day)
-        df = pd.read_sql(
-            text(_ACTUAL_SQL), self._engine,
-            params={"ac": self.station.asset_code, "s": s, "e": e})
+        from services.mengxi_nodal.nomination_curves import get_actuals, get_nominations
+
+        def _v(df, val_col):
+            if df.empty:
+                return df
+            return df[["interval_start", val_col]].rename(columns={val_col: "v"})
+
+        nom = get_nominations(self._engine, self.station.asset_code,
+                              day, day + timedelta(days=1))
+        act = get_actuals(self._engine, self.station.asset_code,
+                          day, day + timedelta(days=1))
+        if nom.empty or act.empty:
+            s, e = _cst_naive_window(day)
+            df = pd.read_sql(
+                text(_ACTUAL_SQL), self._engine,
+                params={"ac": self.station.asset_code, "s": s, "e": e})
+            if nom.empty and not df.empty:
+                nom = df[["interval_start", "nominated_dispatch_mw"]]
+            if act.empty and not df.empty:
+                act = df[["interval_start", "actual_dispatch_mw"]]
+        nom_v = nom if nom.empty else _v(nom, "nominated_mw" if "nominated_mw" in nom.columns
+                                         else "nominated_dispatch_mw")
+        act_v = act if act.empty else _v(act, "actual_mw" if "actual_mw" in act.columns
+                                         else "actual_dispatch_mw")
         return ActualDispatch(
             day=day,
-            nominated_mw=_to_96(df, "interval_start", "nominated_dispatch_mw"),
-            actual_mw=_to_96(df, "interval_start", "actual_dispatch_mw"))
+            nominated_mw=_to_96(nom_v, "interval_start", "v"),
+            actual_mw=_to_96(act_v, "interval_start", "v"))
 
     def strategies(self, day: Day) -> list[Strategy]:
         """Nodal-agent strategy curve for the day ([] when the writer has no

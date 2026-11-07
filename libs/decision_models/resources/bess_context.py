@@ -103,12 +103,53 @@ def load_actual_prices_15min(
     """
     Load 15-min actual RT prices for one asset over date_from..date_to (inclusive).
 
+    Source since 2026-11-07: marketdata.md_mengxi_nodal_price_96_filled at the
+    station's registry price node (avg_node_price, naive-CST metric_time,
+    interval-START) — canon.nodal_rt_price_15min died 2026-09-24 and remains
+    the fallback for earlier dates.
+
     Returns
     -------
     df    : columns [time (datetime), price (float)]
     notes : list of data quality / warning strings
     """
     notes: List[str] = []
+    df = pd.DataFrame()
+
+    node = None
+    try:
+        from libs.trading_book.registry import get_station
+        station = get_station(asset_code)
+        node = station.price_nodes[0] if station.price_nodes else None
+    except Exception as exc:  # registry is authoritative; non-蒙西 codes pass through
+        notes.append(f"actual_prices_15min: registry lookup failed — {exc}")
+    if node:
+        filled_sql = """
+            SELECT metric_time AS time, avg_node_price AS price
+            FROM marketdata.md_mengxi_nodal_price_96_filled
+            WHERE node_name = %(node)s
+              AND metric_time >= %(start_ts)s
+              AND metric_time < %(end_ts)s
+            ORDER BY metric_time
+        """
+        end_d = date_to + pd.Timedelta(days=1)
+        params_f = {"node": node,
+                    "start_ts": f"{date_from} 00:00:00",
+                    "end_ts": f"{str(end_d)[:10]} 00:00:00"}
+        df, err = _run_query_safe(filled_sql, params_f)
+        if err:
+            notes.append(f"actual_prices_15min(filled): query failed — {err}")
+            df = pd.DataFrame()
+        elif not df.empty:
+            df["time"] = pd.to_datetime(df["time"])
+            df["price"] = pd.to_numeric(df["price"], errors="coerce")
+            n_null = int(df["price"].isna().sum())
+            if n_null:
+                notes.append(f"actual_prices_15min: {n_null} null prices for {asset_code}")
+            return df, notes
+        notes.append(f"actual_prices_15min: filled table empty for node {node} "
+                     f"{date_from}..{date_to} — falling back to canon")
+
     sql = """
         SELECT time, price
         FROM canon.nodal_rt_price_15min
@@ -569,12 +610,13 @@ def load_id_cleared_energy(
     df["cleared_energy_mwh_15min"] = pd.to_numeric(df["cleared_energy_mwh_15min"], errors="coerce")
     df["cleared_price"] = pd.to_numeric(df["cleared_price"], errors="coerce")
 
-    # DB column cleared_energy_mwh stores hourly-equivalent energy using the
-    # ops-file sign convention (positive = charge, negative = discharge).
-    # 1. Convert to per-15-min-interval energy: × 0.25 h.
-    # 2. Negate so the result follows LP convention (positive = discharge,
-    #    negative = charge) used by all downstream P&L and stats calculations.
-    df["cleared_energy_mwh_15min"] = -df["cleared_energy_mwh_15min"] * 0.25
+    # DB column cleared_energy_mwh stores the interval AVERAGE POWER in MW
+    # (numerically the hourly-rate energy), exchange sign convention:
+    # positive = discharge, negative = charge (verified 2026-11-05 against the
+    # operator nomination files — the April docstring's "positive = charge"
+    # was wrong, and the old −(x)×0.25 conversion flipped charge into
+    # discharge). Convert to per-15-min-interval MWh: × 0.25 h, sign kept.
+    df["cleared_energy_mwh_15min"] = df["cleared_energy_mwh_15min"] * 0.25
     # Implied power = per-15-min energy / 0.25 h = MW (positive = discharge)
     df["cleared_power_mw_implied_15min"] = df["cleared_energy_mwh_15min"] / 0.25
 
@@ -595,19 +637,23 @@ def load_ops_dispatch_15min(
     date_to: date,
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Load 15-min ops dispatch from marketdata.ops_bess_dispatch_15min.
+    Load 15-min nominated/actual dispatch for one asset over date_from..date_to.
 
-    This is the Inner Mongolia operations ingestion pipeline's output —
-    data parsed directly from the daily Excel operations files.
+    Source since 2026-11-07: the WeCom 调度计划表 workbooks
+    (marketdata.bess_nomination_96 交易员申报计划 + marketdata.bess_actual_96
+    实际执行功率, daily auto-collected). The legacy ops_bess_dispatch_15min
+    (Excel ops ingestion) died 2026-04-21 and remains as the pre-2026-04-20
+    fallback only.
 
     IMPORTANT — Semantic distinctions
     ----------------------------------
     nominated_dispatch_mw : 申报曲线 (BESS operator nomination to grid operator).
                             NOT the same as md_id_cleared_energy.cleared_energy_mwh.
-    actual_dispatch_mw    : 实际充放曲线 (physical output as reported in ops file).
-                            NOT the same as md_id_cleared_energy.cleared_energy_mwh.
-    nodal_price_excel     : 节点电价 from Excel col E.  May differ from
-                            canon.nodal_rt_price_15min (DB source of truth).
+    actual_dispatch_mw    : 实际充放曲线 (physical output as metered in the
+                            nomination workbook). NOT the same as
+                            md_id_cleared_energy.cleared_energy_mwh.
+    nodal_price_excel     : not carried by the new tables — returned as NaN;
+                            canon/filled nodal prices are the price source.
 
     Returns
     -------
@@ -616,38 +662,67 @@ def load_ops_dispatch_15min(
     notes : list of data quality / warning strings
     """
     notes: List[str] = []
-    sql = """
+    new_sql = """
         SELECT
-            interval_start,
-            nominated_dispatch_mw,
-            actual_dispatch_mw,
-            nodal_price_excel
-        FROM marketdata.ops_bess_dispatch_15min
-        WHERE asset_code = %(asset_code)s
-          AND data_date >= %(date_from)s
-          AND data_date <= %(date_to)s
-        ORDER BY interval_start
+            COALESCE(n.data_date, a.data_date) AS data_date,
+            COALESCE(n.slot, a.slot)           AS slot,
+            n.nominated_mw,
+            a.actual_mw
+        FROM marketdata.bess_nomination_96 n
+        FULL OUTER JOIN marketdata.bess_actual_96 a
+          ON a.asset_code = n.asset_code AND a.data_date = n.data_date
+          AND a.slot = n.slot
+        WHERE COALESCE(n.asset_code, a.asset_code) = %(asset_code)s
+          AND COALESCE(n.data_date, a.data_date) >= %(date_from)s
+          AND COALESCE(n.data_date, a.data_date) <= %(date_to)s
+        ORDER BY 1, 2
     """
     params = {
         "asset_code": asset_code,
         "date_from": date_from,
         "date_to": date_to,
     }
-    df, err = _run_query_safe(sql, params)
+    df, err = _run_query_safe(new_sql, params)
     if err:
-        notes.append(f"ops_dispatch_15min: query failed — {err}")
-        return pd.DataFrame(columns=[
-            "interval_start", "nominated_dispatch_mw", "actual_dispatch_mw", "nodal_price_excel",
-        ]), notes
+        notes.append(f"bess_nomination/actual_96: query failed — {err}")
+        df = pd.DataFrame()
     if df.empty:
-        notes.append(
-            f"ops_dispatch_15min: no data for {asset_code} "
-            f"between {date_from} and {date_to} in marketdata.ops_bess_dispatch_15min "
-            "— ops ingestion may not have run for this date range yet"
-        )
-        return pd.DataFrame(columns=[
-            "interval_start", "nominated_dispatch_mw", "actual_dispatch_mw", "nodal_price_excel",
-        ]), notes
+        # Legacy fallback: ops_bess_dispatch_15min (died 2026-04-21; covers
+        # the pre-WeCom period only).
+        sql = """
+            SELECT
+                interval_start,
+                nominated_dispatch_mw,
+                actual_dispatch_mw,
+                nodal_price_excel
+            FROM marketdata.ops_bess_dispatch_15min
+            WHERE asset_code = %(asset_code)s
+              AND data_date >= %(date_from)s
+              AND data_date <= %(date_to)s
+            ORDER BY interval_start
+        """
+        df, err = _run_query_safe(sql, params)
+        if err:
+            notes.append(f"ops_dispatch_15min: query failed — {err}")
+            return pd.DataFrame(columns=[
+                "interval_start", "nominated_dispatch_mw", "actual_dispatch_mw", "nodal_price_excel",
+            ]), notes
+        if df.empty:
+            notes.append(
+                f"ops_dispatch_15min: no data for {asset_code} "
+                f"between {date_from} and {date_to} in either the WeCom "
+                "nomination tables or legacy marketdata.ops_bess_dispatch_15min"
+            )
+            return pd.DataFrame(columns=[
+                "interval_start", "nominated_dispatch_mw", "actual_dispatch_mw", "nodal_price_excel",
+            ]), notes
+    else:
+        df["interval_start"] = (pd.to_datetime(df["data_date"])
+                                + pd.to_timedelta((df["slot"].astype(int) - 1) * 15,
+                                                  unit="min"))
+        df = df.rename(columns={"nominated_mw": "nominated_dispatch_mw",
+                                "actual_mw": "actual_dispatch_mw"})
+        df["nodal_price_excel"] = float("nan")
 
     df["interval_start"] = pd.to_datetime(df["interval_start"])
     df["nominated_dispatch_mw"] = pd.to_numeric(df["nominated_dispatch_mw"], errors="coerce")

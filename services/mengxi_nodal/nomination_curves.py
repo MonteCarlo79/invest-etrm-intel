@@ -47,6 +47,31 @@ CREATE TABLE IF NOT EXISTS marketdata.bess_nomination_96 (
 )
 """
 
+# Metered actual execution （实际执行功率 (MW), column F in the same WeCom
+# workbooks) — replaces ops_bess_dispatch_15min, dead since 2026-04.
+_ACTUAL_DDL = """
+CREATE TABLE IF NOT EXISTS marketdata.bess_actual_96 (
+    asset_code   TEXT        NOT NULL,
+    data_date    DATE        NOT NULL,
+    slot         INTEGER     NOT NULL,
+    actual_mw    NUMERIC,
+    source_file  TEXT,
+    created_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (asset_code, data_date, slot)
+)
+"""
+
+_ACTUAL_UPSERT_SQL = """
+INSERT INTO marketdata.bess_actual_96
+    (asset_code, data_date, slot, actual_mw, source_file)
+VALUES (:asset_code, :data_date, :slot, :actual_mw, :source_file)
+ON CONFLICT (asset_code, data_date, slot)
+DO UPDATE SET actual_mw = EXCLUDED.actual_mw,
+              source_file = EXCLUDED.source_file
+"""
+
+_ACTUAL_UPSERT = text(_ACTUAL_UPSERT_SQL)
+
 _UPSERT = text("""
     INSERT INTO marketdata.bess_nomination_96
         (asset_code, data_date, slot, nominated_mw, source_file)
@@ -57,13 +82,14 @@ _UPSERT = text("""
 """)
 
 _NOM_HEADER_KEY = "申报"  # 交易员申报计划 / 申报计划 / 申报功率
+_ACT_HEADER_KEY = "实际执行"  # 实际执行功率 (MW) — column F in the same workbooks
 
 
-def _nomination_column(ws) -> int | None:
-    """1-based index of the first row-1 header containing 申报."""
+def _nomination_column(ws, key: str = _NOM_HEADER_KEY) -> int | None:
+    """1-based index of the first row-1 header containing the key."""
     for c in range(2, 10):
         v = ws.cell(row=1, column=c).value
-        if v is not None and _NOM_HEADER_KEY in str(v):
+        if v is not None and key in str(v):
             return c
     return None
 
@@ -107,7 +133,8 @@ def _sheet_date_guarded(a2_date: date | None, tab_md: tuple[int, int] | None,
     return a2_date or tab_date
 
 
-def _parse_xls(path: Path, asset_code: str) -> list[dict]:
+def _parse_xls(path: Path, asset_code: str, col_key: str = _NOM_HEADER_KEY,
+               value_field: str = "nominated_mw") -> list[dict]:
     """Legacy .xls workbook via pandas/xlrd (values only — no cell fills;
     wulate's operator switched to .xls from July 2026 and its files carry no
     zone colouring anyway). Same conventions: day sheets MM.DD, header row 1,
@@ -152,10 +179,10 @@ def _parse_xls(path: Path, asset_code: str) -> list[dict]:
                   f"no parseable date, sheet skipped")
             continue
         col = next((c for c in range(1, min(10, df.shape[1]))
-                    if _NOM_HEADER_KEY in str(df.iloc[0, c])), None)
+                    if col_key in str(df.iloc[0, c])), None)
         if col is None:
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
-                  f"no 申报 column, sheet skipped")
+                  f"no {col_key} column, sheet skipped")
             continue
         for r in range(1, min(97, len(df))):
             v = df.iloc[r, col]
@@ -169,13 +196,15 @@ def _parse_xls(path: Path, asset_code: str) -> list[dict]:
                 "asset_code": asset_code,
                 "data_date": d,
                 "slot": r,  # df row 1 = sheet row 2 = slot 1 (00:00–00:15)
-                "nominated_mw": mw,
+                value_field: mw,
                 "source_file": path.name,
             })
     return rows
 
 
-def parse_nomination_curves(path: Path | str, asset_code: str) -> list[dict]:
+def parse_nomination_curves(path: Path | str, asset_code: str,
+                            col_key: str = _NOM_HEADER_KEY,
+                            value_field: str = "nominated_mw") -> list[dict]:
     """Walk the day sheets of one monthly nomination workbook and return one
     row per (data_date, slot) with a numeric nomination: {asset_code,
     data_date, slot, nominated_mw, source_file}. Sheets without a 申报
@@ -191,7 +220,7 @@ def parse_nomination_curves(path: Path | str, asset_code: str) -> list[dict]:
     """
     path = Path(path)
     if path.suffix.lower() == ".xls":
-        return _parse_xls(path, asset_code)
+        return _parse_xls(path, asset_code, col_key, value_field)
     from openpyxl import load_workbook
 
     path = Path(path)
@@ -236,10 +265,10 @@ def parse_nomination_curves(path: Path | str, asset_code: str) -> list[dict]:
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
                   f"no parseable date, sheet skipped")
             continue
-        col = _nomination_column(ws)
+        col = _nomination_column(ws, col_key)
         if col is None:
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
-                  f"no 申报 column, sheet skipped")
+                  f"no {col_key} column, sheet skipped")
             continue
         for r in range(_FIRST_ROW, _LAST_ROW + 1):
             v = ws.cell(row=r, column=col).value
@@ -253,7 +282,7 @@ def parse_nomination_curves(path: Path | str, asset_code: str) -> list[dict]:
                 "asset_code": asset_code,
                 "data_date": d,
                 "slot": r - 1,  # row 2 -> slot 1 (00:00–00:15)
-                "nominated_mw": mw,
+                value_field: mw,
                 "source_file": path.name,
             })
     return rows
@@ -311,7 +340,8 @@ def dedupe_rows(rows: list[dict]) -> list[dict]:
             continue
         ref = date.fromisoformat(dd)
         winner = min(cands, key=lambda r: rank(r, ref))
-        vals = {float(c["nominated_mw"]) for c in cands}
+        vkey = "nominated_mw" if "nominated_mw" in cands[0] else "actual_mw"
+        vals = {float(c[vkey]) for c in cands}
         if len(vals) > 1:
             print(f"WARNING nomination_curves dedupe: {ac} {dd} slot {slot} "
                   f"conflicting {sorted(vals)} across "
@@ -362,3 +392,47 @@ def get_nominations(engine, asset_code: str, start: date, end: date) -> pd.DataF
                                               unit="min"))
     df["nominated_mw"] = pd.to_numeric(df["nominated_mw"], errors="coerce")
     return df[["interval_start", "nominated_mw"]]
+
+
+def parse_actual_curves(path: Path | str, asset_code: str) -> list[dict]:
+    """Same walk as parse_nomination_curves but reading 实际执行功率 (MW) —
+    the metered actual dispatch column F. Returns rows keyed actual_mw."""
+    return parse_nomination_curves(path, asset_code, col_key=_ACT_HEADER_KEY,
+                                   value_field="actual_mw")
+
+
+def ensure_actual_table(engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(text(_ACTUAL_DDL))
+
+
+def load_actuals(engine, path: Path | str, asset_code: str) -> int:
+    rows = parse_actual_curves(path, asset_code)
+    if not rows:
+        return 0
+    ensure_actual_table(engine)
+    with engine.begin() as conn:
+        for i in range(0, len(rows), 500):
+            conn.execute(_ACTUAL_UPSERT, rows[i : i + 500])
+    return len(rows)
+
+
+def get_actuals(engine, asset_code: str, start: date, end: date):
+    """(interval_start, actual_mw) frame over [start, end) — same frame
+    conventions as get_nominations."""
+    df = pd.read_sql(text("""
+        SELECT data_date, slot, actual_mw
+        FROM marketdata.bess_actual_96
+        WHERE asset_code = :ac
+          AND data_date >= :sd
+          AND data_date <  :ed
+        ORDER BY data_date, slot
+    """), engine, params={"ac": asset_code,
+                          "sd": start.isoformat(), "ed": end.isoformat()})
+    if df.empty:
+        return pd.DataFrame(columns=["interval_start", "actual_mw"])
+    df["interval_start"] = (pd.to_datetime(df["data_date"])
+                            + pd.to_timedelta((df["slot"].astype(int) - 1) * 15,
+                                              unit="min"))
+    df["actual_mw"] = pd.to_numeric(df["actual_mw"], errors="coerce")
+    return df[["interval_start", "actual_mw"]]
