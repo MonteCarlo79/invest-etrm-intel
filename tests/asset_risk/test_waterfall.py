@@ -220,7 +220,8 @@ def test_load_settlement_actuals_month_token(sqlite_engine):
 
 
 def test_attribution_decomposition_identities():
-    """Each attribution block sums exactly to its waterfall deviation column."""
+    """Each attribution block sums exactly to its waterfall deviation column
+    (waterfall sign convention: + gain, − loss)."""
     df = pd.DataFrame({
         "asset": ["A1"] * 6,
         "month": ["2026-06"] * 6,
@@ -234,50 +235,60 @@ def test_attribution_decomposition_identities():
         "capacity_mw": [100.0] * 6,
         "price_cny_mwh": [300.0] * 6,
     })
-    bench = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"], "arb_cny": [1000.0]})
-    fc_rows = [{"arb_cny": 800.0}]
-    attr = attribution_rows(df, bench, fc_rows)
-    by_cause = dict(zip(attr["成因"], attr["cny"]))
-
-    # key-shape regression: merged benchmark rows carry BOTH arb_cny (benchmark)
-    # and fc_arb_cny (forecast) — forecast must read fc_arb_cny, not arb_cny
-    merged = [{"arb_cny": 1000.0, "fc_arb_cny": 800.0}]
-    attr_m = attribution_rows(df, bench, merged)
-    assert dict(zip(attr_m["成因"], attr_m["cny"]))[
-        "预测误差（现货价格预测 vs 完美预见）"] == pytest.approx(200.0)
-
-    # Δ策略与预测: 预测误差 + 申报策略 = 标准 − 申报
-    nom_arb = stage_arbitrage(df, "nominated_mw")["arb_cny"].sum()  # 40 x 0.25 x 300 = 3000
-    assert by_cause["预测误差（现货价格预测 vs 完美预见）"] == pytest.approx(200.0)   # 1000-800
-    assert by_cause["申报策略选择（留电/SOC/保守度）"] == pytest.approx(-2200.0)     # 800-3000
-    assert (by_cause["预测误差（现货价格预测 vs 完美预见）"]
-            + by_cause["申报策略选择（留电/SOC/保守度）"]) == pytest.approx(1000.0 - nom_arb)
-
-    # Δ出清校核: 日前未中标 (150) + 实时校核 (75) = Σ(nom−rt)×0.25×300 = 225
-    assert by_cause["日前未中标（申报 vs 日前出清）"] == pytest.approx(150.0)
-    assert by_cause["实时校核（日前出清 vs 实时出清）"] == pytest.approx(75.0)
-    assert (by_cause["日前未中标（申报 vs 日前出清）"]
-            + by_cause["实时校核（日前出清 vs 实时出清）"]) == pytest.approx(225.0)
-    # SOC校核 informational: soc=96 charge interval → 7 x 0.25 x 300 = 525
-    assert by_cause["　其中：SOC校核（soc≥95% 仍出清充电）"] == pytest.approx(525.0)
-
-    # Δ执行偏差: 红绿灯 (2250) + 非响应 (0) + 残差 (675) = 2925
-    assert by_cause["红绿灯限制窗口（仅充电/仅放电时段）"] == pytest.approx(2250.0)
-    assert by_cause["设备非响应事件（出清≠0 实际≈0）"] == pytest.approx(0.0)
-    assert by_cause["阻塞/调度核减/涉网试验（残差）"] == pytest.approx(675.0)
-    assert (by_cause["红绿灯限制窗口（仅充电/仅放电时段）"]
-            + by_cause["设备非响应事件（出清≠0 实际≈0）"]
-            + by_cause["阻塞/调度核减/涉网试验（残差）"]) == pytest.approx(2925.0)
     bench = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"],
                           "arb_cny": [1000.0], "dis_mwh": [10.0], "cap_cny": [3500.0]})
     nominated = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"],
-                              "arb_cny": [900.0], "dis_mwh": [9.0], "cap_cny": [3150.0]})
+                              "arb_cny": [3000.0], "dis_mwh": [20.0], "cap_cny": [7000.0]})
     cleared = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"],
-                            "arb_cny": [800.0], "dis_mwh": [8.0], "cap_cny": [2800.0]})
+                            "arb_cny": [2500.0], "dis_mwh": [18.0], "cap_cny": [6300.0]})
     actual = pd.DataFrame({"asset": ["A1"], "month": ["2026-06"],
-                           "arb_cny": [700.0], "cap_cny": [2500.0],
-                           "fee_cny": [-100.0], "other_cny": [-50.0]})
+                           "arb_cny": [2000.0], "cap_cny": [5600.0],
+                           "fee_cny": [-100.0], "other_cny": [-50.0],
+                           "dis_mwh": [16.0], "chg_mwh": [5.0]})
     wf = build_waterfall(bench, nominated, cleared, actual)
+    fc_rows = [{"arb_cny": 800.0}]
+    attr = attribution_rows(df, wf, bench, nominated, cleared, actual, fc_rows)
+    _by = {(r["偏差区间"], r["成因"]): r["cny"] for _, r in attr.iterrows()}
+    by_cause = _by
+
+    # key-shape regression: merged benchmark rows carry BOTH arb_cny (benchmark)
+    # and fc_arb_cny (forecast) — forecast must read fc_arb_cny, not arb_cny
+    attr_m = attribution_rows(df, wf, bench, nominated, cleared, actual,
+                              [{"arb_cny": 1000.0, "fc_arb_cny": 800.0}])
+    assert dict(zip(attr_m["成因"], attr_m["cny"]))[
+        "预测误差（预测最优 − 投资标准）"] == pytest.approx(-200.0)
+
+    # Δ策略与预测 rows: −200 + 2200 = +2000 = wf arb delta (3000−1000)
+    assert by_cause[("Δ策略与预测", "预测误差（预测最优 − 投资标准）")] == pytest.approx(-200.0)
+    assert by_cause[("Δ策略与预测", "申报策略选择（申报 − 预测最优）")] == pytest.approx(2200.0)
+    seg1 = (by_cause[("Δ策略与预测", "预测误差（预测最优 − 投资标准）")]
+            + by_cause[("Δ策略与预测", "申报策略选择（申报 − 预测最优）")])
+    assert seg1 == pytest.approx(2000.0)
+    assert by_cause[("Δ策略与预测", "容量补偿（Δ放电量 × 补偿单价）")] == pytest.approx(7000.0 - 3500.0)
+
+    # Δ出清校核: 日前 −150 + 实时 −75 = −225; 残差 = −500 − (−225) = −275
+    assert by_cause[("Δ出清校核", "日前未中标（日前出清 − 申报）")] == pytest.approx(-150.0)
+    assert by_cause[("Δ出清校核", "实时校核（实时出清 − 日前出清）")] == pytest.approx(-75.0)
+    assert by_cause[("Δ出清校核", "残差（价格基差/出清降级调整）")] == pytest.approx(-275.0)
+    assert by_cause[("Δ出清校核", "　其中：SOC校核（soc≥95% 仍出清充电）")] == pytest.approx(-525.0)
+
+    # Δ执行与费用 rows tie to wf segment total −1350
+    assert by_cause[("Δ执行与费用", "红绿灯限制窗口（仅充电/仅放电时段）")] == pytest.approx(-2250.0)
+    assert by_cause[("Δ执行与费用", "设备非响应事件（出清≠0 实际≈0）")] == pytest.approx(0.0)
+    assert by_cause[("Δ执行与费用", "阻塞/调度核减/涉网试验（调度残差）")] == pytest.approx(-675.0)
+    assert by_cause[("Δ执行与费用", "系统运行费+线损（仅存在于结算单）")] == pytest.approx(-100.0)
+    assert by_cause[("Δ执行与费用", "其他费用（仅存在于结算单）")] == pytest.approx(-50.0)
+    assert by_cause[("Δ执行与费用", "结算口径/价格基差（残差）")] == pytest.approx(2425.0)
+
+    # exact ties per segment
+    for seg_name, seg_total in [("Δ策略与预测", 2000.0 + 3500.0),
+                                ("Δ出清校核", -500.0 - 700.0),
+                                ("Δ执行与费用", -500.0 - 700.0 - 100.0 - 50.0)]:
+        rows = attr[attr["偏差区间"] == seg_name]
+        rows = rows[~rows["成因"].str.startswith("　其中")]  # informational subset
+        assert rows["cny"].sum() == pytest.approx(seg_total), seg_name
+
+    # bridge identity still holds on the wf used above
     for comp in ["arb_cny", "cap_cny"]:
         std = wf.loc[(wf["stage"] == "投资标准") & (wf["component"] == comp), "cny"].iloc[0]
         d1 = wf.loc[(wf["stage"] == "Δ策略与预测") & (wf["component"] == comp), "cny"].iloc[0]
@@ -289,6 +300,46 @@ def test_attribution_decomposition_identities():
         assert std + d1 == pytest.approx(nom)
         assert nom + d2 == pytest.approx(clr)
         assert clr + d3 == pytest.approx(act)
+
+
+def test_attribution_nan_chain_shows_no_data():
+    """Auto-nomination era carries rt_cleared only — causes with all-NaN gating
+    columns must show 无数据, never a fake ¥0."""
+    df = pd.DataFrame({
+        "asset": ["A1"] * 4,
+        "month": ["2026-10"] * 4,
+        "ts": pd.date_range("2026-10-01", periods=4, freq="15min"),
+        "nominated_mw": [float("nan")] * 4,
+        "da_cleared_mw": [float("nan")] * 4,
+        "rt_cleared_mw": [5.0, 5.0, -5.0, -5.0],
+        "actual_mw": [float("nan")] * 4,
+        "restriction": [None] * 4,
+        "soc_pct": [float("nan")] * 4,
+        "capacity_mw": [100.0] * 4,
+        "price_cny_mwh": [300.0] * 4,
+    })
+    bench = pd.DataFrame({"asset": ["A1"], "month": ["2026-10"],
+                          "arb_cny": [1000.0], "dis_mwh": [10.0], "cap_cny": [3500.0]})
+    nominated = pd.DataFrame({"asset": ["A1"], "month": ["2026-10"],
+                              "arb_cny": [900.0], "dis_mwh": [9.0], "cap_cny": [3150.0]})
+    cleared = pd.DataFrame({"asset": ["A1"], "month": ["2026-10"],
+                            "arb_cny": [800.0], "dis_mwh": [8.0], "cap_cny": [2800.0]})
+    actual = pd.DataFrame({"asset": ["A1"], "month": ["2026-10"],
+                           "arb_cny": [700.0], "cap_cny": [2500.0],
+                           "fee_cny": [-100.0], "other_cny": [-50.0],
+                           "dis_mwh": [7.0], "chg_mwh": [3.0]})
+    wf = build_waterfall(bench, nominated, cleared, actual)
+    attr = attribution_rows(df, wf, bench, nominated, cleared, actual, [{"arb_cny": 800.0}])
+    by_cause = {(r["偏差区间"], r["成因"]): r["cny"] for _, r in attr.iterrows()}
+    import math
+    assert math.isnan(by_cause[("Δ出清校核", "日前未中标（日前出清 − 申报）")])
+    assert math.isnan(by_cause[("Δ出清校核", "实时校核（实时出清 − 日前出清）")])
+    assert math.isnan(by_cause[("Δ执行与费用", "设备非响应事件（出清≠0 实际≈0）")])
+    assert math.isnan(by_cause[("Δ执行与费用", "红绿灯限制窗口（仅充电/仅放电时段）")])
+    fmt = dict(zip(attr["成因"], attr["金额_fmt"]))
+    assert fmt["日前未中标（日前出清 − 申报）"] == "无数据"
+    # wf-sourced rows still have values
+    assert by_cause[("Δ策略与预测", "容量补偿（Δ放电量 × 补偿单价）")] == pytest.approx(3150.0 - 3500.0)
 
 
 # ---------- benchmark LP price fallback (2026-10 cleared-price gap) ----------

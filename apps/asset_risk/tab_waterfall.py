@@ -418,19 +418,35 @@ def forecast_optimal_leg(_engine, asset_id: int, month: str, capacity_mw: float,
     return {"arb_cny": arb, "note": ""}
 
 
-def attribution_rows(df: pd.DataFrame, bench: pd.DataFrame,
+def attribution_rows(df: pd.DataFrame, wf: pd.DataFrame,
+                     bench: pd.DataFrame, nominated: pd.DataFrame,
+                     cleared: pd.DataFrame, actual: pd.DataFrame,
                      forecast_rows: list[dict]) -> pd.DataFrame:
     """Per-cause attribution for the three waterfall deviations.
 
-    df: priced chain frame (asset/ts/month/mw cols/restriction/soc_pct/price_cny_mwh).
-    bench: benchmark leg frame (asset, month, arb_cny).
+    Every row's ¥ follows the waterfall sign convention (+ = gain, − = loss),
+    and each segment's rows sum EXACTLY to its waterfall segment total:
+    cause rows decompose the arb component, component rows (容量补偿/费用) come
+    straight from the wf long frame, residual rows absorb valuation basis gaps.
+    Cause rows whose gating chain columns are all-NaN (auto-nomination
+    extension era carries rt_cleared only) show 无数据 instead of a fake ¥0.
+
+    df: priced chain frame. wf: build_waterfall output. bench/nominated/
+    cleared/actual: the stage legs (cleared already guard-downgraded).
     forecast_rows: forecast_optimal_leg results per (asset, month).
-    Returns DataFrame: 偏差区间 | 成因 | mwh | cny.
     """
     rows = []
 
-    def _diff_sum(col_a: str, col_b: str) -> tuple[float, float]:
-        """Σ(a − b) volumes (|.|×0.25) and ¥ (signed ×0.25×price) over all asset-months."""
+    def _wf_tot(stage: str, comp: str) -> float:
+        return float(wf[(wf["stage"] == stage) & (wf["component"] == comp)]["cny"].sum())
+
+    def _data_ok(*cols: str) -> bool:
+        return all(c in df.columns and df[c].notna().any() for c in cols)
+
+    def _diff_sum(col_a: str, col_b: str) -> tuple[float, float] | tuple[None, None]:
+        """Σ(a − b) volumes (|.|×0.25) and ¥ (signed ×0.25×price), or Nones."""
+        if not _data_ok(col_a, col_b):
+            return None, None
         total_mwh, total_cny = 0.0, 0.0
         for (asset, month), g in df.groupby(["asset", "month"]):
             v = g[col_a] - g[col_b]
@@ -438,52 +454,85 @@ def attribution_rows(df: pd.DataFrame, bench: pd.DataFrame,
             total_cny += float((v * 0.25 * g["price_cny_mwh"]).sum())
         return total_mwh, total_cny
 
-    # --- Δ策略与预测: 预测误差 + 申报策略 ---
+    # --- Δ策略与预测: 预测误差 + 申报策略 + 容量补偿 ---
+    seg = "Δ策略与预测"
     std_arb = float(bench["arb_cny"].sum()) if not bench.empty else 0.0
+    std_dis = float(bench["dis_mwh"].sum()) if not bench.empty else 0.0
     # forecast rows may be plain ({arb_cny}) or merged benchmark rows ({..., fc_arb_cny})
     fc_arb = float(sum(r.get("fc_arb_cny", r.get("arb_cny", 0.0)) for r in forecast_rows))
-    nom_arb = float(stage_arbitrage(df, "nominated_mw")["arb_cny"].sum())
-    rows.append({"偏差区间": "Δ策略与预测", "成因": "预测误差（现货价格预测 vs 完美预见）",
-                 "mwh": None, "cny": std_arb - fc_arb})
-    rows.append({"偏差区间": "Δ策略与预测", "成因": "申报策略选择（留电/SOC/保守度）",
-                 "mwh": None, "cny": fc_arb - nom_arb})
+    nom_arb = float(nominated["arb_cny"].sum())
+    nom_dis = float(nominated["dis_mwh"].sum())
+    rows.append({"偏差区间": seg, "成因": "预测误差（预测最优 − 投资标准）",
+                 "mwh": None, "cny": fc_arb - std_arb})
+    rows.append({"偏差区间": seg, "成因": "申报策略选择（申报 − 预测最优）",
+                 "mwh": None, "cny": nom_arb - fc_arb})
+    rows.append({"偏差区间": seg, "成因": "容量补偿（Δ放电量 × 补偿单价）",
+                 "mwh": nom_dis - std_dis, "cny": _wf_tot(seg, "cap_cny")})
 
-    # --- Δ出清校核: 日前未中标 + 实时校核 (+ SOC校核 informational) ---
-    mwh, cny = _diff_sum("nominated_mw", "da_cleared_mw")
-    rows.append({"偏差区间": "Δ出清校核", "成因": "日前未中标（申报 vs 日前出清）",
+    # --- Δ出清校核: 日前未中标 + 实时校核 + SOC校核 + 容量补偿 + 残差 ---
+    seg = "Δ出清校核"
+    clr_dis = float(cleared["dis_mwh"].sum()) if not cleared.empty else 0.0
+    mwh, cny = _diff_sum("da_cleared_mw", "nominated_mw")
+    rows.append({"偏差区间": seg, "成因": "日前未中标（日前出清 − 申报）",
                  "mwh": mwh, "cny": cny})
-    mwh2, cny2 = _diff_sum("da_cleared_mw", "rt_cleared_mw")
-    rows.append({"偏差区间": "Δ出清校核", "成因": "实时校核（日前出清 vs 实时出清）",
+    mwh2, cny2 = _diff_sum("rt_cleared_mw", "da_cleared_mw")
+    rows.append({"偏差区间": seg, "成因": "实时校核（实时出清 − 日前出清）",
                  "mwh": mwh2, "cny": cny2})
-    soc_mwh, soc_cny = 0.0, 0.0
-    for (asset, month), g in df.groupby(["asset", "month"]):
-        m = g[(g["soc_pct"] >= 95.0) & (g["rt_cleared_mw"] < -0.5)]
-        soc_mwh += float((-m["rt_cleared_mw"] * 0.25).sum())
-        soc_cny += float((-m["rt_cleared_mw"] * 0.25 * m["price_cny_mwh"]).sum())
-    rows.append({"偏差区间": "Δ出清校核", "成因": "　其中：SOC校核（soc≥95% 仍出清充电）",
+    if _data_ok("soc_pct", "rt_cleared_mw"):
+        soc_mwh, soc_cny = 0.0, 0.0
+        for (asset, month), g in df.groupby(["asset", "month"]):
+            m = g[(g["soc_pct"] >= 95.0) & (g["rt_cleared_mw"] < -0.5)]
+            soc_mwh += float((-m["rt_cleared_mw"] * 0.25).sum())
+            soc_cny += float((m["rt_cleared_mw"] * 0.25 * m["price_cny_mwh"]).sum())
+    else:
+        soc_mwh, soc_cny = None, None
+    rows.append({"偏差区间": seg, "成因": "　其中：SOC校核（soc≥95% 仍出清充电）",
                  "mwh": soc_mwh, "cny": soc_cny})
+    rows.append({"偏差区间": seg, "成因": "容量补偿（Δ放电量 × 补偿单价）",
+                 "mwh": clr_dis - nom_dis, "cny": _wf_tot(seg, "cap_cny")})
+    arb_resid = _wf_tot(seg, "arb_cny") - (cny or 0.0) - (cny2 or 0.0)
+    rows.append({"偏差区间": seg, "成因": "残差（价格基差/出清降级调整）",
+                 "mwh": None, "cny": arb_resid})
 
-    # --- Δ执行偏差: 红绿灯 + 设备非响应 + residual ---
+    # --- Δ执行与费用: 红绿灯 + 非响应 + 调度残差 + 容量补偿 + 费用 + 基差残差 ---
+    seg = "Δ执行与费用"
     from apps.asset_risk.tab_diagnostics import restriction_monthly, find_defect_events
-    rest = restriction_monthly(df)
-    rw_cny = float(rest["gap_cny"].sum())
-    rw_mwh = float(rest["gap_dis_mwh"].sum() + abs(rest["gap_chg_mwh"].sum()))
-    events = find_defect_events(df)
-    def_cny = float(events["lost_cny"].sum()) if not events.empty else 0.0
-    def_mwh = float(events["lost_mwh"].abs().sum()) if not events.empty else 0.0
-    gap = exec_gap_monthly(df)
-    total_exec_cny = float((gap["dis_gap_cny"] + gap["chg_gap_cny"]).sum())
-    total_exec_mwh = float((gap["dis_gap_mwh"].abs() + gap["chg_gap_mwh"].abs()).sum())
-    rows.append({"偏差区间": "Δ执行偏差", "成因": "红绿灯限制窗口（仅充电/仅放电时段）",
-                 "mwh": rw_mwh, "cny": rw_cny})
-    rows.append({"偏差区间": "Δ执行偏差", "成因": "设备非响应事件（出清≠0 实际≈0）",
-                 "mwh": def_mwh, "cny": def_cny})
-    rows.append({"偏差区间": "Δ执行偏差", "成因": "阻塞/调度核减/涉网试验（残差）",
-                 "mwh": total_exec_mwh - rw_mwh - def_mwh,
-                 "cny": total_exec_cny - rw_cny - def_cny})
+    act_dis = float(actual["dis_mwh"].sum()) if not actual.empty and "dis_mwh" in actual.columns else 0.0
+    if _data_ok("restriction", "rt_cleared_mw", "actual_mw"):
+        rest = restriction_monthly(df)
+        rw_cny = float(rest["gap_cny"].sum())
+        rw_mwh = float(rest["gap_dis_mwh"].sum() + abs(rest["gap_chg_mwh"].sum()))
+    else:
+        rw_cny, rw_mwh = None, None
+    if _data_ok("actual_mw", "rt_cleared_mw"):
+        events = find_defect_events(df)
+        def_cny = float(events["lost_cny"].sum()) if not events.empty else 0.0
+        def_mwh = float(events["lost_mwh"].abs().sum()) if not events.empty else 0.0
+        gap = exec_gap_monthly(df)
+        total_exec_cny = float((gap["dis_gap_cny"] + gap["chg_gap_cny"]).sum())
+        total_exec_mwh = float((gap["dis_gap_mwh"].abs() + gap["chg_gap_mwh"].abs()).sum())
+    else:
+        def_cny = def_mwh = total_exec_cny = total_exec_mwh = None
+    rows.append({"偏差区间": seg, "成因": "红绿灯限制窗口（仅充电/仅放电时段）",
+                 "mwh": rw_mwh, "cny": (-rw_cny if rw_cny is not None else None)})
+    rows.append({"偏差区间": seg, "成因": "设备非响应事件（出清≠0 实际≈0）",
+                 "mwh": def_mwh, "cny": (-def_cny if def_cny is not None else None)})
+    res_mwh = (total_exec_mwh - (rw_mwh or 0.0) - (def_mwh or 0.0)) if total_exec_mwh is not None else None
+    res_cny = (total_exec_cny - (rw_cny or 0.0) - (def_cny or 0.0)) if total_exec_cny is not None else None
+    rows.append({"偏差区间": seg, "成因": "阻塞/调度核减/涉网试验（调度残差）",
+                 "mwh": res_mwh, "cny": (-res_cny if res_cny is not None else None)})
+    rows.append({"偏差区间": seg, "成因": "容量补偿（Δ放电量 × 补偿单价）",
+                 "mwh": act_dis - clr_dis, "cny": _wf_tot(seg, "cap_cny")})
+    rows.append({"偏差区间": seg, "成因": "系统运行费+线损（仅存在于结算单）",
+                 "mwh": None, "cny": _wf_tot(seg, "fee_cny")})
+    rows.append({"偏差区间": seg, "成因": "其他费用（仅存在于结算单）",
+                 "mwh": None, "cny": _wf_tot(seg, "other_cny")})
+    basis_resid = _wf_tot(seg, "arb_cny") + (total_exec_cny or 0.0)
+    rows.append({"偏差区间": seg, "成因": "结算口径/价格基差（残差）",
+                 "mwh": None, "cny": basis_resid})
 
     out = pd.DataFrame(rows)
-    out["金额_fmt"] = out["cny"].map(lambda v: f"¥{v:,.0f}")
+    out["金额_fmt"] = out["cny"].map(lambda v: "无数据" if pd.isna(v) else f"¥{v:,.0f}")
     out["电量_fmt"] = out["mwh"].map(lambda v: "—" if pd.isna(v) else f"{v:,.0f}")
     return out[["偏差区间", "成因", "电量_fmt", "金额_fmt", "mwh", "cny"]]
 
@@ -643,13 +692,14 @@ def render_waterfall(engine):
 
     # --- 偏差归因 (loss breakdown by cause) ---
     st.markdown("#### 偏差归因（按成因分解损失）")
-    attr = attribution_rows(df, bench, bench_rows)
+    attr = attribution_rows(df, wf, bench, nominated, cleared, actual, bench_rows)
     st.dataframe(attr[["偏差区间", "成因", "电量_fmt", "金额_fmt"]]
                  .rename(columns={"电量_fmt": "电量 (MWh)", "金额_fmt": "金额"}),
                  use_container_width=True, hide_index=True)
-    st.caption("归因合计与瀑布各偏差段一致：预测误差+申报策略=Δ策略与预测；日前未中标+实时校核=Δ出清校核；"
-               "红绿灯限制+设备非响应+残差=Δ执行偏差。预测最优基于 ols_rt_time_v1（小时级，与实际价差结算；"
-               "详见口径与假设）。")
+    st.caption("各段行合计 ≡ 上方瀑布对应段（正=增益，负=损失）：套利成因=预测误差+申报策略；"
+               "容量补偿行 = Δ放电量 × 补偿单价；系统运行费/线损/其他费用仅存在于结算单（实际段）。"
+               "成因列为链数据全缺时显示 无数据（9 月起自动申报链只补齐出清电量）。"
+               "预测最优基于 ols_rt_time_v1（小时级，与实际价差结算；详见口径与假设）。")
 
     with st.expander("偏差定义（复盘）"):
         st.markdown(_DEFINITIONS_MD)
