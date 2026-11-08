@@ -13,8 +13,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from services.exchange_reports.fundamentals_bridge import (  # noqa: E402
-    SOURCE, build_rows,
+    SOURCE, build_rows, _plausibility_split,
 )
+
+
+class _StubCur:
+    """Answers the two guard queries from canned refs: latest= for the
+    capacity LIMIT-1 query, trailing= for the volume median query."""
+    def __init__(self, latest=None, trailing=()):
+        self._latest = latest
+        self._trailing = list(trailing)
+    def execute(self, sql, params):
+        pass
+    def fetchone(self):
+        return (self._latest,) if self._latest is not None else None
+    def fetchall(self):
+        return [(v,) for v in self._trailing]
 
 
 FULL = {
@@ -77,3 +91,40 @@ def test_month_period_source():
         assert r.month == date(2026, 9, 15)  # report_month passes through as-is
         assert r.period == "month"
         assert r.source == SOURCE
+
+
+def _cap_row(v):
+    return build_rows({"installed_capacity_gw": v}, "安徽", date(2026, 9, 1))[0]
+
+
+def _gen_row(v):
+    return build_rows({"thermal_volume_gwh": v}, "安徽", date(2026, 9, 1))[0]
+
+
+def test_capacity_mom_jump_guarded():
+    # refs come back in table units (万千瓦): 7000 → 9000 = +28.6% MoM
+    clean, suspect = _plausibility_split([_cap_row(90.0)], _StubCur(latest=7000.0))
+    assert clean == [] and len(suspect) == 1
+
+
+def test_capacity_normal_growth_clean():
+    clean, suspect = _plausibility_split([_cap_row(73.5)], _StubCur(latest=7000.0))
+    assert len(clean) == 1 and suspect == []  # 7350 vs 7000: +5% MoM — fine
+
+
+def test_volume_outlier_guarded():
+    # 安徽 thermal monthly ~250 亿kWh; the 2026-06 extraction (102,721 GWh →
+    # 1,027 亿kWh) must be held
+    clean, suspect = _plausibility_split([_gen_row(102721.0)], _StubCur(trailing=[250, 260, 240]))
+    assert clean == [] and len(suspect) == 1
+
+
+def test_volume_in_band_clean():
+    clean, suspect = _plausibility_split([_gen_row(24000.0)], _StubCur(trailing=[250, 260, 240]))
+    assert len(clean) == 1 and suspect == []
+
+
+def test_no_reference_is_clean():
+    rows = [_cap_row(68.31), _gen_row(25000.0)]
+    clean, suspect = _plausibility_split(rows, _StubCur())
+    assert len(clean) == 2 and suspect == []

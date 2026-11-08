@@ -49,6 +49,59 @@ _MAPPING = {
 
 _UNITS = {"capacity": "万千瓦", "generation": "亿千瓦时", "interprov": "亿千瓦时"}
 
+# ── Plausibility guards ───────────────────────────────────────────────────────
+# LLM extraction of these PDFs is noisy (累计/本月 column mixups, scanned-page
+# OCR): 安徽 2026-06 thermal_volume came out at 4× monthly scale, and capacity
+# swung 78.9 → 73.6 GW between extracted months. Guarded rows are written as
+# conflict (visible in DB, never surface in confirmed-only tab reads).
+_CAP_MAX_MOM_JUMP = 0.20   # capacity fleets don't move >20% month-over-month
+_VOL_BAND = (0.3, 3.0)     # generation/interprov vs trailing confirmed median
+_VOL_LOOKBACK = 6          # months of confirmed history for the median
+
+
+def _latest_confirmed(cur, r: FundRow) -> Optional[float]:
+    cur.execute(
+        """SELECT value FROM marketdata.province_fundamentals_monthly
+           WHERE province=%s AND section=%s AND metric=%s AND period='month'
+             AND status='confirmed' AND month < %s
+           ORDER BY month DESC LIMIT 1""",
+        (r.province, r.section, r.metric, r.month),
+    )
+    got = cur.fetchone()
+    return float(got[0]) if got and got[0] is not None else None
+
+
+def _trailing_median(cur, r: FundRow) -> Optional[float]:
+    cur.execute(
+        """SELECT value FROM marketdata.province_fundamentals_monthly
+           WHERE province=%s AND section=%s AND metric=%s AND period='month'
+             AND status='confirmed' AND month < %s
+           ORDER BY month DESC LIMIT %s""",
+        (r.province, r.section, r.metric, r.month, _VOL_LOOKBACK),
+    )
+    vals = sorted(float(v[0]) for v in cur.fetchall() if v[0] is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    return (vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2)
+
+
+def _plausibility_split(rows: list[FundRow], cur) -> tuple[list[FundRow], list[FundRow]]:
+    clean, suspect = [], []
+    for r in rows:
+        if r.section == "capacity":
+            ref = _latest_confirmed(cur, r)
+            if ref and abs(r.value / ref - 1) > _CAP_MAX_MOM_JUMP:
+                suspect.append(r)
+                continue
+        else:
+            med = _trailing_median(cur, r)
+            if med and not (_VOL_BAND[0] * med <= r.value <= _VOL_BAND[1] * med):
+                suspect.append(r)
+                continue
+        clean.append(r)
+    return clean, suspect
+
 
 def build_rows(metrics: dict, province: str, month: date) -> list[FundRow]:
     """Map one exchange_monthly_metrics row (as a dict) to FundRows."""
@@ -99,8 +152,14 @@ def bridge_report(province: str, report_month: date, pg_url: str) -> dict:
         metrics = dict(zip(_MAPPING.keys(), got))
         rows = build_rows(metrics, province, report_month)
         rows = _filter_existing(rows, cur)
-        stats = write_rows(rows, pg_url=pg_url)
+        clean, suspect = _plausibility_split(rows, cur)
+        stats = write_rows(clean, pg_url=pg_url)
         stats["cells"] = len(rows)
+        stats["guarded"] = 0
+        if suspect:
+            s2 = write_rows(suspect, pg_url=pg_url, default_status="conflict")
+            stats["guarded"] = len(suspect)
+            stats["written"] += s2["written"]
         return stats
     finally:
         conn.close()
