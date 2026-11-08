@@ -406,3 +406,15 @@ def test_benchmark_leg_no_fallback_when_cleared_complete(sqlite_engine, lp_solve
     assert res["days_solved"] == 1
     assert res["arb_cny"] > 0
     assert res["note"] == ""
+
+
+def test_stage_arbitrage_empty_frame_keeps_columns():
+    """Empty selection (asset filter leaves nothing) must return a columned
+    empty frame — a columnless one crashes the cap line with KeyError."""
+    empty = pd.DataFrame(columns=["asset", "month", "nominated_mw", "price_cny_mwh"])
+    out = stage_arbitrage(empty, "nominated_mw")
+    assert list(out.columns) == ["asset", "month", "dis_mwh", "chg_mwh", "arb_cny"]
+    assert len(out) == 0
+    # the cap line must not crash on it
+    capped = stage_capacity(out["dis_mwh"], out["asset"])
+    assert len(capped) == 0

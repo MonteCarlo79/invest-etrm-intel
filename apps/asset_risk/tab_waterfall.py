@@ -118,6 +118,9 @@ def stage_arbitrage(df: pd.DataFrame, mw_col: str) -> pd.DataFrame:
 
     df columns: asset, month, <mw_col> (MW, + = discharge), price_cny_mwh.
     arb_cny = Σ mw × 0.25 × price (NaN price skipped; MWh counted regardless).
+    Empty input returns a columned empty frame — a columnless one crashes
+    callers on df["dis_mwh"] (查干哈达 2025-09: month existed via other assets,
+    nothing left after the asset filter → KeyError on the cap line).
     """
     rows = []
     for (asset, month), g in df.groupby(["asset", "month"]):
@@ -127,6 +130,8 @@ def stage_arbitrage(df: pd.DataFrame, mw_col: str) -> pd.DataFrame:
         arb = float((mw * 0.25 * g["price_cny_mwh"]).sum())
         rows.append({"asset": asset, "month": month, "dis_mwh": dis_mwh,
                      "chg_mwh": chg_mwh, "arb_cny": arb})
+    if not rows:
+        return pd.DataFrame(columns=["asset", "month", "dis_mwh", "chg_mwh", "arb_cny"])
     return pd.DataFrame(rows)
 
 
@@ -605,6 +610,13 @@ def render_waterfall(engine):
     if sel_asset != "全部资产":
         df = df[df["asset"] == sel_asset]
         assets = assets[assets["name"] == sel_asset]
+
+    if df.empty:
+        # 查干哈达 2025-09: month exists in the chain via other assets — after the
+        # asset filter nothing remains and stage_arbitrage returned a columnless
+        # frame → KeyError: 'dis_mwh' on the cap line.
+        st.info("所选资产在所选月份没有调度链数据（该月链条由其他资产贡献）。")
+        return
 
     # --- legs ---
     nominated = stage_arbitrage(df, "nominated_mw")
