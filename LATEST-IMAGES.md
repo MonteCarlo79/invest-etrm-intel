@@ -25,7 +25,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 
 | Service | ECR repo | Current image | TD | Deployed | By / notes |
 |---|---|---|---|---|---|
-| mengxi-dashboard | `bess-mengxi-dashboard` | **v51** (8c6f06b9fb18) | **66** | 2026-11-08 | this session: Book-tab revival — live actuals (bess_actual_96) + asset_book/bess_context rewires off dead feeds + apps/trading + decision_models/monitoring un-excluded from the image; jq-swap td:63→66 (v50 superseded pre-deploy) |
+| mengxi-dashboard | `bess-mengxi-dashboard` | **v53** (9ae414a1a886) | **68** | 2026-11-09 | this session: service aligned to the rules revision (v53: batch price chain + range-node expansion); stale pre-fix ladder rows cleared (88 deleted); jq-swap td:66→68 |
 | deal-structurer | `bess-platform-deal-structurer` | **v32** (02fff159ad2a) | **36** | 2026-10-28 | this session: hotfix 2 — function-local `import pandas` inside render() → UnboundLocalError on 价值筛选 (deferred review minor that wasn't cosmetic); hoisted to module top + regression test pins the rule on all tab files; in-container verified pre-deploy |
 | bess-map (Quant) | `bess-map` | **v84** (3c0715da55d7) | **123** | 2026-10-23 | this session: geo maps as inline base64 PNG (st.pyplot media-stream fix) |
 | hermes | `bess-platform-hermes` | **v20261108d** (c8be77a8a49e) | **200** | 2026-11-08 | this session: spot monthly RT/DA volume swap guard (35f3a4b2); delta FROM v20261108c; 31 env preserved |
