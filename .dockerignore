@@ -138,6 +138,10 @@ apps/bess-inner-mongolia/
 !db/ddl/marketdata/option_value_snapshot.sql
 !db/ddl/marketdata/option_opportunity_cards.sql
 
+# mengxi-dashboard attribution revival (batch + daily attribution)
+!services/decision_models/
+!services/monitoring/
+
 # asset-risk image exceptions
 !libs/risk/
 !libs/settlement/
