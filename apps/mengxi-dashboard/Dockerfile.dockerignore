@@ -61,16 +61,15 @@ apps/ercot-market/
 apps/pjm-market/
 
 # Services not used by mengxi-dashboard
+# (decision_models + monitoring re-included 2026-11-08: attribution revival)
 services/bess_inner_mongolia/
 services/bess-inner-mongolia/
 services/bess_mcp/
 services/data_ingestion/
-services/decision_models/
 services/document_intake/
 services/lingfeng/
 services/loader/
 services/market_fundamentals/
-services/monitoring/
 services/portal/
 services/spot_ingest/
 services/spot_mcp/
