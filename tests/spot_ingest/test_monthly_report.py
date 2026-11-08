@@ -187,3 +187,42 @@ def test_ingest_full_flow():
     assert result["warnings"] == []
     assert mock_up.call_args[0][2] == dt.date(2026, 6, 1)
     assert mock_up.call_args[0][3] == "电力现货市场价格与运行月报（2026年6月）.pdf"
+
+
+# ── RT/DA volume swap guard (2026-09 report: 表2 column order is 实时 then 日前,
+#    but extraction filed 实时电量 under da_volume and vice versa) ─────────────
+# Real 2026-09 广东/山东 figures from 表2. Coverage % = 中长期电量 / 实时电量.
+
+def test_validate_swaps_rt_da_volumes_when_coverage_matches_da():
+    row = _province(province_cn="广东", mlt_volume_yi_kwh=233.65, mlt_coverage_pct=49.86,
+                    rt_volume_yi_kwh=511.17, da_volume_yi_kwh=468.57)
+    data = {"national": _data()["national"], "provinces": [row] * 1 + [_province() for _ in range(24)]}
+    warnings = validate_monthly_data(data)
+    gd = data["provinces"][0]
+    assert gd["rt_volume_yi_kwh"] == 468.57
+    assert gd["da_volume_yi_kwh"] == 511.17
+    assert any("广东" in w and "对调" in w for w in warnings)
+
+
+def test_validate_swaps_shandong_tiny_da_volume():
+    row = _province(mlt_volume_yi_kwh=194.69, mlt_coverage_pct=61.59,
+                    rt_volume_yi_kwh=0.19, da_volume_yi_kwh=316.09)
+    data = {"national": _data()["national"], "provinces": [row] + [_province() for _ in range(24)]}
+    validate_monthly_data(data)
+    assert data["provinces"][0]["rt_volume_yi_kwh"] == 316.09
+    assert data["provinces"][0]["da_volume_yi_kwh"] == 0.19
+
+
+def test_validate_keeps_correct_volumes():
+    row = _province(province_cn="广东", mlt_volume_yi_kwh=233.65, mlt_coverage_pct=49.86,
+                    rt_volume_yi_kwh=468.57, da_volume_yi_kwh=511.17)
+    data = {"national": _data()["national"], "provinces": [row] + [_province() for _ in range(24)]}
+    assert validate_monthly_data(data) == []
+    assert data["provinces"][0]["rt_volume_yi_kwh"] == 468.57
+
+
+def test_validate_no_swap_when_coverage_inputs_missing():
+    row = _province(mlt_volume_yi_kwh=None, rt_volume_yi_kwh=0.19, da_volume_yi_kwh=316.09)
+    data = {"national": _data()["national"], "provinces": [row] + [_province() for _ in range(24)]}
+    validate_monthly_data(data)
+    assert data["provinces"][0]["rt_volume_yi_kwh"] == 0.19

@@ -83,6 +83,10 @@ Return ONLY valid JSON, no markdown:
 Rules:
 - Volumes in 亿千瓦时, prices in 元/千瓦时, percentages as numbers (4.82 for 4.82%). Negative MoM keeps its sign.
 - mlt_volume_yi_kwh = 中长期市场成交电量 (NOT 合约覆盖电量); mlt_coverage_pct = 中长期合约覆盖电量占比.
+- 表2 column order per row is: 中长期成交电量, 中长期成交均价, 实时市场成交电量, 中长期合约覆盖电量占比,
+  实时市场成交均价, 较燃煤基准价涨幅, 实时环比涨幅, 日前(预出清)成交电量, 日前(预出清)成交均价, 日前环比涨幅.
+  The 3rd number is rt_volume_yi_kwh and the 8th is da_volume_yi_kwh — do not swap them.
+  较燃煤基准价涨幅 has no output field; skip it.
 - "/" or unreadable/missing → null, never 0.
 - SKIP 表1 省间现货市场 (四川主网/灵绍配套电源/天中配套电源 etc. belong to 表1 — exclude them).
 - SKIP chart captions (图 N …) and narrative paragraphs.
@@ -152,6 +156,21 @@ def _clean_number(record: dict, field: str, lo: float, hi: float, label: str, wa
         record[field] = val
 
 
+def _fix_rt_da_volume_swap(row: dict, label: str, warnings: list[str]) -> None:
+    """表2 defines 合约覆盖占比 = 中长期电量 / 实时电量. If the stored volumes fit
+    that identity only with rt/da exchanged, the extraction mis-columned them
+    (2026-09: every row swapped) — exchange them back."""
+    mlt, cov = row.get("mlt_volume_yi_kwh"), row.get("mlt_coverage_pct")
+    rt, da = row.get("rt_volume_yi_kwh"), row.get("da_volume_yi_kwh")
+    if None in (mlt, cov, rt, da) or rt <= 0 or da <= 0:
+        return
+    err_rt = abs(mlt / rt * 100 - cov)
+    err_da = abs(mlt / da * 100 - cov)
+    if err_da <= 1.0 and err_da < err_rt:
+        row["rt_volume_yi_kwh"], row["da_volume_yi_kwh"] = da, rt
+        warnings.append(f"{label}: 实时/日前电量列对调已纠正（覆盖率校验）")
+
+
 def validate_monthly_data(data: dict) -> list[str]:
     """Validate in place. Returns warnings. Raises ValueError on hard failure."""
     warnings: list[str] = []
@@ -182,6 +201,7 @@ def validate_monthly_data(data: dict) -> list[str]:
         for f in _PCT_FIELDS:
             _clean_number(row, f, -1000.0, 1000.0, cn, warnings)
         _clean_number(row, "mlt_coverage_pct", 0.0, 400.0, cn, warnings)
+        _fix_rt_da_volume_swap(row, cn, warnings)
         row["province_cn"] = cn  # write back stripped name — upsert keys on raw value
         kept.append(row)
     data["provinces"] = kept
