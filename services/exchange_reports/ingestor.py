@@ -642,6 +642,15 @@ def ingest_report(
             except Exception as exc:
                 logger.error("Metrics extraction failed for %s: %s", filename, exc)
 
+            # Bridge into the Market Fundamentals tab's long table (S1/S2/S6).
+            # Best-effort; files win on overlap so this never re-states file data.
+            try:
+                from services.exchange_reports.fundamentals_bridge import bridge_report
+                _b = bridge_report(province, report_month, pg_url)
+                logger.info("Fundamentals bridge %s %s → %s", province, report_month, _b)
+            except Exception as exc:
+                logger.warning("Fundamentals bridge failed for %s: %s", filename, exc)
+
         logger.info(
             "Ingested %s: province=%s month=%s kb_doc_id=%s",
             filename, province, report_month, kb_doc_id,
