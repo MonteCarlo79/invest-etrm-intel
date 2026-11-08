@@ -1,0 +1,10 @@
+# Delta build for the fundamentals bridge (2026-11-08).
+# Base FROM current live (v20261102b = td:196); overlay the changed trees:
+# - exchange_reports: fundamentals_bridge.py (new) + ingestor.py hook
+# - province_fundamentals: whole package — the bridge imports store/models,
+#   and no live hermes image has provably carried it yet (final-review
+#   Critical #1 from the fundamentals-tab build: carry it atomically)
+FROM 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-hermes:v20261102b
+
+COPY services/exchange_reports/      /app/services/exchange_reports/
+COPY services/province_fundamentals/ /app/services/province_fundamentals/
