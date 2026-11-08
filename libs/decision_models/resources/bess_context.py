@@ -147,7 +147,28 @@ def load_actual_prices_15min(
             if n_null:
                 notes.append(f"actual_prices_15min: {n_null} null prices for {asset_code}")
             return df, notes
-        notes.append(f"actual_prices_15min: filled table empty for node {node} "
+        # Second leg: the RAW nodal table (exchange/fengxing daily loads) —
+        # covers history the filled table doesn't (filled starts 2026-10).
+        raw_sql = """
+            SELECT datetime AS time, node_price AS price
+            FROM marketdata.md_rt_nodal_price
+            WHERE node_name = %(node)s
+              AND datetime >= %(start_ts)s
+              AND datetime < %(end_ts)s
+            ORDER BY datetime
+        """
+        df, err = _run_query_safe(raw_sql, params_f)
+        if err:
+            notes.append(f"actual_prices_15min(raw): query failed — {err}")
+            df = pd.DataFrame()
+        elif not df.empty:
+            df["time"] = pd.to_datetime(df["time"])
+            df["price"] = pd.to_numeric(df["price"], errors="coerce")
+            n_null = int(df["price"].isna().sum())
+            if n_null:
+                notes.append(f"actual_prices_15min: {n_null} null prices for {asset_code} (raw)")
+            return df, notes
+        notes.append(f"actual_prices_15min: filled+raw empty for node {node} "
                      f"{date_from}..{date_to} — falling back to canon")
 
     sql = """

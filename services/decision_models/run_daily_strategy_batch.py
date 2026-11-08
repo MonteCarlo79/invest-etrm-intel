@@ -95,8 +95,8 @@ def _ensure_dispatch_table() -> None:
 
 def _has_prices(asset_code: str, trade_date: date) -> bool:
     """True when prices exist for this asset/date — filled nodal table first
-    (canon.nodal_rt_price_15min died 2026-09-24; the filled table carries the
-    same node's prices at the station's registry node), canon as fallback."""
+    (complete days from 2026-10), then raw md_rt_nodal_price (history back to
+    2025-05), then canon.nodal_rt_price_15min (died 2026-09-24)."""
     try:
         from libs.decision_models.resources.bess_context import _run_query_safe
         import pandas as pd
@@ -107,22 +107,25 @@ def _has_prices(asset_code: str, trade_date: date) -> bool:
             node = station.price_nodes[0] if station.price_nodes else None
         except Exception:
             node = None
+        end_d = str(trade_date + pd.Timedelta(days=1))[:10]
         if node:
-            sql = """
-                SELECT 1
-                FROM marketdata.md_mengxi_nodal_price_96_filled
-                WHERE node_name = %(node)s
-                  AND metric_time >= %(start_ts)s
-                  AND metric_time < %(end_ts)s
-                LIMIT 1
-            """
-            df, err = _run_query_safe(sql, {
-                "node": node,
-                "start_ts": f"{trade_date} 00:00:00",
-                "end_ts": f"{str(trade_date + pd.Timedelta(days=1))[:10]} 00:00:00",
-            })
-            if err is None and not df.empty:
-                return True
+            for table, tscol in (("md_mengxi_nodal_price_96_filled", "metric_time"),
+                                 ("md_rt_nodal_price", "datetime")):
+                sql = f"""
+                    SELECT 1
+                    FROM marketdata.{table}
+                    WHERE node_name = %(node)s
+                      AND {tscol} >= %(start_ts)s
+                      AND {tscol} < %(end_ts)s
+                    LIMIT 1
+                """
+                df, err = _run_query_safe(sql, {
+                    "node": node,
+                    "start_ts": f"{trade_date} 00:00:00",
+                    "end_ts": f"{end_d} 00:00:00",
+                })
+                if err is None and not df.empty:
+                    return True
         sql = """
             SELECT 1
             FROM canon.nodal_rt_price_15min
