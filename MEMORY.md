@@ -454,3 +454,28 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - 若仍有市场失败 → 该省页面选择器单独看
 - 安徽 LingFeng 数据其实从未缺 — 页面一直好着, 断的是采集器; 若 patrol 显示回补完成, 安徽 capture 序列自动延伸
 - 待定: hermes 下一窗口部署需原子携带 record_fact.py + intake_routes.py + intake_extract.py + province_fundamentals (final review Critical #1, 自上会话遗留)
+
+## Session Summary, 2026-11-08 (fundamentals bridge + watcher repair arc)
+**Worked on:** 安徽 fundamentals 月度缺口 → 发现 hermes exchange watcher 已在每日抽取 → 建桥接 → 磁盘-vs-DB 对账 → 修复 watcher 两类沉默失败 → 冀北误挂清理。
+
+**Completed:**
+- **fundamentals bridge** (services/exchange_reports/fundamentals_bridge.py): staging.exchange_monthly_metrics → marketdata.province_fundamentals_monthly; GW→万千瓦, GWh→亿千瓦时; demand 不桥 (总成交/全社会用电口径歧义); files-win overlap guard; 合理值守卫 (容量 MoM ±20%, 电量 0.3–3× 滚动中位 → conflict 不落 confirmed)。hook 进 ingest_report。16200bd9 + acd87533, 11 测试
+- **hermes 三连 delta**: td:197 (bridge + province_fundamentals 包入镜像, Critical-#1 原子性) → td:198 (infer_report_month 裸 YYYYMM + KB-reroute 化石修复) → td:199 (pymupdf/fitz 入镜像 — 扫描件 OCR 回退复活; 省份映射 +8 含冀北)
+- **bridge_pending 回填**: 269 省-月, 1209 格写入; 山东/广西/福建/蒙西 2025 全年月度序列从无到有; 安徽 6月发电累计污染被守卫拦为 conflict (4格), 9月 2 格守卫
+- **磁盘对账**: data/exchange-monthly-reports 147 个 2026 省-月 PDF, 19 个从未入 metrics — 全部为 `省-2026MM-披露-*` 聚合批次命名 (无分隔符) + KB 一次改道永久跳过 的联合陷阱
+- **watcher catch-up**: 24 新摄入 0 失败 (云南 2026-10 首个 10月报), 31 正确去重
+- **冀北误挂河北 清理**: 两阶段 (v1 撞 unique 回滚 → v2 删空行改指向); 空 metrics 行已删, 报告归冀北, 河北下无误写格
+
+**In progress:** none.
+
+**Decisions made:**
+- 桥接不做 demand (口径歧义), 只 capacity/generation/interprov
+- 守卫宁拦错不放过: conflict 行可见可查, confirmed 必须干净
+- 扫描件缺页真相 = fitz 缺失 (安徽 7/8月全 NULL 的根因), 不是抽取提示词问题 — 提示词修复降级为可选
+- delta 镜像三连叠 (v20261108→b→c), 每层 in-image import 验证
+
+**Next session:**
+- 安徽 2026-07/08 重抽 (fitz 已修, 重跑那两个 PDF 即可补齐)
+- 可选: extractor 提示词 本月/累计 消歧; watcher → data_ops_log 入 patrol 视野
+- 明日 06:20 UTC watcher 首跑 (td:199) 应零候选残留 — patrol 卡验证
+- fundamentals tab 现自动逐月推进; 10月报各省 11月中旬发布后自动落库
