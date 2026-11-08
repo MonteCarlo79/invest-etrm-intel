@@ -94,10 +94,35 @@ def _ensure_dispatch_table() -> None:
 
 
 def _has_prices(asset_code: str, trade_date: date) -> bool:
-    """Return True if canon.nodal_rt_price_15min has at least one row for this asset/date."""
+    """True when prices exist for this asset/date — filled nodal table first
+    (canon.nodal_rt_price_15min died 2026-09-24; the filled table carries the
+    same node's prices at the station's registry node), canon as fallback."""
     try:
         from libs.decision_models.resources.bess_context import _run_query_safe
         import pandas as pd
+        node = None
+        try:
+            from libs.trading_book.registry import get_station
+            station = get_station(asset_code)
+            node = station.price_nodes[0] if station.price_nodes else None
+        except Exception:
+            node = None
+        if node:
+            sql = """
+                SELECT 1
+                FROM marketdata.md_mengxi_nodal_price_96_filled
+                WHERE node_name = %(node)s
+                  AND metric_time >= %(start_ts)s
+                  AND metric_time < %(end_ts)s
+                LIMIT 1
+            """
+            df, err = _run_query_safe(sql, {
+                "node": node,
+                "start_ts": f"{trade_date} 00:00:00",
+                "end_ts": f"{trade_date + pd.Timedelta(days=1)} 00:00:00",
+            })
+            if err is None and not df.empty:
+                return True
         sql = """
             SELECT 1
             FROM canon.nodal_rt_price_15min
@@ -167,8 +192,8 @@ def run_for_date(
         # Quick price availability check before starting a multi-minute LP solve.
         if not _has_prices(asset_code, trade_date):
             logger.info(
-                "SKIP %s %s — no rows in canon.nodal_rt_price_15min; "
-                "run Canon ETL first",
+                "SKIP %s %s — no prices in the filled nodal table or canon; "
+                "check the price pipeline",
                 asset_code, trade_date,
             )
             continue
