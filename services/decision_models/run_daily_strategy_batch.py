@@ -105,6 +105,10 @@ def _has_prices(asset_code: str, trade_date: date) -> bool:
             from libs.trading_book.registry import get_station
             station = get_station(asset_code)
             node = station.price_nodes[0] if station.price_nodes else None
+            if node:
+                from services.bess_map.nodal_pf_daily import _expand_price_nodes
+                expanded = _expand_price_nodes([node])
+                node = expanded[0] if expanded else None
         except Exception:
             node = None
         end_d = str(trade_date + pd.Timedelta(days=1))[:10]

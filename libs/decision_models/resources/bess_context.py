@@ -121,6 +121,10 @@ def load_actual_prices_15min(
         from libs.trading_book.registry import get_station
         station = get_station(asset_code)
         node = station.price_nodes[0] if station.price_nodes else None
+        if node:
+            from services.bess_map.nodal_pf_daily import _expand_price_nodes
+            expanded = _expand_price_nodes([node])
+            node = expanded[0] if expanded else None  # registry ranges expand to members
     except Exception as exc:  # registry is authoritative; non-蒙西 codes pass through
         notes.append(f"actual_prices_15min: registry lookup failed — {exc}")
     if node:
