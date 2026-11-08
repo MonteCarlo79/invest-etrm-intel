@@ -1930,11 +1930,11 @@ st.divider()
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_overview, tab_spread, tab_heatmap, tab_intraday, tab_province, tab_dist, tab_geo, \
-tab_ic, tab_fundamentals, tab_agent, tab_news, tab_library, tab_jizhi, tab_supply, \
+tab_ic, tab_fundamentals, tab_monthly, tab_agent, tab_news, tab_library, tab_jizhi, tab_supply, \
 tab_forecast, tab_mgmt = st.tabs([
     _t("tab_overview"), _t("tab_spread"), _t("tab_heatmap"), _t("tab_intraday"),
     _t("tab_province"), _t("tab_dist"), _t("tab_geo"),
-    _t("tab_ic"), _t("tab_fundamentals"), _t("tab_agent"), _t("tab_news"),
+    _t("tab_ic"), _t("tab_fundamentals"), "现货月报", _t("tab_agent"), _t("tab_news"),
     "Library", "机制竞价", "供需结构", "价格预测", _t("tab_mgmt"),
 ])
 
@@ -2459,6 +2459,10 @@ with tab_geo:
 with tab_ic:
     import interconnector_tab
     interconnector_tab.render(_conn())
+
+with tab_monthly:
+    import monthly_tab
+    monthly_tab.render(_conn())
 
 
 # ── Tab 8: Market Fundamentals ───────────────────────────────────────────────
