@@ -1,0 +1,8 @@
+# Delta build for the watcher month-parse fix (2026-11-08, second delta).
+# Base FROM v20261108 (= td:197, fundamentals bridge); overlay the two files:
+# - ingestor.py: infer_report_month accepts bare YYYYMM (aggregate batch dumps)
+# - watcher.py: KB-known files re-enter candidates when their month parses
+FROM 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-hermes:v20261108
+
+COPY services/exchange_reports/ingestor.py /app/services/exchange_reports/ingestor.py
+COPY services/exchange_reports/watcher.py  /app/services/exchange_reports/watcher.py
