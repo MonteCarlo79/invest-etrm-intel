@@ -479,3 +479,23 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - 可选: extractor 提示词 本月/累计 消歧; watcher → data_ops_log 入 patrol 视野
 - 明日 06:20 UTC watcher 首跑 (td:199) 应零候选残留 — patrol 卡验证
 - fundamentals tab 现自动逐月推进; 10月报各省 11月中旬发布后自动落库
+
+## Session Summary, 2026-11-08
+**Worked on:** asset_risk 收益瀑布归因表与瀑布图一致性整改（用户报告查干哈达视图表图不符）+ 空选择崩溃修复；2 次部署 (v96/td:98, v97/td:99)。
+
+**Completed:**
+- **瀑布归因表重写 (12bcde1a)**: 三处断裂修复 — ① 套利两行符号与瀑布对齐（原表 std−fc/fc−nom 是图的负值）② 每段补容量补偿行（Δ放电量×单价）+ Δ执行补系统运行费/线损/其他费用行（用户截图里 ±37M/−5.1M 的大柱原本无对应行）③ 链数据全缺成因显示"无数据"而非假 ¥0（9月起自动申报链只补 rt_cleared，da_cleared/actual/restriction/soc 全 NaN）；残差行强制每段合计 ≡ 瀑布段（构造性对齐）。真实查干哈达 2026-09/10 数据验证：三段全部精确 tie（脚本 debug/verify_chaganhada_attribution.py，本机 RDS + HiGHS LP）
+- **空资产-月份组合崩溃 (cbbfb390)**: 查干哈达+2025-09 KeyError — 月份由他资产贡献、资产过滤后 df 空 → stage_arbitrage 返回无列空表。守卫提示 + 列化空表防御。94 tests
+- **部署**: v96/td:98 → v97/td:99，均 rollout 验证 + 启动日志干净
+
+**In progress:** none.
+
+**Decisions made:**
+- 归因表一切按瀑布符号约定（正=增益负=损失）；信息性子行（SOC校核）不计入段合计
+- 成因列缺数据时显示"无数据"（诚实缺口），不显示 ¥0
+- 残差行吸收价格基差/出清降级/结算口径差，保证表图恒等
+
+**Next session:**
+- 遗留待办不变：净市场化价差指标（储能口径）、bess-map/hermes-service psycopg[binary] 预防修、2025-08 下网扫描补录、老版统推 parser 售电侧提取
+- asset_risk 当前 v97/td:99；LATEST-IMAGES.md 两条部署记录未提交（同文件有并行编辑，留给对应 session）
+- 并行 session 动态：spot-market v58/td:159 + hermes td:200 已上（他人）；共享 index 第二条教训（stale-parent race）已被同行补进 memory
