@@ -16,6 +16,8 @@ COPY libs/ ./libs/
 COPY services/ ./services/
 COPY shared/ ./shared/
 COPY apps/mengxi-dashboard/ ./apps/mengxi-dashboard/
+# bess_context imports apps.trading.bess.mengxi.pnl_attribution.calc (ASSET_ALIAS_MAP)
+COPY apps/trading/ ./apps/trading/
 
 ENV PYTHONPATH=/app
 

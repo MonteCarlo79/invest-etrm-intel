@@ -119,7 +119,7 @@ def _has_prices(asset_code: str, trade_date: date) -> bool:
             df, err = _run_query_safe(sql, {
                 "node": node,
                 "start_ts": f"{trade_date} 00:00:00",
-                "end_ts": f"{trade_date + pd.Timedelta(days=1)} 00:00:00",
+                "end_ts": f"{str(trade_date + pd.Timedelta(days=1))[:10]} 00:00:00",
             })
             if err is None and not df.empty:
                 return True

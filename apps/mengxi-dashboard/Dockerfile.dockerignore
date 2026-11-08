@@ -34,6 +34,7 @@ backup/
 tests/
 
 # Other apps (not needed in this image)
+# (apps/trading re-included 2026-11-08: bess_context imports pnl_attribution.calc ASSET_ALIAS_MAP)
 apps/portal/
 apps/inner-mongolia/
 apps/spot-watcher/
@@ -51,7 +52,6 @@ apps/mengxi-trading-ops/
 apps/pnl-attribution/
 apps/spot-agent/
 apps/spot-market/
-apps/trading/
 apps/dashboard/
 apps/gb-market/
 apps/au-market/
