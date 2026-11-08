@@ -140,7 +140,13 @@ def infer_report_month(filename: str) -> Optional[date]:
             return date(int(m.group(1)), int(m.group(2)), 1)
         except ValueError:
             pass
-            pass
+
+    # e.g. "安徽-202608-披露-月度信息披露报告" (aggregate batch dumps, no
+    # separator). Month constrained to 01-12; (?!\d) rejects longer digit runs
+    # like the 蒙西 timestamp suffix 20260814155020.
+    m = re.search(r"(?<!\d)(\d{4})(0[1-9]|1[0-2])(?!\d)", filename)
+    if m:
+        return date(int(m.group(1)), int(m.group(2)), 1)
 
     # Quarterly: "2026年一季度"
     qm = re.search(r"(\d{4})年([一二三四]季度)", filename)

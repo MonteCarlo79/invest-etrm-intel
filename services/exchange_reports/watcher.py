@@ -78,10 +78,9 @@ def _is_non_monthly(filename: str, exc: Exception) -> bool:
     return "Cannot infer report_month" in msg or "Cannot infer province" in msg
 
 
-def _existing_filenames(pg_url: str) -> set[str]:
-    """Filenames already handled anywhere — monthly reports table (ingested)
-    plus KB docs (including non-monthly files rerouted there), so rerouted
-    files are not re-downloaded every run."""
+def _existing_filenames(pg_url: str) -> tuple[set[str], set[str]]:
+    """(monthly, kb) — filenames already handled: monthly reports table
+    (metrics-ingested) and KB docs (including non-monthly files rerouted there)."""
     import psycopg2
     conn = psycopg2.connect(pg_url, options="-c statement_timeout=15000")
     try:
@@ -90,9 +89,21 @@ def _existing_filenames(pg_url: str) -> set[str]:
             monthly = {r[0] for r in cur.fetchall() if r[0]}
             cur.execute("SELECT file_name FROM staging.spot_knowledge_docs")
             kb = {r[0] for r in cur.fetchall() if r[0]}
-            return monthly | kb
+            return monthly, kb
     finally:
         conn.close()
+
+
+def _is_candidate(name: str, monthly: set[str], kb: set[str]) -> bool:
+    """Skip metrics-ingested files and KB-known non-monthly files; but a file
+    whose month now parses (parser improved after it was KB-rerouted) is a
+    candidate again — KB presence must not fossilize it out of the metrics path."""
+    if name in monthly:
+        return False
+    if name in kb:
+        from services.exchange_reports.ingestor import infer_report_month
+        return infer_report_month(name) is not None
+    return True
 
 
 def scan_exchange_reports_onedrive(
@@ -123,13 +134,14 @@ def scan_exchange_reports_onedrive(
     summary["scanned"] = len(files)
 
     try:
-        known = _existing_filenames(pg_url)
+        monthly, kb = _existing_filenames(pg_url)
     except Exception as exc:
         logger.error("exchange watch: cannot load existing filenames: %s", exc)
         summary["error"] = f"db_error: {exc}"
         return summary
 
-    candidates = [it for it in files if it["name"] not in known and _within_days(it, days)]
+    candidates = [it for it in files if _is_candidate(it["name"], monthly, kb)
+                  and _within_days(it, days)]
     summary["candidates"] = len(candidates)
     summary["skipped"] = summary["scanned"] - len(candidates)
 
