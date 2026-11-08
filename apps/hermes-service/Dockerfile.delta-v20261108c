@@ -1,0 +1,11 @@
+# Delta build v20261108c (2026-11-08, third delta): fitz + province maps.
+# Base FROM v20261108b (= td:198).
+# - pymupdf: page rendering for the scanned-PDF OCR fallback (was silently
+#   broken — "No module named 'fitz'" — degrading scanned 安徽-style reports)
+# - ingestor.py: province maps extended (冀北 misattributed to 河北 via LLM)
+FROM 319383842493.dkr.ecr.ap-southeast-1.amazonaws.com/bess-platform-hermes:v20261108b
+
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --no-cache-dir "pymupdf>=1.24"
+
+COPY services/exchange_reports/ingestor.py /app/services/exchange_reports/ingestor.py
