@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from services.exchange_reports.ingestor import infer_report_month  # noqa: E402
+from services.exchange_reports.ingestor import infer_report_month, infer_province  # noqa: E402
 from services.exchange_reports.watcher import _is_candidate  # noqa: E402
 
 
@@ -45,3 +45,14 @@ def test_candidate_filter():
     assert not _is_candidate("annual-report.pdf", monthly, kb)
     # brand new file
     assert _is_candidate("2026年10月山东电力市场信息披露月报.pdf", monthly, kb)
+
+
+def test_province_map_covers_all_watcher_provinces():
+    # 冀北 was missing from both maps → LLM fallback misattributed it to 河北
+    # (catch-up 2026-11-08). The maps must cover every folder in the OneDrive tree.
+    for prov in ("冀北", "山西", "陕西", "湖北", "黑龙江", "甘肃", "天津", "北京"):
+        assert infer_province(Path(f"{prov}-202609-披露-月度信息披露报告.pdf")) == prov
+        assert infer_province(Path(f"{prov}月报/{prov}-2026-09-报告.pdf")) == prov
+    # regression: distinct Hebei-grid provinces stay distinct
+    assert infer_province(Path("河北南网-202608-披露.pdf")) == "冀南"
+    assert infer_province(Path("冀南-202608-披露-月度信息披露报告.pdf")) == "冀南"

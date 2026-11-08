@@ -23,3 +23,4 @@ pandas>=2.0
 matplotlib>=3.8
 pulp>=2.7
 playwright>=1.40
+pymupdf>=1.24  # page rendering for scanned-PDF OCR fallback (fitz)
