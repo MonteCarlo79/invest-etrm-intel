@@ -499,3 +499,18 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - 遗留待办不变：净市场化价差指标（储能口径）、bess-map/hermes-service psycopg[binary] 预防修、2025-08 下网扫描补录、老版统推 parser 售电侧提取
 - asset_risk 当前 v97/td:99；LATEST-IMAGES.md 两条部署记录未提交（同文件有并行编辑，留给对应 session）
 - 并行 session 动态：spot-market v58/td:159 + hermes td:200 已上（他人）；共享 index 第二条教训（stale-parent race）已被同行补进 memory
+
+## Session Summary, 2026-11-08→09 (Book tab data revival)
+**Worked on:** Book tab empty-data diagnosis + full revival; nodal writer repair; live actuals; attribution stack revival + backfills.
+**Completed:**
+- Diagnosis: nodal_strategy_daily stopped Oct 12 (nodal-writer td pinned reaped v35 image → daily FailedInvocations since ~Nov 1; before that the Oct RT feed outage starved it); bess_asset_daily_attribution never scheduled (last row 2026-04-22); ops_bess_dispatch_15min dead since 2026-04-21; canon.nodal_rt_price_15min dead since 2026-09-24
+- Nodal writer repaired (td:5 = v48 image): 23 strategies for Nov 8 written on validation run
+- bess_actual_96 built (实际执行功率 from WeCom workbooks; 106,367 rows Apr 20→Nov 2); asset_book.actual() rewired (ops table = pre-Apr-20 fallback)
+- Attribution stack rewired: load_ops_dispatch_15min → nomination/actual tables; load_actual_prices_15min → filled nodal → raw md_rt_nodal_price → canon; _has_prices same chain + range-node expansion (siziwangqi 杜尔伯特站 1M–2M); April loader's charge→discharge sign-flip removed
+- New daily rule bess-platform-attribution-daily 17:45 CST (batch + ladder); settled-bridge refresh folded into book-forecast rule (16:00 CST)
+- mengxi-dashboard v51/td:66 deployed; v53/td:68 registered for rules then service aligned
+- Backfills: Oct window 33 days/101 rows; Apr–Sep 126 days/478 rows; 88 stale pre-fix ladder rows deleted (Apr 3/22 + Mar 28–Apr 21)
+- KEY LESSON: mengxi-dashboard + portal builds filter on apps/<app>/Dockerfile.dockerignore (NOT the root .dockerignore) — the v93 asset_risk incident was root-file; mengxi image issues live in the per-Dockerfile file
+**In progress:** none running; cron retry for the push below dies with this session
+**Decisions made:** storage of cleared_energy_mwh kept as MW (contract codified); legacy inner_pipeline left flagged; WeCom server-side file deletion rejected (no API, irreversible) → coverage panel instead
+**Next session:** FIRST — push commit 56e8d303 (manifest v53/td:68) once GitHub SSH egress recovers (it was down at close; both :22 timeouts). Then: verify the daily rules ran (nodal strategy Nov 10, attribution D-1, settled refresh), October bills ~Nov 10–15 → settled rows extend; PyPSA/wind_farm_tab 4× energy sums still open; enos collector repair decision.
