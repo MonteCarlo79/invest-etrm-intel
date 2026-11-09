@@ -81,7 +81,7 @@ def get_spot_prices(
                     WHERE report_date BETWEEN %s AND %s
                       AND province_en = ANY(%s)
                     ORDER BY report_date, province_en
-                    LIMIT 5000
+                    LIMIT 5001
                     """,
                     (start_date, end_date, provinces),
                 )
@@ -93,12 +93,18 @@ def get_spot_prices(
                     FROM public.spot_daily
                     WHERE report_date BETWEEN %s AND %s
                     ORDER BY report_date, province_en
-                    LIMIT 5000
+                    LIMIT 5001
                     """,
                     (start_date, end_date),
                 )
             rows = _jsonify(_rows_to_dicts(cur))
-    return {"rows": rows, "count": len(rows)}
+    truncated = len(rows) > 5000
+    rows = rows[:5000]
+    out = {"rows": rows, "count": len(rows), "truncated": truncated}
+    if truncated:
+        out["note"] = ("Result capped at 5000 rows (oldest first) — the latest dates are MISSING. "
+                       "Narrow the date range or province list and re-query before concluding.")
+    return out
 
 
 # ── Tool: get_interprov_flow ──────────────────────────────────────────────────
