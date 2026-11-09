@@ -101,3 +101,12 @@ container-def.json
 
 # Transferred Claude Code session transcripts + memory backup (local only)
 memo/
+
+# Keynote duplicates of tracked .pptx decks (2026-11-09)
+*.key
+# professor topic-card source material (code lives in services/professor/)
+professor/
+# internal decks / reference docs kept local (not published to GitHub) — 2026-11-09
+assets/operating/复盘/**/*.pptx
+models/*.pdf
+models/*.docx
