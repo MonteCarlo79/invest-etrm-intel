@@ -66,7 +66,7 @@ def _load_official(_conn) -> tuple[pd.DataFrame, pd.DataFrame]:
     prov = pd.read_sql("SELECT * FROM spot_monthly_province ORDER BY report_month, province_cn", _conn)
     for df in (nat, prov):
         num = df.select_dtypes(include="object").columns.difference(
-            ["province_en", "province_cn", "run_status", "source_file"])
+            ["report_month", "province_en", "province_cn", "run_status", "source_file"])
         for c in num:  # NUMERIC arrives as Decimal
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return nat, prov
