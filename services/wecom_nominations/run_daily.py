@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,7 @@ from services.mengxi_nodal.nomination_curves import (
     parse_actual_curves,
     parse_nomination_curves,
 )
+from services.wecom_nominations import collector
 from services.wecom_nominations.collector import collect
 from services.wecom_nominations.status import (
     _DDL as _STATUS_DDL,
@@ -53,6 +55,9 @@ BUCKET = "bess-uploader-data-chen-singp-2026"
 # revision breaks on the ECR keep-5 lifecycle (td:58's v43 image was reaped
 # 2026-11-05 → CannotPullContainerError on every ship).
 TD = "bess-platform-mengxi-dashboard"
+# launchd's PATH is /usr/bin:/bin:/usr/sbin:/sbin — the uv-installed CLI in
+# ~/.local/bin is not on it (every scheduled ship failed 2026-11-03→09).
+AWS = shutil.which("aws") or str(Path.home() / ".local/bin/aws")
 
 
 def _launch_writer(writer: str) -> None:
@@ -63,7 +68,7 @@ def _launch_writer(writer: str) -> None:
         "name": "mengxi-dashboard",
         "command": ["sh", "-c", f"echo {b64} | base64 -d | python -u"]}]})
     out = subprocess.run([
-        "aws", "ecs", "run-task", "--cluster", "bess-platform-cluster",
+        AWS, "ecs", "run-task", "--cluster", "bess-platform-cluster",
         "--task-definition", TD, "--launch-type", "FARGATE",
         "--region", "ap-southeast-1",
         "--network-configuration",
@@ -83,7 +88,7 @@ def ship_zones(rows: list[dict], tag: str) -> None:
         json.dump(rows, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}zones_daily_{tag}.json"
-    subprocess.run(["aws", "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
                     "--region", "ap-southeast-1"], check=True, capture_output=True)
     writer = f"""
 import json, os, boto3
@@ -117,7 +122,7 @@ def ship_nominations(rows: list[dict], tag: str) -> None:
         json.dump(rows, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}nominations_daily_{tag}.json"
-    subprocess.run(["aws", "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
                     "--region", "ap-southeast-1"], check=True, capture_output=True)
     writer = f"""
 import json, os, boto3
@@ -153,7 +158,7 @@ def ship_status(stats: list[dict], tag: str) -> None:
         json.dump(stamped, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}nomination_file_status_{tag}.json"
-    subprocess.run(["aws", "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
                     "--region", "ap-southeast-1"], check=True, capture_output=True)
     writer = f"""
 import json, os, boto3
@@ -184,7 +189,7 @@ def ship_actuals(rows: list[dict], tag: str) -> None:
         json.dump(rows, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}actuals_daily_{tag}.json"
-    subprocess.run(["aws", "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
                     "--region", "ap-southeast-1"], check=True, capture_output=True)
     writer = f"""
 import json, os, boto3
@@ -209,12 +214,18 @@ print('DONE', n, flush=True)
 def main() -> None:
     stats = collect()
     logger.info("collect: %s", stats)
+    if stats["scanned"] == 0:
+        # The cache always holds hundreds of files; zero means this process
+        # cannot list it (macOS privacy: the python binary needs Full Disk
+        # Access) — fail loudly, never ship an "empty day".
+        raise RuntimeError(f"WeCom cache scan found 0 files: {collector.CACHE_ROOT}")
+    logger.info("mirror: %s", collector.mirror_to(collector.ONEDRIVE_ROOT))
     voter_rows: list[dict] = []
     nom_rows: list[dict] = []
     act_rows: list[dict] = []
     file_stats: list[dict] = []
     for folder, code in FOLDERS.items():
-        d = Path("data/raw/nomination") / folder
+        d = collector.NOMINATION_ROOT / folder
         if not d.is_dir():
             continue
         # .xlsx AND legacy .xls (wulate's operator switched to .xls from July

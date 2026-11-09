@@ -17,6 +17,7 @@ Conventions (verified against the existing folders 2026-11):
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -26,8 +27,18 @@ logger = logging.getLogger(__name__)
 
 CACHE_ROOT = Path.home() / ("Library/Containers/com.tencent.WeWorkMac/Data/Documents/"
                             "Profiles/A33BD293713FD025106CC5D8F9DFA9B9/Caches/Files")
-NOMINATION_ROOT = Path("data/raw/nomination")
-STATE_FILE = Path("services/wecom_nominations/.checkpoint")
+# Repo copy on OneDrive: what people browse and what dispatch_ingest reads.
+ONEDRIVE_ROOT = Path("data/raw/nomination")
+# The launchd job must NOT work on OneDrive: background processes cannot
+# materialise offloaded ("dataless") files — reads fail with EDEADLK
+# "Resource deadlock avoided" (verified 2026-11-09). That broke parsing, and
+# made monthly_max_day() score real root files as 0 days, which would demote
+# complete workbooks. WECOM_NOMINATION_ROOT points the job at a local tree;
+# mirror_to() then copies new files into ONEDRIVE_ROOT write-only.
+_LOCAL_ROOT = os.environ.get("WECOM_NOMINATION_ROOT")
+NOMINATION_ROOT = Path(_LOCAL_ROOT) if _LOCAL_ROOT else ONEDRIVE_ROOT
+STATE_FILE = (NOMINATION_ROOT / ".checkpoint" if _LOCAL_ROOT
+              else Path("services/wecom_nominations/.checkpoint"))
 
 # Filename → station folder (place name). Verified against rm_assets plants
 # and the existing folders.
@@ -225,3 +236,34 @@ def collect(since: float | None = None, dry_run: bool = False) -> dict:
     if not dry_run:
         _write_checkpoint(newest)
     return stats
+
+
+def mirror_to(dst_root: Path, src_root: Path | None = None) -> dict:
+    """Write-only mirror of the working tree into dst_root (the OneDrive copy).
+
+    Never reads content under dst_root — stat, copy-in and rename only, all of
+    which work on OneDrive placeholders from launchd. A file the working tree
+    demoted to archived/ is renamed on the dst side instead of duplicated, so
+    dst root keeps holding only the fullest monthly version. No deletes.
+    """
+    src_root = src_root or NOMINATION_ROOT
+    if Path(src_root).resolve() == Path(dst_root).resolve():
+        return {"mirror_copied": 0, "mirror_moved": 0}
+    copied = moved = 0
+    for src in sorted(Path(src_root).rglob("*")):
+        if not src.is_file() or src.name.startswith("."):
+            continue
+        rel = src.relative_to(src_root)
+        dst = Path(dst_root) / rel
+        if dst.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        stale = Path(dst_root) / rel.parent.parent / rel.name
+        if rel.parent.name == "archived" and stale.is_file():
+            shutil.move(str(stale), dst)
+            moved += 1
+            continue
+        shutil.copy2(src, dst)
+        copied += 1
+    return {"mirror_copied": copied, "mirror_moved": moved}
+

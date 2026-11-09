@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>WECOM_NOMINATION_ROOT</key>
+		<string>/Users/chenzhuqi/Library/Application Support/bess-platform/nomination</string>
+	</dict>
+	<key>Label</key>
+	<string>ai.pjh-etrm.wecom-nominations-daily</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/chenzhuqi/.venvs/bess-platform/bin/python</string>
+		<string>services/wecom_nominations/run_daily.py</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>/tmp/wecom_nominations_daily.err</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/wecom_nominations_daily.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Hour</key>
+			<integer>11</integer>
+			<key>Minute</key>
+			<integer>0</integer>
+		</dict>
+		<dict>
+			<key>Hour</key>
+			<integer>16</integer>
+			<key>Minute</key>
+			<integer>0</integer>
+		</dict>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform</string>
+</dict>
+</plist>
