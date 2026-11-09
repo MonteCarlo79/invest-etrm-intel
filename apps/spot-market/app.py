@@ -1273,7 +1273,7 @@ def load_provinces() -> list[str]:
     cur = _conn().cursor()
     cur.execute(
         "SELECT DISTINCT province_en FROM spot_daily "
-        "WHERE report_date >= '2026-01-01' ORDER BY 1"
+        "WHERE report_date >= CURRENT_DATE - INTERVAL '12 months' ORDER BY 1"
     )
     return [r[0] for r in cur.fetchall()]
 
@@ -1289,7 +1289,7 @@ def load_kpis(quality_filter: bool) -> dict:
             SUM(CASE WHEN da_avg IS NOT NULL AND rt_avg IS NOT NULL THEN 1 ELSE 0 END) AS complete_rows,
             COUNT(*)                                      AS total_rows
         FROM spot_daily
-        WHERE report_date >= '2026-01-01'
+        WHERE report_date >= CURRENT_DATE - INTERVAL '12 months'
     """)
     r = cur.fetchone()
     return {
@@ -3427,8 +3427,15 @@ It returns daily P&L and dispatch metrics across all 5 strategy scenarios.
         # Status line shown during tool calls (lives inside the same chat message)
         _status_ph = st.empty() if text_placeholder is not None else None
 
-        while True:
+        _max_rounds = 12  # cap tool-use rounds so a tool-error loop can't burn tokens
+        for _round in range(_max_rounds + 1):
             streamed_text = ""
+
+            if _round == _max_rounds:
+                if _status_ph:
+                    _status_ph.empty()
+                return (f"(已达到单次回答的工具调用上限 {_max_rounds} 轮，已停止。"
+                        "请缩小问题范围后重试。)"), messages, tool_events
 
             if text_placeholder is not None:
                 if _status_ph:
