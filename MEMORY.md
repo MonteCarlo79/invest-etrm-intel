@@ -559,3 +559,20 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Recurring risk: ECR keep-5 will reap v55 after 5 more mengxi pushes → writer/rules break again; pin or exempt the tag
 - Rule: any new md_id_cleared_energy query filters on data_date + exact plant_name; time new tab queries on prod via run-task before rollout; validate scheduled jobs via CloudTrail/FailedInvocations after the next scheduled fire, never a manual admin run
 - P1 when ready (cross-pillar: nodal writer ↔ Quant PF engine path)
+
+## Session Summary, 2026-11-09 (addendum: run checks + WeCom pipeline repair)
+**Worked on:** Checked the repaired nodal-writer / book-forecast state, then diagnosed and fixed the WeCom nomination launchd pipeline, which had never worked.
+**Completed:**
+- Run check at 18:32 CST: rules not yet fired post-fix (next 2026-11-10 16:00 CST); forecast + strategy current at Nov 10 from manual runs
+- WeCom pipeline (30d69af9, 61db1429): all 14 scheduled runs since Nov 3 failed — 0-file cache scan (no Full Disk Access, silent), `aws` not on launchd PATH, OneDrive placeholders unreadable from launchd (EDEADLK). User granted FDA to the uv python3.13 binary; job now works in ~/Library/Application Support/bess-platform/nomination (plist env WECOM_NOMINATION_ROOT) and mirrors write-only into data/raw/nomination; absolute aws path; zero-scan raises. Local tree seeded + diff-verified (1,123 files)
+- First good launchd run 19:12: 53 files collected, 0 parse failures, 4 ECS writers DONE; bess_actual_96 / bess_nomination_96 now through Nov 4 for all 6 stations
+**In progress:**
+- Nov 5–9 nomination/actual files not in the WeCom cache yet — user to open the 储能场站日报群 chat
+**Decisions made:**
+- launchd jobs never read OneDrive content: local working root + write-only mirror (copy/rename) keeps the OneDrive tree current for dispatch_ingest
+- Hydrate OneDrive at -P 2 (parallel -P 8 killed the main OneDrive app)
+**Next session:**
+- FIRST after 2026-11-10 16:00 CST: nodal-writer FailedInvocations = 0 + strategy/forecast at Nov 11; WeCom 11:00/16:00 runs exit 0 (launchctl print gui/$(id -u)/ai.pjh-etrm.wecom-nominations-daily → last exit code) and actuals advance past Nov 4
+- WeCom job failures only reach /tmp logs — wire run status into data_ops_log so the Hermes patrol card shows it
+- FDA is bound to the uv python 3.13.14 path — re-grant after any uv Python upgrade
+- Still open: attribution missing for siziwangqi/bameng/wulate; cleared feed stuck at Nov 2; ECR keep-5 vs pinned images; attribution rule script into infra/eventbridge/
