@@ -245,20 +245,39 @@ def drop_placeholder_zero_days(df: pd.DataFrame, active_market: bool) -> pd.Data
     frames for the current unpublished day — 2026-09-16/17/18 and 2026-09-24
     蒙西 incidents; placeholder zeros poisoned the RT fallback).
 
+    Per side (2026-11-09 audit): LingFeng also zero-fills ONE side — DA all-zero
+    with real RT (广东/海南/广西, ongoing) and RT all-zero with real DA. A side that
+    is all-zero for a whole day is nulled (missing, not a 0 price); the row is
+    dropped only when both sides end up missing. Partial-zero days are untouched
+    (genuine 0-price hours, e.g. 东北 heating season).
+
     active_market=False keeps the rows: for provinces that have never had a
     non-zero price (no spot disclosure), all-zero IS the data.
     Pure function — the DB lookup for `active_market` lives in the caller."""
     if not active_market or df.empty or "rt_price" not in df.columns:
         return df
-    rt = pd.to_numeric(df["rt_price"], errors="coerce")
-    day = pd.to_datetime(df["datetime"]).dt.date
-    is_zero_day = (rt.fillna(0) == 0).groupby(day).transform("all")
-    out = df[~is_zero_day]
-    dropped = int(is_zero_day.sum())
+    out = df.copy()
+    day = pd.to_datetime(out["datetime"]).dt.date
+    nulled = {}
+    for col in ("rt_price", "da_price"):
+        if col not in out.columns:
+            continue
+        vals = pd.to_numeric(out[col], errors="coerce")
+        zero_day = (vals.fillna(0) == 0).groupby(day).transform("all")
+        out[col] = vals.where(~zero_day)
+        nulled[col] = sorted({str(d) for d in day[zero_day]})
+    sides = [c for c in ("rt_price", "da_price") if c in out.columns]
+    keep = out[sides].notna().any(axis=1)
+    dropped = int((~keep).sum())
+    out = out[keep]
     if dropped:
-        days = sorted({str(d) for d in day[is_zero_day]})
+        days = sorted({str(d) for d in day[~keep]})
         print(f"[GUARD] dropped {dropped} placeholder-zero price rows "
               f"({', '.join(days)}) — all-zero day in an active market")
+    for col, days in nulled.items():
+        one_side = [d for d in days if d in {str(x) for x in day[keep]}]
+        if one_side:
+            print(f"[GUARD] nulled placeholder {col} on {', '.join(one_side)} (other side real)")
     return out
 
 
@@ -280,7 +299,10 @@ def upsert_hourly_prices(engine, schema: str, province: str, hourly_prices_df, s
     df["province"] = province
     df["source_file"] = source_file
 
-    records = df[["province", "datetime", "rt_price", "da_price", "source_file"]].to_dict("records")
+    cols = ["province", "datetime", "rt_price", "da_price", "source_file"]
+    # NaN must reach Postgres as NULL (psycopg2 sends float NaN as 'NaN'::float,
+    # which COALESCE does not treat as missing)
+    records = df[cols].astype(object).where(df[cols].notna(), None).to_dict("records")
 
     sql = text(f"""
     INSERT INTO "{schema}"."spot_prices_hourly"
@@ -288,8 +310,9 @@ def upsert_hourly_prices(engine, schema: str, province: str, hourly_prices_df, s
     VALUES
         (:province, :datetime, :rt_price, :da_price, :source_file, now())
     ON CONFLICT (province, datetime) DO UPDATE SET
-        rt_price    = EXCLUDED.rt_price,
-        da_price    = EXCLUDED.da_price,
+        -- a guard-nulled placeholder side must never erase a real stored price
+        rt_price    = COALESCE(EXCLUDED.rt_price, spot_prices_hourly.rt_price),
+        da_price    = COALESCE(EXCLUDED.da_price, spot_prices_hourly.da_price),
         source_file = EXCLUDED.source_file,
         updated_at  = now();
     """)

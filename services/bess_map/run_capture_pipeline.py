@@ -245,8 +245,10 @@ def fetch_hourly_prices(engine, schema: str, province: str) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["datetime"]).sort_values("datetime").set_index("datetime")
     df["rt_price"] = pd.to_numeric(df["rt_price"], errors="coerce")
     df["da_price"] = pd.to_numeric(df["da_price"], errors="coerce")
-    # Fall back to DA price where RT is zero or missing (e.g. provinces with DA-only settlement)
-    df["rt_price"] = df["rt_price"].replace(0, np.nan).fillna(df["da_price"])
+    # Fall back to DA price only where RT is missing (e.g. DA-only settlement).
+    # A 0 RT is a real price (东北 floor is 0) — placeholder zeros are nulled at
+    # ingest (db.drop_placeholder_zero_days) and were nulled historically 2026-11-09.
+    df["rt_price"] = df["rt_price"].fillna(df["da_price"])
     return df
 
 
