@@ -612,3 +612,10 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 **Root cause:** the Section 5b nomination-coverage panel used bare `text()`; app.py's convention is lazy alias imports (`from sqlalchemy import text as _sql_text`) per section — `text` never exists at module scope. st.tabs executes ALL sections on every rerun, so a section-local NameError is app-global. The v46 probe verified the query logic but never the app's own scope.
 **Lesson:** (1) in this mega-app, any code added to app.py must use the alias-import pattern for sqlalchemy text (or import at use site); (2) an ECS probe of the query path does not prove the app renders — after app.py edits, at minimum `python -c "import py_compile"` plus a grep that every bare `text(` call has a visible import; better: run the panel function against a sqlite harness. (3) Uncached queries in app.py run on every rerun of every tab — wrap with @st.cache_data(ttl=...) on the read helper.
 **Fix:** v48/td:63 — alias import + cached panel loader.
+
+## 2026-11-09 — Book tab freshness probe hung the whole mengxi-dashboard (v54)
+**Symptom:** v54/td:69 rolled out COMPLETED with clean startup logs, but a run-task probe of the new freshness code took ~8 min for ONE station.
+**Root cause:** `SELECT MAX(datetime) … WHERE plant_name LIKE '%name%' AND datetime >= …` on md_id_cleared_energy (36M rows). Every index leads with data_date or (plant_name, data_date); a datetime-only range + leading-wildcard LIKE becomes a filtered scan of the range (>120 s). st.tabs executes every tab on every rerun, so one slow tab blocks the entire app.
+**Fix:** rolled back to td:68, then v55: `MAX(data_date) … WHERE plant_name = :exact AND data_date >= …` → idx_md_id_plant_date, ~5 ms.
+**Rule:** any new query on md_id_cleared_energy filters on data_date (and exact plant_name), never datetime-only or LIKE '%…%'. Before rolling out a tab change that adds DB reads, time the new queries on prod via a run-task probe — rollout health never exercises tab code.
+
