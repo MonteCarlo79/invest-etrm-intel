@@ -514,3 +514,19 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **In progress:** none running; cron retry for the push below dies with this session
 **Decisions made:** storage of cleared_energy_mwh kept as MW (contract codified); legacy inner_pipeline left flagged; WeCom server-side file deletion rejected (no API, irreversible) → coverage panel instead
 **Next session:** FIRST — push commit 56e8d303 (manifest v53/td:68) once GitHub SSH egress recovers (it was down at close; both :22 timeouts). Then: verify the daily rules ran (nodal strategy Nov 10, attribution D-1, settled refresh), October bills ~Nov 10–15 → settled rows extend; PyPSA/wind_farm_tab 4× energy sums still open; enos collector repair decision.
+
+## Session Summary, 2026-11-08/09 (spot monthly report + zero-price data integrity)
+**Worked on:** 现货月报 ingest/tab, then a cross-source audit of LingFeng zero prices that ended in fixing how capture treats 0 RT prices (东北 overstated).
+**Completed:**
+- 现货月报 tab in spot-markets (v58/td:159): national trend, province×month pivot, official-vs-LingFeng cross-check (zero-day excluded, <15 valid days tinted). Monthly ingest RT/DA volume-swap guard (hermes v20261108d/td:200). Jun–Sep monthly rows corrected to the PDF (48 swaps + 6 audit fixes incl. Jul 山西/广东 price swap, 山东 Jun DA 0.37).
+- Created 5 staging.spot_report_* KP tables (daily-report KB path had always failed).
+- spot_prices_hourly: 1,785 both-sides-zero placeholder days deleted (backup …zeroday_backup_20261108), then 52+2 days restored where official daily report also says 0 / 黑龙江 genuine 0 (list in staging.spot_prices_zeroday_restored_20261109). Stale derived rows removed (capture_daily 10,096, theoretical dispatch 83,184; backups …_20261109).
+- One-sided fake zeros verified vs public.spot_daily and NULLed: RT 326 days/7,824 rows, DA 1,690 days/40,560 rows (backup staging.spot_prices_hourly_oneside_backup_20261109).
+- Code 8e2a9d27: ingest guard nulls a per-day all-zero SIDE + COALESCE upsert + NaN→NULL; capture falls back to DA only on NULL RT (0 RT = real). Deployed lingfeng-ingest v12/td:14 and bess-map v85/td:124 (also brings 61f9c8be upsert heal). tfvars bess-map→v85, spot-markets→v58 (local, gitignored).
+**In progress:**
+- Full capture recompute on v12 (--force --force-theoretical, 33 provinces): ols_rt_time_v1 33/33 both durations ✅, naive_rt_ar17 33/33 ✅; ols_fundamentals_v1 task 56c40b4b79844c4bb9d61808d275411d 2h done rc=0, 4h RUNNING (~20+ min/province). Session cron 52002709 dies with this session.
+**Decisions made:**
+- 0 RT is a real price: 黑龙江 32.9% / 吉林,福建 16% / 辽宁 12.9% / 陕西 10% of RT hours are genuine 0 (user correction). Old `.replace(0,nan).fillna(da)` overstated 东北 capture.
+- Placeholder rule: a whole-day all-zero side is missing (NULL), not 0; two independent sources agreeing on 0 → keep. 辽宁 official floor is −100 ¥/MWh, so exact all-day 0 there is suspect; 黑龙江 floor is 0.
+- Any services/bess_map change must ship to BOTH lingfeng-ingest and bess-map images.
+**Next session:** Audit ols_fundamentals_v1 4h (expect 33 OK, logs ecs-lingfeng-ingest/ecs/lingfeng-ingest/56c40b4b…), then report 2026 YTD theoretical_profit_per_mwh_day + capture_rate (ols_rt_time_v1, 2h) for 黑龙江/吉林/福建/辽宁/陕西 — expect drops vs before. Open: 5月月报 not ingested (resend via Feishu); extraction should be cross-checked vs deterministic PDF parse (proposal pending); 108 RT / 752 DA one-sided zero days left undetermined; whole-day genuine zeros in floor-0 provinces now become NULL at ingest — periodic reconcile vs spot_daily would restore them.
