@@ -533,3 +533,29 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **Addendum (same session, close-out):** shared `.git/index` had drifted 94 entries behind HEAD (temp-index commits never update it) — 52 staged deletions of committed files + 42 stale "modifications"; all verified worktree==HEAD and reset index-only. 3 staged deletions of gitignored `apps/hermes-service/Dockerfile.delta-*` left as deliberate untracking. Before any plain `git commit`, check `git diff --cached --name-only HEAD`.
 **Addendum 2 (close-out):** 7 files accidentally deleted by unrelated commits 2cf7492e (CITIC move) and 333df465 (nodal spec) restored byte-identical in 0a6f5f3e — services/bess_map/strategy_experiments.py (+DDL, tests), test_quantile_forecast.py, 3 AM-framework PDFs. CLAUDE.md nodal-writer note corrected (b16a3a0b): register_strategies is gated on import, module now on main. `git status` "ahead by N" after pushing via the ssh.github.com:443 URL is a false alarm — sync with `git update-ref refs/remotes/origin/main HEAD` after verifying remote == local. Next: audit ols_fundamentals_v1 4h (task 56c40b4b…) + 东北 YTD capture check; confirm nodal writer prints `REGISTER <n>` at 16:00 CST.
 **Addendum 3 (repo tidy, 710a3850):** tracked 73 Hermes briefings; untracked the 3 gitignored Dockerfile.delta-*; deleted stale scripts/mnp96_fill.py (pre-fix '+08:00' POSIX-TZ version) and an identical OneDrive conflict copy of knowledge_docs.py. Decision: internal decks/reference docs stay OFF GitHub — new .gitignore rules `assets/operating/复盘/**/*.pptx`, `models/*.pdf|docx`, `*.key`, `professor/` (already-tracked 6/7月复盘 + PPA PDFs untouched). Working tree clean, main == origin/main.
+
+## Session Summary, 2026-11-09 (trading-book review → P0 freshness → schedule repairs)
+**Worked on:** Gap review of the 蒙西 trading book against the ideal OO book model, then P0 (tests + per-layer freshness), deploy, and repair of the two daily jobs the freshness check exposed.
+**Completed:**
+- Gap review: book is a read-only ledger over 5 pipelines that don't consume it (~40–50% of spec intent). Roadmap: P0 tests+freshness; P1 book as producer (writer consumes book forecast w/ zones+λ, single registry, dp_optimal Strategy series); P2 strict sequential waterfall shared with asset_risk + typed 96-slot series (unit/frame/sign); P3 positions/MTM, PortfolioBook, Trader agent tools over the book
+- 12 stale tests fixed (13df3b40): book fakes now serve bess_nomination_96/bess_actual_96 (+ ops fallback test); pf_results tests rewritten to ¥/MWh + 30-day floor contract
+- `AssetBook.freshness()` + Book tab stale-layer banner (f60f6a46, 4c61bc31): 6 layers with cadence tolerances (forecast/strategy 0d, cleared 3d, actual 4d, attribution 2d, settled 75d)
+- mengxi-dashboard v54/td:69 ROLLED BACK (~25 min): cleared probe LIKE '%…%' + datetime filter on 36M rows >120 s, st.tabs runs every tab → whole app blocked. v55/td:70 LIVE: exact plant_name + data_date (idx_md_id_plant_date, ~5 ms; 12-station sweep 0.89 s, probed on prod before rollout)
+- Nodal writer schedule repaired (dd8a88e2, user-run targeted apply): 3 stacked faults — scheduler IAM pinned to td:3 (AccessDenied daily ≥11-06), td:5 image v48 reaped, target subnets have no NAT with public IP off. Now RunTask on `nodal-writer:*`, assign_public_ip=true, writer td:7 = v55; tfvars image_mengxi_dashboard v30→v55 (local). Manual td:6 run wrote Nov 10 strategies (23 plants, REGISTER 6)
+- Book-forecast rule fixed via put-targets: inline script forecast `today−1` (hindcast) while zones forecast D+1; now D+1. Script tracked at infra/eventbridge/book_forecast_daily.py (4cc80d5f). One-off run wrote Nov 10 price forecasts (6×96), exit 0
+- ERRORS.md: freshness probe incident + nodal writer three-fault entry
+**In progress:**
+- None running. Freshness first live read: cleared + WeCom actuals stop at Nov 2; attribution missing for siziwangqi/bameng/wulate (only 3 stations); lingt46 settled stuck at July
+**Decisions made:**
+- P0 before P1 (user)
+- Freshness thresholds from documented cadences; first live read showed real outages, not miscalibration — keep as is
+- Writer gets public IP like the working rules; do NOT change private_subnet_ids (it also feeds the RDS subnet group; in this account it points at the public IGW subnets)
+- Rolled back own broken deploy to the immediately prior td (image-only diff) rather than leave prod blocked
+- Did not bypass the auto-mode block on terraform apply; user ran it
+**Next session:**
+- FIRST, after 2026-11-10 16:00 CST: nodal-writer-daily FailedInvocations = 0 and nodal_strategy_daily has Nov 11; book_forecast_daily has Nov 11; Book tab banner should drop forecast + strategy
+- Attribution coverage: why siziwangqi/bameng/wulate have no bess_asset_daily_attribution rows (rule 17:45 CST); copy the attribution rule's inline script into infra/eventbridge/ too
+- Cleared feed (exchange/enos collector) and WeCom actuals stalled at Nov 2 — collector repair decision
+- Recurring risk: ECR keep-5 will reap v55 after 5 more mengxi pushes → writer/rules break again; pin or exempt the tag
+- Rule: any new md_id_cleared_energy query filters on data_date + exact plant_name; time new tab queries on prod via run-task before rollout; validate scheduled jobs via CloudTrail/FailedInvocations after the next scheduled fire, never a manual admin run
+- P1 when ready (cross-pillar: nodal writer ↔ Quant PF engine path)
