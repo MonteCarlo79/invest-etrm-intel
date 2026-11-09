@@ -2,6 +2,7 @@
 """现货月报 tab: official-vs-LingFeng cross-check math and unit normalisation."""
 import sys
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -77,3 +78,17 @@ def test_cross_check_full_coverage_still_flags():
     cc = mt.cross_check(off, hr)
     assert not cc.loc[0, "low_cov"]
     assert cc.loc[0, "flag"]
+
+
+def test_decimals_to_float_keeps_date_and_text_columns():
+    df = pd.DataFrame({
+        "report_month": [date(2026, 9, 1), date(2026, 10, 1)],
+        "source_file": ["a.pdf", "b.pdf"],
+        "note": ["x", None],
+        "rt_avg_price": [Decimal("0.393"), None],
+    })
+    mt._decimals_to_float(df)
+    assert df["report_month"].tolist() == [date(2026, 9, 1), date(2026, 10, 1)]
+    assert df["source_file"].tolist() == ["a.pdf", "b.pdf"]
+    assert df["note"].iloc[0] == "x"
+    assert df["rt_avg_price"].iloc[0] == 0.393 and df["rt_avg_price"].dtype == "float64"

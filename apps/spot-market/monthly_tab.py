@@ -13,6 +13,8 @@ only deviations above the threshold are flagged.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -60,15 +62,21 @@ def cross_check(official: pd.DataFrame, hourly: pd.DataFrame,
     return df
 
 
+def _decimals_to_float(df: pd.DataFrame) -> None:
+    """NUMERIC arrives as Decimal (object dtype). Coerce only columns that hold
+    Decimals — text/date columns (report_month, source_file, new ones) are left alone."""
+    for c in df.columns:
+        vals = df[c].dropna()
+        if len(vals) and vals.map(lambda v: isinstance(v, Decimal)).all():
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+
 @st.cache_data(ttl=300)
 def _load_official(_conn) -> tuple[pd.DataFrame, pd.DataFrame]:
     nat = pd.read_sql("SELECT * FROM spot_monthly_national ORDER BY report_month", _conn)
     prov = pd.read_sql("SELECT * FROM spot_monthly_province ORDER BY report_month, province_cn", _conn)
     for df in (nat, prov):
-        num = df.select_dtypes(include="object").columns.difference(
-            ["report_month", "province_en", "province_cn", "run_status", "source_file"])
-        for c in num:  # NUMERIC arrives as Decimal
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+        _decimals_to_float(df)
     return nat, prov
 
 
