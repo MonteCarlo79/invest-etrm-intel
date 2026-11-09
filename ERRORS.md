@@ -619,3 +619,9 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 **Fix:** rolled back to td:68, then v55: `MAX(data_date) … WHERE plant_name = :exact AND data_date >= …` → idx_md_id_plant_date, ~5 ms.
 **Rule:** any new query on md_id_cleared_energy filters on data_date (and exact plant_name), never datetime-only or LIKE '%…%'. Before rolling out a tab change that adds DB reads, time the new queries on prod via a run-task probe — rollout health never exercises tab code.
 
+
+## 2026-11-09 — Nodal writer schedule dead since ≥2026-11-06 (three stacked faults)
+**Symptom:** nodal_strategy_daily stuck at Nov 8; EventBridge FailedInvocations=1 every day. The Nov 8 "repair" (td:5) looked fixed because it was validated by a MANUAL run-task under terraform-admin, which never exercises the scheduler role.
+**Root causes:** (1) scheduler role policy allowed ecs:RunTask on `nodal-writer:3` only (terraform pinned `.arn`); out-of-band revisions 4/5 → AccessDenied (CloudTrail RunTask errorCode). (2) td:5 image v48 reaped by ECR keep-5. (3) rule target uses `var.private_subnet_ids` with assign_public_ip=false, but in this account those ARE the public IGW subnets (no NAT route) → ResourceInitializationError reaching ECR. Also tfvars image_mengxi_dashboard was v30 (reaped) — a naive apply would have recreated fault (2).
+**Fix:** nodal_writer.tf policy Resource → `${arn_without_revision}:*`; target assign_public_ip=true (same as book-forecast/attribution rules); td:6 on v55; tfvars → v55. Manual run on td:6 with public IP: RUN_DAY 23 plants Nov 10, REGISTER 6.
+**Rule:** validate a scheduled job via CloudTrail/FailedInvocations after the NEXT scheduled fire, never by a manual run-task under admin. Do not change private_subnet_ids (also feeds the RDS subnet group).

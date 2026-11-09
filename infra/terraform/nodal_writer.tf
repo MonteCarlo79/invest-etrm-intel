@@ -68,9 +68,14 @@ resource "aws_iam_role_policy" "nodal_writer_scheduler" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "ecs:RunTask"
-        Resource = aws_ecs_task_definition.nodal_writer.arn
+        Effect = "Allow"
+        Action = "ecs:RunTask"
+        # Any revision of the family: the target resolves to the latest
+        # ACTIVE revision, and image deploys register revisions outside
+        # terraform. Pinning .arn (one revision) denied every scheduled run
+        # from 2026-11-06 to 11-09 (AccessDenied on :5 while the policy
+        # allowed only :3).
+        Resource = "${aws_ecs_task_definition.nodal_writer.arn_without_revision}:*"
       },
       {
         Effect   = "Allow"
@@ -93,10 +98,14 @@ resource "aws_cloudwatch_event_target" "nodal_writer_daily" {
     # "TaskDefinition is inactive" (2026-09-26/27 both days failed this way).
     task_definition_arn = aws_ecs_task_definition.nodal_writer.arn_without_revision
     launch_type         = "FARGATE"
+    # private_subnet_ids are the public (IGW) subnets in this account — no
+    # NAT route — so a task without a public IP cannot reach ECR
+    # (ResourceInitializationError, 2026-11-09). Same setting as the working
+    # book-forecast / attribution rules; the writer needs no whitelisted IP.
     network_configuration {
       subnets          = var.private_subnet_ids
       security_groups  = [aws_security_group.ecs_tasks.id]
-      assign_public_ip = false
+      assign_public_ip = true
     }
   }
 }
