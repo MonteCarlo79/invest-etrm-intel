@@ -79,6 +79,7 @@ import pandas as pd
 
 _N_ATTR = %d
 _SETTLED_OK = %r
+_LATEST_LAG = %d
 _D = date.today()
 _DAY = _D - timedelta(days=1)
 _TS = pd.date_range(f"{_DAY} 00:00", periods=96, freq="15min")
@@ -131,6 +132,10 @@ _BT_ROWS = pd.DataFrame({
 
 def _fake_read_sql(sql, con, params=None):
     s = " ".join(str(getattr(sql, "text", sql)).split())
+    # Freshness probes (libs.trading_book.freshness) — match before the
+    # per-table branches, which share the FROM clauses.
+    if "AS latest FROM" in s:
+        return pd.DataFrame({"latest": [_D - timedelta(days=_LATEST_LAG)]})
     if "to_regclass('reports.book_settled_daily')" in s:
         return pd.DataFrame(
             {"r": ["reports.book_settled_daily" if _SETTLED_OK else None]})
@@ -174,10 +179,10 @@ book_tab.render_book_tab(object())
 """
 
 
-def _at(n_attr: int, settled_ok: bool = True):
+def _at(n_attr: int, settled_ok: bool = True, latest_lag: int = 0):
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_string(
-        _HARNESS % (str(REPO), str(APPDIR), n_attr, settled_ok),
+        _HARNESS % (str(REPO), str(APPDIR), n_attr, settled_ok, latest_lag),
         default_timeout=60)
     at.run()
     return at
@@ -287,3 +292,16 @@ def test_tab_backtest_skipped_for_registry_only():
     assert not at.exception, f"render exception: {at.exception}"
     headers = [h.value for h in at.header]
     assert not any("Backtest" in h for h in headers), headers
+
+
+# ---------------------------------------------------------- freshness (P0)
+
+def test_tab_warns_on_stale_layers():
+    # 10 days behind: every daily layer is past tolerance, settled (75d) is not.
+    at = _at(n_attr=5, latest_lag=10)
+    assert not at.exception, f"render exception: {at.exception}"
+    msgs = [w.value for w in at.warning if "Stale book layers" in w.value]
+    assert len(msgs) == 1, [w.value for w in at.warning]
+    for layer in ("forecast", "strategy", "cleared", "actual", "attribution"):
+        assert f"**{layer}** stale" in msgs[0], msgs[0]
+    assert "settled" not in msgs[0]

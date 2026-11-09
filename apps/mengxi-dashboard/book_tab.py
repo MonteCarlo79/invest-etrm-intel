@@ -273,6 +273,27 @@ def _render_backtest_section(engine, station: StationRef) -> None:
     st.dataframe(bt_df, use_container_width=True, hide_index=True)
 
 
+def _render_freshness(book: AssetBook) -> None:
+    """Top-of-tab layer health: one warning naming every stale / missing /
+    unavailable layer, plus the full per-layer table in an expander."""
+    rows = book.freshness()
+    if not rows:
+        return
+    bad = [r for r in rows if r.status != "ok"]
+    if bad:
+        st.warning("Stale book layers: " + "; ".join(
+            f"**{r.layer}** {r.status}"
+            + (f" (latest {r.latest}, {r.lag_days}d behind, tolerance "
+               f"{r.max_lag_days}d)" if r.latest else "")
+            for r in bad))
+    with st.expander("Data freshness by layer", expanded=False):
+        st.dataframe(pd.DataFrame(
+            [{"layer": r.layer, "latest": r.latest, "lag_days": r.lag_days,
+              "tolerance_days": r.max_lag_days, "status": r.status,
+              "note": r.note} for r in rows]),
+            use_container_width=True, hide_index=True)
+
+
 def render_book_tab(engine) -> None:
     st.title("Asset Book — 蒙西 Stations")
     st.caption(
@@ -304,6 +325,7 @@ def render_book_tab(engine) -> None:
         return
 
     book = AssetBook(engine, station)
+    _render_freshness(book)
 
     # ── (a) Dispatch chain ──────────────────────────────────────────────────
     st.header("Dispatch chain — one day")

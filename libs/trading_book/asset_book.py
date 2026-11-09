@@ -213,6 +213,12 @@ class AssetBook(TradingBook):
                 "waterfall assembler lands in Task 5") from exc
         return waterfall.build_waterfall(self._engine, self, start, end)
 
+    def freshness(self, today: Day | None = None) -> list:
+        """Per-layer latest date + ok/stale/missing/unavailable status for
+        this station's data-path tier. Never raises on DB errors."""
+        from libs.trading_book import freshness
+        return freshness.book_freshness(self._engine, self.station, today)
+
     def forecast(self, day: Day) -> ForecastSet:
         """D-1 forecast artifact (Task 7 reader) + Task 8 fleet-response
         stack, wired end-to-end. Call-time imports, same pattern as

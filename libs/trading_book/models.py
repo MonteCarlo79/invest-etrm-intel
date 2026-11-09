@@ -63,3 +63,4 @@ class TradingBook:
     def actual(self, day: Day) -> ActualDispatch: raise NotImplementedError
     def settlement(self, period: str) -> Settlement: raise NotImplementedError
     def attribution(self, start: Day, end: Day) -> Waterfall: raise NotImplementedError
+    def freshness(self, today: Day | None = None) -> list: raise NotImplementedError
