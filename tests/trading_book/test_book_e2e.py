@@ -47,6 +47,14 @@ def _frame_for(sql_text: str) -> pd.DataFrame:
         return pd.DataFrame({"datetime": ts,
                              "cleared_price": np.full(96, 350.0),
                              "cleared_energy_mwh": np.full(96, 20.0)})
+    # WeCom workbook curves — the primary actual() source since 2026-11-07.
+    if "bess_nomination_96" in sql_text:
+        return pd.DataFrame({"data_date": [DAY] * 96, "slot": range(1, 97),
+                             "nominated_mw": np.full(96, 19.0)})
+    if "bess_actual_96" in sql_text:
+        return pd.DataFrame({"data_date": [DAY] * 96, "slot": range(1, 97),
+                             "actual_mw": np.full(96, 18.0)})
+    # Pre-2026-04-20 fallback, used only when the WeCom tables are empty.
     if "ops_bess_dispatch_15min" in sql_text:
         ts = pd.date_range(f"{DAY} 00:00", periods=96, freq="15min")
         return pd.DataFrame({"interval_start": ts,
@@ -116,6 +124,7 @@ def test_full_chain_assembles_with_fakes(fake_db, fake_stack):
     actual = book.actual(DAY)
     assert isinstance(actual, ActualDispatch)
     assert len(actual.actual_mw) == 96 and actual.actual_mw[0] == 18.0
+    assert actual.nominated_mw[0] == 19.0
 
     strategies = book.strategies(DAY)
     assert len(strategies) == 1 and strategies[0].scope == "nodal_agent"
@@ -161,3 +170,21 @@ def test_forecast_stack_failure_degrades_to_none(fake_db, monkeypatch, capsys):
     assert fs.fleet_response is None
     assert fs.nodal_price_fc[0] == 300.0  # price forecast survives the degrade
     assert "WARNING" in capsys.readouterr().out
+
+
+def test_actual_falls_back_to_ops_table_when_wecom_empty(monkeypatch):
+    """Empty WeCom tables (pre-2026-04-20 days) -> ops_bess_dispatch_15min."""
+    def fake(sql, engine, params=None):
+        q = str(sql)
+        if "bess_nomination_96" in q or "bess_actual_96" in q:
+            return pd.DataFrame(columns=["data_date", "slot", "v"])
+        if "ops_bess_dispatch_15min" in q:
+            ts = pd.date_range(f"{DAY} 00:00", periods=96, freq="15min")
+            return pd.DataFrame({"interval_start": ts,
+                                 "nominated_dispatch_mw": np.full(96, 7.0),
+                                 "actual_dispatch_mw": np.full(96, 6.0)})
+        raise AssertionError(f"unexpected SQL: {q[:120]}")
+
+    monkeypatch.setattr(pd, "read_sql", fake)
+    actual = AssetBook(engine=None, station=get_station("suyou")).actual(DAY)
+    assert actual.nominated_mw[0] == 7.0 and actual.actual_mw[95] == 6.0

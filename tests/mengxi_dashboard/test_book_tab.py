@@ -137,6 +137,13 @@ def _fake_read_sql(sql, con, params=None):
     if "FROM marketdata.md_id_cleared_energy" in s:
         return pd.DataFrame({"datetime": _TS, "cleared_price": _PRICE,
                              "cleared_energy_mwh": _MW})
+    # WeCom workbook curves — actual()'s primary source since 2026-11-07.
+    if "FROM marketdata.bess_nomination_96" in s:
+        return pd.DataFrame({"data_date": [_DAY] * 96, "slot": range(1, 97),
+                             "nominated_mw": _MW})
+    if "FROM marketdata.bess_actual_96" in s:
+        return pd.DataFrame({"data_date": [_DAY] * 96, "slot": range(1, 97),
+                             "actual_mw": _MW2})
     if "FROM marketdata.ops_bess_dispatch_15min" in s:
         return pd.DataFrame({"interval_start": _TS,
                              "nominated_dispatch_mw": _MW,
