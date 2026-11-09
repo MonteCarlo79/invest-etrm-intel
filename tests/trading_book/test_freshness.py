@@ -51,7 +51,9 @@ def test_keys_follow_reader_conventions(monkeypatch):
     calls = _capture(monkeypatch, TODAY)
     book_freshness(None, get_station("bameng"), TODAY)
     by_table = {sql.split("FROM")[1].split()[0]: p["k"] for sql, p in calls}
-    assert by_table["marketdata.md_id_cleared_energy"] == "%景怡查干哈达储能电站%"
+    # exact name, never LIKE: the wildcard scan timed out on 36M rows (v54)
+    assert by_table["marketdata.md_id_cleared_energy"] == "景怡查干哈达储能电站"
+    assert all("LIKE :k" not in sql for sql, _ in calls)
     assert by_table["reports.bess_asset_daily_attribution"] == "hetao"
     assert by_table["reports.book_settled_daily"] == "bameng"
     assert by_table["marketdata.nodal_strategy_daily"] == "景怡查干哈达储能电站"

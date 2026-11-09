@@ -20,8 +20,7 @@ max_lag_days = today − latest; negative lag is fine (D+1 artifacts).
 Tolerances are first-cut values from those cadences, not yet calibrated
 against live lag history.
 
-Frames: date columns are DATE; md_id_cleared_energy.datetime is CST-naive,
-compared via a naive literal (no '+08', no AT TIME ZONE).
+Frames: every probe reads a DATE column, so no timezone rendering at all.
 "today" is the CST calendar date.
 
 Data-path tiers: 'full' books check every layer; 'settlement_only' books
@@ -71,10 +70,15 @@ _LAYERS: tuple[LayerSpec, ...] = (
         WHERE plant_name = :k AND model_version LIKE 'nodal_agent%'
           AND target_date >= CAST(:s AS date)""",
         "plant_name", 0, 30),
+    # 36M rows; every index leads with data_date or (plant_name, data_date).
+    # A datetime filter + leading-wildcard LIKE scans the range and timed out
+    # at 120 s in prod (v54). Exact name + data_date hits idx_md_id_plant_date
+    # in ~5 ms; all 6 full-path plant names match exactly once (verified
+    # 2026-11-09).
     LayerSpec("cleared", """
-        SELECT MAX(datetime) AS latest FROM marketdata.md_id_cleared_energy
-        WHERE plant_name LIKE :k AND datetime >= CAST(:s AS timestamp)""",
-        "plant_like", 3, 30),
+        SELECT MAX(data_date) AS latest FROM marketdata.md_id_cleared_energy
+        WHERE plant_name = :k AND data_date >= CAST(:s AS date)""",
+        "plant_name", 3, 30),
     LayerSpec("actual", """
         SELECT MAX(data_date) AS latest FROM marketdata.bess_actual_96
         WHERE asset_code = :k AND data_date >= CAST(:s AS date)""",
@@ -101,8 +105,6 @@ def cst_today() -> date:
 
 
 def _key(station: StationRef, key: str) -> str:
-    if key == "plant_like":
-        return f"%{station.plant_name}%"   # same match as AssetBook.cleared()
     if key == "attribution_code":
         from libs.trading_book.waterfall import _attribution_code
         return _attribution_code(station.asset_code)
