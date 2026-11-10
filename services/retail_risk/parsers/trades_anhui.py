@@ -1,5 +1,11 @@
 # services/retail_risk/parsers/trades_anhui.py
-"""安徽 trades: 滚搓市场成交结果 (hourly cleared vol/price) + 中长期合同批次 sheets."""
+"""安徽 trades: 我的滚搓结果 (our hourly rolling-match vol/price) + 中长期合同批次 sheets.
+
+滚搓市场成交结果 in the same workbook is the MARKET-wide result (~2,000 MWh/h with
+市场滚搓分时加权均价) — never our trades (P1 read it as ours: 39x overstatement).
+Only the March workbook carries 我的滚搓结果; Apr-Aug workbooks hold a scratch
+滚搓 planning sheet, not a trade record, so their rolling trades are absent.
+"""
 from __future__ import annotations
 
 import re
@@ -14,7 +20,7 @@ _HOUR_RE = re.compile(r"段\d+:(\d{2}):00-(\d{2}):00")
 
 def _parse_guncuo(path: Path) -> pd.DataFrame:
     try:
-        df = pd.read_excel(path, sheet_name="滚搓市场成交结果")
+        df = pd.read_excel(path, sheet_name="我的滚搓结果")
     except ValueError:
         return pd.DataFrame(columns=schemas.TRADES_COLS)
     hour_cols = [c for c in df.columns if re.fullmatch(r"\d{1,2}点", str(c))]
@@ -22,14 +28,16 @@ def _parse_guncuo(path: Path) -> pd.DataFrame:
     i = 0
     while i < len(df) - 1:
         vol_row, px_row = df.iloc[i], df.iloc[i + 1]
-        if str(vol_row.get("交易类型")) == "电量" and str(px_row.get("交易类型")) == "电价":
+        if (str(vol_row.get("交易类型")) == "电量" and str(px_row.get("交易类型")) == "电价"
+                and pd.notna(vol_row.get("标的日"))):
             delivery = pd.to_datetime(vol_row["标的日"]).date()
             for c in hour_cols:
                 h = int(str(c).replace("点", "")) - 1       # 1点 = hour 0
                 vol, px = vol_row[c], px_row[c]
                 if pd.notna(vol) and float(vol) != 0:
-                    rows.append([delivery, h, "intramonth_match", "forward", "buy",
-                                 float(vol), float(px) if pd.notna(px) else None,
+                    rows.append([delivery, h, "intramonth_match", "forward",
+                                 "buy" if float(vol) > 0 else "sell",
+                                 abs(float(vol)), float(px) if pd.notna(px) else None,
                                  None, "滚撮", path.name])
             i += 2
         else:

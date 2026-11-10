@@ -9,8 +9,15 @@ def _make_guncuo(path: Path):
     cols = ["申报日", "标的日", "交易类型", "平均"] + [f"{h}点" for h in range(1, 25)]
     vol = ["2026-02-27", "2026-03-01", "电量", None] + [100.0] * 24
     px = ["2026-02-27", "2026-03-01", "电价", 293.3] + [266.8] * 24
+    mine_cols = ["交易日期", "标的日", "交易类型"] + [f"{h}点" for h in range(1, 25)]
+    mine_vol = ["2026-02-27", "2026-03-01", "电量", 1.95, 18.0] + [None] * 22
+    mine_px = ["2026-02-27", "2026-03-01", "电价", 246.15, 230.0] + [None] * 22
+    empty = [None, None, "电量"] + [None] * 24                    # trailing blank pair
     with pd.ExcelWriter(path, engine="openpyxl") as w:
+        # MARKET-wide results (~2,000 MWh/h) — must NOT be read as our trades
         pd.DataFrame([vol, px], columns=cols).to_excel(w, sheet_name="滚搓市场成交结果", index=False)
+        pd.DataFrame([mine_vol, mine_px, empty, [None, None, "电价"] + [None] * 24],
+                     columns=mine_cols).to_excel(w, sheet_name="我的滚搓结果", index=False)
 
 
 def _make_contracts(path: Path):
@@ -27,10 +34,10 @@ def test_guncuo_hourly_pairs(tmp_path):
     _make_guncuo(tmp_path / "安徽" / "交易记录" / "3月-中长期交易.xlsx")
     out = parse_anhui_trades(tmp_path)
     g = out[out.channel == "intramonth_match"]
-    assert len(g) == 24
+    assert len(g) == 2                                    # our sheet only, not the market's 24
     row = g[g.hour == 0].iloc[0]
-    assert row.volume_mwh == 100.0 and row.price_cny_mwh == 266.8
-    assert str(row.delivery_date) == "2026-03-01"
+    assert row.volume_mwh == 1.95 and row.price_cny_mwh == 246.15
+    assert str(row.delivery_date) == "2026-03-01" and row.direction == "buy"
 
 
 def test_contract_batches(tmp_path):
