@@ -36,7 +36,7 @@ import psycopg2.extras
 COLUMN_GROUPS = {
     "load":         ("省内负荷",   "load"),
     "net_export":   ("净外送",     "net_export"),
-    "renewable":    ("新能源总出力", "renewable_total"),  # 新能源总出力量 and 新能源总出力
+    "renewable":    ("新能源总出力", "renewable"),        # 新能源总出力量 and 新能源总出力
     "bidding":      ("竞价空间",   "bidding_space"),      # 竞价空间(MW) and 竞价空间(B区合计)
     "wind":         ("风电",       "wind"),
     "solar":        ("光伏",       "solar"),
@@ -55,9 +55,22 @@ _FULL_MAP: dict[tuple[str, str], str] = {}
 for _g, (_, _db_prefix) in COLUMN_GROUPS.items():
     for _sfx, _db_sfx in SUFFIX_SPECS:
         _FULL_MAP[(_g, _sfx)] = f"{_db_prefix}{_db_sfx}"
+# Realized renewable is stored as renewable_total_mw; forecasts as renewable_d{n}_mw
+# (the DDL has no renewable_total_d1_mw — the old mapping silently dropped D-1/2/3).
+_FULL_MAP[("renewable", "实时")] = "renewable_total_mw"
 # e.g. ("load", "实时") → "load_mw"
 #       ("bidding", "实时") → "bidding_space_mw"
-#       ("renewable", "D-1") → "renewable_total_d1_mw"
+#       ("renewable", "D-1") → "renewable_d1_mw"
+
+# Columns written by the upsert — must cover every _FULL_MAP target.
+_ALL_DB_COLS = [
+    "load_mw", "load_d1_mw", "load_d2_mw", "load_d3_mw",
+    "net_export_mw", "net_export_d1_mw", "net_export_d2_mw", "net_export_d3_mw",
+    "renewable_total_mw", "renewable_d1_mw", "renewable_d2_mw", "renewable_d3_mw",
+    "bidding_space_mw", "bidding_space_d1_mw", "bidding_space_d2_mw", "bidding_space_d3_mw",
+    "wind_mw", "wind_d1_mw", "wind_d2_mw", "wind_d3_mw",
+    "solar_mw", "solar_d1_mw", "solar_d2_mw", "solar_d3_mw",
+]
 
 
 def _detect_fundamentals_cols(xlsx_path: Path) -> dict[str, str]:
@@ -208,15 +221,7 @@ def _ingest_one_file(
     _ensure_table(dsn, schema)
 
     # Upsert
-    all_db_cols = [
-        "load_mw", "load_d1_mw", "load_d2_mw", "load_d3_mw",
-        "net_export_mw", "net_export_d1_mw", "net_export_d2_mw", "net_export_d3_mw",
-        "renewable_total_mw", "renewable_d1_mw", "renewable_d2_mw", "renewable_d3_mw",
-        "bidding_space_mw", "bidding_space_d1_mw", "bidding_space_d2_mw", "bidding_space_d3_mw",
-        "wind_mw", "wind_d1_mw", "wind_d2_mw", "wind_d3_mw",
-        "solar_mw", "solar_d1_mw", "solar_d2_mw", "solar_d3_mw",
-    ]
-    present_cols = [c for c in all_db_cols if c in hourly.columns]
+    present_cols = [c for c in _ALL_DB_COLS if c in hourly.columns]
     insert_cols = ["province", "datetime"] + present_cols
     update_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in present_cols)
 
