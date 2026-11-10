@@ -161,8 +161,10 @@ def _irr_defaults_for_province(
         )
         if not prov_sof.empty:
             avg_fee = float(prov_sof["fee_yuan_kwh"].mean())
-            # fee(¥/kWh) × 1000(kWh/MWh capacity) / RTE / 365 days
-            result["sysopfee_day"] = -(avg_fee * 1000.0 / rte / 365.0)
+            # fee(¥/kWh) × 1000 kWh/MWh ÷ RTE = ¥ per MWh_cap per day at 1 cycle/day
+            # (charge energy = discharge ÷ RTE); already per-day — no ÷365.
+            # Same basis as capacity_stack.sysopfee_annual_cost_per_mwh ÷ 365.
+            result["sysopfee_day"] = -(avg_fee * 1000.0 / rte)
             result["sysopfee_src"] = f"2026至今均值 ({len(prov_sof)}个月)"
         else:
             result["sysopfee_src"] = "无2026数据"
@@ -170,19 +172,23 @@ def _irr_defaults_for_province(
     # ── 容量补偿: most recent row with standard ¥/kW value ───────────────────
     if not cc_df.empty and province in cc_df["province"].values:
         prov_cc = cc_df[cc_df["province"] == province].copy()
-        # Skip rows where notes indicate a ¥/kWh volume-based model (e.g. 蒙东, 山东)
+        # Skip 放电量补偿 rows (元/kWh discharged, e.g. 蒙东 0.28 / 山东 0.0705): notes
+        # mention kWh, or rate < 1 — the same threshold capacity_stack uses
+        # (DISCHARGE_MODE_RATE_THRESHOLD); per-kW·yr rates are always ≥ 100.
         if "notes" in prov_cc.columns:
             prov_cc = prov_cc[
                 ~prov_cc["notes"].fillna("").str.contains("kWh", case=False)
             ]
+        prov_cc = prov_cc[~(pd.to_numeric(prov_cc["cap_comp_yuan_kw"], errors="coerce") < 1.0)]
         prov_cc = prov_cc.dropna(subset=["cap_comp_yuan_kw"]).sort_values(
             "effective_date", ascending=False
         )
         if not prov_cc.empty:
             row = prov_cc.iloc[0]
             cap_val = float(row["cap_comp_yuan_kw"])
-            # ¥/kW/year ÷ duration_h ÷ 365 = ¥/MWh installed/day
-            result["cap_comp_day"] = cap_val / duration_h / 365.0
+            # ¥/kW·yr × 1000 kW/MW ÷ duration_h ÷ 365 = ¥/MWh installed/day
+            # (capacity_stack.capacity_payment_per_mwh_yr: rate × 1000/D per MWh/yr)
+            result["cap_comp_day"] = cap_val * 1000.0 / duration_h / 365.0
             result["cap_comp_src"] = f"最新数据 {str(row['effective_date'])[:7]}"
         else:
             # Province has cap_comp rows but all are non-standard

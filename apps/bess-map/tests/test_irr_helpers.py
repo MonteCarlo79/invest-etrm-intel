@@ -163,8 +163,8 @@ def _make_fr_df(province, price):
 def test_irr_defaults_sysopfee_conversion():
     sof = _make_sof_df("广东", fee=0.05, months=12)
     d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
-    # expected: -(0.05 × 1000 / 0.85 / 365) ≈ -0.1612
-    assert d["sysopfee_day"] == pytest.approx(-(0.05 * 1000 / 0.85 / 365), rel=1e-4)
+    # expected: -(0.05 × 1000 / 0.85) ≈ -58.82 (per MWh_cap per day, 1 cycle/day)
+    assert d["sysopfee_day"] == pytest.approx(-(0.05 * 1000 / 0.85), rel=1e-4)
     assert d["sysopfee_day"] < 0
 
 
@@ -174,7 +174,7 @@ def test_irr_defaults_sysopfee_uses_2026_average():
     sof_2026 = _make_sof_df("广东", fee=0.05, months=7)  # 2026-01..2026-07
     sof = pd.concat([sof_2025, sof_2026], ignore_index=True)
     d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
-    assert d["sysopfee_day"] == pytest.approx(-(0.05 * 1000 / 0.85 / 365), rel=1e-4)
+    assert d["sysopfee_day"] == pytest.approx(-(0.05 * 1000 / 0.85), rel=1e-4)
     assert "2026" in d["sysopfee_src"]
 
 
@@ -189,7 +189,7 @@ def test_irr_defaults_sysopfee_caps_at_12_months():
     sof = pd.DataFrame(rows)
     d = _irr_defaults_for_province("广东", 4.0, sof, pd.DataFrame(), pd.DataFrame())
     latest12_mean = sum(0.01 * (i + 1) for i in range(2, 14)) / 12  # 0.085
-    assert d["sysopfee_day"] == pytest.approx(-(latest12_mean * 1000 / 0.85 / 365), rel=1e-4)
+    assert d["sysopfee_day"] == pytest.approx(-(latest12_mean * 1000 / 0.85), rel=1e-4)
 
 
 def test_irr_defaults_sysopfee_no_data_without_2026_rows():
@@ -201,8 +201,8 @@ def test_irr_defaults_sysopfee_no_data_without_2026_rows():
 def test_irr_defaults_cap_comp_conversion():
     cc = _make_cc_df("广东", 200.0)
     d = _irr_defaults_for_province("广东", 4.0, pd.DataFrame(), cc, pd.DataFrame())
-    # expected: 200 / 4 / 365 ≈ 0.1370
-    assert d["cap_comp_day"] == pytest.approx(200.0 / 4.0 / 365.0, rel=1e-4)
+    # expected: 200 × 1000 / 4 / 365 ≈ 136.99 (matches capacity_stack: rate × 1000/D per MWh/yr)
+    assert d["cap_comp_day"] == pytest.approx(200.0 * 1000 / 4.0 / 365.0, rel=1e-4)
     assert d["cap_comp_day"] > 0
 
 def test_irr_defaults_cap_comp_skips_kwh_notes():
@@ -210,6 +210,12 @@ def test_irr_defaults_cap_comp_skips_kwh_notes():
     d = _irr_defaults_for_province("蒙东", 4.0, pd.DataFrame(), cc, pd.DataFrame())
     assert d["cap_comp_day"] == 0.0
     assert "非¥/kW模式" in d["cap_comp_src"]
+
+def test_irr_defaults_cap_comp_skips_discharge_mode_rate_without_notes():
+    # 山东-style 元/kWh row whose notes omit the unit string: rate < 1 ⇒ not ¥/kW·yr
+    cc = _make_cc_df("山东", 0.0705, notes="动态调整")
+    d = _irr_defaults_for_province("山东", 4.0, pd.DataFrame(), cc, pd.DataFrame())
+    assert d["cap_comp_day"] == 0.0
 
 def test_irr_defaults_fr_conversion():
     fr = _make_fr_df("甘肃", 10.0)
@@ -243,7 +249,7 @@ def test_build_extra_rev_map_sysopfee_only():
         4.0, selected_items=["sysopfee"],
     )
     assert "广东" in result
-    expected = -(0.05 * 1000 / 0.85 / 365) * 365
+    expected = -(0.05 * 1000 / 0.85) * 365
     assert result["广东"] == pytest.approx(expected, rel=1e-4)
     assert result["广东"] < 0
 
@@ -256,7 +262,7 @@ def test_build_extra_rev_map_combined():
         selected_items=["sysopfee", "cap_comp", "fr"],
         fr_util_pct=0.30,
     )
-    sof_ann = -(0.05 * 1000 / 0.85 / 365) * 365
-    cc_ann  = (200.0 / 4.0 / 365.0) * 365
+    sof_ann = -(0.05 * 1000 / 0.85) * 365
+    cc_ann  = (200.0 * 1000 / 4.0 / 365.0) * 365
     fr_ann  = (10.0 * 0.30 * 8760 / 4 / 365) * 365
     assert result["广东"] == pytest.approx(sof_ann + cc_ann + fr_ann, rel=1e-4)

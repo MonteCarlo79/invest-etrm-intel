@@ -143,7 +143,7 @@ _T: dict[str, dict[str, str]] = {
         "fr_saved":             "Saved as confirmed.",
         "fr_none":              "No Hermes draft extractions pending.",
         "fr_pending_caption":   "Hermes-extracted 调频 revenue drafts — confirm to stack on the ranking chart; dismiss marks superseded.",
-        "rank_spread_title":    "Intraday RT Spread by Province (¥/kWh)",
+        "rank_spread_title":    "Intraday RT Spread by Province (¥/MWh)",
         "rank_spread_caption":  "Max − Min of hourly avg RT prices. Bar label σ = annualised volatility (std of daily avg-price changes ÷ mean price × √365).",
         # dispatch
         "disp_province":        "Province",
@@ -157,7 +157,7 @@ _T: dict[str, dict[str, str]] = {
         "disp_charge":          "Charge (MW)",
         "disp_discharge":       "Discharge (MW)",
         "disp_soc":             "SoC (MWh)",
-        "disp_rt_price":        "RT Price (¥/kWh)",
+        "disp_rt_price":        "RT Price (¥/MWh)",
         # irr
         "irr_title":            "BESS IRR Calculator",
         "irr_caption":          "Revenue basis is pulled from DB for the selected province/duration. All other parameters are user-defined.",
@@ -310,7 +310,7 @@ _T: dict[str, dict[str, str]] = {
         "pca_no_data":             "No price data available for this province / period.",
         "pca_not_enough":          "Fewer than 30 trading days — PCA results may be unreliable.",
         "pca_days":                "Trading days in sample",
-        "pca_mean_title":          "Mean Daily Price Profile (¥/kWh)",
+        "pca_mean_title":          "Mean Daily Price Profile (¥/MWh)",
         "pca_var_title":           "Variance Explained by PC",
         "pca_loading_label":       "PC{n} — {pct}% variance",
         "pca_hour":                "Hour of day",
@@ -561,7 +561,7 @@ _T: dict[str, dict[str, str]] = {
         "fr_saved":             "已保存（confirmed）。",
         "fr_none":              "暂无 Hermes 提取的待审草稿。",
         "fr_pending_caption":   "Hermes 提取的调频收入草稿——确认后堆叠到排名图；忽略则标记 superseded。",
-        "rank_spread_title":    "各省日内实时价差（元/千瓦时）",
+        "rank_spread_title":    "各省日内实时价差（元/兆瓦时）",
         "rank_spread_caption":  "小时均价最大值减最小值。条上 σ = 年化波动率（日均价格变动标准差 ÷ 均价 × √365）。",
         "disp_province":        "省份",
         "disp_duration":        "时长",
@@ -574,7 +574,7 @@ _T: dict[str, dict[str, str]] = {
         "disp_charge":          "充电（MW）",
         "disp_discharge":       "放电（MW）",
         "disp_soc":             "荷电状态（MWh）",
-        "disp_rt_price":        "实时电价（元/千瓦时）",
+        "disp_rt_price":        "实时电价（元/兆瓦时）",
         "irr_title":            "储能IRR计算器",
         "irr_caption":          "收益基准从数据库中读取（选定省份/时长）。其他参数由用户自定义。",
         "irr_province":         "省份",
@@ -724,7 +724,7 @@ _T: dict[str, dict[str, str]] = {
         "pca_no_data":             "该省份/时段无可用价格数据。",
         "pca_not_enough":          "交易日数少于30天 — 主成分结果可能不可靠。",
         "pca_days":                "样本交易日数",
-        "pca_mean_title":          "日均电价曲线（元/千瓦时）",
+        "pca_mean_title":          "日均电价曲线（元/兆瓦时）",
         "pca_var_title":           "各主成分方差解释比例",
         "pca_loading_label":       "PC{n} — {pct}%方差",
         "pca_hour":                "小时",
@@ -1010,7 +1010,7 @@ def load_province_ranking(_eng_key, start: str, end: str, model: str = "ols_rt_t
                r.annual_real, r.capture_pct, r.sum_real, r.sum_theo
         FROM (
             SELECT province, duration_h,
-                   ROUND((AVG(theoretical_profit_per_mwh_day) * 365)::numeric, 0) AS annual_theo,
+                   ROUND((AVG(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision)) * 365)::numeric, 0) AS annual_theo,
                    COUNT(DISTINCT date) AS days
             FROM marketdata.bess_capture_daily
             WHERE date BETWEEN :start AND :end
@@ -1064,7 +1064,7 @@ def load_forecast_spread(_eng_key, start: str, end: str, model: str):
                 SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
                        AVG(rt_pred) AS avg_price
                 FROM marketdata.spot_prices_hourly_rt_forecast
-                WHERE model = :model AND datetime BETWEEN :start AND :end
+                WHERE model = :model AND datetime >= :start AND datetime < CAST(:end AS date) + 1
                 GROUP BY province, hour
             ) t GROUP BY province
         ) p
@@ -1079,7 +1079,7 @@ def load_forecast_spread(_eng_key, start: str, end: str, model: str):
                 FROM (
                     SELECT province, datetime::date AS d, AVG(rt_pred) AS p
                     FROM marketdata.spot_prices_hourly_rt_forecast
-                    WHERE model = :model AND datetime BETWEEN :start AND :end
+                    WHERE model = :model AND datetime >= :start AND datetime < CAST(:end AS date) + 1
                     GROUP BY province, datetime::date
                 ) dm
             ) c GROUP BY province
@@ -1099,7 +1099,7 @@ def load_intraday_spread(_eng_key, start: str, end: str):
                 SELECT province, EXTRACT(hour FROM datetime)::int AS hour,
                        AVG(rt_price) AS avg_price
                 FROM marketdata.spot_prices_hourly
-                WHERE datetime BETWEEN :start AND :end
+                WHERE datetime >= :start AND datetime < CAST(:end AS date) + 1
                 GROUP BY province, hour
             ) t GROUP BY province
         ) p
@@ -1116,7 +1116,7 @@ def load_intraday_spread(_eng_key, start: str, end: str):
                 FROM (
                     SELECT province, datetime::date AS d, AVG(rt_price) AS p
                     FROM marketdata.spot_prices_hourly
-                    WHERE datetime BETWEEN :start AND :end
+                    WHERE datetime >= :start AND datetime < CAST(:end AS date) + 1
                     GROUP BY province, datetime::date
                 ) dm
             ) c GROUP BY province
@@ -1133,7 +1133,7 @@ def load_monthly_economics(_eng_key, province: str, duration_h: float, start: st
                r.real_avg, r.capture_pct
         FROM (
             SELECT date_trunc('month', date)::date AS month, province,
-                   ROUND(AVG(theoretical_profit_per_mwh_day)::numeric, 2) AS theo_avg
+                   ROUND(AVG(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision))::numeric, 2) AS theo_avg
             FROM marketdata.bess_capture_daily
             WHERE province = :p AND ABS(duration_h - :d) < 0.01
               AND date BETWEEN :start AND :end
@@ -1141,7 +1141,7 @@ def load_monthly_economics(_eng_key, province: str, duration_h: float, start: st
         ) t
         LEFT JOIN (
             SELECT date_trunc('month', date)::date AS month, province,
-                   ROUND(AVG(realized_profit_per_mwh_day)::numeric, 2) AS real_avg,
+                   ROUND(AVG(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision))::numeric, 2) AS real_avg,
                    ROUND((SUM(COALESCE(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision), 0.0))
                         / NULLIF(SUM(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision)), 0)
                         * 100)::numeric, 1) AS capture_pct
@@ -1242,7 +1242,7 @@ def load_avg_cycles(_eng_key, start: str, end: str):
             SELECT province, datetime::date AS day, duration_h, power_mw,
                    SUM(GREATEST(dispatch_grid_mw, 0)) AS daily_discharge
             FROM marketdata.spot_dispatch_hourly_theoretical
-            WHERE datetime BETWEEN :start AND :end
+            WHERE datetime >= :start AND datetime < CAST(:end AS date) + 1
             GROUP BY province, datetime::date, duration_h, power_mw
         ) t
         GROUP BY province, duration_h
@@ -2101,7 +2101,7 @@ def load_monthly_gaps(_eng_key):
         """,
         "installed": """
             SELECT province,
-                   TO_CHAR(TO_DATE(year_month::text, 'YYYYMM'), 'YYYY-MM') AS year_month
+                   TO_CHAR(year_month, 'YYYY-MM') AS year_month
             FROM marketdata.province_installed_monthly
             WHERE bess_mw IS NOT NULL
         """,
@@ -2165,6 +2165,7 @@ with tab_ranking:
 
         # avg daily cycles
         cycles_df = load_avg_cycles(_ENG_KEY, sel_start, sel_end)
+        cycles_df = cycles_df[~cycles_df["province"].isin(_RANKING_EXCLUDE)]
         cy4 = cycles_df[abs(cycles_df["duration_h"] - 4.0) < 0.01].set_index("province")["avg_cycles"]
         avg_cycles_4h = cy4.mean() if not cy4.empty else None
 
@@ -2402,7 +2403,7 @@ with tab_ranking:
             fig_sp = px.bar(
                 spread_df, x="spread", y="province", orientation="h",
                 color="spread", color_continuous_scale="Blues", text="vol_label",
-                labels={"spread": "RT Intraday Spread (¥/kWh)", "province": ""},
+                labels={"spread": "RT Intraday Spread (¥/MWh)", "province": ""},
             )
             fig_sp.update_traces(textposition="outside")
             fig_sp.update_layout(
@@ -2453,14 +2454,18 @@ with tab_geo:
         _geo_fr_util = st.slider(_t("geo_fr_util"), 5, 80, 30, step=5, key="geo_fr_util") / 100.0
 
     # Build extra_rev_map from already-loaded DataFrames
-    _geo_extra_map = _build_extra_rev_map(
-        _sof_df, _cc_df, _fr_df,
-        duration_h=4.0,
-        selected_items=_geo_sel_keys,
-        fr_util_pct=_geo_fr_util,
-    ) if _geo_sel_keys else {}
+    # cap_comp / fr adjustments are ¥/MWh installed and scale with 1/duration,
+    # so each map needs its own duration's map (the 2h map used the 4h values).
+    _geo_extra_map = {
+        d: (_build_extra_rev_map(_sof_df, _cc_df, _fr_df, duration_h=d,
+                                 selected_items=_geo_sel_keys, fr_util_pct=_geo_fr_util)
+            if _geo_sel_keys else {})
+        for d in (2.0, 4.0)
+    }
 
     geo_rank_df = load_province_ranking(_ENG_KEY, sel_start, sel_end, sel_model)
+    # same stale sub-provincial entities as the ranking; several share one adcode
+    geo_rank_df = geo_rank_df[~geo_rank_df["province"].isin(_RANKING_EXCLUDE)]
     _geojson_bess, _geo_err = _load_china_geojson_bess()
     if _geo_err:
         st.warning(f"{_t('geo_unavailable')} ({_geo_err})")
@@ -2476,7 +2481,7 @@ with tab_geo:
                 geo_rank_df, 2.0, rank_annual_col, _geojson_bess,
                 capex_per_kwh=geo_capex,
                 title=_t("geo_2h_title"),
-                extra_rev_map=_geo_extra_map if _geo_extra_map else None,
+                extra_rev_map=_geo_extra_map[2.0] or None,
             )
             st.markdown(f'<img src="data:image/png;base64,{_fig_to_b64(fig_geo2)}" style="max-width:100%">',
                         unsafe_allow_html=True)
@@ -2487,7 +2492,7 @@ with tab_geo:
                 geo_rank_df, 4.0, rank_annual_col, _geojson_bess,
                 capex_per_kwh=geo_capex,
                 title=_t("geo_4h_title"),
-                extra_rev_map=_geo_extra_map if _geo_extra_map else None,
+                extra_rev_map=_geo_extra_map[4.0] or None,
             )
             st.markdown(f'<img src="data:image/png;base64,{_fig_to_b64(fig_geo4)}" style="max-width:100%">',
                         unsafe_allow_html=True)
@@ -2592,7 +2597,7 @@ with tab_pca:
                     ))
                     fig_mean.update_layout(
                         title=f"{prov} — {_t('pca_mean_title')}",
-                        xaxis_title=_t("pca_hour"), yaxis_title="¥/kWh",
+                        xaxis_title=_t("pca_hour"), yaxis_title="¥/MWh",
                         height=280, margin=dict(t=40, b=30, l=40, r=10),
                         showlegend=False,
                     )
@@ -3479,7 +3484,7 @@ with tab_aux:
         _cap_n = int(_scan_st.get("cap_comp_found", 0))
         _fr_n = int(_scan_st.get("fr_found", 0))
         with _status_col:
-            st.progress(_done / _total if _total else 0,
+            st.progress(min(_done / _total, 1.0) if _total else 0,
                         text=_t("aux_scanning").format(done=_done, total=_total, province=_prov))
             st.caption(_t("aux_scan_results").format(cap=_cap_n, fr=_fr_n))
         # Auto-refresh every 8 seconds while scan is running
@@ -3505,6 +3510,10 @@ with tab_aux:
         list(_cc_df["effective_date"].apply(lambda d: d.year).unique() if not _cc_df.empty else []) +
         list(_fr_df["effective_date"].apply(lambda d: d.year).unique() if not _fr_df.empty else [])
     ), reverse=True) or [dt.datetime.now().year]
+    # default (current year) may not exist in the data → selectbox would keep an
+    # out-of-options value and the year filter would match nothing
+    if st.session_state.get("aux_year") not in _aux_years:
+        st.session_state["aux_year"] = _aux_years[0]
 
     _aux_col1, _aux_col2 = st.columns([3, 1])
     with _aux_col1:
@@ -3529,7 +3538,7 @@ with tab_aux:
     def _style_conflicts(df):
         """Highlight conflict rows in orange."""
         def _row_style(row):
-            if row.get("status") == "conflict":
+            if row.get(_t("aux_status")) == "conflict":  # column renamed before styling
                 return ["background-color: #fff3cd"] * len(row)
             return [""] * len(row)
         return df.style.apply(_row_style, axis=1)
@@ -3655,75 +3664,75 @@ with tab_aux:
             })
             st.dataframe(_inst_disp, use_container_width=True, hide_index=True)
 
-        # ── Conflict resolution ──────────────────────────────────────────────
-        _cc_conflicts = _cc_df[_cc_df["status"] == "conflict"] if not _cc_df.empty else _pd.DataFrame()
-        _fr_conflicts = _fr_df[_fr_df["status"] == "conflict"] if not _fr_df.empty else _pd.DataFrame()
-        _n_conflicts = len(_cc_conflicts) + len(_fr_conflicts)
+    # ── Conflict resolution ──────────────────────────────────────────────
+    _cc_conflicts = _cc_df[_cc_df["status"] == "conflict"] if not _cc_df.empty else _pd.DataFrame()
+    _fr_conflicts = _fr_df[_fr_df["status"] == "conflict"] if not _fr_df.empty else _pd.DataFrame()
+    _n_conflicts = len(_cc_conflicts) + len(_fr_conflicts)
 
-        if _n_conflicts > 0:
-            with st.expander(f"{_t('aux_conflict_section')} ({_n_conflicts} items)"):
-                if not _hermes_url:
-                    st.warning("HERMES_URL not configured — cannot resolve conflicts from UI.")
+    if _n_conflicts > 0:
+        with st.expander(f"{_t('aux_conflict_section')} ({_n_conflicts} items)"):
+            if not _hermes_url:
+                st.warning("HERMES_URL not configured — cannot resolve conflicts from UI.")
 
-                def _resolve_btn(table, row_keep, row_drop, label):
-                    btn_key = f"resolve_{table}_{row_keep}_{row_drop}"
-                    if st.button(f"{_t('aux_confirm_btn')} — {label}", key=btn_key):
-                        if _hermes_url:
-                            try:
-                                _r = _requests.post(
-                                    _hermes_url.rstrip("/") + "/hermes/capcomp/resolve",
-                                    json={"table": table, "row_id_keep": row_keep, "row_id_drop": row_drop},
-                                    timeout=5,
-                                )
-                                if _r.status_code == 200:
-                                    st.success(f"Resolved: kept row {row_keep}")
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                else:
-                                    st.error(f"Error: {_r.text[:100]}")
-                            except Exception as _re:
-                                st.error(f"Request failed: {_re}")
-                        else:
-                            st.warning("HERMES_URL not configured.")
+            def _resolve_btn(table, row_keep, row_drop, label):
+                btn_key = f"resolve_{table}_{row_keep}_{row_drop}"
+                if st.button(f"{_t('aux_confirm_btn')} — {label}", key=btn_key):
+                    if _hermes_url:
+                        try:
+                            _r = _requests.post(
+                                _hermes_url.rstrip("/") + "/hermes/capcomp/resolve",
+                                json={"table": table, "row_id_keep": row_keep, "row_id_drop": row_drop},
+                                timeout=5,
+                            )
+                            if _r.status_code == 200:
+                                st.success(f"Resolved: kept row {row_keep}")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error(f"Error: {_r.text[:100]}")
+                        except Exception as _re:
+                            st.error(f"Request failed: {_re}")
+                    else:
+                        st.warning("HERMES_URL not configured.")
 
-                # Group cap_comp conflicts by (province, effective_date)
-                if not _cc_conflicts.empty:
-                    st.markdown("**容量补偿 conflicts:**")
-                    for (prov, eff_dt), grp in _cc_conflicts.groupby(["province", "effective_date"]):
-                        st.markdown(f"*{prov} — {eff_dt}*")
-                        _grp_rows = grp.reset_index(drop=True)
-                        _cols = st.columns(len(_grp_rows))
-                        for i, (_, row) in enumerate(_grp_rows.iterrows()):
-                            with _cols[i]:
-                                st.write(f"**{row.get('cap_comp_yuan_kw')} ¥/kW**")
-                                st.caption(str(row.get("source", ""))[:80])
-                                # resolve against all other rows in group
-                                for _, other_row in _grp_rows.iterrows():
-                                    if other_row["id"] != row["id"]:
-                                        _resolve_btn(
-                                            "province_cap_comp",
-                                            int(row["id"]), int(other_row["id"]),
-                                            f"{row.get('cap_comp_yuan_kw')} ¥/kW",
-                                        )
+            # Group cap_comp conflicts by (province, effective_date)
+            if not _cc_conflicts.empty:
+                st.markdown("**容量补偿 conflicts:**")
+                for (prov, eff_dt), grp in _cc_conflicts.groupby(["province", "effective_date"]):
+                    st.markdown(f"*{prov} — {eff_dt}*")
+                    _grp_rows = grp.reset_index(drop=True)
+                    _cols = st.columns(len(_grp_rows))
+                    for i, (_, row) in enumerate(_grp_rows.iterrows()):
+                        with _cols[i]:
+                            st.write(f"**{row.get('cap_comp_yuan_kw')} ¥/kW**")
+                            st.caption(str(row.get("source", ""))[:80])
+                            # resolve against all other rows in group
+                            for _, other_row in _grp_rows.iterrows():
+                                if other_row["id"] != row["id"]:
+                                    _resolve_btn(
+                                        "province_cap_comp",
+                                        int(row["id"]), int(other_row["id"]),
+                                        f"{row.get('cap_comp_yuan_kw')} ¥/kW",
+                                    )
 
-                # Group fr_market conflicts by (province, effective_date)
-                if not _fr_conflicts.empty:
-                    st.markdown("**调频市场 conflicts:**")
-                    for (prov, eff_dt), grp in _fr_conflicts.groupby(["province", "effective_date"]):
-                        st.markdown(f"*{prov} — {eff_dt}*")
-                        _grp_rows = grp.reset_index(drop=True)
-                        _cols = st.columns(len(_grp_rows))
-                        for i, (_, row) in enumerate(_grp_rows.iterrows()):
-                            with _cols[i]:
-                                st.write(f"**{row.get('fr_price_yuan_kw_h')} ¥/kW·h**")
-                                st.caption(str(row.get("source", ""))[:80])
-                                for _, other_row in _grp_rows.iterrows():
-                                    if other_row["id"] != row["id"]:
-                                        _resolve_btn(
-                                            "province_fr_market",
-                                            int(row["id"]), int(other_row["id"]),
-                                            f"{row.get('fr_price_yuan_kw_h')} ¥/kW·h",
-                                        )
+            # Group fr_market conflicts by (province, effective_date)
+            if not _fr_conflicts.empty:
+                st.markdown("**调频市场 conflicts:**")
+                for (prov, eff_dt), grp in _fr_conflicts.groupby(["province", "effective_date"]):
+                    st.markdown(f"*{prov} — {eff_dt}*")
+                    _grp_rows = grp.reset_index(drop=True)
+                    _cols = st.columns(len(_grp_rows))
+                    for i, (_, row) in enumerate(_grp_rows.iterrows()):
+                        with _cols[i]:
+                            st.write(f"**{row.get('fr_price_yuan_kw_h')} ¥/kW·h**")
+                            st.caption(str(row.get("source", ""))[:80])
+                            for _, other_row in _grp_rows.iterrows():
+                                if other_row["id"] != row["id"]:
+                                    _resolve_btn(
+                                        "province_fr_market",
+                                        int(row["id"]), int(other_row["id"]),
+                                        f"{row.get('fr_price_yuan_kw_h')} ¥/kW·h",
+                                    )
 
     # ── Data Gaps expander ────────────────────────────────────────────────────
     with st.expander("📋 Data Gaps — 容量补偿 / 调频市场 / 装机容量", expanded=False):
@@ -3912,7 +3921,7 @@ with tab_dispatch:
             row=2, col=1,
         )
         fig_det.update_yaxes(title_text="MW", row=1, col=1, secondary_y=False)
-        fig_det.update_yaxes(title_text="¥/kWh", row=1, col=1, secondary_y=True)
+        fig_det.update_yaxes(title_text="¥/MWh", row=1, col=1, secondary_y=True)
         fig_det.update_yaxes(title_text="MWh", row=2, col=1)
         fig_det.update_layout(height=450, barmode="relative",
                                margin=dict(t=20, b=20), legend=dict(orientation="h"))
@@ -3944,7 +3953,9 @@ with tab_irr:
         else:
             irr_rev_day = real_day_
             irr_cap_rate = 1.0
-        real_day = theo_day * cap_rate  # display only
+        # display: the model's AVG(realized) when present (= the realized IRR basis);
+        # AVG(theo)×AVG(capture) differs from it whenever capture varies with price level
+        real_day = real_day_ if real_day_ else theo_day * cap_rate
 
         if theo_day == 0:
             st.warning(_t("irr_no_data"))
