@@ -592,3 +592,26 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **Next session:**
 - Review items still open (subagent review, partly unverified; app.py is 8,450 lines): shared ¥/MWh-vs-¥/kWh unit helper (median>5 guess at app.py:6194, 6633, monthly_tab.to_kwh); agent `run_pipeline`/`ingest_kb_document` accept model-supplied paths with no allowlist (prompt-injection write path); same silent 5000-row cap on `get_interprov_flow` (spot_mcp/tools.py:136); agent lacks tools for 现货月报/机制竞价/价格预测; 79 bare `except: pass` in app.py; heavy unbounded spot_prices_hourly scans; no tests for interconnector tab/forecast models/dispatcher.
 - Unchecked: what clock the LingFeng collector writes into `spot_prices_hourly.datetime` (should be CST).
+
+## Session Summary, 2026-11-10 (retail-risk P2)
+**Worked on:** retail-risk review after user verdict "not happy" — attribution dead (no benchmarks), recon all red, CRM only 山东. All three were parser/coverage gaps, not missing data.
+**Completed:**
+- Code (c8972123..ff7825da, pushed; spec `docs/superpowers/specs/2026-11-10-retail-risk-p2.md`; 106 tests):
+  - 冀南 counterparty-format 交易结果 parser (bulk 中长期 was in the folder all along; net vol = invoice exactly Jan–Jun, Aug; Jul +157 MWh unexplained).
+  - 浙江 Jan–Mar from 日滚动撮合汇总 *分日持仓量 (VWAP ties sheet's own 撮合后日均价).
+  - Hourly volumes net sells; recon: CfD 中长期 mode for 浙江/山东 (vs DA), grey statuses no_invoice/no_trades/partial_trades(>10% vol gap vs invoice)/no_prices; per-book months.
+  - Benchmarks: 山东 披露月报 表2 (Jan–Apr), 浙江 复盘 clearing prices (Jan–May), 冀南 复盘 hourly 全网 weighted by our hourly buys (Jan–Mar); 亿kWh factor ×100,000 (was ×10,000); source-ranked trader alpha; trader alpha no longer needs RT prices.
+  - CRM: 冀南/浙江/广东/福建/上海/江苏 contract parsers; channel fee = vol × (per-MWh 居间费 + CHANNEL share × max(margin,0)) + lump/12.
+  - 安徽 P1 bug: parser read market-wide 滚搓市场成交结果 as ours (39× overstatement); now 我的滚搓结果 (March only exists).
+- Deployed retail-risk v5/td:5 → v6/td:6 → v7/td:7 (delta builds; aliyun mirror times out via VPN). Logged in LATEST-IMAGES.md (b0efe55f, f320285e).
+- Backfill on ECS run-task (user staged data/trading in S3 tmp/retail-p2; deleted after). 7,223 customers / 7,252 contracts / 155 benchmarks.
+- Verified Jan–Aug: 冀南 explained 7/8 (Jul flagged 64k); 浙江/冀南 trader alpha live; 安徽 + most 山东 = partial_trades (grey).
+**In progress:** nothing mid-edit.
+**Decisions made:**
+- Channel 分成比例 = channel's share of the MARGIN (P1 assumed our share of revenue) — 山东 meaning still unconfirmed.
+- Retail revenue is gross (before 渠道费); 渠道费 deducted once in sales alpha.
+- Bulk retail-risk DB writes go via ECS run-task (Mac → RDS unreachable; VPN IP not whitelisted); Claude cannot upload data/trading to S3 (classifier) — user runs the sync (~1 file/s, silent with --only-show-errors).
+**Next session:**
+- Sales alpha is WRONG for 浙江 (+11M Jan: no 售电侧 lines → fallback revenue = costs + printed total, but 浙江 printed total is the full bill ≈ costs → revenue doubled, 714 ¥/MWh) and questionable for 山东 (benchmark = 中长期 avg only, but CfD province settles whole load at spot). Proposed fix, awaiting user OK: (1) 浙江 sales alpha = None when no sell-side revenue + fix total_kind; (2) CfD provinces benchmark = load-weighted spot + CfD effect; (3) user to explain 山东 售电侧 '售电公司服务费用' −4.59M (Jan).
+- 山东 May recon flagged −343% with vol within 6%: spot_prices_hourly stores 山东 RT-only (Jan–Apr, Aug) / DA-only (May–Jun) → CfD reference price unconfirmed.
+- Data gaps: 浙江 spot prices only Sep+ (shared spot ingest); 安徽 annual + Apr–Aug rolling trades; 山东 positions incomplete; 山东 July invoice missing; 冀南 Apr+ / 浙江 Jun–Aug / 安徽 benchmarks.
