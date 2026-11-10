@@ -37,6 +37,9 @@ def trades_to_volumes(trades: pd.DataFrame, load: pd.DataFrame | None = None) ->
     if trades.empty:
         return pd.DataFrame(columns=schemas.VOLUMES_COLS)
     df = trades.copy()
+    # sells (日滚动卖出, 月度竞价 sell-backs, net-sell 滚撮 days) net against buys
+    sign = df["direction"].map({"sell": -1.0}).fillna(1.0)
+    df["volume_mwh"] = df["volume_mwh"] * sign
     df["pv"] = df["volume_mwh"] * df["price_cny_mwh"].fillna(0)
     df["est"] = df["source_term"].fillna("").str.contains(r"\(est\)")
     g = df.groupby(["delivery_date", "hour", "channel"], as_index=False)

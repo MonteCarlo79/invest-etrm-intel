@@ -35,3 +35,13 @@ def test_trades_to_volumes_propagates_estimated():
     ], columns=schemas.TRADES_COLS)
     out = trades_to_volumes(trades)
     assert out.iloc[0].estimated == True  # noqa: E712
+
+
+def test_trades_to_volumes_nets_sells():
+    trades = pd.DataFrame([
+        [datetime.date(2026, 3, 1), 8, "monthly_auction", "forward", "buy", 10.0, 350.0, None, "月度竞价", "f"],
+        [datetime.date(2026, 3, 1), 8, "monthly_auction", "forward", "sell", 4.0, 380.0, None, "月度竞价", "f"],
+    ], columns=schemas.TRADES_COLS)
+    row = trades_to_volumes(trades).iloc[0]
+    assert row.volume_mwh == 6.0                           # net, not 14
+    assert row.vwap_cny_mwh == pytest.approx((10 * 350 - 4 * 380) / 6)   # net cost / net vol
