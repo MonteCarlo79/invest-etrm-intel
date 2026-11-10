@@ -18,6 +18,7 @@ def load_rt_hourly(conn, province: str, months: int = 12) -> list[tuple]:
     sql = (
         "SELECT datetime, rt_price FROM marketdata.spot_prices_hourly "
         "WHERE province = %s AND datetime >= now() - make_interval(months => %s) "
+        "AND rt_price IS NOT NULL "
         "ORDER BY datetime"
     )
     with conn.cursor() as cur:

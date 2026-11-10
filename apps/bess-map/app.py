@@ -263,6 +263,8 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "No LLM configured (set ANTHROPIC_API_KEY or BEDROCK_REGION).",
         "agent_clear":          "Clear chat",
         "agent_error":          "Agent error: {err}",
+        "agent_round_cap":      "Stopped after {n} tool-call rounds without a final answer.",
+        "agent_empty_reply":    "(empty reply from model)",
         "llm_selector_label":   "AI Model",
         "llm_no_key":           "{provider} API key is not set.",
         # memory
@@ -675,6 +677,8 @@ _T: dict[str, dict[str, str]] = {
         "agent_no_key":         "未配置LLM（请设置 ANTHROPIC_API_KEY 或 BEDROCK_REGION）。",
         "agent_clear":          "清空对话",
         "agent_error":          "助手错误：{err}",
+        "agent_round_cap":      "已达到单次回答的工具调用上限 {n} 轮，已停止。",
+        "agent_empty_reply":    "（模型未返回文本）",
         "llm_selector_label":   "AI 模型",
         "llm_no_key":           "{provider} API Key未设置。",
         # memory
@@ -1204,13 +1208,15 @@ def load_avg_economics(_eng_key, province: str, duration_h: float, model: str = 
     sql = sql_text("""
         SELECT t.theo_per_mwh_day, r.real_per_mwh_day, r.capture_rate
         FROM (
-            SELECT AVG(theoretical_profit_per_mwh_day) AS theo_per_mwh_day
+            -- NULLIF NaN: realized/theo are literal NaN on warmup / forecast-hole days
+            -- and one NaN poisons AVG (same guard as load_province_ranking).
+            SELECT AVG(NULLIF(theoretical_profit_per_mwh_day, 'NaN'::double precision)) AS theo_per_mwh_day
             FROM marketdata.bess_capture_daily
             WHERE province = :p AND ABS(duration_h - :d) < 0.01
         ) t
         CROSS JOIN (
-            SELECT AVG(realized_profit_per_mwh_day)              AS real_per_mwh_day,
-                   AVG(NULLIF(capture_rate, 'NaN'::double precision)) AS capture_rate
+            SELECT AVG(NULLIF(realized_profit_per_mwh_day, 'NaN'::double precision)) AS real_per_mwh_day,
+                   AVG(NULLIF(capture_rate, 'NaN'::double precision))              AS capture_rate
             FROM marketdata.bess_capture_daily
             WHERE province = :p AND ABS(duration_h - :d) < 0.01
               AND model = :model
@@ -4671,25 +4677,30 @@ with tab_agent:
     # Anthropic client is always available (used for memory extraction with Haiku)
     _ant_client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
 
+    # Never stop the script here: st.stop halts the whole run and blanks every tab rendered
+    # after this one (跨省绿电). A missing key just disables the chat input.
+    _agent_ready = True
+    _chat_client = None  # anthropic: use _ant_client directly
     if _llm_provider == "anthropic":
         if not _is_llm_available(os.environ.get("ANTHROPIC_API_KEY", "")):
             st.error(_t("agent_no_key"))
-            st.stop()
-        _chat_client = None  # use _ant_client directly
+            _agent_ready = False
     elif _llm_provider == "openai":
         _oai_key = os.environ.get("OPENAI_API_KEY")
         if not _oai_key:
             st.error(_t("llm_no_key", provider="OPENAI_API_KEY"))
-            st.stop()
-        from openai import OpenAI as _OAI
-        _chat_client = _OAI(api_key=_oai_key)
+            _agent_ready = False
+        else:
+            from openai import OpenAI as _OAI
+            _chat_client = _OAI(api_key=_oai_key)
     else:  # deepseek
         _ds_key = os.environ.get("DEEPSEEK_API_KEY")
         if not _ds_key:
             st.error(_t("llm_no_key", provider="DEEPSEEK_API_KEY"))
-            st.stop()
-        from openai import OpenAI as _OAI
-        _chat_client = _OAI(api_key=_ds_key, base_url="https://api.deepseek.com")
+            _agent_ready = False
+        else:
+            from openai import OpenAI as _OAI
+            _chat_client = _OAI(api_key=_ds_key, base_url="https://api.deepseek.com")
 
     # ── session state init ────────────────────────────────────────────────────
     # Clear history when user switches LLM provider (incompatible tool formats)
@@ -4769,7 +4780,8 @@ with tab_agent:
                 "Get monthly grid system operation fees (系统运行费, ¥/kWh) by province. "
                 "This is a COST charged by the grid on every MWh discharged — reduces actual BESS revenue. "
                 "Higher fee = higher grid balancing cost = stronger BESS flexibility demand. "
-                "Use to adjust IRR calculations: pass the fee as a negative subsidy_per_mwh in get_irr_estimate."
+                "To deduct it in get_irr_estimate convert ¥/kWh to ¥/MWh (×1000) and pass it as a NEGATIVE "
+                "subsidy_per_mwh, e.g. 0.05 ¥/kWh → subsidy_per_mwh = -50."
             ),
             "input_schema": {
                 "type": "object",
@@ -4786,7 +4798,9 @@ with tab_agent:
             "description": (
                 "Get province capacity compensation (容量补偿/容量电价) policy data: ¥/kW rate and qualifying duration. "
                 "This is a REVENUE stream paid to BESS owners for providing capacity. "
-                "Use to add to IRR: annualised ¥/kW ÷ duration_h ÷ 1000 converts to ¥/MWh for subsidy_per_mwh in get_irr_estimate."
+                "To add it in get_irr_estimate convert annual ¥/kW to ¥/MWh discharged: "
+                "¥/kW·yr × 1000 ÷ (duration_h × cycles_per_day × 365), cycles_per_day from get_bess_economics "
+                "(use 1 if unknown), and pass it as a positive subsidy_per_mwh."
             ),
             "input_schema": {
                 "type": "object",
@@ -4866,11 +4880,7 @@ with tab_agent:
             )
             irr = _compute_irr(cfs)
             npv = _compute_npv(cfs, 0.08)
-            cum, payback = 0.0, None
-            for yr, cf in enumerate(cfs[1:], 1):
-                cum += cf
-                if cum >= 0 and payback is None:
-                    payback = yr
+            payback = _compute_payback(cfs)  # includes the year-0 equity outlay
             return str({
                 "province": inp["province"], "duration_h": inp.get("duration_h"),
                 "revenue_basis": "realised" if inp.get("use_realised") else "theoretical",
@@ -4952,6 +4962,11 @@ with tab_agent:
                 if raw.startswith("json"):
                     raw = raw[4:]
             items = _json.loads(raw)
+            if not isinstance(items, list):
+                return []
+            items = [it for it in items if isinstance(it, dict)
+                     and all(isinstance(it.get(k), str) and it.get(k).strip()
+                             for k in ("category", "subject", "content"))]
             from shared.memory_shadow import shadow_memory_extraction
             shadow_memory_extraction("bess_map", user_msg, agent_reply, items)
             return items
@@ -5002,7 +5017,9 @@ with tab_agent:
                 st.rerun()
 
     # ── chat input ────────────────────────────────────────────────────────────
-    user_input = st.chat_input(_t("agent_placeholder"), key="bess_agent_input")
+    _MAX_TOOL_ROUNDS = 12  # cap tool-use rounds so a tool-error loop can't burn tokens
+    user_input = st.chat_input(_t("agent_placeholder"), key="bess_agent_input",
+                               disabled=not _agent_ready)
     if user_input:
         st.session_state["bess_agent_msgs"].append({"role": "user", "content": user_input})
         with st.chat_message("user"):
@@ -5021,7 +5038,10 @@ with tab_agent:
 
                 if _llm_provider == "anthropic":
                     # ── Anthropic Claude ──────────────────────────────────────
-                    while True:
+                    for _round in range(_MAX_TOOL_ROUNDS + 1):
+                        if _round == _MAX_TOOL_ROUNDS:
+                            _reply_parts.append(_t("agent_round_cap", n=_MAX_TOOL_ROUNDS))
+                            break
                         resp = _ant_client.messages.create(
                             model=_llm_model,
                             max_tokens=4096,
@@ -5054,7 +5074,10 @@ with tab_agent:
                 else:
                     # ── OpenAI-compatible (GPT-4o / DeepSeek) ────────────────
                     _oai_history = [{"role": "system", "content": _sys}] + _history
-                    while True:
+                    for _round in range(_MAX_TOOL_ROUNDS + 1):
+                        if _round == _MAX_TOOL_ROUNDS:
+                            _reply_parts.append(_t("agent_round_cap", n=_MAX_TOOL_ROUNDS))
+                            break
                         resp = _chat_client.chat.completions.create(
                             model=_llm_model,
                             max_tokens=4096,
@@ -5082,7 +5105,7 @@ with tab_agent:
                             _reply_parts.append(msg.content or "")
                             break
 
-                _reply = "".join(_reply_parts)
+                _reply = "".join(_reply_parts).strip() or _t("agent_empty_reply")
                 _status.update(state="complete", expanded=False)
                 st.markdown(_reply)
 
@@ -5349,9 +5372,11 @@ with tab_icp:
     _receiver = st.selectbox(_t("icp_s3_receiver"), _provs,
                              index=_provs.index("江苏") if "江苏" in _provs else 0,
                              key="icp_s3_receiver")
-    if "上海" not in _provs:
+    # 上海 is a receiver but not a LingFeng market → read its proxy series
+    _s3_src = _receiver if _receiver in _ICP_LINGFENG_29 else _ICP_PROXY.get(_receiver, "江苏")
+    if _s3_src != _receiver:
         st.caption(_t("icp_s3_shanghai_proxy"))
-    _rt_rows = _icp_rt_hourly(_ENG_KEY, _receiver, 12)
+    _rt_rows = _icp_rt_hourly(_ENG_KEY, _s3_src, 12)
     if not _rt_rows:
         st.info(_t("icp_s3_no_data"))
     else:
@@ -5378,7 +5403,7 @@ with tab_icp:
     _proxied: set = set()
 
     def _receiver_rt(recv: str):
-        if recv in _provs:
+        if recv in _ICP_LINGFENG_29:
             _p, _is_proxy = recv, False
         else:
             _p, _is_proxy = _ICP_PROXY.get(recv, "江苏"), True

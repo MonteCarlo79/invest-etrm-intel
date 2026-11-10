@@ -24,3 +24,11 @@ def test_load_trade_ttm_converts_mwh_to_100gwh():
     from libs.interconnector_pricing.db_reads import load_trade_ttm
     conn = _Conn([("宝合直流", 2_000_000.0)])   # 2e6 MWh = 20 亿kWh
     assert load_trade_ttm(conn) == {"宝合直流": 20.0}
+
+
+def test_load_rt_hourly_excludes_null_prices():
+    # A single NULL rt_price hour used to crash S3/S5b (sum over None).
+    from libs.interconnector_pricing.db_reads import load_rt_hourly
+    conn = _Conn([])
+    load_rt_hourly(conn, "江苏", months=12)
+    assert "rt_price IS NOT NULL" in conn.cursor().sql
