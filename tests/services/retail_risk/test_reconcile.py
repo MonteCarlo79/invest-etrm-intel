@@ -145,3 +145,34 @@ def test_invoice_totals_no_join_fanout():
     assert out["total"] == 175251.68                    # not x2 (2 items)
     assert out["settled_vol"] == 21906.46
     assert "JOIN" not in queries[0].upper()             # total query must not join
+
+
+def test_midlong_mode_by_province():
+    assert rc.MIDLONG_MODE.get("浙江") == "cfd" and rc.MIDLONG_MODE.get("山东") == "cfd"
+    assert rc.MIDLONG_MODE.get("冀南", "physical") == "physical"
+
+
+def test_expected_cfd_cost_vs_da():
+    d = datetime.date(2026, 1, 1)
+    hourly = pd.DataFrame([{"delivery_date": d, "hour": 0, "volume_mwh": 10.0, "price_cny_mwh": 350.0},
+                           {"delivery_date": d, "hour": 1, "volume_mwh": -4.0, "price_cny_mwh": 300.0},
+                           {"delivery_date": d, "hour": 2, "volume_mwh": 5.0, "price_cny_mwh": 340.0}])
+    da = pd.DataFrame([{"delivery_date": d, "hour": 0, "da_price": 330.0},
+                       {"delivery_date": d, "hour": 1, "da_price": 320.0}])        # hour 2 missing
+    cost, missing = rc.expected_cfd_cost(hourly, da)
+    assert cost == pytest.approx(10 * (350 - 330) + (-4) * (300 - 320))         # 200 + 80
+    assert missing == 1
+
+
+def test_coverage_status():
+    assert rc.coverage_status(has_invoice=False, has_trades=True, has_prices=True) == "no_invoice"
+    assert rc.coverage_status(has_invoice=True, has_trades=False, has_prices=True) == "no_trades"
+    assert rc.coverage_status(has_invoice=True, has_trades=True, has_prices=False) == "no_prices"
+    assert rc.coverage_status(has_invoice=True, has_trades=True, has_prices=True) is None
+
+
+def test_judge_explained_when_only_spot_estimate_off():
+    L = rc.ReconLine
+    lines = [L("midlong", 100.0, 100.2, 0.2, ""), L("spot", 50.0, 80.0, -30.0, ""),
+             L("total", 180.0, 210.0, -30.0, ""), L("residual", 30.0, 10.0, 20.0, "fees")]
+    assert rc.judge(lines, tol=1.0) == "explained"     # trades tie; spot is a load-shape estimate

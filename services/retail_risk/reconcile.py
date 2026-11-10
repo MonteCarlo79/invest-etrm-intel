@@ -7,7 +7,18 @@ Checks:
                exposure = invoice settled volume - cleared midlong volume
   3. residual: invoice total - (midlong+spot) vs itemised fees (imbalance/penalty/
                surcharges/redistribution/rule_charges/other/green_premium)
-Status: matched | explained | flagged.
+Status: matched | explained | flagged, or a coverage status when an input is
+missing (no_invoice | no_trades | no_prices) — grey, not red: absent data is a
+coverage gap, not a disagreement.
+  matched   = midlong and total within tolerance
+  explained = midlong within tolerance; spot/total differ (the spot line is an
+              estimate — exposure x mean RT — not a load-shape replay)
+  flagged   = trades disagree with the invoice's midlong line
+
+Midlong settlement mode (MIDLONG_MODE): 'physical' provinces (冀南, 安徽) bill
+contracts at contract price and spot covers only the deviation; 'cfd' provinces
+(浙江, 山东) bill the whole load at spot and 中长期 as a difference vs the DA price,
+so expected midlong = Σ_h net_vol x (contract price - DA price).
 
 Hierarchy rule (subject codes are nested: 0101 > 010102 > 0101020302):
 category AMOUNTS use the min-code-length line per category; fee sums and any
@@ -23,6 +34,8 @@ import pandas as pd
 from sqlalchemy import text
 
 from services.retail_risk import schemas
+
+MIDLONG_MODE = {"浙江": "cfd", "山东": "cfd"}   # default 'physical'
 
 FEE_CATEGORIES = ["imbalance", "penalty", "govt_surcharges", "market_redistribution",
                   "rule_charges", "other", "green_premium", "frequency"]
@@ -58,17 +71,37 @@ def tolerance_for(invoice_total_cny: float, pct: float, floor: float) -> float:
     return max(pct * abs(invoice_total_cny), floor)
 
 
+def _ok(l: ReconLine | None, tol: float) -> bool:
+    return l is not None and l.delta_cny is not None and abs(l.delta_cny) <= tol
+
+
 def judge(lines: list[ReconLine], tol: float) -> str:
-    core = [l for l in lines if l.name in ("midlong", "spot", "total")]
-    residual = next((l for l in lines if l.name == "residual"), None)
-    if all(l.delta_cny is not None and abs(l.delta_cny) <= tol for l in core):
+    by = {l.name: l for l in lines}
+    if not _ok(by.get("midlong"), tol):
+        return "flagged"
+    if _ok(by.get("total"), tol):
         return "matched"
-    core12 = [l for l in lines if l.name in ("midlong", "spot")]
-    if (all(l.delta_cny is not None and abs(l.delta_cny) <= tol for l in core12)
-            and residual is not None and residual.delta_cny is not None
-            and abs(residual.delta_cny) <= tol):
-        return "explained"
-    return "flagged"
+    return "explained"
+
+
+def coverage_status(has_invoice: bool, has_trades: bool, has_prices: bool) -> str | None:
+    if not has_invoice:
+        return "no_invoice"
+    if not has_trades:
+        return "no_trades"
+    if not has_prices:
+        return "no_prices"
+    return None
+
+
+def expected_cfd_cost(hourly: pd.DataFrame, da: pd.DataFrame) -> tuple[float, int]:
+    """Σ net_vol x (contract price - DA price) over hours; returns (cost, hours
+    with volume but no DA price — those are left out of the sum)."""
+    m = hourly.merge(da, on=["delivery_date", "hour"], how="left")
+    m = m[m["volume_mwh"].fillna(0) != 0]
+    missing = int(m["da_price"].isna().sum())
+    m = m.dropna(subset=["da_price", "price_cny_mwh"])
+    return float((m["volume_mwh"] * (m["price_cny_mwh"] - m["da_price"])).sum()), missing
 
 
 def invoice_by_category_frame(items: pd.DataFrame) -> dict[str, float]:
@@ -219,6 +252,37 @@ def _rt_vwap(conn, province: str, month: datetime.date) -> float | None:
     return spot_vwap_series(df) if not df.empty else None
 
 
+_VOL_CHANNELS = ("annual", "monthly_auction", "monthly_listed", "intramonth_match")
+
+
+def _hourly_positions(conn, book_id: int, month: datetime.date) -> pd.DataFrame:
+    """Net hourly volume + VWAP per channel from rm_position_volumes (long form)."""
+    parts = " UNION ALL ".join(
+        f"SELECT delivery_date, hour, {c}_volume_mwh AS volume_mwh, "
+        f"{c}_price_cny_mwh AS price_cny_mwh FROM marketdata.rm_position_volumes "
+        f"WHERE book_id = :b AND delivery_date >= :m AND delivery_date < :m_next"
+        for c in _VOL_CHANNELS)
+    df = pd.read_sql(text(parts), conn, params={"b": book_id, "m": month,
+                                                "m_next": _next_month(month)})
+    for c in ("volume_mwh", "price_cny_mwh"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df.dropna(subset=["volume_mwh"])
+
+
+def _da_prices(conn, province: str, month: datetime.date) -> pd.DataFrame:
+    """Hour-beginning DA prices: datetime 00:00 -> hour 0."""
+    df = pd.read_sql(text("""
+        SELECT CAST(datetime AS date) AS delivery_date,
+               CAST(EXTRACT(hour FROM datetime) AS int) AS hour, da_price
+        FROM marketdata.spot_prices_hourly
+        WHERE province = :p AND datetime >= :m AND datetime < :m_next
+          AND da_price IS NOT NULL
+    """), conn, params={"p": schemas.spot_province(province), "m": month,
+                        "m_next": _next_month(month)})
+    df["da_price"] = pd.to_numeric(df["da_price"], errors="coerce")
+    return df
+
+
 def reconcile_month(conn, book_id: int, month: datetime.date,
                     tolerance_pct: float = 0.005,
                     tolerance_floor: float = 5000.0) -> ReconResult:
@@ -233,25 +297,44 @@ def reconcile_month(conn, book_id: int, month: datetime.date,
     inv_spot = by_cat.get("spot_energy", 0.0)
     inv_fees = sum(by_cat.get(c, 0.0) for c in FEE_CATEGORIES)
     inv_total = float(totals["total"]) if totals["total"] is not None else None
+    mode = MIDLONG_MODE.get(province, "physical")
+    has_prices = True
 
     lines: list[ReconLine] = []
-    lines.append(ReconLine("midlong", pos_cost, inv_midlong, pos_cost - inv_midlong,
-                           f"trades vol {pos_vol:,.0f} MWh"))
+    if mode == "cfd":
+        da = _da_prices(conn, province, month) if province else pd.DataFrame()
+        has_prices = not da.empty
+        cfd, missing = (expected_cfd_cost(_hourly_positions(conn, book_id, month), da)
+                        if has_prices else (None, 0))
+        note = f"CfD vs DA; trades vol {pos_vol:,.0f} MWh"
+        if missing:
+            note += f"; {missing} hours without DA price excluded"
+        lines.append(ReconLine("midlong", cfd, inv_midlong,
+                               (cfd - inv_midlong) if cfd is not None else None, note))
+        exp_mid = cfd or 0.0
+    else:
+        lines.append(ReconLine("midlong", pos_cost, inv_midlong, pos_cost - inv_midlong,
+                               f"trades vol {pos_vol:,.0f} MWh"))
+        exp_mid = pos_cost
     rt = _rt_vwap(conn, province, month) if province else None
     exp_spot = None
     if rt is not None and totals["settled_vol"] is not None and pos_vol:
-        exposure = float(totals["settled_vol"]) - pos_vol
+        # cfd: the whole load settles at spot; physical: only the deviation
+        exposure = float(totals["settled_vol"]) - (0.0 if mode == "cfd" else pos_vol)
         exp_spot = expected_spot_cost(exposure, rt)
     lines.append(ReconLine("spot", exp_spot, inv_spot,
                            (exp_spot - inv_spot) if exp_spot is not None else None,
                            f"RT VWAP {rt:.1f}" if rt else "no spot data"))
     if inv_total is not None:
-        exp_total = pos_cost + (exp_spot or 0.0) + inv_fees
+        exp_total = exp_mid + (exp_spot or 0.0) + inv_fees
         lines.append(ReconLine("total", exp_total, inv_total, exp_total - inv_total, ""))
         residual = inv_total - inv_midlong - inv_spot
         lines.append(ReconLine("residual", inv_fees, residual, inv_fees - residual, "fees"))
         tol = tolerance_for(inv_total, tolerance_pct, tolerance_floor)
     else:
         tol = tolerance_floor
+    has_invoice = inv_total is not None or bool(by_cat)
+    status = (coverage_status(has_invoice, pos_vol != 0, has_prices)
+              or judge(lines, tol))
     return ReconResult(book_id=book_id, month=month,
-                       status=judge(lines, tol), lines=lines, tolerance_cny=tol)
+                       status=status, lines=lines, tolerance_cny=tol)

@@ -29,10 +29,6 @@ def render_reconciliation(engine):
         books = pd.read_sql(text(
             "SELECT id, name FROM marketdata.rm_books WHERE book_type = 'load' ORDER BY name"
         ), conn)
-        months = pd.read_sql(text("""
-            SELECT DISTINCT settlement_month FROM marketdata.rm_settlements
-            ORDER BY settlement_month DESC
-        """), conn)
 
     if books.empty:
         st.info("No load books yet. Run the backfill or upload data first.")
@@ -41,11 +37,21 @@ def render_reconciliation(engine):
     book_id = st.selectbox("Book", books["id"].tolist(),
                            format_func=lambda x: books[books["id"] == x]["name"].iloc[0],
                            key="recon_book")
+    with engine.connect() as conn:
+        # this book's months only: an invoice month OR a month with trades
+        months = pd.read_sql(text("""
+            SELECT settlement_month FROM marketdata.rm_settlements WHERE book_id = :b
+            UNION
+            SELECT DISTINCT CAST(date_trunc('month', start_date) AS date)
+            FROM marketdata.rm_positions WHERE book_id = :b
+              AND start_date < date_trunc('month', CURRENT_DATE)
+            ORDER BY 1 DESC
+        """), conn, params={"b": book_id})
     if months.empty:
         st.info("No invoices ingested for reconciliation yet.")
         return
 
-    month_list = [m.isoformat() for m in months["settlement_month"]]
+    month_list = [pd.Timestamp(m).date().isoformat() for m in months.iloc[:, 0]]
     status_rows = []
     for m in month_list:
         r = _recon(engine, book_id, m)
@@ -56,6 +62,10 @@ def render_reconciliation(engine):
         return {"matched": "🟢", "explained": "🟡", "flagged": "🔴"}.get(s, "⚪")
     status_df["status"] = status_df["status"].map(lambda s: f"{_color(s)} {s}")
     st.dataframe(status_df, use_container_width=True, hide_index=True)
+    st.caption("🟢 matched: 中长期 and total tie · 🟡 explained: 中长期 ties, spot line is "
+               "an estimate (exposure × mean RT) · 🔴 flagged: trades disagree with the "
+               "invoice 中长期 line · ⚪ no_invoice / no_trades / no_prices: data missing, "
+               "not a mismatch. 浙江/山东 settle 中长期 as a difference vs DA price.")
 
     sel = st.selectbox("Drill into month", month_list, key="recon_month")
     r = _recon(engine, book_id, sel)
