@@ -37,6 +37,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 | gb-market | `bess-gb-market` | v107 | 30 | 2026-09-20 | parallel session: modo question rotation |
 | lingfeng-ingest | `lingfeng-ingest` | **v12** (e04ab74f5293) | **14** | 2026-11-09 | this session: per-side placeholder-zero guard (null the all-zero side, COALESCE upsert, NaN→NULL) + capture treats 0 RT as real (8e2a9d27); delta FROM v11 |
 | professor-topic-card | `bess-professor-topic-card` | **v4** | **4** | 2026-10-11 | this session: 「」/《》 inner-quote constraint fixes unparseable LLM JSON; one-shot Fargate task (no service), EventBridge Mondays 08:50 Beijing |
+| retail-risk | `bess-retail-risk` | **v6** (2754d8ee50a6) | **6** | 2026-11-10 | this session: P2 (冀南 counterparty trades, 浙江 Jan–Mar, CfD recon, 2026 benchmarks, 6-province CRM) + 安徽 我的滚搓结果 fix (3f79e8ea); delta FROM v5/v4 (aliyun mirror timed out via VPN) |
 
 ## Deploy history (append-only, newest at bottom)
 
@@ -68,6 +69,8 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 
 - 2026-10-07 — `bess-retail-risk:4` ← `bess-retail-risk:v4` (a1e6b4e51c2c); hotfix — image ships `psycopg[binary]` (sqlalchemy>=2.0.38 makes psycopg v3 the default postgresql:// driver; v3 crashed ModuleNotFoundError on boot). Saga: first push silently failed (exit 0, v4 never landed — service circuit-broke on CannotPullContainerError for 7h serving v3's crash page); serial uploads (MaxConcurrentUploads=1 in Docker Desktop settings-store.json) fixed the concurrent-upload stalls; ALWAYS verify ECR pushes with describe-images (see ERRORS.md). jq-swap from live tdArn rev 3 (td:4), force-new-deployment, rollout COMPLETED, target healthy (this session).
 - 2026-10-13 — `bess-platform-hermes:186` ← `bess-platform-hermes:v20261013` (bc4cbff76f2c); weekly-patrol fixes: thinking_agent design-prompt md_* column names corrected to actual (`plant_name, dispatch_unit_name, datetime, cleared_energy_mwh, cleared_price, data_date, source_file`), spot_ingest_bridge set_document_status inner-except now logs warning, market_classifier model env-overridable via HERMES_CLASSIFY_MODEL; plus DB-side `idx_md_da_data_date`/`idx_md_id_data_date` indexes created same day (MAX(data_date) 10s-timeout → 0.01s). First push hit 30-min background limit + proxy connection-drop; resume-push succeeded, digest verified == local image ID. Minimal-context staging (services/+shared/+skills/colleague only) after full-tree OneDrive rsync stalled at 5.7M (this session).
+- 2026-11-10 — `bess-platform-retail-risk:5` ← `bess-retail-risk:v5` (e9be40399a5e); retail-risk P2 (3ec3013b). Full build failed (mirrors.aliyun.com read timeout via VPN egress) → delta FROM v4 + `python-pptx` from PyPI. In-container import + driver-load (OperationalError) checks pre-push; jq-swap from live td:4 (4 env identical); rollout COMPLETED; read-only run-task SQL probe on td:5 ran all new recon/attribution SQL clean (this session).
+- 2026-11-10 — `bess-platform-retail-risk:6` ← `bess-retail-risk:v6` (2754d8ee50a6); 安徽 trades read 我的滚搓结果 not market-wide 滚搓市场成交结果 (P1 39x overstatement, 3f79e8ea). Delta FROM v5, jq-swap from td:5, rollout COMPLETED 1/1 zero-failed, ALB 302 (Cognito) (this session).
 
 ## Known parallel-session coordination points
 
