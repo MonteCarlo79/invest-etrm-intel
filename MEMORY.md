@@ -576,3 +576,19 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - WeCom job failures only reach /tmp logs — wire run status into data_ops_log so the Hermes patrol card shows it
 - FDA is bound to the uv python 3.13.14 path — re-grant after any uv Python upgrade
 - Still open: attribution missing for siziwangqi/bameng/wulate; cleared feed stuck at Nov 2; ECR keep-5 vs pinned images; attribution rule script into infra/eventbridge/
+
+## Session Summary, 2026-11-10
+**Worked on:** spot-market app crash on the 现货月报 tab, then a module review and the first batch of review fixes.
+**Completed:**
+- Root cause: `monthly_tab._load_official` blanket `pd.to_numeric(errors="coerce")` over object columns turned the date column `report_month` into NaN (pandas 3.0.5) → `pd.Timestamp(NaN)` = NaT → strftime ValueError (pivot/national chart silently blank too). Fixed ade7a5c6, deployed v59/td:160.
+- Review fixes, deployed v60/td:161 (19b01f1f, 64a4a3ea, 87fc0c35, manifest 6312039c): `_load_official` now coerces only Decimal columns (+ regression test); `get_spot_prices` returns `truncated` flag + note at the 5000-row cap (+ test in tests/spot_mcp/); Strategist tool loop capped at 12 rounds; `load_provinces`/`load_kpis` hardcoded 2026-01-01 → rolling 12 months (KPI header now spans last 12 months).
+- `spot_prices_hourly.datetime` is plain `timestamp` (services/bess_map/db.py:232) → naive EXTRACT/DATE queries are session-TZ independent; review's timezone finding A2 is mostly moot.
+- All commits pushed; remote head == local 6312039c.
+**In progress:** nothing started. Not yet confirmed in browser: live 现货月报 tab + KPI header after v60.
+**Decisions made:**
+- GitHub push from the Mac: port 22 times out; use `git push ssh://git@ssh.github.com:443/MonteCarlo79/invest-etrm-intel.git main` (origin URL left unchanged; `git status` "ahead N" is then stale — verify with ls-remote).
+- Delta-build pattern for spot-market: FROM previous tag + COPY changed files from `git archive HEAD`, `--provenance=false`; first verify prior image files are byte-identical to repo.
+- `aws logs tail` unsupported by this CLI version.
+**Next session:**
+- Review items still open (subagent review, partly unverified; app.py is 8,450 lines): shared ¥/MWh-vs-¥/kWh unit helper (median>5 guess at app.py:6194, 6633, monthly_tab.to_kwh); agent `run_pipeline`/`ingest_kb_document` accept model-supplied paths with no allowlist (prompt-injection write path); same silent 5000-row cap on `get_interprov_flow` (spot_mcp/tools.py:136); agent lacks tools for 现货月报/机制竞价/价格预测; 79 bare `except: pass` in app.py; heavy unbounded spot_prices_hourly scans; no tests for interconnector tab/forecast models/dispatcher.
+- Unchecked: what clock the LingFeng collector writes into `spot_prices_hourly.datetime` (should be CST).
