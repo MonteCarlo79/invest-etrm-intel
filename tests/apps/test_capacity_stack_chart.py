@@ -46,8 +46,10 @@ def test_i18n_keys_both_locales():
 
 def test_table_stack_columns():
     src = _APP.read_text(encoding="utf-8")
+    # columns are emitted in a loop: out[f"{tag} {comp}"] for comp in (...)
+    assert 'out[f"{tag} {comp}"]' in src, "table stack columns no longer emitted per tag"
     for col in ("CapPmt", "AncRev", "Total"):
-        assert f'{{tag}} {col}' in src, f"table missing {col} column"
+        assert f'"{col}"' in src, f"table missing {col} column"
 
 
 def test_unified_model_wired():

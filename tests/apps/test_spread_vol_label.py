@@ -22,7 +22,7 @@ def test_vol_label_wired_into_chart():
     src = _APP.read_text(encoding="utf-8")
     assert '"vol_label"' in src
     assert 'text="vol_label"' in src
-    assert "σ {v*100:.0f}%" in src
+    assert "σ {r['ann_vol']*100:.0f}%" in src
 
 
 def test_caption_explains_sigma_both_locales():
