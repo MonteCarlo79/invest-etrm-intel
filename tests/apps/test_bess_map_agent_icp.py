@@ -47,3 +47,9 @@ def test_shanghai_routes_to_proxy_series():
     # must be tested against the 29 live markets, not the receiver list.
     assert "if recv in _ICP_LINGFENG_29:" in _ICP
     assert "if recv in _provs:" not in _ICP
+
+
+def test_manual_ingest_scoped_to_session_uploads():
+    # --indir alone re-ingests every file accumulated in the container's upload dir
+    mgmt = _SRC[_SRC.index("with tab_mgmt:"):_SRC.index("with tab_agent:")]
+    assert mgmt.count('"--only-files", ",".join(_uploaded_names)') == 2

@@ -4366,6 +4366,7 @@ with tab_mgmt:
                                                   str(_local_dir / _fname))
                     _cmd = [sys.executable, str(_ingest_script),
                             "--indir", str(_local_dir),
+                            "--only-files", ",".join(_uploaded_names),  # not every file ever left in the dir
                             "--auto-cols", "--upload-db",
                             "--env", "none", "--schema", "marketdata",
                             "--continue-on-error"]
@@ -4410,6 +4411,7 @@ with tab_mgmt:
                                                   str(_local_dir / _fname))
                     _cmd2 = [sys.executable, str(_fund_script),
                              "--indir", str(_local_dir),
+                             "--only-files", ",".join(_uploaded_names),
                              "--env", "none", "--schema", "marketdata",
                              "--continue-on-error"]
                     st.caption(f"Running: {' '.join(_cmd2)}")
