@@ -84,14 +84,39 @@ def judge(lines: list[ReconLine], tol: float) -> str:
     return "explained"
 
 
-def coverage_status(has_invoice: bool, has_trades: bool, has_prices: bool) -> str | None:
+PARTIAL_TOL = 0.10    # trades vs invoice 中长期 volume beyond this = incomplete trade data
+
+
+def coverage_status(has_invoice: bool, has_trades: bool, has_prices: bool,
+                    pos_vol: float | None = None, inv_vol: float | None = None) -> str | None:
+    """Missing inputs -> grey status. partial_trades: the invoice states a 中长期 volume
+    and our net position volume is >10% off it — the trade files are incomplete
+    (安徽 annual/rolling, 山东 shaped positions), so a money delta isn't a mismatch."""
     if not has_invoice:
         return "no_invoice"
     if not has_trades:
         return "no_trades"
+    if inv_vol and pos_vol is not None and abs(pos_vol - inv_vol) > PARTIAL_TOL * abs(inv_vol):
+        return "partial_trades"
     if not has_prices:
         return "no_prices"
     return None
+
+
+def midlong_volume(items: pd.DataFrame) -> float | None:
+    """Invoice 中长期 volume: buy-side midlong_energy line with the shortest subject
+    code. None when the invoice bills 中长期 as amount only (浙江)."""
+    if items.empty:
+        return None
+    df = items[items["category"] == "midlong_energy"]
+    if "counterparty" in df.columns:
+        df = df[df["counterparty"] != "售电侧"]
+    df = df.assign(_clen=df["notes"].fillna("").str.extract(r"^(\d+)")[0].str.len())
+    df = df.dropna(subset=["_clen"])
+    if df.empty:
+        return None
+    v = df.sort_values("_clen").iloc[0]["volume_mwh"]
+    return float(v) if v is not None and pd.notna(v) else None
 
 
 def expected_cfd_cost(hourly: pd.DataFrame, da: pd.DataFrame) -> tuple[float, int]:
@@ -334,7 +359,15 @@ def reconcile_month(conn, book_id: int, month: datetime.date,
     else:
         tol = tolerance_floor
     has_invoice = inv_total is not None or bool(by_cat)
-    status = (coverage_status(has_invoice, pos_vol != 0, has_prices)
+    inv_vol = midlong_volume(pd.read_sql(text("""
+        SELECT si.category, si.notes, si.volume_mwh, si.counterparty
+        FROM marketdata.rm_settlement_items si
+        JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
+        WHERE s.book_id = :b AND s.settlement_month = :m
+    """), conn, params={"b": book_id, "m": month}))
+    if inv_vol:
+        lines[0].note += f"; invoice 中长期 vol {inv_vol:,.0f} MWh"
+    status = (coverage_status(has_invoice, pos_vol != 0, has_prices, pos_vol, inv_vol)
               or judge(lines, tol))
     return ReconResult(book_id=book_id, month=month,
                        status=status, lines=lines, tolerance_cny=tol)

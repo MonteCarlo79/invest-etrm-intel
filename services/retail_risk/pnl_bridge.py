@@ -33,12 +33,15 @@ class BridgeResult:
     margin_check_cny: float | None = None   # net - printed margin (true cross-check)
 
 
-def alpha_rows(positions_pv: pd.DataFrame, spot_vwap: float) -> pd.DataFrame:
-    """positions_pv: (channel, volume_mwh, pv=Σvol*price). alpha = (spot - vwap) x vol."""
+def alpha_rows(positions_pv: pd.DataFrame, spot_vwap: float | None) -> pd.DataFrame:
+    """positions_pv: (channel, volume_mwh, pv=Σvol*price). alpha = (spot - vwap) x vol.
+    spot_vwap None (no RT prices) keeps our VWAP — trader alpha only needs that."""
     df = positions_pv.copy()
+    for c in ("volume_mwh", "pv"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     df["vwap"] = df["pv"] / df["volume_mwh"].replace(0, float("nan"))
-    df["spot_vwap"] = spot_vwap
-    df["alpha_cny_mwh"] = spot_vwap - df["vwap"]
+    df["spot_vwap"] = float("nan") if spot_vwap is None else spot_vwap
+    df["alpha_cny_mwh"] = df["spot_vwap"] - df["vwap"]
     df["alpha_cny"] = df["alpha_cny_mwh"] * df["volume_mwh"]
     return df[["channel", "volume_mwh", "vwap", "spot_vwap", "alpha_cny_mwh", "alpha_cny"]]
 
@@ -182,9 +185,6 @@ def channel_alpha(conn, book_id: int, month: datetime.date) -> pd.DataFrame:
     ), {"b": book_id}).scalar()
     from services.retail_risk.reconcile import _rt_vwap
     rt = _rt_vwap(conn, province, month)
-    if rt is None:
-        return pd.DataFrame(columns=["channel", "volume_mwh", "vwap", "spot_vwap",
-                                     "alpha_cny_mwh", "alpha_cny"])
     return alpha_rows(pos, rt)
 
 

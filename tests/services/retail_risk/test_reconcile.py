@@ -176,3 +176,20 @@ def test_judge_explained_when_only_spot_estimate_off():
     lines = [L("midlong", 100.0, 100.2, 0.2, ""), L("spot", 50.0, 80.0, -30.0, ""),
              L("total", 180.0, 210.0, -30.0, ""), L("residual", 30.0, 10.0, 20.0, "fees")]
     assert rc.judge(lines, tol=1.0) == "explained"     # trades tie; spot is a load-shape estimate
+
+
+def test_invoice_midlong_volume_top_buy_line():
+    items = pd.DataFrame([
+        {"category": "midlong_energy", "notes": "0101 中长期交易", "volume_mwh": 93894.0, "counterparty": "购电侧"},
+        {"category": "midlong_energy", "notes": "010101 电力直接交易", "volume_mwh": 93000.0, "counterparty": "购电侧"},
+        {"category": "midlong_energy", "notes": "0101 中长期交易", "volume_mwh": 1.0, "counterparty": "售电侧"},
+        {"category": "spot_energy", "notes": "0102", "volume_mwh": 5.0, "counterparty": "购电侧"}])
+    assert rc.midlong_volume(items) == 93894.0
+    assert rc.midlong_volume(items.assign(volume_mwh=None)) is None          # 浙江: amount only
+
+
+def test_coverage_partial_trades():
+    assert rc.coverage_status(True, True, True, pos_vol=62630, inv_vol=93894) == "partial_trades"
+    assert rc.coverage_status(True, True, True, pos_vol=17927, inv_vol=17770) is None    # 0.9%: real check
+    assert rc.coverage_status(True, True, False, pos_vol=62630, inv_vol=93894) == "partial_trades"
+    assert rc.coverage_status(True, True, True, pos_vol=100, inv_vol=None) is None

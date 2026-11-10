@@ -64,7 +64,8 @@ def render_reconciliation(engine):
     st.dataframe(status_df, use_container_width=True, hide_index=True)
     st.caption("🟢 matched: 中长期 and total tie · 🟡 explained: 中长期 ties, spot line is "
                "an estimate (exposure × mean RT) · 🔴 flagged: trades disagree with the "
-               "invoice 中长期 line · ⚪ no_invoice / no_trades / no_prices: data missing, "
+               "invoice 中长期 line · ⚪ no_invoice / no_trades / partial_trades (trade volume >10% off the "
+               "invoice 中长期 volume) / no_prices: data missing, "
                "not a mismatch. 浙江/山东 settle 中长期 as a difference vs DA price.")
 
     sel = st.selectbox("Drill into month", month_list, key="recon_month")

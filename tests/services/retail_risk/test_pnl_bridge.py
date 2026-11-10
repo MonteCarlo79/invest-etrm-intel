@@ -85,3 +85,10 @@ def test_trader_alpha_prefers_disclosure_and_blends_matching_rows():
     row = pb.trader_alpha(our, bench).iloc[0]
     assert row["mkt_avg"] == pytest.approx((3 * 302 + 1 * 306) / 4)     # 303, infohub ignored
     assert row["trader_alpha_cny"] == pytest.approx(30.0)
+
+
+def test_alpha_rows_without_rt_keeps_our_vwap():
+    """Trader alpha needs only our VWAP; missing RT prices (浙江 pre-Sep) must not drop it."""
+    pos = pd.DataFrame([{"channel": "annual", "volume_mwh": 10.0, "pv": 3500.0}])
+    out = pb.alpha_rows(pos, spot_vwap=None)
+    assert out.iloc[0].vwap == pytest.approx(350.0) and pd.isna(out.iloc[0].alpha_cny)
