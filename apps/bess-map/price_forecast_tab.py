@@ -322,10 +322,15 @@ def run_hybrid_forecast(eng, province, target_date, train_days=365):
     share_hist = compute_net_import_share(fund_hist)
     landing = load_landing_price_latest(eng, province)
     X_hist = build_feature_frame(fund_hist, share_hist, landing)
-    # daily-aggregate features to match scores' daily rows
+    # daily-aggregate features and join them to the score rows ON DATE: scores
+    # exist only for full 24h price days, features only for fundamentals days,
+    # and trailing-position alignment shifted rows whenever either had a gap.
     X_daily = X_hist.groupby(X_hist.index.date).mean()
-    common = min(len(X_daily), len(out["scores"]))
-    w, mu, sd = fit_score_models(out["scores"][-common:], X_daily.iloc[-common:])
+    scores_df = pd.DataFrame(out["scores"], index=mat.index)
+    common_idx = scores_df.index.intersection(X_daily.index)
+    if len(common_idx) < 30:
+        return pd.DataFrame()
+    w, mu, sd = fit_score_models(scores_df.loc[common_idx], X_daily.loc[common_idx])
     share_t = compute_net_import_share(fund_target)
     X_t = build_feature_frame(fund_target, share_t, landing)
     X_t_daily = X_t.groupby(X_t.index.date).mean()
