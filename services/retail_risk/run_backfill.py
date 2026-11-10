@@ -25,7 +25,7 @@ from sqlalchemy import text
 from services.retail_risk import loader, schemas
 from services.retail_risk.parsers import (
     INVOICE_GLOBS, LOAD_PARSERS, TRADES_PARSERS,
-    benchmark_infohub, mtm_workbook, trades_shandong,
+    benchmark_infohub, benchmark_review, mtm_workbook, trades_shandong,
 )
 
 
@@ -60,6 +60,31 @@ def _shandong_shapes(root: Path) -> pd.DataFrame:
     """Day-level actual hourly shapes from 日用电曲线 (not the MTM workbook —
     its 分月分时比例 sheet is a per-customer pivot, not a province shape)."""
     return trades_shandong.day_shapes_from_curves(root)
+
+
+def review_benchmarks(root: Path, provinces) -> list[pd.DataFrame]:
+    """2026 benchmarks: 山东 披露月报, 浙江 复盘 clearing prices (later deck wins),
+    冀南 复盘 hourly 全网 prices weighted by our own hourly buys."""
+    out: list[pd.DataFrame] = []
+    if "山东" in provinces:
+        out += [benchmark_review.parse_shandong_disclosure(f)
+                for f in benchmark_review.shandong_disclosure_files(root)]
+    if "浙江" in provinces:
+        zj = [benchmark_review.parse_zhejiang_review(f)
+              for f in benchmark_review.zhejiang_review_files(root)]
+        zj = [f for f in zj if not f.empty]
+        if zj:
+            out.append(pd.concat(zj, ignore_index=True)
+                       .drop_duplicates(["province", "channel", "month"], keep="last"))
+    if "冀南" in provinces:
+        hourly = [benchmark_review.parse_jinan_review_hourly(f)
+                  for f in benchmark_review.jinan_review_files(root)]
+        hourly = [h for h in hourly if not h.empty]
+        if hourly:
+            h = pd.concat(hourly, ignore_index=True).drop_duplicates(
+                ["channel", "month", "hour"], keep="last")
+            out.append(benchmark_review.benchmark_from_hourly(h, TRADES_PARSERS["冀南"](root)))
+    return out
 
 
 def run(root, provinces, kinds, dry_run: bool, echo=print) -> dict:
@@ -147,11 +172,15 @@ def run(root, provinces, kinds, dry_run: bool, echo=print) -> dict:
         summary["mtm"] = {"curves": n_curves, "contracts": n_contracts}
 
     if "benchmarks" in kinds:
+        frames = [benchmark_infohub.parse_infohub_benchmarks(f)
+                  for f in benchmark_infohub.infohub_files(root)]
+        frames += review_benchmarks(root, provinces)
         n = 0
-        for f in benchmark_infohub.infohub_files(root):
-            df = benchmark_infohub.parse_infohub_benchmarks(f)
-            echo(f"[bench] {f.name}: rows={len(df)}")
-            if not dry_run and not df.empty:
+        for df in frames:
+            if df.empty:
+                continue
+            echo(f"[bench] {df['source_file'].iloc[0]}: {df['source'].iloc[0]} rows={len(df)}")
+            if not dry_run:
                 with engine.begin() as conn:
                     n += loader.write_benchmarks(conn, df)
         summary["benchmarks"] = n

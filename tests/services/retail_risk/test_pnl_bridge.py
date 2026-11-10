@@ -72,3 +72,15 @@ def test_bridge_margin_none_when_only_spot_subtotal():
     assert b.net is None and b.retail_revenue is None
     assert b.spot_cost == 75766581.44          # costs still shown
     assert b.spread is None
+
+
+def test_trader_alpha_prefers_disclosure_and_blends_matching_rows():
+    our = pd.DataFrame([{"channel": "monthly_auction", "volume_mwh": 10.0, "vwap": 300.0}])
+    bench = pd.DataFrame([
+        {"channel": "集中竞价交易", "avg_price_cny_mwh": 999.0, "volume_mwh": 1.0, "source": "infohub"},
+        {"channel": "月度集中竞价交易", "avg_price_cny_mwh": 302.0, "volume_mwh": 3.0, "source": "disclosure"},
+        {"channel": "月度双边协商交易", "avg_price_cny_mwh": 306.0, "volume_mwh": 1.0, "source": "disclosure"},
+    ])
+    row = pb.trader_alpha(our, bench).iloc[0]
+    assert row["mkt_avg"] == pytest.approx((3 * 302 + 1 * 306) / 4)     # 303, infohub ignored
+    assert row["trader_alpha_cny"] == pytest.approx(30.0)

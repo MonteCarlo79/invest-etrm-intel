@@ -46,14 +46,27 @@ def alpha_rows(positions_pv: pd.DataFrame, spot_vwap: float) -> pd.DataFrame:
 def trader_alpha(our_df: pd.DataFrame, bench_df: pd.DataFrame) -> pd.DataFrame:
     """our_df: (channel, volume_mwh, vwap). bench_df: rm_market_benchmarks rows.
     Join via schemas.BENCH_CHANNEL_MAP (benchmark channel covers several of ours).
+    Per our channel: take the best-ranked source (BENCH_SOURCE_RANK) that has any
+    matching row, and volume-weight its matching rows (月度集中竞价 + 月度双边 both
+    map to monthly_auction); flat mean when volumes are missing.
     Positive = bought below market = trader gain."""
     rows = []
+    b_all = bench_df.copy()
+    if "source" not in b_all.columns:
+        b_all["source"] = "infohub"
+    if "volume_mwh" not in b_all.columns:
+        b_all["volume_mwh"] = None
+    b_all["_rank"] = b_all["source"].map(schemas.BENCH_SOURCE_RANK).fillna(9)
     for r in our_df.itertuples(index=False):
         mkt = None
-        for b in bench_df.itertuples(index=False):
-            if r.channel in schemas.BENCH_CHANNEL_MAP.get(b.channel, []):
-                mkt = b.avg_price_cny_mwh
-                break
+        hit = b_all[b_all["channel"].map(
+            lambda c: r.channel in schemas.BENCH_CHANNEL_MAP.get(c, []))]
+        if not hit.empty:
+            hit = hit[hit["_rank"] == hit["_rank"].min()]
+            w = pd.to_numeric(hit["volume_mwh"], errors="coerce")
+            px = hit["avg_price_cny_mwh"].astype(float)
+            mkt = (float((px * w).sum() / w.sum()) if w.notna().all() and w.sum() > 0
+                   else float(px.mean()))
         rows.append({"channel": r.channel, "volume_mwh": r.volume_mwh, "vwap": r.vwap,
                      "mkt_avg": mkt,
                      "trader_alpha_cny": (mkt - r.vwap) * r.volume_mwh
@@ -173,8 +186,9 @@ def attribution_month(conn, book_id: int, month: datetime.date) -> dict:
         "SELECT name FROM marketdata.rm_books WHERE id = :b"
     ), {"b": book_id}).scalar().split("-", 1)[1]
     bench = pd.read_sql(text("""
-        SELECT channel, avg_price_cny_mwh FROM marketdata.rm_market_benchmarks
-        WHERE month = :m AND source = 'infohub' AND province = :p
+        SELECT channel, avg_price_cny_mwh, volume_mwh, source
+        FROM marketdata.rm_market_benchmarks
+        WHERE month = :m AND province = :p
     """), conn, params={"m": month, "p": province})
     our = alpha.dropna(subset=["vwap"]) if not alpha.empty else alpha
     t = trader_alpha(our, bench) if not our.empty else pd.DataFrame(

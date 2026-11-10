@@ -4,7 +4,7 @@
 Right block layout: a header row whose cells contain channel names (双边协商交易,
 集中竞价交易, 挂牌交易, 月内集中竞价), each spanning two columns (净合约量, 加权均价),
 plus a 月份 column. Located by anchors, never by fixed coordinates. Volumes are 亿度
-(x10,000 -> MWh). Years inferred from a year marker left of 月份 when present, else
+(1 亿kWh = 100,000 MWh). Years inferred from a year marker left of 月份 when present, else
 the file's by<date> stamp; rows labelled 合计 are excluded.
 """
 from __future__ import annotations
@@ -82,6 +82,6 @@ def parse_infohub_benchmarks(path: str | Path) -> pd.DataFrame:
             if pd.isna(px):
                 continue
             rows.append([province, chan, f"{current_year}-{mnum:02d}-01", float(px),
-                         float(vol) * 10000.0 if pd.notna(vol) else None,
+                         float(vol) * 100_000.0 if pd.notna(vol) else None,
                          "infohub", path.name])
     return pd.DataFrame(rows, columns=schemas.BENCH_COLS)

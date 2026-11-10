@@ -61,7 +61,28 @@ BENCH_CHANNEL_MAP = {
     "集中竞价交易": ["monthly_auction"],
     "挂牌交易": ["monthly_listed"],
     "月内集中竞价": ["intramonth_match"],
+    # 山东 信息披露月报 表2
+    "年度双边协商交易": ["annual"],
+    "年度集中竞价交易": ["annual"],
+    "月度集中竞价交易": ["monthly_auction"],
+    "月度双边协商交易": ["monthly_auction"],
+    "月内集中竞价交易": ["intramonth_match"],
+    "滚动撮合交易": ["intramonth_match"],
+    # 浙江 复盘 clearing prices
+    "年度长协": ["annual"],
+    "月度竞价": ["monthly_auction"],
+    "月度双边": ["monthly_auction"],
+    "上旬竞价": ["intramonth_match"],
+    "中旬竞价": ["intramonth_match"],
+    "下旬竞价": ["intramonth_match"],
+    # 冀南 复盘 hourly 全网 contract prices
+    "年度合同": ["annual"],
+    "月度合同": ["monthly_auction"],
+    "月内合同": ["intramonth_match"],
 }
+
+# Benchmark source preference: official disclosure > trader review decks > infohub
+BENCH_SOURCE_RANK = {"disclosure": 0, "review": 1, "review_hourly": 1, "infohub": 2}
 
 
 class InvoiceItem(TypedDict, total=False):

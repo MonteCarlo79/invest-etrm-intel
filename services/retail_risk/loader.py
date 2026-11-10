@@ -281,12 +281,13 @@ def write_benchmarks(conn, df: pd.DataFrame) -> int:
         conn.execute(text("""
             INSERT INTO marketdata.rm_market_benchmarks
               (province, channel, month, avg_price_cny_mwh, volume_mwh, source, source_file)
-            VALUES (:p, :c, :m, :px, :vol, 'infohub', :sf)
+            VALUES (:p, :c, :m, :px, :vol, :src, :sf)
             ON CONFLICT (province, channel, month, source)
             DO UPDATE SET avg_price_cny_mwh = EXCLUDED.avg_price_cny_mwh,
                           volume_mwh = EXCLUDED.volume_mwh,
                           source_file = EXCLUDED.source_file
         """), {"p": r.province, "c": r.channel, "m": r.month, "px": r.avg_price_cny_mwh,
-               "vol": r.volume_mwh if pd.notna(r.volume_mwh) else None, "sf": r.source_file})
+               "vol": r.volume_mwh if pd.notna(r.volume_mwh) else None,
+               "src": r.source, "sf": r.source_file})
         n += 1
     return n

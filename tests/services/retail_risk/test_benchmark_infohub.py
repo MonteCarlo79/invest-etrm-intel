@@ -28,7 +28,7 @@ def test_right_block_extracted(tmp_path):
     assert len(out[out.channel == "双边协商交易"]) == 2          # 合计 row excluded
     row = out[(out.channel == "双边协商交易") & (out.month.astype(str) == "2026-01-01")]
     assert row.avg_price_cny_mwh.iloc[0] == pytest.approx(372.21)
-    assert row.volume_mwh.iloc[0] == pytest.approx(72.1 * 10000)  # 亿度 -> MWh
+    assert row.volume_mwh.iloc[0] == pytest.approx(72.1 * 100_000)  # 1 亿kWh = 100,000 MWh
     assert set(out.province) == {"山东"}
 
 
