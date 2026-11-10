@@ -163,33 +163,66 @@ def write_curves(conn, df: pd.DataFrame) -> int:
 
 
 def write_contracts(conn, province: str, df: pd.DataFrame) -> tuple[int, int]:
+    """Upsert customers (by name+province) and contracts (by contract_ref).
+    Re-runs refresh BD / channel / share / price fields instead of skipping."""
+    from services.retail_risk.parsers.contracts_crm import price_formula
+
+    def _v(r, c):
+        v = getattr(r, c, None)
+        return None if v is None or (not isinstance(v, str) and pd.isna(v)) else v
+
     n_cust, n_ctr = 0, 0
     for r in df.itertuples(index=False):
+        cust = {"n": r.customer_name, "p": province, "sr": _v(r, "share_ratio"),
+                "bd": _v(r, "bd_name"), "src": _v(r, "customer_source"),
+                "ch": _v(r, "channel_name")}
         cid = conn.execute(text(
             "SELECT id FROM marketdata.rm_customers WHERE name = :n AND province = :p"
-        ), {"n": r.customer_name, "p": province}).scalar()
+        ), cust).scalar()
         if cid is None:
             cid = conn.execute(text("""
-                INSERT INTO marketdata.rm_customers (name, province, revenue_share_ratio, status)
-                VALUES (:n, :p, :sr, 'active') RETURNING id
-            """), {"n": r.customer_name, "p": province,
-                   "sr": r.share_ratio if pd.notna(r.share_ratio) else None}).scalar()
+                INSERT INTO marketdata.rm_customers
+                  (name, province, revenue_share_ratio, bd_name, customer_source,
+                   channel_name, status)
+                VALUES (:n, :p, :sr, :bd, :src, :ch, 'active') RETURNING id
+            """), cust).scalar()
             n_cust += 1
+        else:
+            conn.execute(text("""
+                UPDATE marketdata.rm_customers SET
+                  revenue_share_ratio = COALESCE(:sr, revenue_share_ratio),
+                  bd_name = COALESCE(:bd, bd_name),
+                  customer_source = COALESCE(:src, customer_source),
+                  channel_name = COALESCE(:ch, channel_name)
+                WHERE id = :id
+            """), {**cust, "id": cid})
+        ctr = {"cid": cid, "cr": r.contract_ref, "ct": r.contract_type,
+               "px": _v(r, "price_cny_mwh"), "sd": r.start_date, "ed": r.end_date,
+               "am": _v(r, "annual_mwh"),
+               "mf": r.monthly_mwh if isinstance(r.monthly_mwh, str) else "{}",
+               "pf": price_formula(r), "k1": _v(r, "k1"), "k2": _v(r, "k2"), "k3": _v(r, "k3"),
+               "st": _v(r, "status") or "active"}
         existing = conn.execute(text(
             "SELECT id FROM marketdata.rm_customer_contracts WHERE contract_ref = :cr"
-        ), {"cr": r.contract_ref}).scalar()
+        ), ctr).scalar()
         if existing is not None:
+            conn.execute(text("""
+                UPDATE marketdata.rm_customer_contracts SET
+                  customer_id = :cid, contract_type = :ct, price_cny_mwh = :px,
+                  start_date = :sd, end_date = :ed, annual_forecast_mwh = :am,
+                  monthly_forecast = CAST(:mf AS jsonb), price_formula = CAST(:pf AS jsonb),
+                  k1 = :k1, k2 = :k2, k3 = :k3, contract_status = :st
+                WHERE id = :id
+            """), {**ctr, "id": existing})
             continue
         conn.execute(text("""
             INSERT INTO marketdata.rm_customer_contracts
-              (customer_id, contract_ref, contract_type, price_cny_mwh,
-               start_date, end_date, annual_forecast_mwh, monthly_forecast, contract_status)
-            VALUES (:cid, :cr, :ct, :px, :sd, :ed, :am, CAST(:mf AS jsonb), 'active')
-        """), {"cid": cid, "cr": r.contract_ref, "ct": r.contract_type,
-               "px": r.price_cny_mwh if pd.notna(r.price_cny_mwh) else None,
-               "sd": r.start_date, "ed": r.end_date,
-               "am": r.annual_mwh if pd.notna(r.annual_mwh) else None,
-               "mf": r.monthly_mwh if isinstance(r.monthly_mwh, str) else "{}"})
+              (customer_id, contract_ref, contract_type, price_cny_mwh, start_date, end_date,
+               annual_forecast_mwh, monthly_forecast, price_formula, k1, k2, k3,
+               contract_status)
+            VALUES (:cid, :cr, :ct, :px, :sd, :ed, :am, CAST(:mf AS jsonb),
+                    CAST(:pf AS jsonb), :k1, :k2, :k3, :st)
+        """), ctr)
         n_ctr += 1
     return n_cust, n_ctr
 

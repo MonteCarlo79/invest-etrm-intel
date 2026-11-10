@@ -231,15 +231,21 @@ def parse_mtm_workbook(path: str | Path) -> dict:
                 if v is not None and pd.notna(v):     # NaN cells -> dropped (jsonb rejects NaN tokens)
                     monthly[mnum] = v * 10.0              # 万度 -> MWh
             annual_v = _f(cdf.iloc[pos][annual_col]) if annual_col else None
+            ctype = schemas.contract_type_for(str(getattr(r, "套餐类别", "")))
+            pkg_px = _f(getattr(r, "套餐价格", None))
+            fixed = ctype == "fixed"
+            channel = cdf.iloc[pos].get("渠道归属") if "渠道归属" in cdf.columns else None
             rows.append([
                 str(r.零售用户名称), f"{province}-{r.序号}", str(getattr(r, "套餐名称", "")),
-                str(getattr(r, "套餐类别", "")),
-                schemas.contract_type_for(str(getattr(r, "套餐类别", ""))),
-                _f(getattr(r, "套餐价格", None)),
+                str(getattr(r, "套餐类别", "")), ctype,
+                pkg_px if fixed else None,           # 联动+上浮: 套餐价格 is the spread
                 _f(getattr(r, "渠道分成比例", None)),
                 pd.to_datetime(r.生效时间).date(), pd.to_datetime(r.失效时间).date(),
                 annual_v * 10.0 if annual_v is not None else None,
                 json.dumps(monthly),
+                "active", None, None,
+                str(channel) if channel is not None and pd.notna(channel) else None,
+                None if fixed else pkg_px, None, None, None, None, None,
             ])
         contracts = pd.DataFrame(rows, columns=schemas.CONTRACTS_COLS)
 

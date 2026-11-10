@@ -3,7 +3,7 @@
 
 Usage:
   python services/retail_risk/run_backfill.py --root data/trading \
-      --province 冀南 浙江 山东 安徽 [--kinds trades invoices mtm benchmarks] [--dry-run]
+      --province 冀南 浙江 山东 安徽 广东 福建 上海 江苏 [--kinds trades invoices mtm benchmarks contracts] [--dry-run]
 
 --dry-run parses everything and prints per-file/per-frame counts, writes nothing.
 Live run requires the Task-1 migration applied (user-confirmed).
@@ -25,7 +25,7 @@ from sqlalchemy import text
 from services.retail_risk import loader, schemas
 from services.retail_risk.parsers import (
     INVOICE_GLOBS, LOAD_PARSERS, TRADES_PARSERS,
-    benchmark_infohub, benchmark_review, mtm_workbook, trades_shandong,
+    benchmark_infohub, benchmark_review, contracts_crm, mtm_workbook, trades_shandong,
 )
 
 
@@ -185,16 +185,32 @@ def run(root, provinces, kinds, dry_run: bool, echo=print) -> dict:
                     n += loader.write_benchmarks(conn, df)
         summary["benchmarks"] = n
 
+    if "contracts" in kinds:            # 冀南/浙江/广东/福建/上海/江苏 零售签约 sheets (山东 via mtm)
+        files = contract_files_for(root, provinces)
+        summary["contracts"] = {}
+        for prov, f in files.items():
+            df = contracts_crm.parse_contracts(f, prov)
+            echo(f"[contracts] {prov} {f.name}: rows={len(df)}")
+            if not dry_run and not df.empty:
+                with engine.begin() as conn:
+                    nc, nk = loader.write_contracts(conn, prov, df)
+                echo(f"[contracts] {prov}: new customers={nc} new contracts={nk}")
+            summary["contracts"][prov] = len(df)
+
     return summary
+
+
+def contract_files_for(root: Path, provinces) -> dict:
+    return {p: f for p, f in contracts_crm.contract_files(root).items() if p in provinces}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="data/trading")
     ap.add_argument("--province", nargs="+",
-                    default=["冀南", "浙江", "山东", "安徽"])
+                    default=["冀南", "浙江", "山东", "安徽", "广东", "福建", "上海", "江苏"])
     ap.add_argument("--kinds", nargs="+",
-                    default=["trades", "invoices", "mtm", "benchmarks"])
+                    default=["trades", "invoices", "mtm", "benchmarks", "contracts"])
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     run(args.root, args.province, args.kinds, args.dry_run)

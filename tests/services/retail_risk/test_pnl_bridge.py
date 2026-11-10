@@ -39,8 +39,9 @@ def test_channel_fee():
         {"annual_mwh": 1000.0, "price_cny_mwh": 400.0, "share_ratio": 0.9},
         {"annual_mwh": 500.0, "price_cny_mwh": 380.0, "share_ratio": None},
     ])
-    # fee = revenue x (1 - share) where share present: 1000*400*0.1 = 40000
-    assert pb.channel_fee(contracts) == pytest.approx(40000.0)
+    # channel takes 90% of the margin over the 350 wholesale benchmark: 1000*0.9*50
+    assert pb.channel_fee(contracts, benchmark=350.0) == pytest.approx(45000.0)
+    assert pb.channel_fee(contracts) == 0.0          # no benchmark -> fixed-price margin unknown
 
 
 def test_channel_fee_uses_monthly_forecast_when_available():
@@ -50,12 +51,12 @@ def test_channel_fee_uses_monthly_forecast_when_available():
         {"annual_mwh": 1200.0, "price_cny_mwh": 400.0, "share_ratio": 0.9,
          "monthly_forecast": '{"3": 100.0}'},
     ])
-    # month 3: 100 x 400 x 0.1 = 4000 (not 1200x400x0.1=48000)
-    assert pb.channel_fee(contracts, month=3) == pytest.approx(4000.0)
+    # month 3: 100 x 0.9 x (400-350) = 4500 (not the annual 1200 MWh)
+    assert pb.channel_fee(contracts, month=3, benchmark=350.0) == pytest.approx(4500.0)
     # fallback: annual / 12
     no_monthly = pd.DataFrame([{"annual_mwh": 1200.0, "price_cny_mwh": 400.0,
                                 "share_ratio": 0.9, "monthly_forecast": None}])
-    assert pb.channel_fee(no_monthly, month=3) == pytest.approx(1200.0 / 12 * 400.0 * 0.1)
+    assert pb.channel_fee(no_monthly, month=3, benchmark=350.0) == pytest.approx(100 * 0.9 * 50)
 
 
 def test_bridge_margin_none_when_only_spot_subtotal():

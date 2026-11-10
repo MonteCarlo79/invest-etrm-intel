@@ -79,28 +79,42 @@ def sales_alpha(retail_revenue_cny: float, channel_fee_cny: float,
     return retail_revenue_cny - channel_fee_cny - blended_benchmark * retail_vol_mwh
 
 
-def channel_fee(contracts: pd.DataFrame, month: int | None = None) -> float:
-    """渠道费用 = Σ contract retail revenue x (1 - 渠道分成比例), MONTHLY.
+def _nz(v) -> float | None:
+    return None if v is None or pd.isna(v) else float(v)
 
-    Volume per contract: monthly_forecast[month] when available; fallback
-    annual_mwh / 12. Share missing -> 0 (D10). Pass month for monthly attribution;
-    month=None keeps the legacy annual figure (callers that need annual)."""
+
+def channel_fee(contracts: pd.DataFrame, month: int | None = None,
+                benchmark: float | None = None) -> float:
+    """渠道费用 per contract = vol x (per-MWh 居间费 + share x max(margin, 0))
+    + annual lump / 12. share = the CHANNEL's share of the margin;
+    margin = spread_cny_mwh for 价差 packages, else price - benchmark (wholesale
+    market average) for fixed-price packages. Losses are not shared.
+
+    Volume: monthly_forecast[month] when available, else annual_mwh / 12.
+    month=None returns the annual figure."""
     fee = 0.0
     for r in contracts.itertuples(index=False):
-        share = getattr(r, "share_ratio", None)
-        price = getattr(r, "price_cny_mwh", None)
-        if pd.isna(share) or pd.isna(price):
-            continue
         vol = None
         mf = getattr(r, "monthly_forecast", None)
         if month is not None and isinstance(mf, str) and mf and mf != "{}":
             vol = json.loads(mf).get(str(month))
+        annual = _nz(getattr(r, "annual_mwh", None))
         if vol is None:
-            annual = getattr(r, "annual_mwh", None)
-            if pd.isna(annual):
+            if annual is None:
                 continue
             vol = annual if month is None else annual / 12.0
-        fee += vol * price * (1.0 - share)
+        spread = _nz(getattr(r, "spread_cny_mwh", None))
+        price = _nz(getattr(r, "price_cny_mwh", None))
+        margin = spread if spread is not None else (
+            price - benchmark if price is not None and benchmark is not None else None)
+        share = _nz(getattr(r, "share_ratio", None))
+        per_mwh = _nz(getattr(r, "channel_fee_cny_mwh", None)) or 0.0
+        if share is not None and margin is not None:
+            per_mwh += share * max(margin, 0.0)
+        fee += vol * per_mwh
+        lump = _nz(getattr(r, "channel_fee_lump_cny", None))
+        if lump:
+            fee += lump if month is None else lump / 12.0
     return fee
 
 
@@ -174,6 +188,11 @@ def channel_alpha(conn, book_id: int, month: datetime.date) -> pd.DataFrame:
     return alpha_rows(pos, rt)
 
 
+def _month_end(month: datetime.date) -> datetime.date:
+    from services.retail_risk.reconcile import _next_month
+    return _next_month(month) - datetime.timedelta(days=1)
+
+
 def attribution_month(conn, book_id: int, month: datetime.date) -> dict:
     """Trader alpha per channel (vs 全网 benchmark) + sales alpha + identity residual.
 
@@ -198,13 +217,21 @@ def attribution_month(conn, book_id: int, month: datetime.date) -> dict:
         tt = t.dropna(subset=["mkt_avg"])
         blended = float((tt["mkt_avg"] * tt["volume_mwh"]).sum() / tt["volume_mwh"].sum())
     contracts = pd.read_sql(text("""
-        SELECT cc.annual_forecast_mwh AS annual_mwh, cc.price_cny_mwh,
-               cc.monthly_forecast, c.revenue_share_ratio AS share_ratio
+        SELECT cc.annual_forecast_mwh AS annual_mwh, cc.price_cny_mwh, cc.contract_type,
+               CAST(cc.monthly_forecast AS text) AS monthly_forecast,
+               c.revenue_share_ratio AS share_ratio,
+               CAST(cc.price_formula->>'spread_cny_mwh' AS double precision) AS spread_cny_mwh,
+               CAST(cc.price_formula->>'channel_fee_cny_mwh' AS double precision) AS channel_fee_cny_mwh,
+               CAST(cc.price_formula->>'channel_fee_lump_cny' AS double precision) AS channel_fee_lump_cny
         FROM marketdata.rm_customer_contracts cc
         JOIN marketdata.rm_customers c ON c.id = cc.customer_id
         WHERE c.province = :p AND cc.contract_status = 'active'
-    """), conn, params={"p": province})
-    fee = channel_fee(contracts, month=month.month) if not contracts.empty else 0.0
+          AND cc.start_date <= :m_end AND cc.end_date >= :m
+    """), conn, params={"p": province, "m": month, "m_end": _month_end(month)})
+    for col in ("annual_mwh", "price_cny_mwh", "share_ratio"):
+        contracts[col] = pd.to_numeric(contracts[col], errors="coerce")
+    fee = (channel_fee(contracts, month=month.month, benchmark=blended)
+           if not contracts.empty else 0.0)
     sales = None
     if blended is not None and bridge.settled_vol_mwh and bridge.retail_revenue is not None:
         sales = sales_alpha(bridge.retail_revenue, fee, blended, bridge.settled_vol_mwh)

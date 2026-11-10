@@ -50,7 +50,13 @@ CURVES_COLS = ["province", "product", "delivery_date", "delivery_hour",
 
 CONTRACTS_COLS = ["customer_name", "contract_ref", "package_name", "package_class",
                   "contract_type", "price_cny_mwh", "share_ratio",
-                  "start_date", "end_date", "annual_mwh", "monthly_mwh"]
+                  "start_date", "end_date", "annual_mwh", "monthly_mwh",
+                  # P2 CRM fields. share_ratio = CHANNEL's share of the margin;
+                  # spread_cny_mwh for 价差/联动上浮 contracts (price_cny_mwh NULL);
+                  # channel_fee_* = per-MWh 居间费 / annual lump channel fee.
+                  "status", "bd_name", "customer_source", "channel_name",
+                  "spread_cny_mwh", "channel_fee_cny_mwh", "channel_fee_lump_cny",
+                  "k1", "k2", "k3"]
 
 BENCH_COLS = ["province", "channel", "month", "avg_price_cny_mwh", "volume_mwh",
               "source", "source_file"]
