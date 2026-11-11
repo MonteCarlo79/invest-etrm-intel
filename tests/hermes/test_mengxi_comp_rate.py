@@ -26,3 +26,9 @@ def test_zero_comp_plant_unchanged():
 
 def test_jingtong_hongfeng_gets_no_compensation():
     assert _resolve_comp_rate("景通红丰储能电站", date(2022, 11, 19), date(2026, 11, 10)) == 0.0
+
+
+def test_listed_self_declared_rates():
+    # 独立新型储能电站名单: 协鑫石拐 0.335, 巴能(德岭山) 0.30 元/kWh — approved 2026-11-11
+    assert _resolve_comp_rate("协鑫石拐储能电站", date(2024, 1, 1), date(2026, 11, 10)) == 335.0
+    assert _resolve_comp_rate("巴能峰塔储能电站", date(2024, 1, 1), date(2026, 11, 10)) == 300.0

@@ -36,6 +36,13 @@ _280_COMP_PLANTS: frozenset[str] = frozenset([
     "盛德二登图储能电站",
 ])
 
+# Listed stations with a self-declared rate ≠ 350 (独立新型储能电站名单, 元/kWh ×1000;
+# Dipeng approved 2026-11-11). 巴能 effective 2025-12-11 — precedes every report date.
+_PLANT_COMP_RATES: dict[str, float] = {
+    "协鑫石拐储能电站": 335.0,  # #4 协鑫石拐区 10万kW/40万kWh, 0.335
+    "巴能峰塔储能电站": 300.0,  # #14 乌拉特中旗德岭山 500kV 电网侧, 巴能, 0.30
+}
+
 # Assets joining the market after this date (and before 2027-01-01) get 280元/MWh.
 # 2026-11-01: boundary set to 2026-01-01 per the 独立新型储能电站名单 rule —
 # listed stations 350; COD after 2026-01-01 and unlisted → 280 by default
@@ -183,6 +190,8 @@ def _resolve_comp_rate(plant_name: str, first_seen: Optional[date], report_date:
     """Return the capacity compensation rate (元/MWh) for a plant."""
     if plant_name in _ZERO_COMP_PLANTS:
         return 0.0
+    if plant_name in _PLANT_COMP_RATES:
+        return _PLANT_COMP_RATES[plant_name]
     if plant_name in _280_COMP_PLANTS:
         return _NEW_COMP_RATE
     if (
@@ -658,8 +667,9 @@ def _generate_pdf(
             note_s,
         ),
         Paragraph(
-            "容量补偿标准：350元/MWh（独立新型储能电站名单内项目）；280元/MWh（2026年1月1日后并网且不在名单的项目）；"
-            "0元/MWh（大航都林储能电站、大航额日和图储能电站——非独立储能，不享受补偿）。",
+            "容量补偿标准：350元/MWh（独立新型储能电站名单内项目）；335元/MWh（协鑫石拐）、300元/MWh（巴能峰塔）（名单内自主申报标准）；"
+            "280元/MWh（2025年11月10日后并网且不在名单的项目）；"
+            "0元/MWh（大航都林、大航额日和图——非独立储能；景通红丰——不享受补偿）。",
             note_s,
         ),
         Paragraph(
