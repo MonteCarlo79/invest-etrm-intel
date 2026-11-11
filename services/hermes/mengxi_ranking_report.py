@@ -18,6 +18,7 @@ from typing import Optional
 _ZERO_COMP_PLANTS: frozenset[str] = frozenset([
     "大航都林储能电站",
     "大航额日和图储能电站",
+    "景通红丰储能电站",  # 远景 3.35MW (asset-risk 乌兰察布储能) — no compensation (Dipeng 2026-11-11)
 ])
 
 # Assets with explicit 280元/MWh compensation (2026-11-11 list confirmed by Dipeng:

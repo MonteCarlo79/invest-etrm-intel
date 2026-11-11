@@ -22,3 +22,7 @@ def test_unlisted_pre_cutoff_plant_keeps_350():
 
 def test_zero_comp_plant_unchanged():
     assert _resolve_comp_rate("大航都林储能电站", date(2025, 6, 1), date(2026, 11, 10)) == 0.0
+
+
+def test_jingtong_hongfeng_gets_no_compensation():
+    assert _resolve_comp_rate("景通红丰储能电站", date(2022, 11, 19), date(2026, 11, 10)) == 0.0
