@@ -94,7 +94,7 @@ _AUTO_SOURCES = [
     ("Canon 日前出清", "marketdata.md_da_cleared_energy", "data_date", ""),
     ("Canon RT节点电价", "marketdata.md_rt_nodal_price", "data_date", ""),
     ("蒙西节点96填充表", "marketdata.md_mengxi_nodal_price_96_filled", "metric_time::date", ""),
-    ("BESS捕获率日数据", "marketdata.bess_capture_daily", "trade_date", ""),
+    ("BESS捕获率日数据", "marketdata.bess_capture_daily", "date", ""),
     ("GB Elexon结算", "intl_market.gb_elexon_sp", "settlement_date", ""),
     ("GB风电预测", "intl_market.gb_wind_forecast", "start_time::date", ""),
 ]
@@ -119,9 +119,13 @@ def check_auto_pipelines(pg_url: str) -> list[SourceStatus]:
     results: list[SourceStatus] = []
 
     def _query_max(cur, table: str, date_col: str, extra: str = "") -> Optional[date]:
+        # MAX(col::date) casts every row and cannot use the column's index
+        # (md_shanxi_nodal_price_96 timed out); MAX(col) is index-served and
+        # the date is taken in Python below.
+        col = date_col[:-len("::date")] if date_col.endswith("::date") else date_col
         try:
             where = f"WHERE {extra}" if extra else ""
-            cur.execute(f"SELECT MAX({date_col}) FROM {table} {where}")
+            cur.execute(f"SELECT MAX({col}) FROM {table} {where}")
             row = cur.fetchall()
             val = row[0][0] if row else None
             if val is None:
@@ -129,6 +133,10 @@ def check_auto_pipelines(pg_url: str) -> list[SourceStatus]:
             return val.date() if hasattr(val, "date") else val
         except Exception as exc:
             logger.warning("patrol query failed for %s: %s", table, exc)
+            # One failed statement aborts the shared transaction; without a
+            # rollback every later source read as "missing" (2026-11-09
+            # header showed 2/11 after the bess_capture_daily column error).
+            cur.connection.rollback()
             return None
 
     try:
@@ -520,7 +528,7 @@ def build_summary_card(report: PatrolReport) -> dict:
             kb_line = f"📊 知识库        本月新增 {total_30d} 篇"
 
     lines = [
-        f"✅ 自动管道      {auto_fresh}/{len(auto_sources)} 正常",
+        f"{'✅' if auto_fresh == len(auto_sources) else '⚠️'} 自动管道      {auto_fresh}/{len(auto_sources)} 正常",
         f"{'⚠️' if manual_issues else '✅'} 手动上传      {'%d 项需关注' % manual_issues if manual_issues else '正常'}",
         f"{'🔴' if monthly_missing else '✅'} 月度数据      {'%d 项缺失' % monthly_missing if monthly_missing else '正常'}",
     ]

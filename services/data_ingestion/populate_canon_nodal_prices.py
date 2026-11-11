@@ -88,7 +88,8 @@ def get_engine():
     url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
     if not url:
         raise SystemExit("PGURL environment variable is required")
-    return create_engine(url, pool_pre_ping=True)
+    from services.data_ingestion.shared.db import psycopg2_url
+    return create_engine(psycopg2_url(url), pool_pre_ping=True)
 
 
 def load_id_cleared(engine, start_date: date, end_date: date) -> pd.DataFrame:

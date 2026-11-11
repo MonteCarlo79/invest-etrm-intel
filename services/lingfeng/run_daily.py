@@ -71,14 +71,19 @@ _INGEST_FUNDAMENTALS_SCRIPT = _REPO / "services" / "bess_map" / "run_fundamental
 _CAPTURE_PIPELINE_SCRIPT    = _REPO / "services" / "bess_map" / "run_capture_pipeline.py"
 
 # ---------------------------------------------------------------------------
-# All 29 LingFeng markets (Chinese province names as shown on the platform)
-# Province names in DB are stored as Chinese characters.
+# LingFeng markets ingested daily (Chinese province names as shown on the
+# platform; stored as Chinese characters in the DB).
+# 冀北 (no spot market yet) and 广州 (regional exchange, no spot price) are
+# listed on LingFeng but carry no spot data: they failed 31/31 daily runs and
+# showed as "LingFeng 采集 27/29 失败: 冀北、广州" in the patrol (Dipeng
+# 2026-11-11). Excluded until they have a spot market.
 # ---------------------------------------------------------------------------
+_NO_SPOT_MARKETS = ("冀北", "广州")
 _ALL_MARKETS = [
     "河南", "新疆", "吉林", "海南", "湖北", "四川", "黑龙江", "福建",
     "浙江", "江苏", "广西", "安徽", "陕西", "贵州", "云南", "广东",
     "蒙东", "湖南", "宁夏", "辽宁", "河北南网", "甘肃", "蒙西",
-    "山东", "山西", "冀北", "广州", "青海", "江西",
+    "山东", "山西", "青海", "江西",
 ]
 
 # Default capture models for daily runs
@@ -579,7 +584,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Data selection
     p.add_argument("--markets", default="all",
-                   help="Comma-separated market names or 'all' for all 29 markets (default: all)")
+                   help="Comma-separated market names or 'all' for all 27 spot markets (default: all)")
     p.add_argument("--indicator", default=_DEFAULT_INDICATOR,
                    help=f"Indicator type (default: {_DEFAULT_INDICATOR})")
 

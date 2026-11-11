@@ -62,24 +62,31 @@ TABLE_SOURCE_RULES = {
     "marketdata.md_id_fuel_summary": 0,
     "marketdata.md_settlement_ref_price": 0,
 }
+# A file is kept when ANY core sheet carries data. The exchange sometimes
+# publishes a day with 实时节点电价 empty but DA/ID clearing complete
+# (2026-11-03, 2026-04-28: 2.6 MB files) — rejecting on the RT sheet alone
+# dropped the whole day, incl. the 日内 clearing the 07:05 ranking report
+# reads. Per-sheet emptiness is handled by the loader ([SKIP EMPTY]).
+# An unpublished day is an ~8.7 KB template with every sheet empty → still
+# rejected.
+_CORE_SHEETS = ("实时节点电价", "日内各时段出清电量", "日前各时段出清电量")
+
+
 def excel_contains_data(filepath: Path):
 
-    try:
-        df = pd.read_excel(
-            filepath,
-            sheet_name="实时节点电价",
-            nrows=200
-        )
-
-        if len(df) > 50:
-            return True
-
-        print(f"[INVALID] {filepath.name} only {len(df)} rows")
-        return False
-
-    except Exception as e:
-        print(f"[INVALID EXCEL] {filepath.name} ({e})")
-        return False
+    counts = {}
+    for sheet in _CORE_SHEETS:
+        try:
+            counts[sheet] = len(pd.read_excel(filepath, sheet_name=sheet, nrows=200))
+        except Exception as e:
+            counts[sheet] = f"ERR {type(e).__name__}"
+    if any(isinstance(n, int) and n > 50 for n in counts.values()):
+        empty = [k for k, n in counts.items() if not (isinstance(n, int) and n > 50)]
+        if empty:
+            print(f"[PARTIAL] {filepath.name} kept; empty/unreadable sheets: {empty}")
+        return True
+    print(f"[INVALID] {filepath.name} no core sheet has data: {counts}")
+    return False
 def get_engine():
 
     db_dsn = os.getenv("DB_DSN") or os.getenv("PGURL")

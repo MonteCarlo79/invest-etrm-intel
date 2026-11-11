@@ -302,7 +302,8 @@ def _db_engine():
         print(f"[column_to_matrix_all] db connection mode={mode} host={host}", flush=True)
         _DB_MODE_LOGGED = True
 
-    return create_engine(url, pool_pre_ping=True)
+    from services.data_ingestion.shared.db import psycopg2_url
+    return create_engine(psycopg2_url(url), pool_pre_ping=True)
 
 def _hist_path(market: str) -> str:
     return f"hist_{market}.csv"

@@ -5,11 +5,25 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 
+def psycopg2_url(url: str) -> str:
+    """Pin the psycopg2 driver on a bare postgres URL.
+
+    SQLAlchemy >= 2.0.38 resolves bare postgresql:// to psycopg (v3), which
+    this image does not ship — every tt_api / enos_market collector run died
+    in get_engine() with ModuleNotFoundError: psycopg from the 2026-09-27
+    image rebuild until 2026-11-11 (hist_* frozen at 2026-09-24).
+    """
+    for bare in ("postgresql://", "postgres://"):
+        if url.startswith(bare):
+            return "postgresql+psycopg2://" + url[len(bare):]
+    return url
+
+
 def get_engine() -> Engine:
     url = os.environ.get("PGURL") or os.environ.get("DB_DSN")
     if not url:
         raise SystemExit("PGURL environment variable is required")
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(psycopg2_url(url), pool_pre_ping=True)
 
 
 def upsert_staging(engine: Engine, target_table: str, staging_df, conflict_cols: list[str]):

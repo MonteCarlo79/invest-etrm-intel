@@ -359,7 +359,14 @@ class ThinkingAgent:
                             rel = os.path.relpath(os.path.join(root, f), _REPO_ROOT)
                             results.append(rel.replace("\\", "/"))
         if not results:
-            return f"No .py files found for app '{app}'."
+            # The hermes image ships services/ only — apps/* (spot-market,
+            # bess-map, …) are not in this container. An empty listing here
+            # means "not visible from hermes", NOT "the app has no code"
+            # (the 2026-11-09 design review concluded the latter).
+            return (f"UNAVAILABLE: source for app '{app}' is not shipped in the "
+                    f"hermes container (only services/ is). This says nothing "
+                    f"about the app's code — do not report it as missing; "
+                    f"skip code review for this app.")
         return "\n".join(results)
 
     # ── Tool: send_feishu_message ─────────────────────────────────────────────

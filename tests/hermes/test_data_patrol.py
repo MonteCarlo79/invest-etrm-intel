@@ -394,3 +394,48 @@ def test_detail_card_kb_province_section_capped():
     shown = sum(1 for i in range(15) if f"省{i:02d}" in card_str)
     assert shown == 12                       # capped
     assert "另 3 项" in card_str
+
+
+# ── 2026-11-11: 2026-11-09 patrol showed "✅ 自动管道 2/11" ────────────────────
+
+def test_failed_source_rolls_back_so_later_sources_still_read(monkeypatch):
+    """One failing statement must not poison the shared transaction."""
+    today = date.today()
+    cur = _make_cursor([(today,)])
+    calls = {"n": 0}
+
+    def execute(sql, *a):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise psycopg2.errors.UndefinedColumn("column does not exist")
+    cur.execute.side_effect = execute
+    conn = _make_conn(cur)
+    cur.connection = conn
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+
+    from services.hermes.data_patrol import check_auto_pipelines
+    results = check_auto_pipelines("postgresql://test")
+    assert conn.rollback.called
+    assert results[0].status == "missing"
+    assert all(s.status == "fresh" for s in results[1:])
+
+
+def test_date_cast_is_applied_after_max(monkeypatch):
+    """MAX(col::date) defeats the index (shanxi 96 timed out) — query MAX(col)."""
+    cur = _make_cursor([(date.today(),)])
+    conn = _make_conn(cur)
+    monkeypatch.setattr("psycopg2.connect", lambda url: conn)
+    from services.hermes.data_patrol import check_auto_pipelines
+    check_auto_pipelines("postgresql://test")
+    sqls = [str(c.args[0]) for c in cur.execute.call_args_list]
+    assert not any("::date)" in s for s in sqls), sqls
+    assert any("MAX(trade_date)" not in s and "bess_capture_daily" in s and "MAX(date)" in s for s in sqls)
+
+
+def test_summary_auto_line_not_green_when_sources_stale():
+    from services.hermes.data_patrol import build_summary_card, PatrolReport
+    s1 = SourceStatus(name="a", table="t", last_date=date.today(), days_behind=0, status="fresh", group="auto")
+    s2 = SourceStatus(name="b", table="t", last_date=None, days_behind=9999, status="missing", group="auto")
+    text = str(build_summary_card(PatrolReport(sources=[s1, s2], kb_summaries=[])))
+    assert "⚠️ 自动管道      1/2 正常" in text
+    assert "✅ 自动管道" not in text
