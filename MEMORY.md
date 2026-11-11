@@ -615,3 +615,27 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Sales alpha is WRONG for 浙江 (+11M Jan: no 售电侧 lines → fallback revenue = costs + printed total, but 浙江 printed total is the full bill ≈ costs → revenue doubled, 714 ¥/MWh) and questionable for 山东 (benchmark = 中长期 avg only, but CfD province settles whole load at spot). Proposed fix, awaiting user OK: (1) 浙江 sales alpha = None when no sell-side revenue + fix total_kind; (2) CfD provinces benchmark = load-weighted spot + CfD effect; (3) user to explain 山东 售电侧 '售电公司服务费用' −4.59M (Jan).
 - 山东 May recon flagged −343% with vol within 6%: spot_prices_hourly stores 山东 RT-only (Jan–Apr, Aug) / DA-only (May–Jun) → CfD reference price unconfirmed.
 - Data gaps: 浙江 spot prices only Sep+ (shared spot ingest); 安徽 annual + Apr–Aug rolling trades; 山东 positions incomplete; 山东 July invoice missing; 冀南 Apr+ / 浙江 Jun–Aug / 安徽 benchmarks.
+
+## Session Summary, 2026-11-11 (bess-map review + v86 deploy)
+**Worked on:** Bug investigation of `apps/bess-map` (three parallel read-only reviewers over the 5.5k-line app.py, every finding re-verified by reading before editing), fix wave with regression tests, then deploy as v86.
+**Completed:**
+- Commits 64818977..9d1a2a2d + manifest 0e0e80e5, all pushed via ssh.github.com:443; 224 tests green across apps/bess-map/tests, tests/bess_map, tests/apps, tests/services/price_lab, tests/interconnector_pricing.
+- IRR tab defaults dimensionally wrong: cap_comp lacked ×1000 (¥/kW·yr→¥/MWh_cap/day, 1000× low), sysopfee divided by 365 twice (365× low); both now match `capacity_stack`; 元/kWh rows (<1) skipped. Tests had enshrined the old formulas.
+- NaN-safe AVGs in load_avg_economics / load_monthly_economics / ranking annual_theo (one NaN day zeroed realized IRR revenue); get_irr_estimate payback ignored year-0 outlay.
+- 5 loaders `datetime BETWEEN :start AND :end` with date strings dropped the last day → `< CAST(:end AS date)+1`.
+- Geo map: _RANKING_EXCLUDE applied (adcode collisions) + per-duration extra-rev map (2h used 4h); KPI cycles respects exclusions; installed-gap TO_DATE on a DATE column fixed.
+- Quant agent: st.stop() on missing key blanked 跨省绿电; tool loops capped at 12; Haiku memory JSON validated; empty reply guarded; sysop/cap-comp tool descriptions gave 1000×/3000× wrong conversions.
+- 跨省绿电: load_rt_hourly drops NULL rt_price (TypeError killed S3–S5); 上海 agreements now route to 江苏 proxy (membership vs _ICP_LINGFENG_29, not RECEIVER_PROVINCES).
+- Price forecast: PCA scores joined to daily features on date (was trailing position; any gap shifted the regression). Aux tab: conflict highlighting + resolution expander reachable + aux_year default. RT price axes ¥/kWh→¥/MWh. Manual ingest scoped via --only-files.
+- `run_fundamentals_ingest`: renewable D-1/D-2/D-3 never written since inception (`renewable_total_d1_mw` vs DDL `renewable_d1_mw`) — fixed; two stale source-grep tests updated.
+- Deployed v86 (33bdd5fb0d49) / td:125, delta FROM v85 + 6 files (byte-hash + import smoke in-container), jq-swap from td:124, rollout COMPLETED, startup log clean. LATEST-IMAGES + memory updated.
+**In progress:** nothing mid-edit. Live tabs not yet checked in a browser (IRR defaults, 跨省绿电 with 上海).
+**Decisions made:**
+- FR default (`fr_val × util × 8760 / D / 365`) left untouched: same missing ×1000 only if `fr_price_yuan_kw_h` is truly ¥/kW·h; Fargate read-only probe was denied by the permission classifier, so stored magnitudes unverified — a 10 ¥/kW·h value ×1000 would be absurd, suspect ¥/MW·h mislabelled.
+- Delta build COPYed only this session's 6 files; HEAD's newer services/bess_map/{optimisation_engine,nodal_pf_daily}.py and market_fundamentals/loader.py (蒙西 nodal-PF / summary-2025) deliberately NOT included — unverified in this image. Drift logged in LATEST-IMAGES.
+- Pushed image is a single-platform OCI manifest (no index): `imagetools inspect | grep Platform` prints nothing; use `--format '{{.Image.OS}}/{{.Image.Architecture}}'` for the amd64 guard.
+**Next session:**
+- Check `SELECT province, fr_price_yuan_kw_h FROM marketdata.province_fr_market` magnitudes, then fix or relabel the FR default.
+- Fundamentals re-ingest on ECS (needs explicit OK) so renewable D-1/D-2/D-3 history fills; price-forecast tab COALESCEs to realized renewable until then.
+- Next full bess-map build: drop baked-in `services/bess_map/.env` + OneDrive conflict copy of run_capture_pipeline.py (in image since v84), pick up the nodal-PF/loader drift, and smoke the Data Management capture runner.
+- Flagged, not fixed: cap-comp/FR/sysopfee loaders read PGURL only (DATABASE_URL-only sessions get empty overlays); annual_theo averages across all models' theoretical vintages; 冀北/河北南网 share one map polygon, 蒙东 has no adcode; `_ensure_memory_table` DDL runs every rerun; repo-wide `grep -r` hangs on the OneDrive tree (scope to subdirs).
