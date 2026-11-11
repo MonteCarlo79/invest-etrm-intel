@@ -85,13 +85,35 @@ _NOM_HEADER_KEY = "申报"  # 交易员申报计划 / 申报计划 / 申报功�
 _ACT_HEADER_KEY = "实际执行"  # 实际执行功率 (MW) — column F in the same workbooks
 
 
-def _nomination_column(ws, key: str = _NOM_HEADER_KEY) -> int | None:
-    """1-based index of the first row-1 header containing the key."""
-    for c in range(2, 10):
-        v = ws.cell(row=1, column=c).value
-        if v is not None and key in str(v):
-            return c
-    return None
+# Header scan width. Multi-unit stations split one quantity across several
+# columns (武川 一期/二期 = the two exchange accounts 旭纯哈乐/旭纯哈乐二, with
+# 二期 实际执行 in col K; 阿拉善 申报 split by unit group "3、5" + "1、2、4、6").
+# The site value is the SUM of every matching column. The six original
+# stations have exactly one 申报 (C) and one 实际执行 (F) column in every
+# file (surveyed 2026-11-11), so their output is unchanged.
+_HEADER_SCAN_MAX_COL = 30
+
+
+def _nomination_columns(ws, key: str = _NOM_HEADER_KEY) -> list[int]:
+    """1-based indexes of every row-1 header (col B onward) containing key."""
+    last = min(ws.max_column or 0, _HEADER_SCAN_MAX_COL)
+    return [c for c in range(2, last + 1)
+            if ws.cell(row=1, column=c).value is not None
+            and key in str(ws.cell(row=1, column=c).value)]
+
+
+def _sum_cells(values) -> float | None:
+    """Site value for one slot: sum of the matching cells, or None unless
+    every cell is numeric — a partial sum would understate a multi-unit site."""
+    total = 0.0
+    for v in values:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        try:
+            total += float(v)
+        except (ValueError, TypeError):
+            return None
+    return total
 
 
 def _stale_a2_detect(a2_dates: list, tab_mds: set, day_sheets: list) -> bool:
@@ -138,7 +160,7 @@ def _parse_xls(path: Path, asset_code: str, col_key: str = _NOM_HEADER_KEY,
     """Legacy .xls workbook via pandas/xlrd (values only — no cell fills;
     wulate's operator switched to .xls from July 2026 and its files carry no
     zone colouring anyway). Same conventions: day sheets MM.DD, header row 1,
-    col A timestamps, first 申报 column, row 2 = slot 1."""
+    col A timestamps, every 申报 column summed, row 2 = slot 1."""
     xl = pd.ExcelFile(path)
     day_sheets = [n for n in xl.sheet_names if _SHEET_RE.match(n)]
     frames: dict[str, pd.DataFrame] = {}
@@ -178,19 +200,15 @@ def _parse_xls(path: Path, asset_code: str, col_key: str = _NOM_HEADER_KEY,
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
                   f"no parseable date, sheet skipped")
             continue
-        col = next((c for c in range(1, min(10, df.shape[1]))
-                    if col_key in str(df.iloc[0, c])), None)
-        if col is None:
+        cols = [c for c in range(1, min(_HEADER_SCAN_MAX_COL, df.shape[1]))
+                if col_key in str(df.iloc[0, c])]
+        if not cols:
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
                   f"no {col_key} column, sheet skipped")
             continue
         for r in range(1, min(97, len(df))):
-            v = df.iloc[r, col]
-            if v is None or (isinstance(v, float) and pd.isna(v)):
-                continue
-            try:
-                mw = float(v)
-            except (ValueError, TypeError):
+            mw = _sum_cells(df.iloc[r, c] for c in cols)
+            if mw is None:
                 continue
             rows.append({
                 "asset_code": asset_code,
@@ -265,18 +283,14 @@ def parse_nomination_curves(path: Path | str, asset_code: str,
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
                   f"no parseable date, sheet skipped")
             continue
-        col = _nomination_column(ws, col_key)
-        if col is None:
+        cols = _nomination_columns(ws, col_key)
+        if not cols:
             print(f"WARNING nomination_curves: {path.name} sheet {name!r} — "
                   f"no {col_key} column, sheet skipped")
             continue
         for r in range(_FIRST_ROW, _LAST_ROW + 1):
-            v = ws.cell(row=r, column=col).value
-            if v is None:
-                continue
-            try:
-                mw = float(v)
-            except (ValueError, TypeError):
+            mw = _sum_cells(ws.cell(row=r, column=c).value for c in cols)
+            if mw is None:
                 continue
             rows.append({
                 "asset_code": asset_code,

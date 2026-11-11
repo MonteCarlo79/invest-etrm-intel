@@ -44,7 +44,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("wecom_nominations")
 
 FOLDERS = {"谷山梁": "gushanliang", "苏右": "suyou", "杭锦旗": "hangjinqi",
-           "四子王旗": "siziwangqi", "巴盟": "bameng", "乌拉特中旗": "wulate"}
+           "四子王旗": "siziwangqi", "巴盟": "bameng", "乌拉特中旗": "wulate",
+           "武川": "wuchuan", "阿拉善": "alashan"}
+# Nominated/actual MW only (2026-11-11): their workbooks are multi-unit
+# (summed by nomination_curves) and their cell colouring has not been
+# validated as zone data — no zone votes, and no fleet-consensus rows either.
+NO_ZONE_PARSE = {"wuchuan", "alashan"}
 # Stations whose own files carry no usable zone colouring (bameng's red
 # marks 出清偏差, wulate's sheets are unpainted): their file rows are NOT
 # zone data — they vote nothing and get the fleet consensus instead.
@@ -232,7 +237,8 @@ def main() -> None:
         # 2026 — xlsx-only globbing silently ended its feed at Jun 30)
         files = sorted(set(d.glob("*.xlsx")) | set(d.glob("*.xls")))
         for f in files:
-            if code not in NO_ZONE_FILES and f.suffix.lower() == ".xlsx":
+            if (code not in NO_ZONE_FILES and code not in NO_ZONE_PARSE
+                    and f.suffix.lower() == ".xlsx"):
                 try:
                     voter_rows.extend(parse_nomination_zones(f, code))
                 except Exception as ex:

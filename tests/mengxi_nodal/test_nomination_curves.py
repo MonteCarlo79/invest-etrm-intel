@@ -213,3 +213,51 @@ def test_parse_short_workbook_stale_a2_dates_by_tab(tmp_path, capsys):
     assert by[(date(2026, 11, 1), 1)] == 1.0
     assert by[(date(2026, 11, 2), 1)] == 2.0
     assert all(r["data_date"].month >= 10 for r in rows)
+
+
+# ── 2026-11-11: multi-unit workbooks — every matching column summed ─────────
+
+_WUCHUAN_HEADER = ["时间", "SOC（%）一期", "SOC（%）二期",
+                   "交易员申报计划 (MW)一期", "日前出清 (MW)一期", "实时调度出清 (MW)一期",
+                   "实际执行功率 (MW)一期",
+                   "交易员申报计划 (MW)二期", "日前出清 (MW)二期", "实时调度出清 (MW)二期",
+                   "实际执行功率 (MW)二期", "出清偏差(MW)一期", "AGC下发功率(MW)一期"]
+
+
+def test_two_account_workbook_sums_both_accounts(tmp_path):
+    # 武川 = 旭纯哈乐 (一期) + 旭纯哈乐二 (二期); 二期 实际执行 sits in col K,
+    # past the old B..I scan window.
+    from services.mengxi_nodal.nomination_curves import parse_actual_curves
+    base = pd.Timestamp("2026-09-23")
+    body = [[str(base + pd.Timedelta(minutes=15 * i)), 40, 41,
+             248.0, 248.0, 248.0, 248.8, 240.0, 240.0, 240.0, 239.5, 0.8, None]
+            for i in range(96)]
+    body[5][7] = None                     # 二期 nomination missing in slot 6
+    f = tmp_path / "220kV旭纯哈乐储能电站电站电力交易调度计划表9月.xlsx"
+    _make_workbook(f, {"09.23": body}, header=_WUCHUAN_HEADER)
+    nom = {r["slot"]: r["nominated_mw"] for r in parse_nomination_curves(f, "wuchuan")}
+    act = {r["slot"]: r["actual_mw"] for r in parse_actual_curves(f, "wuchuan")}
+    assert nom[1] == 488.0
+    assert 6 not in nom and len(nom) == 95  # partial sum never written
+    assert act[1] == pytest.approx(488.3)
+
+
+def test_unit_group_columns_are_summed(tmp_path):
+    # 阿拉善 splits 申报 by unit group: "3、5" + "1、2、4、6" = site (= DA cleared).
+    header = ["时间", "SOC（%）", "交易员申报计划 3、5(MW)", "交易员申报计划 1、2、4、6(MW)",
+              "日前出清 (MW)", "实时调度出清 (MW)", "实际执行功率 (MW)"]
+    base = pd.Timestamp("2026-10-04")
+    body = [[str(base + pd.Timedelta(minutes=15 * i)), 60, 90, 212, 302, 302, 303.7]
+            for i in range(96)]
+    f = tmp_path / "景敖乌珠日储能电站电力交易调度计划表10月.xlsx"
+    _make_workbook(f, {"10.04": body}, header=header)
+    rows = parse_nomination_curves(f, "alashan")
+    assert len(rows) == 96 and all(r["nominated_mw"] == 302.0 for r in rows)
+
+
+def test_new_stations_shipped_without_zone_parse():
+    from services.wecom_nominations import run_daily
+    assert run_daily.FOLDERS["武川"] == "wuchuan"
+    assert run_daily.FOLDERS["阿拉善"] == "alashan"
+    assert {"wuchuan", "alashan"} <= run_daily.NO_ZONE_PARSE
+    assert not ({"wuchuan", "alashan"} & run_daily.NO_ZONE_FILES)  # no consensus rows
