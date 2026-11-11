@@ -44,7 +44,7 @@ def test_tiers_limit_layers(monkeypatch):
     _capture(monkeypatch, TODAY)
     assert [r.layer for r in book_freshness(None, get_station("wuhai"), TODAY)] \
         == ["attribution", "settled"]
-    assert book_freshness(None, get_station("wuchuan"), TODAY) == []
+    assert book_freshness(None, get_station("erlian"), TODAY) == []
 
 
 def test_keys_follow_reader_conventions(monkeypatch):
@@ -52,11 +52,19 @@ def test_keys_follow_reader_conventions(monkeypatch):
     book_freshness(None, get_station("bameng"), TODAY)
     by_table = {sql.split("FROM")[1].split()[0]: p["k"] for sql, p in calls}
     # exact name, never LIKE: the wildcard scan timed out on 36M rows (v54)
-    assert by_table["marketdata.md_id_cleared_energy"] == "景怡查干哈达储能电站"
+    assert by_table["marketdata.md_id_cleared_energy"] == ["景怡查干哈达储能电站"]
     assert all("LIKE :k" not in sql for sql, _ in calls)
     assert by_table["reports.bess_asset_daily_attribution"] == "hetao"
     assert by_table["reports.book_settled_daily"] == "bameng"
-    assert by_table["marketdata.nodal_strategy_daily"] == "景怡查干哈达储能电站"
+    assert by_table["marketdata.nodal_strategy_daily"] == ["景怡查干哈达储能电站"]
+
+
+def test_multi_account_station_checks_every_account(monkeypatch):
+    calls = _capture(monkeypatch, TODAY)
+    book_freshness(None, get_station("wuchuan"), TODAY)
+    by_table = {sql.split("FROM")[1].split()[0]: p["k"] for sql, p in calls}
+    assert by_table["marketdata.md_id_cleared_energy"] == ["旭纯哈乐储能电站", "旭纯哈乐储能电站二"]
+    assert by_table["marketdata.bess_actual_96"] == "wuchuan"
 
 
 def test_timestamp_latest_becomes_date(monkeypatch):

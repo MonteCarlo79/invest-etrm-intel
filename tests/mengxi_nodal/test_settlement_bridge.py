@@ -67,10 +67,11 @@ def test_wind_without_rm_book_absent_from_map():
 def test_registry_only_stations_skip_loudly(capsys):
     # Skip happens before any engine use, so engine=None proves it.
     from services.mengxi_nodal.settlement_bridge import refresh_settled_daily
-    for code in ("wuchuan", "alashan", "alashanzuoqi", "erlian"):
+    # wuchuan/alashan left registry_only 2026-11-11 (exchange accounts mapped).
+    for code in ("alashanzuoqi", "erlian"):
         assert refresh_settled_daily(None, code, "2026-10") == 0
     out = capsys.readouterr().out
-    assert out.count("WARNING") == 4 and out.count("registry_only") == 4
+    assert out.count("WARNING") == 2 and out.count("registry_only") == 2
     assert "erlian" in out
 
 

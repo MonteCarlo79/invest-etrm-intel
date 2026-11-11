@@ -23,7 +23,7 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from libs.trading_book.models import (
     ActualDispatch,
@@ -49,6 +49,27 @@ _CLEARED_SQL = """
     WHERE plant_name LIKE :pn
       AND datetime >= CAST(:s AS timestamp)
       AND datetime <  CAST(:e AS timestamp)
+    ORDER BY datetime
+"""
+
+# Stations whose exchange accounts differ from plant_name (registry
+# md_plant_names): exact names (index-friendly, no LIKE) summed across
+# accounts per slot; price = |MW|-weighted mean, plain mean when all MW are 0.
+# data_date bound lets idx_md_id_plant_date prune the 36M-row table.
+_CLEARED_MULTI_SQL = """
+    SELECT datetime,
+           CASE WHEN SUM(ABS(cleared_energy_mwh)) > 0
+                THEN SUM(cleared_price * ABS(cleared_energy_mwh))
+                     / SUM(ABS(cleared_energy_mwh))
+                ELSE AVG(cleared_price) END AS cleared_price,
+           SUM(cleared_energy_mwh) AS cleared_energy_mwh
+    FROM marketdata.md_id_cleared_energy
+    WHERE plant_name IN :pns
+      AND data_date >= CAST(:ds AS date)
+      AND data_date <= CAST(:de AS date)
+      AND datetime >= CAST(:s AS timestamp)
+      AND datetime <  CAST(:e AS timestamp)
+    GROUP BY datetime
     ORDER BY datetime
 """
 
@@ -126,9 +147,17 @@ class AssetBook(TradingBook):
         per-interval MW — pass through, no unit conversion)."""
         self._require_strategy_layer()
         s, e = _cst_naive_window(day)
-        df = pd.read_sql(
-            text(_CLEARED_SQL), self._engine,
-            params={"pn": f"%{self.station.plant_name}%", "s": s, "e": e})
+        if self.station.md_plant_names:
+            df = pd.read_sql(
+                text(_CLEARED_MULTI_SQL).bindparams(bindparam("pns", expanding=True)),
+                self._engine,
+                params={"pns": list(self.station.md_plant_names),
+                        "ds": str(day - timedelta(days=1)),
+                        "de": str(day + timedelta(days=1)), "s": s, "e": e})
+        else:
+            df = pd.read_sql(
+                text(_CLEARED_SQL), self._engine,
+                params={"pn": f"%{self.station.plant_name}%", "s": s, "e": e})
         return ClearedDispatch(
             day=day,
             cleared_mw=_to_96(df, "datetime", "cleared_energy_mwh"),
@@ -176,20 +205,26 @@ class AssetBook(TradingBook):
         """Nodal-agent strategy curve for the day ([] when the writer has no
         row). curve_json is a 96-slot signed-MW JSON array, discharge +."""
         self._require_strategy_layer()
-        df = pd.read_sql(
-            text(_STRATEGY_SQL), self._engine,
-            params={"pn": self.station.plant_name, "day": day})
-        out: list[Strategy] = []
-        for _, row in df.iterrows():
-            try:
-                series = [float(x) for x in json.loads(row["curve_json"])]
-            except (TypeError, ValueError):
-                continue
-            if len(series) != 96:
-                continue
-            out.append(Strategy(scope="nodal_agent", day=day,
-                                series=series, primary=True))
-        return out
+        names = self.station.cleared_names
+        curves: list[list[float]] = []
+        for pn in names:
+            df = pd.read_sql(text(_STRATEGY_SQL), self._engine,
+                             params={"pn": pn, "day": day})
+            for _, row in df.iterrows():
+                try:
+                    series = [float(x) for x in json.loads(row["curve_json"])]
+                except (TypeError, ValueError):
+                    continue
+                if len(series) == 96:
+                    curves.append(series)
+        if len(names) > 1:
+            # Multi-account station: one summed curve, only when every
+            # account has one — a partial sum would understate the site.
+            if len(curves) != len(names):
+                return []
+            curves = [[sum(v) for v in zip(*curves)]]
+        return [Strategy(scope="nodal_agent", day=day, series=c, primary=True)
+                for c in curves]
 
     def settlement(self, period: str) -> Settlement:
         """Delegates to the Task 4 settlement bridge."""

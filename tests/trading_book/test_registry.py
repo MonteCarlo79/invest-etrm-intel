@@ -33,14 +33,17 @@ def test_filter_by_asset_type():
     assert {s.asset_code for s in get_stations(asset_type="wind")} == WIND
 
 def test_filter_by_data_path():
-    assert {s.asset_code for s in get_stations(data_path="full")} == BESS_FULL
+    # 2026-11-11: wuchuan/alashan promoted — their exchange accounts are in
+    # md_id_cleared_energy under 旭纯哈乐(+二) / 景敖乌珠日.
+    assert {s.asset_code for s in get_stations(data_path="full")} == \
+        BESS_FULL | {"wuchuan", "alashan"}
     assert {s.asset_code for s in get_stations(data_path="settlement_only")} == {"wuhai", "lingt46"}
     assert {s.asset_code for s in get_stations(data_path="registry_only")} == \
-        {"wuchuan", "alashan", "alashanzuoqi", "erlian"}
+        {"alashanzuoqi", "erlian"}
 
 def test_combined_filter():
     assert {s.asset_code for s in get_stations(asset_type="wind", data_path="settlement_only")} == {"lingt46"}
-    assert {s.asset_code for s in get_stations(asset_type="bess", data_path="registry_only")} == {"wuchuan", "alashan"}
+    assert {s.asset_code for s in get_stations(asset_type="bess", data_path="registry_only")} == set()
 
 def test_new_bess_entries():
     w = get_station("wuhai")
@@ -49,11 +52,15 @@ def test_new_bess_entries():
     assert w.price_nodes == []  # node TBD — no report in repo
     wc = get_station("wuchuan")
     assert wc.plant_name == "武川储能电站" and wc.capacity_mw == 1000
-    assert wc.substation == "武川500kV变电站" and wc.data_path == "registry_only"
+    assert wc.substation == "武川500kV变电站" and wc.data_path == "full"
+    assert wc.cleared_names == ("旭纯哈乐储能电站", "旭纯哈乐储能电站二")
     assert any("武川站" in n for n in wc.price_nodes)
     al = get_station("alashan")
     assert al.plant_name == "阿拉善储能电站" and al.capacity_mw == 1000
-    assert al.substation == "阿拉腾敖包500kV变电站"
+    assert al.substation == "阿拉腾敖包500kV变电站" and al.data_path == "full"
+    assert al.cleared_names == ("景敖乌珠日储能电站",)
+    # stations without exchange aliases keep plant_name as the lookup key
+    assert get_station("suyou").cleared_names == ("景蓝乌尔图储能电站",)
     assert any("阿拉腾敖包" in n for n in al.price_nodes)
 
 def test_wind_entries():

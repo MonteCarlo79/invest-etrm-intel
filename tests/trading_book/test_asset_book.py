@@ -4,6 +4,7 @@ No RDS in unit tests: the readers themselves are exercised against the live
 DB by callers, not here. The Task 11 data_path guards run BEFORE any engine
 use, so engine=None suffices to exercise them.
 """
+import json
 from datetime import date
 
 import pandas as pd
@@ -55,9 +56,9 @@ DAY = date(2026, 10, 15)
 
 
 def test_registry_only_station_strategy_layer_raises():
-    # wuchuan: registry_only — cleared/actual/strategies/forecast raise with a
+    # erlian: registry_only — cleared/actual/strategies/forecast raise with a
     # clear message before any engine use (engine=None proves the ordering).
-    book = AssetBook(engine=None, station=get_station("wuchuan"))
+    book = AssetBook(engine=None, station=get_station("erlian"))
     for meth in ("cleared", "actual", "strategies", "forecast"):
         with pytest.raises(NotImplementedError, match="no data path yet"):
             getattr(book, meth)(DAY)
@@ -123,3 +124,60 @@ def test_attribution_works_for_settlement_only_wind(monkeypatch, capsys):
     resid = [l for l in w.lines if l.name == "settlement_residual"][0]
     assert resid.delta_cny == 1000.0
     assert "WARNING" in capsys.readouterr().out
+
+
+# ── 2026-11-11: multi-account stations (registry md_plant_names) ────────────
+
+def _fake_read_sql(monkeypatch, frames):
+    calls = []
+
+    def fake(sql, engine, params=None):
+        calls.append((str(sql), params))
+        return frames(str(sql), params)
+
+    monkeypatch.setattr(pd, "read_sql", fake)
+    return calls
+
+
+def test_multi_account_cleared_sums_accounts_exact_names(monkeypatch):
+    # 武川 trades as 旭纯哈乐 + 旭纯哈乐二: exact names, SUM per slot, no LIKE.
+    calls = _fake_read_sql(monkeypatch, lambda sql, p: pd.DataFrame({
+        "datetime": ["2026-10-15 00:15:00"], "cleared_price": [300.0],
+        "cleared_energy_mwh": [-500.0]}))
+    out = AssetBook(None, get_station("wuchuan")).cleared(DAY)
+    sql, params = calls[0]
+    assert "SUM(cleared_energy_mwh)" in sql and "GROUP BY datetime" in sql
+    assert "LIKE" not in sql
+    assert params["pns"] == ["旭纯哈乐储能电站", "旭纯哈乐储能电站二"]
+    assert params["ds"] == "2026-10-14" and params["de"] == "2026-10-16"
+    assert out.cleared_mw[1] == -500.0 and out.cleared_price[1] == 300.0
+
+
+def test_single_name_station_keeps_like_reader(monkeypatch):
+    calls = _fake_read_sql(monkeypatch, lambda sql, p: pd.DataFrame(
+        columns=["datetime", "cleared_price", "cleared_energy_mwh"]))
+    AssetBook(None, get_station("suyou")).cleared(DAY)
+    assert calls[0][1]["pn"] == "%景蓝乌尔图储能电站%"
+
+
+def test_multi_account_strategy_summed_only_when_all_accounts_present(monkeypatch):
+    curves = {"旭纯哈乐储能电站": [1.0] * 96, "旭纯哈乐储能电站二": [2.0] * 96}
+
+    def frames(sql, p):
+        c = curves.get(p["pn"])
+        return pd.DataFrame({"curve_json": [json.dumps(c)]} if c else {"curve_json": []})
+
+    _fake_read_sql(monkeypatch, frames)
+    book = AssetBook(None, get_station("wuchuan"))
+    out = book.strategies(DAY)
+    assert len(out) == 1 and out[0].series == [3.0] * 96
+    del curves["旭纯哈乐储能电站二"]
+    assert book.strategies(DAY) == []  # partial sum would understate the site
+
+
+def test_single_account_alias_strategy(monkeypatch):
+    calls = _fake_read_sql(monkeypatch, lambda sql, p: pd.DataFrame(
+        {"curve_json": [json.dumps([5.0] * 96)]}))
+    out = AssetBook(None, get_station("alashan")).strategies(DAY)
+    assert calls[0][1]["pn"] == "景敖乌珠日储能电站"
+    assert len(out) == 1 and out[0].series == [5.0] * 96

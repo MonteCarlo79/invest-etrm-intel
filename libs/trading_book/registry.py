@@ -39,6 +39,14 @@ class StationRef:
     subsidy_cny_per_mwh: float | None = None  # 蒙西 discharge compensation
                                        # (350 listed / 280 post-2026 default /
                                        #  None for wind — knowledge/mengxi/cap_payment_list.md)
+    md_plant_names: tuple[str, ...] = ()  # exchange (enos) trading-account names
+                                       # when they differ from plant_name; several
+                                       # accounts are summed. Empty → plant_name.
+
+    @property
+    def cleared_names(self) -> tuple[str, ...]:
+        """md_id_cleared_energy / nodal_strategy_daily plant_name(s) for this station."""
+        return self.md_plant_names or (self.plant_name,)
 
 STATIONS: list[StationRef] = [
     StationRef(
@@ -134,7 +142,11 @@ STATIONS: list[StationRef] = [
             "内蒙.武川站/220kV.1M–4M",
             "内蒙.武川站/500kV.1M–2M",
         ],
-        data_path="registry_only",
+        # Exchange trades the site as two accounts, 500MW/2GWh each (one site;
+        # a single account was not allowed). Observed MW < nameplate: export
+        # channel limited. Dipeng 2026-11-11.
+        md_plant_names=("旭纯哈乐储能电站", "旭纯哈乐储能电站二"),
+        data_path="full",
         subsidy_cny_per_mwh=280,       # post-2026 unlisted default (COD 2026-08)
     ),
     StationRef(
@@ -146,7 +158,8 @@ STATIONS: list[StationRef] = [
         price_nodes=[                  # candidates — station had not appeared
             "内蒙.阿拉腾敖包站/220kV.1M–4M",   # in the price table as of 2026-09
         ],
-        data_path="registry_only",
+        md_plant_names=("景敖乌珠日储能电站",),  # exchange account name (1GW/4GWh) — Dipeng 2026-11-11
+        data_path="full",
         subsidy_cny_per_mwh=280,       # post-2026 unlisted default (COD 2026-07)
     ),
     # ── Task 11: wind +3 (settlement/attribution books; no strategy layer) ──

@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from libs.trading_book.models import CST_TZ
 from libs.trading_book.registry import StationRef
@@ -67,18 +67,19 @@ _LAYERS: tuple[LayerSpec, ...] = (
         "asset_code", 0, 30),
     LayerSpec("strategy", """
         SELECT MAX(target_date) AS latest FROM marketdata.nodal_strategy_daily
-        WHERE plant_name = :k AND model_version LIKE 'nodal_agent%'
+        WHERE plant_name IN :k AND model_version LIKE 'nodal_agent%'
           AND target_date >= CAST(:s AS date)""",
-        "plant_name", 0, 30),
+        "cleared_names", 0, 30),
     # 36M rows; every index leads with data_date or (plant_name, data_date).
     # A datetime filter + leading-wildcard LIKE scans the range and timed out
     # at 120 s in prod (v54). Exact name + data_date hits idx_md_id_plant_date
     # in ~5 ms; all 6 full-path plant names match exactly once (verified
-    # 2026-11-09).
+    # 2026-11-09). Multi-account stations (registry md_plant_names) pass the
+    # exact account names as an expanding IN list — still index-served.
     LayerSpec("cleared", """
         SELECT MAX(data_date) AS latest FROM marketdata.md_id_cleared_energy
-        WHERE plant_name = :k AND data_date >= CAST(:s AS date)""",
-        "plant_name", 3, 30),
+        WHERE plant_name IN :k AND data_date >= CAST(:s AS date)""",
+        "cleared_names", 3, 30),
     LayerSpec("actual", """
         SELECT MAX(data_date) AS latest FROM marketdata.bess_actual_96
         WHERE asset_code = :k AND data_date >= CAST(:s AS date)""",
@@ -139,8 +140,12 @@ def book_freshness(engine, station: StationRef,
             continue
         start = (today - timedelta(days=spec.lookback_days)).isoformat()
         try:
-            df = pd.read_sql(text(spec.sql), engine,
-                             params={"k": _key(station, spec.key), "s": start})
+            k = _key(station, spec.key)
+            stmt = text(spec.sql)
+            if isinstance(k, tuple):
+                stmt = stmt.bindparams(bindparam("k", expanding=True))
+                k = list(k)
+            df = pd.read_sql(stmt, engine, params={"k": k, "s": start})
             latest = _as_date(df["latest"].iloc[0]) if not df.empty else None
         except Exception as exc:  # missing table / timeout: report, don't raise
             out.append(LayerFreshness(spec.name, None, None, spec.max_lag_days,

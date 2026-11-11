@@ -287,7 +287,7 @@ def test_tab_backtest_skipped_for_registry_only():
     # registry_only books skip the backtest section entirely (convention).
     from libs.trading_book.registry import get_station
     at = _at(n_attr=5)
-    at.selectbox[0].set_value(get_station("wuchuan"))
+    at.selectbox[0].set_value(get_station("erlian"))
     at.run()
     assert not at.exception, f"render exception: {at.exception}"
     headers = [h.value for h in at.header]
