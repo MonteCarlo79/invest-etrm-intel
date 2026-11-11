@@ -20,9 +20,19 @@ _ZERO_COMP_PLANTS: frozenset[str] = frozenset([
     "大航额日和图储能电站",
 ])
 
-# Assets with explicit 280元/MWh compensation
+# Assets with explicit 280元/MWh compensation (2026-11-11 list confirmed by Dipeng:
+# post-2025-11-10 projects absent from 独立新型储能电站名单 → 280, not 350)
 _280_COMP_PLANTS: frozenset[str] = frozenset([
     "荣鑫地房子储能电站",
+    "华腾南园储能电站",
+    "旭纯哈乐储能电站",
+    "旭纯哈乐储能电站二",
+    "烨荣晟储能电站",
+    "明阳把栅储能电站",
+    "蒙能翁贡储能电站",
+    "国能托清储能电站",
+    "景敖乌珠日储能电站",
+    "盛德二登图储能电站",
 ])
 
 # Assets joining the market after this date (and before 2027-01-01) get 280元/MWh.
