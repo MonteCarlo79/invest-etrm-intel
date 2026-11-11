@@ -153,11 +153,14 @@ def test_multi_account_cleared_sums_accounts_exact_names(monkeypatch):
     assert out.cleared_mw[1] == -500.0 and out.cleared_price[1] == 300.0
 
 
-def test_single_name_station_keeps_like_reader(monkeypatch):
+def test_single_name_station_uses_exact_name(monkeypatch):
+    # 2026-11-11: LIKE '%name%' took 24 s/day on suyou; exact + data_date bound.
     calls = _fake_read_sql(monkeypatch, lambda sql, p: pd.DataFrame(
         columns=["datetime", "cleared_price", "cleared_energy_mwh"]))
     AssetBook(None, get_station("suyou")).cleared(DAY)
-    assert calls[0][1]["pn"] == "%景蓝乌尔图储能电站%"
+    sql, params = calls[0]
+    assert "LIKE" not in sql and "data_date" in sql
+    assert params["pns"] == ["景蓝乌尔图储能电站"]
 
 
 def test_multi_account_strategy_summed_only_when_all_accounts_present(monkeypatch):

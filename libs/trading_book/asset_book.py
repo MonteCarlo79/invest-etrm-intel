@@ -43,20 +43,13 @@ def _cst_naive_window(day: date) -> tuple[str, str]:
     return f"{day} 00:00:00", f"{day + timedelta(days=1)} 00:00:00"
 
 
+# Exact exchange account name(s) (registry cleared_names) — never LIKE: the
+# leading-wildcard scan took 24 s/day for suyou (2026-11-11 probe) vs ~3 s
+# exact + data_date-bounded (idx_md_id_plant_date prunes the 36M-row table).
+# Multi-account stations (武川) are summed per slot; price = |MW|-weighted
+# mean, plain mean when all MW are 0. Single-account stations have one row
+# per slot, so SUM/weighted-mean are the identity.
 _CLEARED_SQL = """
-    SELECT datetime, cleared_price, cleared_energy_mwh
-    FROM marketdata.md_id_cleared_energy
-    WHERE plant_name LIKE :pn
-      AND datetime >= CAST(:s AS timestamp)
-      AND datetime <  CAST(:e AS timestamp)
-    ORDER BY datetime
-"""
-
-# Stations whose exchange accounts differ from plant_name (registry
-# md_plant_names): exact names (index-friendly, no LIKE) summed across
-# accounts per slot; price = |MW|-weighted mean, plain mean when all MW are 0.
-# data_date bound lets idx_md_id_plant_date prune the 36M-row table.
-_CLEARED_MULTI_SQL = """
     SELECT datetime,
            CASE WHEN SUM(ABS(cleared_energy_mwh)) > 0
                 THEN SUM(cleared_price * ABS(cleared_energy_mwh))
@@ -147,17 +140,12 @@ class AssetBook(TradingBook):
         per-interval MW — pass through, no unit conversion)."""
         self._require_strategy_layer()
         s, e = _cst_naive_window(day)
-        if self.station.md_plant_names:
-            df = pd.read_sql(
-                text(_CLEARED_MULTI_SQL).bindparams(bindparam("pns", expanding=True)),
-                self._engine,
-                params={"pns": list(self.station.md_plant_names),
-                        "ds": str(day - timedelta(days=1)),
-                        "de": str(day + timedelta(days=1)), "s": s, "e": e})
-        else:
-            df = pd.read_sql(
-                text(_CLEARED_SQL), self._engine,
-                params={"pn": f"%{self.station.plant_name}%", "s": s, "e": e})
+        df = pd.read_sql(
+            text(_CLEARED_SQL).bindparams(bindparam("pns", expanding=True)),
+            self._engine,
+            params={"pns": list(self.station.cleared_names),
+                    "ds": str(day - timedelta(days=1)),
+                    "de": str(day + timedelta(days=1)), "s": s, "e": e})
         return ClearedDispatch(
             day=day,
             cleared_mw=_to_96(df, "datetime", "cleared_energy_mwh"),
