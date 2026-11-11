@@ -274,6 +274,9 @@ resource "aws_cloudwatch_event_rule" "tt_api_daily" {
   name                = "${var.name}-tt-api-daily"
   description         = "Daily TT DAAS API collection (province + node tables)"
   schedule_expression = "cron(55 0 * * ? *)"   # 08:55 SGT — before existing tt-province-loader at 09:10
+  # Stopped 2026-11-11 per Dipeng: tt_api no longer collected (collector had
+  # been crashing since 2026-09-27; hist_mengxi/shandong frozen at 2026-09-24).
+  state               = "DISABLED"
   tags                = { Project = var.name }
 }
 
