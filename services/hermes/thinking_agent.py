@@ -158,9 +158,13 @@ class ThinkingAgent:
     def _resolve_model(self, mode: str) -> str:
         """Return the Anthropic model ID for the given mode, respecting env-var overrides."""
         env_var = "HERMES_THINK_HEALTH_MODEL" if mode == "health" else "HERMES_THINK_DESIGN_MODEL"
-        alias = os.environ.get(env_var, "sonnet" if mode == "health" else "sonnet")
+        # health = structured SQL patrol → judgement → templated message:
+        # Haiku is enough. Haiku 4.5 verified invocable on this Bedrock account
+        # 2026-11-11 (global.anthropic.claude-haiku-4-5-20251001-v1:0); the
+        # use-case-form block noted earlier no longer applies.
+        alias = os.environ.get(env_var, "haiku" if mode == "health" else "sonnet")
         _MODEL_MAP = {
-            "haiku":   "claude-sonnet-4-6",   # haiku blocked on Bedrock; restore when use-case form approved
+            "haiku":   "claude-haiku-4-5",
             "sonnet":  "claude-sonnet-4-6",
             "opus":    "claude-opus-4-6",
         }
