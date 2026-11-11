@@ -408,10 +408,12 @@ def create_unique_index(engine, schema, table, keys):
     quoted_table = quote_ident(table)
     quoted_keys = ",".join(quote_ident(k) for k in keys)
 
+    # Create only if missing — never DROP + rebuild per file: on md_id_cleared_energy
+    # (36M rows) that held an AccessExclusive lock ~9 min per sheet and timed out
+    # the 07:05 CST 蒙西 BESS daily report (2026-11-11). Name encodes the keys.
     with engine.begin() as c:
-        c.execute(text(f"DROP INDEX IF EXISTS {quoted_schema}.{quoted_idx_name};"))
         c.execute(text(f"""
-            CREATE UNIQUE INDEX {quoted_idx_name}
+            CREATE UNIQUE INDEX IF NOT EXISTS {quoted_idx_name}
             ON {quoted_schema}.{quoted_table} ({quoted_keys});
         """))
 

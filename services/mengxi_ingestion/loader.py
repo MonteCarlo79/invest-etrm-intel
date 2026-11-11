@@ -264,9 +264,10 @@ def _create_unique_index(engine: Engine, schema: str, table: str, keys: list[str
     idx = _quote_ident(f"ux_{table}_" + "_".join(keys))
     qs, qt = _quote_ident(schema), _quote_ident(table)
     qkeys = ",".join(_quote_ident(k) for k in keys)
+    # Create only if missing — a per-file DROP + rebuild locked md_id_cleared_energy
+    # (36M rows) ~9 min each and timed out the 蒙西 daily report (2026-11-11).
     with engine.begin() as c:
-        c.execute(text(f"DROP INDEX IF EXISTS {qs}.{idx};"))
-        c.execute(text(f"CREATE UNIQUE INDEX {idx} ON {qs}.{qt} ({qkeys});"))
+        c.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {idx} ON {qs}.{qt} ({qkeys});"))
 
 
 def _drop_null_key_rows(df: pd.DataFrame, keys: list[str], table: str) -> pd.DataFrame:
