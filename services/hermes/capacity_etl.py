@@ -138,7 +138,7 @@ def _parse_with_llm(text: str, filename: str, api_key: str,
     hint_block = "\n".join(hint_lines)
 
     resp = client.messages.create(
-        model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
+        model="claude-haiku-4-5",  # text-only simple task → Haiku 4.5 (Bedrock verified 2026-11-11)
         max_tokens=1000,
         system="""You are a data extraction assistant for China electricity market data.
 Extract province-level installed capacity in MW from the Excel content provided.

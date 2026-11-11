@@ -73,7 +73,7 @@ def _claude_extract(province: str, kb_rows: list, api_key: str) -> Optional[dict
         from shared.anthropic_client import make_client as _make_anthropic_client
         client = _make_anthropic_client(api_key)
         resp = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5",  # text-only simple task → Haiku 4.5 (Bedrock verified 2026-11-11)
             max_tokens=1024,
             system=_EXTRACTION_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],

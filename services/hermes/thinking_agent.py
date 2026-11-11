@@ -164,7 +164,7 @@ class ThinkingAgent:
         # use-case-form block noted earlier no longer applies.
         alias = os.environ.get(env_var, "haiku" if mode == "health" else "sonnet")
         _MODEL_MAP = {
-            "haiku":   "claude-haiku-4-5",
+            "haiku":   "claude-haiku-4-5-20251001",
             "sonnet":  "claude-sonnet-4-6",
             "opus":    "claude-opus-4-6",
         }

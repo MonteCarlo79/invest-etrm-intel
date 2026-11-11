@@ -341,7 +341,7 @@ def summarize_emails(messages: list[dict], api_key: str) -> str:
 
     client = _make_anthropic_client(api_key)
     resp = client.messages.create(
-        model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form; sonnet-4-6 text-only confirmed working
+        model="claude-haiku-4-5",  # haiku-4-5 requires use-case form; sonnet-4-6 text-only confirmed working
         max_tokens=800,
         system=(
             "You are a personal assistant summarising unread emails for a busy professional. "

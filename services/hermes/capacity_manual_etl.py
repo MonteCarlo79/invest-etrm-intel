@@ -179,7 +179,7 @@ def _call_claude(context: str, api_key: str) -> Optional[dict]:
     try:
         client = _make_anthropic_client(api_key)
         resp = client.messages.create(
-            model="claude-sonnet-4-6",  # haiku-4-5 requires use-case form on this Bedrock account
+            model="claude-haiku-4-5",  # text-only simple task → Haiku 4.5 (Bedrock verified 2026-11-11)
             max_tokens=2048,
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],

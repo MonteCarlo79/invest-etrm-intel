@@ -142,9 +142,9 @@ def classify_to_market_fundamentals(
 
     try:
         resp = client.messages.create(
-            # Default sonnet (haiku-4-5 requires use-case form on this Bedrock account);
+            # Default Haiku 4.5 (Bedrock invoke verified 2026-11-11);
             # override via HERMES_CLASSIFY_MODEL, consistent with thinking_agent._resolve_model.
-            model=os.environ.get("HERMES_CLASSIFY_MODEL", "claude-sonnet-4-6"),
+            model=os.environ.get("HERMES_CLASSIFY_MODEL", "claude-haiku-4-5"),
             max_tokens=160,
             system=_CLASSIFY_PROMPT,
             messages=[{"role": "user", "content": user_content}],
