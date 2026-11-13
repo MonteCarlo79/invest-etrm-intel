@@ -15,6 +15,24 @@ _SCOPES = "Files.ReadWrite offline_access User.Read"
 _TOKEN_TTL_MARGIN = 300  # refresh 5 min before expiry
 
 
+
+def _raise_for_status(resp: "requests.Response") -> None:
+    """raise_for_status() without leaking pre-authenticated URLs.
+
+    Download redirects / upload sessions point at my.microsoftpersonalcontent.com
+    with a `tempauth` query token that grants access to the file until it
+    expires. requests' default message embeds the full URL, and callers forward
+    str(exc) to Feishu — 2026-11-13 the 401s posted live tempauth links into
+    chat. Keep scheme/host/path only.
+    """
+    if resp.ok:
+        return
+    url = (resp.url or "").split("?", 1)[0]
+    raise requests.HTTPError(
+        f"{resp.status_code} {resp.reason} for url: {url} (query redacted)",
+        response=resp,
+    )
+
 class OneDriveClient:
     """Microsoft Graph API client for personal OneDrive.
 
@@ -54,7 +72,7 @@ class OneDriveClient:
             },
             timeout=15,
         )
-        resp.raise_for_status()
+        _raise_for_status(resp)
         data = resp.json()
         self._access_token = data["access_token"]
         self._expires_at = time.time() + data.get("expires_in", 3600) - _TOKEN_TTL_MARGIN
@@ -82,7 +100,7 @@ class OneDriveClient:
 
     def _get(self, url: str, params: Optional[dict] = None) -> dict:
         resp = requests.get(url, headers=self._headers(), params=params, timeout=20)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -113,7 +131,7 @@ class OneDriveClient:
             timeout=60,
             allow_redirects=True,
         )
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.content
 
     def read_file_by_path(self, file_path: str) -> bytes:
@@ -124,7 +142,7 @@ class OneDriveClient:
         enc_path = "/".join(quote(seg, safe="") for seg in file_path.strip("/").split("/"))
         url = f"{_GRAPH_BASE}/me/drive/root:/{enc_path}:/content"
         resp = requests.get(url, headers=self._headers(), timeout=60, allow_redirects=True)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.content
 
     def read_file_text(self, item_id: str, encoding: str = "utf-8") -> str:
@@ -139,7 +157,7 @@ class OneDriveClient:
             params={"$select": "id,name,size,file"},
             timeout=20,
         )
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     def read_file_smart(self, item_id: str, max_chars: int = 6000) -> str:
@@ -289,7 +307,7 @@ class OneDriveClient:
             json={"item": {"@microsoft.graph.conflictBehavior": conflict_behavior}},
             timeout=30,
         )
-        sess_resp.raise_for_status()
+        _raise_for_status(sess_resp)
         upload_url = sess_resp.json()["uploadUrl"]
 
         chunk_size = 5 * 1024 * 1024  # 5 MB chunks (must be multiple of 320 KiB)
@@ -308,7 +326,7 @@ class OneDriveClient:
                 data=chunk,
                 timeout=120,
             )
-            chunk_resp.raise_for_status()
+            _raise_for_status(chunk_resp)
             if chunk_resp.status_code in (200, 201):
                 result = chunk_resp.json()
             offset += len(chunk)
@@ -327,7 +345,7 @@ class OneDriveClient:
             json={"name": folder_name, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"},
             timeout=10,
         )
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
 
