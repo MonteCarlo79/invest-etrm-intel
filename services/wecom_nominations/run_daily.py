@@ -65,6 +65,25 @@ TD = "bess-platform-mengxi-dashboard"
 AWS = shutil.which("aws") or str(Path.home() / ".local/bin/aws")
 
 
+def _s3_put(tmp: str, key: str, attempts: int = 3) -> None:
+    """aws s3 cp with retries. Multi-MB uploads from the China Mac to
+    ap-southeast-1 fail intermittently; with no retry, one failed cp killed
+    the whole run — nominations/actuals shipped only once between 2026-11-04
+    and 2026-11-12 while zones (shipped first) kept landing."""
+    import time
+    for i in range(1, attempts + 1):
+        r = subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
+                            "--region", "ap-southeast-1"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+        logger.warning("s3 cp %s attempt %d/%d failed: %s", key, i, attempts,
+                       (r.stderr or r.stdout).strip()[-400:])
+        if i < attempts:
+            time.sleep(20 * i)
+    raise RuntimeError(f"s3 cp {key} failed after {attempts} attempts")
+
+
 def _launch_writer(writer: str) -> None:
     """Base64-wrap a python payload and launch it as a one-off ECS task."""
     import base64
@@ -93,8 +112,7 @@ def ship_zones(rows: list[dict], tag: str) -> None:
         json.dump(rows, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}zones_daily_{tag}.json"
-    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
-                    "--region", "ap-southeast-1"], check=True, capture_output=True)
+    _s3_put(tmp, key)
     writer = f"""
 import json, os, boto3
 from sqlalchemy import create_engine, text
@@ -127,8 +145,7 @@ def ship_nominations(rows: list[dict], tag: str) -> None:
         json.dump(rows, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}nominations_daily_{tag}.json"
-    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
-                    "--region", "ap-southeast-1"], check=True, capture_output=True)
+    _s3_put(tmp, key)
     writer = f"""
 import json, os, boto3
 from sqlalchemy import create_engine, text
@@ -163,8 +180,7 @@ def ship_status(stats: list[dict], tag: str) -> None:
         json.dump(stamped, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}nomination_file_status_{tag}.json"
-    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
-                    "--region", "ap-southeast-1"], check=True, capture_output=True)
+    _s3_put(tmp, key)
     writer = f"""
 import json, os, boto3
 from sqlalchemy import create_engine, text
@@ -194,8 +210,7 @@ def ship_actuals(rows: list[dict], tag: str) -> None:
         json.dump(rows, fh, ensure_ascii=False, default=str)
         tmp = fh.name
     key = f"{S3_KEY_PREFIX}actuals_daily_{tag}.json"
-    subprocess.run([AWS, "s3", "cp", tmp, f"s3://{BUCKET}/{key}",
-                    "--region", "ap-southeast-1"], check=True, capture_output=True)
+    _s3_put(tmp, key)
     writer = f"""
 import json, os, boto3
 from sqlalchemy import create_engine, text
@@ -261,10 +276,20 @@ def main() -> None:
                 len(nom_rows), len(act_rows))
     from datetime import date
     tag = date.today().isoformat()
-    ship_zones(zone_rows, tag)
-    ship_nominations(dedupe_rows(nom_rows), tag)
-    ship_actuals(dedupe_rows(act_rows), tag)
-    ship_status(file_stats, tag)
+    # Each ship is independent: a failure in one must not skip the others
+    # (zones shipping first used to be the only thing that landed).
+    failed = []
+    for name, fn, rows in (("zones", ship_zones, zone_rows),
+                           ("nominations", ship_nominations, dedupe_rows(nom_rows)),
+                           ("actuals", ship_actuals, dedupe_rows(act_rows)),
+                           ("status", ship_status, file_stats)):
+        try:
+            fn(rows, tag)
+        except Exception as ex:
+            logger.error("ship %s failed: %s", name, ex)
+            failed.append(name)
+    if failed:
+        raise RuntimeError(f"shipping failed for: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
