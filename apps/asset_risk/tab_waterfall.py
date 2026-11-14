@@ -36,11 +36,10 @@ from libs.asset_risk.waterfall import (
     stage_capacity,
 )
 from libs.asset_risk.diagnostics import (
-    AUTO_NOM_CODE,
-    CAPCOMP_RATE,
     CAPCOMP_RATE_DEFAULT,
-    PLANT_MAP,
     _month_asset_matrix,
+    chain_asset_names,
+    load_maps,
     exec_gap_monthly,
 )
 from libs.asset_risk.chain import _attach_prices, _load_chain, _load_prices
@@ -57,7 +56,7 @@ def _load_assets(engine) -> pd.DataFrame:
             "SELECT id, name, capacity_mw, bess_duration_h, commission_date "
             "FROM marketdata.rm_assets WHERE asset_type = 'bess' ORDER BY name"
         ), conn)
-    return df[df["name"].isin(PLANT_MAP.keys())].reset_index(drop=True)
+    return df[df["name"].isin(chain_asset_names(engine))].reset_index(drop=True)
 
 
 
@@ -178,7 +177,9 @@ def render_waterfall(engine):
         st.warning("No BESS assets found.")
         return
 
-    chain = _load_chain(engine, assets["id"].tolist(), None, None)
+    plant_map, nom_map, rate_map = load_maps(engine)
+    chain = _load_chain(engine, assets["id"].tolist(), None, None,
+                        nom_code_map=nom_map, plant_map=plant_map)
     if chain.empty:
         st.info("No dispatch-chain data.")
         return
@@ -197,9 +198,9 @@ def render_waterfall(engine):
 
     df = chain[chain["month"].isin(sel_months)].copy()
     month_end = (pd.Timestamp(max(sel_months) + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
-    prices = _load_prices(engine, [PLANT_MAP[a] for a in assets["name"]],
+    prices = _load_prices(engine, [plant_map[a] for a in assets["name"]],
                           min(sel_months), month_end)
-    df = _attach_prices(df, prices, PLANT_MAP)
+    df = _attach_prices(df, prices, {a: plant_map[a] for a in assets["name"]})
 
     if sel_asset != "全部资产":
         df = df[df["asset"] == sel_asset]
@@ -214,9 +215,9 @@ def render_waterfall(engine):
 
     # --- legs ---
     nominated = stage_arbitrage(df, "nominated_mw")
-    nominated["cap_cny"] = stage_capacity(nominated["dis_mwh"], nominated["asset"])
+    nominated["cap_cny"] = stage_capacity(nominated["dis_mwh"], nominated["asset"], rate_map)
     cleared = stage_arbitrage(df, "rt_cleared_mw")
-    cleared["cap_cny"] = stage_capacity(cleared["dis_mwh"], cleared["asset"])
+    cleared["cap_cny"] = stage_capacity(cleared["dis_mwh"], cleared["asset"], rate_map)
 
     actual = _load_settlement_actuals(engine, assets["id"].tolist(),
                                       min(sel_months), None)
@@ -241,13 +242,14 @@ def render_waterfall(engine):
 
     def _solve(item):
         a, month, commission_iso = item
-        rate = CAPCOMP_RATE.get(a["name"], CAPCOMP_RATE_DEFAULT)
+        rate = rate_map.get(a["name"], CAPCOMP_RATE_DEFAULT)
         r = benchmark_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
                           float(a["bess_duration_h"]), commission_iso, rate,
-                          PLANT_MAP[a["name"]], asset_name=a["name"])
+                          plant_map[a["name"]], asset_name=a["name"],
+                          asset_code=nom_map.get(a["name"]))
         fr = forecast_optimal_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
                                   float(a["bess_duration_h"]), commission_iso,
-                                  PLANT_MAP[a["name"]])
+                                  plant_map[a["name"]])
         return {"asset": a["name"], "month": month, **r, "fc_arb_cny": fr.get("arb_cny", 0.0)}
 
     if len(work) > 1:

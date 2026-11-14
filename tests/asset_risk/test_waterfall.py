@@ -194,7 +194,7 @@ def test_stage_arbitrage_values(sqlite_engine):
 def test_stage_capacity_rates():
     dis = pd.Series([100.0, 50.0], index=[0, 1])
     assets = pd.Series(["悦杭独贵", "锡西二"], index=[0, 1])
-    cap = stage_capacity(dis, assets)
+    cap = stage_capacity(dis, assets, {"锡西二": 280.0})
     assert cap.iloc[0] == pytest.approx(100.0 * 350.0)
     assert cap.iloc[1] == pytest.approx(50.0 * 280.0)
 
@@ -416,5 +416,5 @@ def test_stage_arbitrage_empty_frame_keeps_columns():
     assert list(out.columns) == ["asset", "month", "dis_mwh", "chg_mwh", "arb_cny"]
     assert len(out) == 0
     # the cap line must not crash on it
-    capped = stage_capacity(out["dis_mwh"], out["asset"])
+    capped = stage_capacity(out["dis_mwh"], out["asset"], {})
     assert len(capped) == 0

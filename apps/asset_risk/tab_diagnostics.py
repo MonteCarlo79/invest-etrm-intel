@@ -24,18 +24,21 @@ from libs.asset_risk.chain import (  # noqa: F401  (re-exported for tabs/tests)
 )
 from libs.asset_risk.diagnostics import (  # noqa: F401  (re-exported for tabs/tests)
     AUTO_NOM_CODE, CAPCOMP_RATE, CAPCOMP_RATE_DEFAULT, PLANT_MAP,
-    RESTRICTION_CN, RESTRICTION_COLOR, _coverage, _month_asset_matrix,
+    chain_asset_names, load_maps, RESTRICTION_CN, RESTRICTION_COLOR, _coverage, _month_asset_matrix,
     bid_fail_monthly, capacity_loss_monthly, exec_gap_monthly,
     find_defect_events, restriction_monthly,
 )
 
 
 def _load_assets(engine) -> pd.DataFrame:
+    """BESS assets with a dispatch chain (registry data_path 'full'; legacy six
+    pre-migration) — see diagnostics.chain_asset_names."""
     with engine.connect() as conn:
-        return pd.read_sql(text(
+        df = pd.read_sql(text(
             "SELECT id, name, capacity_mw, bess_duration_h "
             "FROM marketdata.rm_assets WHERE asset_type = 'bess' ORDER BY name"
         ), conn)
+    return df[df["name"].isin(chain_asset_names(engine))].reset_index(drop=True)
 
 
 
@@ -103,7 +106,7 @@ def render_diagnostics(engine):
         return
 
     assets = _load_assets(engine)
-    assets = assets[assets["name"].isin(PLANT_MAP.keys())]
+    plant_map, nom_map, rate_map = load_maps(engine)
     if assets.empty:
         st.warning("No BESS assets found.")
         return
@@ -121,12 +124,13 @@ def render_diagnostics(engine):
         return
     sel_ids = assets[assets["name"].isin(sel_assets)]["id"].tolist()
 
-    chain = _load_chain(engine, sel_ids, start, end)
+    chain = _load_chain(engine, sel_ids, start, end,
+                        nom_code_map=nom_map, plant_map=plant_map)
     if chain.empty:
         st.info("所选范围无调度链数据。")
         return
-    prices = _load_prices(engine, [PLANT_MAP[a] for a in sel_assets], start, end)
-    df = _attach_prices(chain, prices, {a: PLANT_MAP[a] for a in sel_assets})
+    prices = _load_prices(engine, [plant_map[a] for a in sel_assets], start, end)
+    df = _attach_prices(chain, prices, {a: plant_map[a] for a in sel_assets})
     df["month"] = df["ts"].dt.strftime("%Y-%m")
 
     priced_share = df["price_cny_mwh"].notna().mean()
@@ -138,7 +142,7 @@ def render_diagnostics(engine):
     # ================= Panel 1: execution gap =================
     st.markdown("#### 1. 执行偏差：实时出清 vs 实际执行（网架拥堵）")
     gap = exec_gap_monthly(df)
-    cap1 = capacity_loss_monthly(df, kind="exec_gap")
+    cap1 = capacity_loss_monthly(df, kind="exec_gap", rate_map=rate_map)
     gap = gap.merge(cap1[["asset", "month", "capacity_loss_cny"]],
                     on=["asset", "month"], how="left")
     gap["cost_change_cny"] = -gap["chg_gap_cny"]              # 充电成本变化：+多付 / −少付
@@ -203,7 +207,7 @@ def render_diagnostics(engine):
     # ================= Panel 2: bid failure =================
     st.markdown("#### 2. 申报失败：申报 vs 日前出清")
     fail = bid_fail_monthly(df)
-    cap2 = capacity_loss_monthly(df, kind="bid_fail")
+    cap2 = capacity_loss_monthly(df, kind="bid_fail", rate_map=rate_map)
     fail = fail.merge(cap2[["asset", "month", "capacity_loss_cny"]],
                       on=["asset", "month"], how="left")
     fail["chg_shortfall_mwh"] = -fail["chg_fail_mwh"]      # 充电未中标电量：正=少中标，负=多中标
@@ -267,7 +271,7 @@ def render_diagnostics(engine):
     # ================= Panel 3: restrictions & defects =================
     st.markdown("#### 3. 系统限制与设备缺陷")
     st.markdown("**3a 调度限制窗口（申报表时间格颜色）**")
-    rest = restriction_monthly(df)
+    rest = restriction_monthly(df, rate_map=rate_map)
     n_flag = rest["charge_only_intervals"].sum() + rest["discharge_only_intervals"].sum()
     gap_vol = rest["gap_dis_mwh"].sum() + rest["gap_chg_mwh"].sum()
     c1, c2, c3, c4, c5 = st.columns(5)

@@ -11,9 +11,7 @@ from libs.asset_risk.standard_params import params_for_asset
 from libs.asset_risk.chain import _attach_prices, _load_chain, _load_prices
 from libs.asset_risk.diagnostics import (
     AUTO_NOM_CODE,
-    CAPCOMP_RATE,
     CAPCOMP_RATE_DEFAULT,
-    PLANT_MAP,
     _month_asset_matrix,
     exec_gap_monthly,
 )
@@ -106,10 +104,12 @@ def stage_arbitrage(df: pd.DataFrame, mw_col: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def stage_capacity(dis_mwh: pd.Series, assets: pd.Series) -> pd.Series:
-    """discharge MWh × capacity-subsidy rate per asset (350 default / 280 named)."""
+def stage_capacity(dis_mwh: pd.Series, assets: pd.Series,
+                   rate_map: dict[str, float]) -> pd.Series:
+    """discharge MWh × capacity-subsidy rate per asset (rate_map from
+    diagnostics.load_maps; assets absent from it take the 350 default)."""
     return pd.Series(
-        [float(d) * CAPCOMP_RATE.get(a, CAPCOMP_RATE_DEFAULT) for d, a in zip(dis_mwh, assets)],
+        [float(d) * rate_map.get(a, CAPCOMP_RATE_DEFAULT) for d, a in zip(dis_mwh, assets)],
         index=dis_mwh.index,
     )
 
@@ -145,7 +145,8 @@ def guard_cleared_leg(cleared: pd.DataFrame, actual: pd.DataFrame,
     return out, untrusted
 
 
-def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str) -> pd.Series:
+def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str,
+                              asset_code: str | None = None) -> pd.Series:
     """Filled nodal RT price (md_mengxi_nodal_price_96_filled.avg_node_price)
     for the station's own registry node — the same market price, complete
     96-slot days. metric_time stamps interval START (no −15min shift, unlike
@@ -153,7 +154,7 @@ def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str) -> 
     when the asset has no registry mapping/node."""
     from libs.trading_book.registry import get_station
 
-    code = AUTO_NOM_CODE.get(asset_name)
+    code = asset_code or AUTO_NOM_CODE.get(asset_name)
     if not code:
         return pd.Series(dtype=float)
     station = get_station(code)
@@ -176,7 +177,7 @@ def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str) -> 
 def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
                   duration_h: float, commission_iso: str | None,
                   capcomp_rate: float, plant: str,
-                  asset_name: str = "") -> dict:
+                  asset_name: str = "", asset_code: str | None = None) -> dict:
     """Investment-standard leg: LP perfect-foresight with standard params for one
     asset-month. Cached on (asset_id, month, ...) — historical inputs immutable.
 
@@ -218,7 +219,8 @@ def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
         # skips any day with a NaN slot; 2026-10: ~32% nulls). Fall back to the
         # filled nodal price — the same market price, complete days.
         s2 = _load_nodal_prices_filled(engine, asset_name,
-                                       month_start.strftime("%Y-%m-%d"), month_end)
+                                       month_start.strftime("%Y-%m-%d"), month_end,
+                                       asset_code=asset_code)
         if not s2.empty:
             dispatch_df, profit_s = _run(s2)
             price_note = "节点填充电价"

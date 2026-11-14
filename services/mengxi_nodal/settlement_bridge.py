@@ -24,8 +24,10 @@ stored = −printed, uniform since the 2026-09 charge remediation). All settleme
 statuses count ('processed' and 'flagged' alike — flagged rows still carry real
 money; the flag is a recon hint, not an exclusion).
 
-asset_code → book resolution goes through the rm_assets short name
-(_RM_ASSET_NAME) — the same names services/settlement_ingest/folder_mapper.py
+asset_code → book resolution goes through the rm_assets short name, read at
+call time from the registry identity frame (libs.asset_risk.registry.rm_name_map)
+when rm_assets carries asset_code; pre-migration it falls back to the literal
+_RM_ASSET_NAME (removed in Task 12) — the same names services/settlement_ingest/folder_mapper.py
 maps the stations' invoice folders to (book_type='asset').
 
 Task 11 fleet extension: registry_only stations (no data path yet — e.g.
@@ -41,6 +43,7 @@ from datetime import date, timedelta
 import pandas as pd
 from sqlalchemy import text
 
+from libs.asset_risk.registry import asset_identity, has_asset_code, rm_name_map
 from libs.trading_book.registry import get_station
 from libs.trading_book.settlement_bridge import month_bounds
 
@@ -62,6 +65,7 @@ CREATE TABLE IF NOT EXISTS reports.book_settled_daily (
 # rm short name is NOT always a substring of the registry plant_name).
 # Task 11: wuhai/wuchuan/alashan/lingt46 verified against the rm_assets probe;
 # alashanzuoqi/erlian have no rm_assets entry and are deliberately absent.
+# FALLBACK ONLY (pre-migration, no rm_assets.asset_code) — see _rm_name().
 _RM_ASSET_NAME: dict[str, str] = {
     "suyou": "景蓝乌尔图",
     "hangjinqi": "悦杭独贵",
@@ -117,6 +121,14 @@ def _spread_lump(amount: float, month_start: date,
     return rows
 
 
+def _rm_name(engine, asset_code: str) -> str | None:
+    """rm_assets.name for a registry code: identity frame when the asset_code
+    column exists, literal _RM_ASSET_NAME otherwise."""
+    if not has_asset_code(engine):
+        return _RM_ASSET_NAME.get(asset_code)
+    return rm_name_map(asset_identity(engine)).get(asset_code)
+
+
 def refresh_settled_daily(engine, asset_code: str, month: str) -> int:
     """Refresh one book's daily settled rows for month 'YYYY-MM'; returns rows
     written (upserted on PK, so re-runs are idempotent).
@@ -137,7 +149,7 @@ def refresh_settled_daily(engine, asset_code: str, month: str) -> int:
               f"yet) — skipping refresh_settled_daily for {month}; "
               f"0 rows written.", flush=True)
         return 0
-    name = _RM_ASSET_NAME.get(asset_code)
+    name = _rm_name(engine, asset_code)
     if name is None:
         raise KeyError(f"no rm_assets name mapped for asset_code: "
                        f"{asset_code!r}")

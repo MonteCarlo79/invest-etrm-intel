@@ -4,6 +4,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from libs.asset_risk.registry import (
+    asset_identity, capcomp_rate_map, has_asset_code, nom_code_map, plant_map,
+)
+from libs.trading_book.registry import get_station
+
+# Legacy literal maps — read only as the fallback when rm_assets has no asset_code
+# column yet (pre-migration); render paths get their maps from load_maps().
 # rm_assets.name → md_id_cleared_energy.plant_name (validated map)
 PLANT_MAP = {
     "悦杭独贵": "悦杭独贵储能电站",
@@ -34,6 +41,29 @@ RESTRICTION_COLOR = {"charge_only": "#e67e22", "discharge_only": "#e74c3c"}  # E
 # 容量补偿标准 (¥/MWh, per user 2026-09-01): default 350; 锡西二/阿拉善/武川 280.
 CAPCOMP_RATE: dict[str, float] = {"锡西二": 280.0, "阿拉善": 280.0, "武川": 280.0}
 CAPCOMP_RATE_DEFAULT = 350.0
+
+
+def load_maps(engine) -> tuple[dict[str, str], dict[str, str], dict[str, float]]:
+    """(plant_map_first_name, nom_code_map, capcomp_rate_map) keyed by rm_assets.name,
+    derived from the registry identity frame. Multi-account stations (武川) map to
+    their FIRST plant name here (prices); cross-account cleared sums are Task 11.
+    Pre-migration (no asset_code column) → the legacy literal dicts."""
+    if not has_asset_code(engine):
+        return dict(PLANT_MAP), dict(AUTO_NOM_CODE), dict(CAPCOMP_RATE)
+    ident = asset_identity(engine)
+    pm = {n: names[0] for n, names in plant_map(ident).items() if names}
+    return pm, nom_code_map(ident), capcomp_rate_map(ident)
+
+
+def chain_asset_names(engine) -> set[str]:
+    """rm_assets names eligible for the dispatch-chain tabs: registry station with
+    data_path 'full' and at least one cleared plant name (keeps settlement_only
+    乌海/零碳46 out). Pre-migration → the legacy six (PLANT_MAP keys)."""
+    if not has_asset_code(engine):
+        return set(PLANT_MAP)
+    ident = asset_identity(engine)
+    return {r.name for r in ident.itertuples()
+            if r.asset_code and r.plant_names and get_station(r.asset_code).data_path == "full"}
 
 def exec_gap_monthly(df: pd.DataFrame) -> pd.DataFrame:
     """Per (asset, month): exec gap volumes, ¥ impacts, cleared volumes, gap %.
@@ -116,7 +146,8 @@ def capacity_loss_monthly(df: pd.DataFrame, kind: str = "exec_gap",
     return pd.DataFrame(rows)
 
 
-def restriction_monthly(df: pd.DataFrame) -> pd.DataFrame:
+def restriction_monthly(df: pd.DataFrame,
+                        rate_map: dict[str, float] | None = None) -> pd.DataFrame:
     """Per (asset, month): restriction counts, share, scheduled volume/¥ in windows,
     and the exec-gap deviation (MWh + ¥) WITHIN flagged windows.
 
@@ -125,6 +156,7 @@ def restriction_monthly(df: pd.DataFrame) -> pd.DataFrame:
     gap_mwh/gap_cny = exec-gap deviation inside flagged windows (same masks/formulas
     as exec_gap_monthly) — the deviation quantity.
     """
+    rates = CAPCOMP_RATE if rate_map is None else rate_map
     rows = []
     for (asset, month), g in df.groupby(["asset", "month"]):
         out = {"asset": asset, "month": month}
@@ -146,7 +178,7 @@ def restriction_monthly(df: pd.DataFrame) -> pd.DataFrame:
                                   * chg["price_cny_mwh"]).sum())
         # In-window capacity subsidy foregone (subset of panel-1 容量补偿影响):
         # discharge exec-gap volume in flagged windows × rate (350 default / 280 named)
-        out["capacity_loss_cny"] = out["gap_dis_mwh"] * CAPCOMP_RATE.get(asset, CAPCOMP_RATE_DEFAULT)
+        out["capacity_loss_cny"] = out["gap_dis_mwh"] * rates.get(asset, CAPCOMP_RATE_DEFAULT)
         rows.append(out)
     return pd.DataFrame(rows)
 

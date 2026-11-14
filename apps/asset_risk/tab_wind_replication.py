@@ -19,9 +19,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
+from libs.asset_risk.registry import has_asset_code
+
+# PLANT/ASSET key wind_dispatch_15min / wind_settlement_monthly, whose names differ
+# from the registry's lingt46 plant name — kept literal on purpose.
 PLANT = "悦盛昌渠风光储电站"
 ASSET = "新_悦盛昌渠#1期"
-BOOK_ID = 6
+BOOK_ID = 6  # fallback when rm_assets has no asset_code column / no lingt46 book
+WIND_ASSET_CODE = "lingt46"
 WIND_LABEL = "零碳46风电(悦盛昌渠)"
 
 _GREEN = "#2ecc71"
@@ -61,6 +66,20 @@ def _load_monthly(_engine) -> pd.DataFrame:
     return pd.read_sql(q, _engine, params={"asset": ASSET})
 
 
+def _book_id(engine) -> int:
+    """rm_books id of the lingt46 asset book (via rm_assets.asset_code); BOOK_ID
+    when the column is missing (pre-migration) or no book is found."""
+    if not has_asset_code(engine):
+        return BOOK_ID
+    with engine.connect() as conn:
+        bid = conn.execute(text(
+            "SELECT b.id FROM marketdata.rm_books b "
+            "JOIN marketdata.rm_assets a ON a.id = b.asset_id "
+            "WHERE a.asset_code = :code AND b.book_type = 'asset' ORDER BY b.id LIMIT 1"
+        ), {"code": WIND_ASSET_CODE}).scalar()
+    return int(bid) if bid is not None else BOOK_ID
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_bill_items(_engine, month: str) -> pd.DataFrame:
     q = text("""
@@ -69,7 +88,7 @@ def _load_bill_items(_engine, month: str) -> pd.DataFrame:
         JOIN marketdata.rm_settlements s ON i.settlement_id = s.id
         WHERE s.book_id = :book AND s.settlement_month = :month
     """)
-    return pd.read_sql(q, _engine, params={"book": BOOK_ID, "month": f"{month}-01"})
+    return pd.read_sql(q, _engine, params={"book": _book_id(_engine), "month": f"{month}-01"})
 
 
 # ── Tab 7 wind mode: Dispatch Diagnostics ────────────────────────────────────

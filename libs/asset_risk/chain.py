@@ -26,7 +26,9 @@ def _month_token_bounds(start: str | None, end: str | None) -> tuple[str | None,
     return start, end
 
 
-def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None) -> pd.DataFrame:
+def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None,
+                nom_code_map: dict[str, str] | None = None,
+                plant_map: dict[str, str] | None = None) -> pd.DataFrame:
     ts = _ts_expr(engine)
     start, end = _month_token_bounds(start, end)
     sql = f"""
@@ -49,11 +51,14 @@ def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None
         df = pd.read_sql(stmt, conn, params=params)
     df["ts"] = pd.to_datetime(df["ts"])
     return _merge_auto_nominations(
-        df, _load_auto_nominations(engine, asset_ids, start, end))
+        df, _load_auto_nominations(engine, asset_ids, start, end,
+                                   nom_code_map=nom_code_map, plant_map=plant_map))
 
 
 def _load_auto_nominations(engine, asset_ids: list[int],
-                           start: str | None, end: str | None) -> pd.DataFrame:
+                           start: str | None, end: str | None,
+                           nom_code_map: dict[str, str] | None = None,
+                           plant_map: dict[str, str] | None = None) -> pd.DataFrame:
     """Auto-scraped nominations for the requested rm_assets ids:
     (asset_id, ts, auto_nominated_mw, auto_rt_cleared_mw), ts naive Beijing
     (data_date + (slot−1)·15min — the same frame the PG branch of _load_chain
@@ -63,15 +68,20 @@ def _load_auto_nominations(engine, asset_ids: list[int],
     per the 2026-11-05 unit verification) — used
     ONLY to fill chain-uncovered slots (the manual chain ingest stopped
     2026-08-30), never to override the chain's own values.
+
+    nom_code_map / plant_map (rm name → registry code / first plant name) come
+    from diagnostics.load_maps; None → the legacy literal dicts.
     """
+    codes_by_name = AUTO_NOM_CODE if nom_code_map is None else nom_code_map
+    plants_by_name = PLANT_MAP if plant_map is None else plant_map
     start, end = _month_token_bounds(start, end)
     with engine.connect() as conn:
         names = pd.read_sql(
             text("SELECT id, name FROM marketdata.rm_assets WHERE id IN :ids")
             .bindparams(bindparam("ids", expanding=True)),
             conn, params={"ids": asset_ids})
-    id_to_code = {int(r.id): AUTO_NOM_CODE[r.name]
-                  for r in names.itertuples() if r.name in AUTO_NOM_CODE}
+    id_to_code = {int(r.id): codes_by_name[r.name]
+                  for r in names.itertuples() if r.name in codes_by_name}
     if not id_to_code:
         return pd.DataFrame(
             columns=["asset_id", "ts", "auto_nominated_mw", "auto_rt_cleared_mw"])
@@ -107,8 +117,8 @@ def _load_auto_nominations(engine, asset_ids: list[int],
     # RT-cleared fill for the extension rows (chain has no Sep+ slots at all).
     # UNIT: md_id_cleared_energy.cleared_energy_mwh is average MW per interval
     # (mislabeled name, verified 2026-11-05) — no ×4.
-    plants = {i: PLANT_MAP[n] for i, n in zip(names["id"], names["name"])
-              if int(i) in id_to_code and n in PLANT_MAP}
+    plants = {i: plants_by_name[n] for i, n in zip(names["id"], names["name"])
+              if int(i) in id_to_code and n in plants_by_name}
     if plants:
         sql = """
             SELECT plant_name, datetime, cleared_energy_mwh AS rt_mw

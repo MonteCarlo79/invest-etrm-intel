@@ -7,7 +7,7 @@ Rows without asset_code get plant_names=() and the default capcomp rate.
 from __future__ import annotations
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from libs.trading_book.registry import get_station
 
@@ -23,6 +23,14 @@ CAPCOMP_DEFAULT = 350.0
 
 # rm_assets columns passed through as-is (selected only if present in the table)
 _PASSTHROUGH = ["asset_type", "invoice_folder", "capacity_mw", "bess_duration_h", "commission_date"]
+
+
+def has_asset_code(engine) -> bool:
+    """True when marketdata.rm_assets carries the asset_code column (added by the
+    Task 9 migration; absent in production until it runs). Consumers fall back to
+    their legacy literal maps when False."""
+    cols = inspect(engine).get_columns("rm_assets", schema="marketdata")
+    return any(c["name"] == "asset_code" for c in cols)
 
 
 def asset_identity(engine) -> pd.DataFrame:
