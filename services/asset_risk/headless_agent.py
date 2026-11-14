@@ -54,7 +54,7 @@ def _make_engine(pg_url: str):
 
 def run_asset_risk_query(question: str, api_key: str, pg_url: str = "") -> str:
     """Run the asset risk headless agent and return its answer."""
-    from apps.asset_risk.tab_agent import tools as _tools, _execute_tool
+    from libs.asset_risk.agent_tools import tools as _tools, execute_tool as _execute_tool
 
     client = _make_client(api_key)
     engine = _make_engine(pg_url)
