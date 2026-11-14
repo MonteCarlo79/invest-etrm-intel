@@ -1,7 +1,7 @@
 """Headless Asset Risk agent.
 
-Routes asset risk questions to DB query tools:
-get_book_pnl, get_position_mtm, get_var, get_asset_list.
+Routes asset risk questions to the shared tool set in libs/asset_risk/agent_tools
+(same tools and grounding prompt as the Streamlit Agent tab).
 
 Usage:
     from services.asset_risk.headless_agent import run_asset_risk_query
@@ -19,21 +19,6 @@ logger = logging.getLogger(__name__)
 # Tool-round budget: past this, the next API call is made without tools so the
 # model must answer with what it has (prevents unbounded tool loops).
 _MAX_TOOL_ROUNDS = 12
-
-_SYSTEM = """\
-
-You are an asset risk management analyst for a Chinese electricity trading company. \
-You track book P&L, position mark-to-market, value at risk (VaR), \
-and portfolio exposure across the asset book.
-
-## Rules
-1. Always call get_asset_list first if you don't know the book_id.
-2. Always call a tool before stating any P&L, VaR, or MTM figure.
-3. Quote all monetary values in CNY (元); MWh for energy volumes.
-4. Respond concisely with actionable risk insights.
-5. Respond in the same language as the question (Chinese or English).
-"""
-
 
 def _make_client(api_key: str):
     from shared.anthropic_client import make_client
@@ -54,12 +39,14 @@ def _make_engine(pg_url: str):
 
 def run_asset_risk_query(question: str, api_key: str, pg_url: str = "") -> str:
     """Run the asset risk headless agent and return its answer."""
-    from libs.asset_risk.agent_tools import tools as _tools, execute_tool as _execute_tool
+    from libs.asset_risk.agent_tools import (
+        AGENT_BASE_SYSTEM, tools as _tools, execute_tool as _execute_tool,
+    )
 
     client = _make_client(api_key)
     engine = _make_engine(pg_url)
 
-    system = (f"今天是 {date.today().isoformat()}。涉及日期/时期的问题一律以该日期为基准,使用最新可得数据——模型的内部日期感可能滞后于真实当前日期。\n\n" + _SYSTEM)
+    system = (f"今天是 {date.today().isoformat()}。涉及日期/时期的问题一律以该日期为基准,使用最新可得数据——模型的内部日期感可能滞后于真实当前日期。\n\n" + AGENT_BASE_SYSTEM)
     try:
         from services.knowledge_pool.expert_memory import get_relevant_insights, inject_expert_memory
         insights = get_relevant_insights(question, limit=4)
