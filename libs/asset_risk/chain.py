@@ -1,11 +1,11 @@
 """Dispatch-chain SQL loaders and price join (moved from apps/asset_risk/tab_diagnostics.py)."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, inspect, text
 
 from libs.asset_risk.diagnostics import AUTO_NOM_CODE, PLANT_MAP
+from libs.asset_risk.registry import asset_identity, has_asset_code
 
 
 def _ts_expr(engine) -> str:
@@ -26,17 +26,20 @@ def _month_token_bounds(start: str | None, end: str | None) -> tuple[str | None,
     return start, end
 
 
-def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None,
-                nom_code_map: dict[str, str] | None = None,
-                plant_map: dict[str, str] | None = None) -> pd.DataFrame:
+CHAIN_COLUMNS = ["asset_id", "asset", "capacity_mw", "ts", "nominated_mw", "da_cleared_mw",
+                 "rt_cleared_mw", "actual_mw", "restriction", "soc_pct"]
+_KEY = ["asset_id", "ts"]
+
+
+def _load_legacy_chain(engine, asset_ids: list[int], start: str | None,
+                       end: str | None) -> pd.DataFrame:
+    """Manual dispatch chain (rm_dispatch_chain; ingest stopped 2026-08-30)."""
     ts = _ts_expr(engine)
-    start, end = _month_token_bounds(start, end)
     sql = f"""
-        SELECT dc.asset_id, a.name AS asset, a.capacity_mw, {ts} AS ts,
+        SELECT dc.asset_id, {ts} AS ts,
                dc.nominated_mw, dc.da_cleared_mw, dc.rt_cleared_mw, dc.actual_mw,
                dc.restriction, dc.soc_pct
         FROM marketdata.rm_dispatch_chain dc
-        JOIN marketdata.rm_assets a ON a.id = dc.asset_id
         WHERE dc.asset_id IN :ids
     """
     params: dict = {"ids": asset_ids}
@@ -50,131 +53,206 @@ def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None
     with engine.connect() as conn:
         df = pd.read_sql(stmt, conn, params=params)
     df["ts"] = pd.to_datetime(df["ts"])
-    return _merge_auto_nominations(
-        df, _load_auto_nominations(engine, asset_ids, start, end,
-                                   nom_code_map=nom_code_map, plant_map=plant_map))
+    return df
 
 
-def _load_auto_nominations(engine, asset_ids: list[int],
-                           start: str | None, end: str | None,
-                           nom_code_map: dict[str, str] | None = None,
-                           plant_map: dict[str, str] | None = None) -> pd.DataFrame:
-    """Auto-scraped nominations for the requested rm_assets ids:
-    (asset_id, ts, auto_nominated_mw, auto_rt_cleared_mw), ts naive Beijing
-    (data_date + (slot−1)·15min — the same frame the PG branch of _load_chain
-    renders). Empty frame when no requested asset maps to a registry code.
+def _asset_keys(engine, asset_ids: list[int], nom_code_map: dict[str, str] | None,
+                plant_map: dict[str, str] | None) -> pd.DataFrame:
+    """(asset_id, asset, capacity_mw, asset_code, plant_names) per requested id.
 
-    auto_rt_cleared_mw is md_id_cleared_energy.cleared_energy_mwh (MW-scale,
-    per the 2026-11-05 unit verification) — used
-    ONLY to fill chain-uncovered slots (the manual chain ingest stopped
-    2026-08-30), never to override the chain's own values.
-
-    nom_code_map / plant_map (rm name → registry code / first plant name) come
-    from diagnostics.load_maps; None → the legacy literal dicts.
+    Post-migration (rm_assets.asset_code present): code + ALL exchange plant
+    names from the registry identity frame (武川 has two accounts). Pre-migration:
+    nom_code_map / plant_map (None → the legacy literal AUTO_NOM_CODE / PLANT_MAP),
+    one plant name per asset — exactly today's behaviour for the six stations.
     """
-    codes_by_name = AUTO_NOM_CODE if nom_code_map is None else nom_code_map
-    plants_by_name = PLANT_MAP if plant_map is None else plant_map
-    start, end = _month_token_bounds(start, end)
     with engine.connect() as conn:
-        names = pd.read_sql(
-            text("SELECT id, name FROM marketdata.rm_assets WHERE id IN :ids")
+        a = pd.read_sql(
+            text("SELECT id AS asset_id, name AS asset, capacity_mw "
+                 "FROM marketdata.rm_assets WHERE id IN :ids")
             .bindparams(bindparam("ids", expanding=True)),
             conn, params={"ids": asset_ids})
-    id_to_code = {int(r.id): codes_by_name[r.name]
-                  for r in names.itertuples() if r.name in codes_by_name}
-    if not id_to_code:
-        return pd.DataFrame(
-            columns=["asset_id", "ts", "auto_nominated_mw", "auto_rt_cleared_mw"])
+    a["asset_id"] = a["asset_id"].astype(int)
+    if has_asset_code(engine):
+        ident = asset_identity(engine).set_index("asset_id")
+        a["asset_code"] = [ident["asset_code"].get(i) for i in a["asset_id"]]
+        a["plant_names"] = [tuple(ident["plant_names"].get(i) or ()) for i in a["asset_id"]]
+    else:
+        codes = AUTO_NOM_CODE if nom_code_map is None else nom_code_map
+        plants = PLANT_MAP if plant_map is None else plant_map
+        a["asset_code"] = [codes.get(n) for n in a["asset"]]
+        a["plant_names"] = [(plants[n],) if n in plants else () for n in a["asset"]]
+    return a
 
-    from services.mengxi_nodal.nomination_curves import ensure_table as _ensure_nom
-    _ensure_nom(engine)
-    sql = """
-        SELECT asset_code, data_date, slot, nominated_mw
-        FROM marketdata.bess_nomination_96
+
+def _slot96_ts(df: pd.DataFrame) -> pd.Series:
+    """data_date + (slot−1)·15min — CST-naive wall clock."""
+    return (pd.to_datetime(df["data_date"].astype(str).str[:10])
+            + pd.to_timedelta((df["slot"].astype(int) - 1) * 15, unit="min"))
+
+
+def _load_slot96(engine, table: str, value_col: str, code_to_id: dict[str, int],
+                 start: str | None, end: str | None) -> pd.Series:
+    """bess_nomination_96 / bess_actual_96 value series indexed by (asset_id, ts)."""
+    sql = f"""
+        SELECT asset_code, data_date, slot, {value_col} AS v
+        FROM marketdata.{table}
         WHERE asset_code IN :codes
     """
-    params: dict = {"codes": list(id_to_code.values())}
+    params: dict = {"codes": list(code_to_id)}
     if start:
         sql += " AND data_date >= :s"
         params["s"] = start[:10]
     if end:
         sql += " AND data_date < :e"
         params["e"] = end[:10]
-    nom = pd.read_sql(text(sql).bindparams(bindparam("codes", expanding=True)),
-                      engine, params=params)
-    code_to_id = {c: i for i, c in id_to_code.items()}
-    out = pd.DataFrame(columns=["asset_id", "ts", "auto_nominated_mw",
-                                "auto_rt_cleared_mw"])
-    if not nom.empty:
-        nom["asset_id"] = nom["asset_code"].map(code_to_id)
-        nom["ts"] = (pd.to_datetime(nom["data_date"].astype(str).str[:10])
-                     + pd.to_timedelta((nom["slot"].astype(int) - 1) * 15,
-                                       unit="min"))
-        out = nom.rename(columns={"nominated_mw": "auto_nominated_mw"})[
-            ["asset_id", "ts", "auto_nominated_mw"]]
-        out["auto_rt_cleared_mw"] = np.nan
+    df = pd.read_sql(text(sql).bindparams(bindparam("codes", expanding=True)),
+                     engine, params=params)
+    if df.empty:
+        return pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=_KEY))
+    df["asset_id"] = df["asset_code"].map(code_to_id)
+    df["ts"] = _slot96_ts(df)
+    return pd.to_numeric(df.set_index(_KEY)["v"], errors="coerce")
 
-    # RT-cleared fill for the extension rows (chain has no Sep+ slots at all).
-    # UNIT: md_id_cleared_energy.cleared_energy_mwh is average MW per interval
-    # (mislabeled name, verified 2026-11-05) — no ×4.
-    plants = {i: plants_by_name[n] for i, n in zip(names["id"], names["name"])
-              if int(i) in id_to_code and n in plants_by_name}
-    if plants:
-        sql = """
-            SELECT plant_name, datetime, cleared_energy_mwh AS rt_mw
-            FROM marketdata.md_id_cleared_energy
-            WHERE plant_name IN :plants
-        """
-        params = {"plants": list(plants.values())}
-        if start:
-            sql += " AND datetime >= :s"
-            params["s"] = start
-        if end:
-            sql += " AND datetime < :e"
-            params["e"] = end
-        rt = pd.read_sql(text(sql).bindparams(bindparam("plants", expanding=True)),
-                         engine, params=params)
-        if not rt.empty:
-            plant_to_id = {p: int(i) for i, p in plants.items()}
-            rt["asset_id"] = rt["plant_name"].map(plant_to_id)
-            rt = rt.rename(columns={"datetime": "ts"})
-            rt["ts"] = pd.to_datetime(rt["ts"])
-            if out.empty:
-                out = rt[["asset_id", "ts"]].assign(auto_nominated_mw=np.nan)
-                out["auto_rt_cleared_mw"] = rt["rt_mw"]
-            else:
-                out = out.merge(
-                    rt[["asset_id", "ts", "rt_mw"]], on=["asset_id", "ts"],
-                    how="outer")
-                out["auto_rt_cleared_mw"] = out["auto_rt_cleared_mw"].combine_first(
-                    out.pop("rt_mw"))
+
+def _load_ops_actuals(engine, code_to_id: dict[str, int], start: str | None,
+                      end: str | None) -> pd.Series:
+    """ops_bess_dispatch_15min.actual_dispatch_mw by (asset_id, interval_start)
+    — the pre-2026-04-20 fallback (feed died 2026-04-21). Absent table → empty."""
+    empty = pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=_KEY))
+    if not inspect(engine).has_table("ops_bess_dispatch_15min", schema="marketdata"):
+        return empty
+    sql = """
+        SELECT asset_code, interval_start AS ts, actual_dispatch_mw AS v
+        FROM marketdata.ops_bess_dispatch_15min
+        WHERE asset_code IN :codes
+    """
+    params: dict = {"codes": list(code_to_id)}
+    if start:
+        sql += " AND interval_start >= :s"
+        params["s"] = start
+    if end:
+        sql += " AND interval_start < :e"
+        params["e"] = end
+    df = pd.read_sql(text(sql).bindparams(bindparam("codes", expanding=True)),
+                     engine, params=params)
+    if df.empty:
+        return empty
+    df["asset_id"] = df["asset_code"].map(code_to_id)
+    df["ts"] = pd.to_datetime(df["ts"])
+    s = pd.to_numeric(df.set_index(_KEY)["v"], errors="coerce")
+    return s[~s.index.duplicated(keep="last")]
+
+
+def _load_cleared_sum(engine, plant_to_id: dict[str, int], start: str | None,
+                      end: str | None) -> pd.Series:
+    """Exchange-cleared MW summed over ALL of an asset's accounts per (asset_id, ts):
+    accounts with a row contribute; no row anywhere → absent (NaN after reindex).
+
+    UNIT: md_id_cleared_energy.cleared_energy_mwh is interval-average MW
+    (mislabeled name, verified 2026-11-05) — no ×4. Exact plant_name IN, never LIKE.
+    """
+    sql = """
+        SELECT plant_name, datetime AS ts, cleared_energy_mwh AS v
+        FROM marketdata.md_id_cleared_energy
+        WHERE plant_name IN :plants
+    """
+    params: dict = {"plants": list(plant_to_id)}
+    if start:
+        sql += " AND data_date >= :ds AND datetime >= :s"
+        params["ds"] = start[:10]
+        params["s"] = start
+    if end:
+        sql += " AND data_date <= :de AND datetime < :e"
+        params["de"] = end[:10]
+        params["e"] = end
+    df = pd.read_sql(text(sql).bindparams(bindparam("plants", expanding=True)),
+                     engine, params=params)
+    if df.empty:
+        return pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=_KEY))
+    df["asset_id"] = df["plant_name"].map(plant_to_id)
+    df["ts"] = pd.to_datetime(df["ts"])
+    df["v"] = pd.to_numeric(df["v"], errors="coerce")
+    return df.groupby(_KEY)["v"].sum(min_count=1)
+
+
+def _check_sign(df: pd.DataFrame) -> None:
+    """Per (asset, month) over slots with both actual and nominated: Σ actual·nominated
+    must be > 0 (sign conventions agree). Months with no overlap pass."""
+    both = df[df["actual_mw"].notna() & df["nominated_mw"].notna()]
+    if both.empty:
+        return
+    prod = both["actual_mw"].astype(float) * both["nominated_mw"].astype(float)
+    month = both["ts"].dt.strftime("%Y-%m")
+    for (asset, m), total in prod.groupby([both["asset"], month]).sum().items():
+        if total <= 0:
+            raise ValueError(f"actual/nominated sign disagreement {asset} {m}")
+
+
+def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None,
+                nom_code_map: dict[str, str] | None = None,
+                plant_map: dict[str, str] | None = None) -> pd.DataFrame:
+    """Dispatch chain per (asset_id, ts), CST-naive 15-min slots. Sources by priority:
+
+    - nominated_mw: WeCom bess_nomination_96 overrides the legacy chain on overlap
+      and extends it;
+    - rt_cleared_mw: legacy chain, else md_id_cleared_energy summed over all the
+      asset's exchange accounts;
+    - actual_mw: legacy chain, else bess_actual_96, else
+      ops_bess_dispatch_15min.actual_dispatch_mw;
+    - da_cleared_mw / restriction / soc_pct: legacy chain only (NaN elsewhere).
+
+    Slots present only in the new sources extend the chain. Raises ValueError on
+    an actual/nominated sign disagreement (see _check_sign). Assets without an
+    asset_code (post-migration) or outside the literal maps (pre-migration)
+    return legacy rows only.
+    """
+    start, end = _month_token_bounds(start, end)
+    keys = _asset_keys(engine, asset_ids, nom_code_map, plant_map)
+    legacy = _load_legacy_chain(engine, asset_ids, start, end)
+
+    code_to_id = {c: int(i) for i, c in zip(keys["asset_id"], keys["asset_code"]) if c}
+    plant_to_id = {p: int(i) for i, ps in zip(keys["asset_id"], keys["plant_names"])
+                   for p in ps}
+    nom = act96 = ops = cleared = None
+    if code_to_id:
+        from services.mengxi_nodal.nomination_curves import ensure_actual_table, ensure_table
+        ensure_table(engine)
+        ensure_actual_table(engine)
+        nom = _load_slot96(engine, "bess_nomination_96", "nominated_mw", code_to_id, start, end)
+        act96 = _load_slot96(engine, "bess_actual_96", "actual_mw", code_to_id, start, end)
+        ops = _load_ops_actuals(engine, code_to_id, start, end)
+    if plant_to_id:
+        cleared = _load_cleared_sum(engine, plant_to_id, start, end)
+    extra = [s for s in (nom, act96, ops, cleared) if s is not None and not s.empty]
+
+    base = legacy.set_index(_KEY)
+    idx = base.index
+    for s in extra:
+        idx = idx.union(s.index, sort=False)
+    if len(idx) == 0:
+        return pd.DataFrame(columns=CHAIN_COLUMNS)
+    out = base.reindex(idx)
+    for col in ("nominated_mw", "da_cleared_mw", "rt_cleared_mw", "actual_mw", "soc_pct"):
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    if nom is not None and not nom.empty:
+        out["nominated_mw"] = nom.reindex(idx).combine_first(out["nominated_mw"])
+    if cleared is not None and not cleared.empty:
+        out["rt_cleared_mw"] = out["rt_cleared_mw"].combine_first(cleared.reindex(idx))
+    for s in (act96, ops):
+        if s is not None and not s.empty:
+            out["actual_mw"] = out["actual_mw"].combine_first(s.reindex(idx))
+    out = out.reset_index()
+    ident = keys.set_index("asset_id")
+    out["asset_id"] = out["asset_id"].astype(int)
+    out["asset"] = out["asset_id"].map(ident["asset"])
+    out["capacity_mw"] = out["asset_id"].map(ident["capacity_mw"])
+    out["ts"] = pd.to_datetime(out["ts"])
+    out = out.sort_values(_KEY, kind="stable").reset_index(drop=True)[CHAIN_COLUMNS]
+    _check_sign(out)
     return out
 
 
-def _merge_auto_nominations(chain: pd.DataFrame, auto: pd.DataFrame) -> pd.DataFrame:
-    """WeCom auto nominations win on (asset_id, ts) overlap; auto-only slots
-    EXTEND the chain (their rt_cleared_mw fills from the exchange-cleared
-    source; da/actual/soc/restriction stay NaN — honest gaps). Identity
-    columns (asset, capacity_mw) fill from the chain's own mapping."""
-    if auto.empty:
-        return chain
-    key = ["asset_id", "ts"]
-    base = chain.set_index(key)
-    add = auto.set_index(key)
-    idx = base.index.union(add.index, sort=False)
-    out = base.reindex(idx)
-    nom = add["auto_nominated_mw"].reindex(idx)
-    out["nominated_mw"] = nom.combine_first(out["nominated_mw"])
-    rtc = add["auto_rt_cleared_mw"].reindex(idx)
-    out["rt_cleared_mw"] = out["rt_cleared_mw"].combine_first(rtc)
-    id_asset = dict(zip(chain["asset_id"], chain["asset"]))
-    id_cap = dict(zip(chain["asset_id"], chain["capacity_mw"]))
-    level_ids = out.index.get_level_values("asset_id")
-    out["asset"] = out["asset"].fillna(pd.Series(level_ids.map(id_asset),
-                                                 index=out.index))
-    out["capacity_mw"] = out["capacity_mw"].fillna(
-        pd.Series(level_ids.map(id_cap), index=out.index))
-    return out.reset_index()
+load_chain = _load_chain
 
 
 def _load_prices(engine, plants: list[str], start: str | None, end: str | None) -> pd.DataFrame:

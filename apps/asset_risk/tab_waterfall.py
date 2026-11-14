@@ -223,6 +223,19 @@ def render_waterfall(engine):
                                       min(sel_months), None)
     actual = actual[actual["month"].isin(sel_months)] if not actual.empty else actual
 
+    # Unit assertion: cleared > 3× billed discharge means a unit error (e.g. a
+    # stray ×4 on interval-average MW), not a feed gap — stop, don't downgrade.
+    if not cleared.empty and not actual.empty and "dis_mwh" in actual.columns:
+        billed = actual.set_index(["asset", "month"])["dis_mwh"]
+        unit_bad = []
+        for _, row in cleared.iterrows():
+            b = billed.get((row["asset"], row["month"]))
+            if b is not None and pd.notna(b) and b > 0 and row["dis_mwh"] / b > 3:
+                unit_bad.append(f"{row['asset']} {row['month']} ({row['dis_mwh'] / b:.1f}×)")
+        if unit_bad:
+            st.error("出清放电量超过账单放电量 3 倍（疑似单位错误，页面停止）: " + "、".join(unit_bad))
+            st.stop()
+
     cleared, cleared_untrusted = guard_cleared_leg(cleared, actual)
     if cleared_untrusted:
         st.warning("出清数据不可信（出清电量与账单放电量偏差 >30%，出清腿已按账单口径降级展示）: "

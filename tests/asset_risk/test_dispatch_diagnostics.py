@@ -293,6 +293,13 @@ def _add_mapped_asset(eng):
             "(asset_id, interval_start, nominated_mw, da_cleared_mw, "
             "rt_cleared_mw, actual_mw, source_file) "
             "VALUES (7, '2026-09-01 00:00:00', 10, 10, 8, 9, 'xlsx')"))
+        # Task 11 sign guard: the −99 override at 00:00 opposes actual 9; this
+        # sign-consistent slot keeps the month's Σ actual·nominated > 0
+        conn.execute(text(
+            "INSERT INTO marketdata.rm_dispatch_chain "
+            "(asset_id, interval_start, nominated_mw, da_cleared_mw, "
+            "rt_cleared_mw, actual_mw, source_file) "
+            "VALUES (7, '2026-09-01 00:30:00', 100, 100, 100, 100, 'xlsx')"))
         conn.execute(text(
             "INSERT INTO marketdata.md_id_cleared_energy "
             "(plant_name, datetime, cleared_price, cleared_energy_mwh) "

@@ -19,8 +19,7 @@ import streamlit as st
 from sqlalchemy import bindparam, text
 
 from libs.asset_risk.chain import (  # noqa: F401  (re-exported for tabs/tests)
-    _attach_prices, _load_auto_nominations, _load_chain, _load_prices,
-    _merge_auto_nominations, _month_token_bounds, _ts_expr,
+    _attach_prices, _load_chain, _load_prices, _month_token_bounds, _ts_expr,
 )
 from libs.asset_risk.diagnostics import (  # noqa: F401  (re-exported for tabs/tests)
     AUTO_NOM_CODE, CAPCOMP_RATE, CAPCOMP_RATE_DEFAULT, PLANT_MAP,
