@@ -98,12 +98,12 @@ def render_pnl(engine):
     with engine.connect() as conn:
         snap = pd.read_sql(text("""
             SELECT snapshot_date, realized_cny, bilateral_pnl_cny, spot_pnl_cny,
-                   deviation_pnl_cny, other_pnl_cny, unrealized_mtm_cny
+                   deviation_pnl_cny, other_pnl_cny
             FROM marketdata.rm_pnl_snapshots
             WHERE book_id = :b ORDER BY snapshot_date
         """), conn, params={"b": book_id})
     if not snap.empty:
-        st.line_chart(snap.set_index("snapshot_date")[["realized_cny", "unrealized_mtm_cny"]])
+        st.line_chart(snap.set_index("snapshot_date")[["realized_cny"]])
     else:
         st.info("No snapshots yet — run the engines (run_backfill or in-app compute).")
 

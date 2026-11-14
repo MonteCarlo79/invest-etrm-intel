@@ -51,10 +51,9 @@ except Exception:
 
 st.title("Asset Risk Management")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "Asset Config", "Settlement", "Realised P&L",
-    "Positions & MtM", "VaR & Greeks", "Agent", "Dispatch Diagnostics",
-    "收益瀑布 P&L Waterfall"
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Asset Config", "Settlement", "Realised P&L", "Agent",
+    "Dispatch Diagnostics", "收益瀑布 P&L Waterfall"
 ])
 
 with tab1:
@@ -70,21 +69,13 @@ with tab3:
     render_pnl(engine)
 
 with tab4:
-    from apps.asset_risk.tab_positions import render_positions
-    render_positions(engine)
-
-with tab5:
-    from apps.asset_risk.tab_var import render_var
-    render_var(engine)
-
-with tab6:
     from apps.asset_risk.tab_agent import render_agent
     render_agent(engine)
 
-with tab7:
+with tab5:
     from apps.asset_risk.tab_diagnostics import render_diagnostics
     render_diagnostics(engine)
 
-with tab8:
+with tab6:
     from apps.asset_risk.tab_waterfall import render_waterfall
     render_waterfall(engine)
