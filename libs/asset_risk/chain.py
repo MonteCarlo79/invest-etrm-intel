@@ -186,15 +186,17 @@ def _load_cleared_sum(engine, plant_to_id: dict[str, int], start: str | None,
 
 
 def _check_sign(df: pd.DataFrame) -> None:
-    """Per (asset, month) over slots with both actual and nominated: Σ actual·nominated
-    must be > 0 (sign conventions agree). Months with no overlap pass."""
+    """Per (asset, month) over slots with both actual and nominated: raise when
+    Σ actual·nominated < 0 (sign conventions disagree). Σ == 0 carries no
+    directional evidence and passes (R16: 景蓝乌尔图 2026-06, one zero slot);
+    months with no overlap pass."""
     both = df[df["actual_mw"].notna() & df["nominated_mw"].notna()]
     if both.empty:
         return
     prod = both["actual_mw"].astype(float) * both["nominated_mw"].astype(float)
     month = both["ts"].dt.strftime("%Y-%m")
     for (asset, m), total in prod.groupby([both["asset"], month]).sum().items():
-        if total <= 0:
+        if total < 0:
             raise ValueError(f"actual/nominated sign disagreement {asset} {m}")
 
 

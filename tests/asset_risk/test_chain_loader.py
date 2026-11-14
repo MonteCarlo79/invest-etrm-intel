@@ -190,3 +190,14 @@ def test_merged_ts_is_tz_naive(sqlite_engine):
     df = _load_chain(sqlite_engine, [1, 3, 9], "2026-09-01", "2026-09-02")
     assert str(df["ts"].dtype).startswith("datetime64") and df["ts"].dt.tz is None
     assert df.set_index(["asset_id", "ts"]).index.is_unique
+
+
+def test_zero_sum_month_does_not_raise():
+    # R16: one overlapping slot with nominated 0 → Σ actual·nominated == 0 → no raise
+    eng = _base_engine()
+    with eng.begin() as conn:
+        conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
+                          "(1, '景蓝乌尔图', 'bess', 'test', 100, 4.0, NULL)"))
+        _chain(conn, 1, "2026-06-01 00:00:00", 0.0, 5.0)
+    df = _load_chain(eng, [1], None, None)
+    assert len(df) == 1 and df.iloc[0]["actual_mw"] == 5.0
