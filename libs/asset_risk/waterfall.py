@@ -35,7 +35,7 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
 
     start/end accept ISO dates or 'YYYY-MM' month tokens (normalized via
     _month_token_bounds from tab_diagnostics)."""
-    from apps.asset_risk.tab_diagnostics import _month_token_bounds
+    from libs.asset_risk.chain import _month_token_bounds
     start, end = _month_token_bounds(start, end)
     sql = """
         SELECT a.id AS asset_id, a.name AS asset, s.settlement_month AS month,
@@ -407,7 +407,7 @@ def attribution_rows(df: pd.DataFrame, wf: pd.DataFrame,
 
     # --- Δ执行与费用: 红绿灯 + 非响应 + 调度残差 + 容量补偿 + 费用 + 基差残差 ---
     seg = "Δ执行与费用"
-    from apps.asset_risk.tab_diagnostics import restriction_monthly, find_defect_events
+    from libs.asset_risk.diagnostics import restriction_monthly, find_defect_events
     act_dis = float(actual["dis_mwh"].sum()) if not actual.empty and "dis_mwh" in actual.columns else 0.0
     if _data_ok("restriction", "rt_cleared_mw", "actual_mw"):
         rest = restriction_monthly(df)
