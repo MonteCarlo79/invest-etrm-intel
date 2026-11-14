@@ -60,3 +60,37 @@ def test_map_helpers(sqlite_engine):
 def test_attribution_alias_from_registry():
     from libs.trading_book.waterfall import _ATTR_CODE_ALIAS
     assert _ATTR_CODE_ALIAS == {"bameng": "hetao"}
+
+
+def _probe():
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "scripts" / "asset_risk" / "probe_identity.py"
+    spec = importlib.util.spec_from_file_location("probe_identity", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _legacy(df, **over):
+    from libs.asset_risk.diagnostics import PLANT_MAP, AUTO_NOM_CODE, CAPCOMP_RATE, CAPCOMP_RATE_DEFAULT
+    base = {"plant_map": dict(PLANT_MAP), "nom_code": dict(AUTO_NOM_CODE),
+            "capcomp": {n: CAPCOMP_RATE.get(n, CAPCOMP_RATE_DEFAULT) for n in df["name"]},
+            "rm_name": {v: k for k, v in AUTO_NOM_CODE.items()}, "folder_map": {}, "attr_alias": {"bameng": "hetao"}}
+    base.update(over)
+    return base
+
+
+def test_probe_classifies_expected_and_defects(sqlite_engine):
+    probe = _probe()
+    df = asset_identity(sqlite_engine)
+    res = probe.classify_diffs(df, _legacy(df, folder_map={"B-【外】乌海储能": None}))
+    assert [t for t, _ in res if t == "DEFECT"] == []
+    al = [(t, l) for t, l in res if "阿拉善储能 capcomp 350→280" in l]
+    assert al and al[0][0] == "EXPECTED" and "user decision 2026-11-14" in al[0][1]
+    assert any(t == "EXPECTED" and "B-【外】乌海储能" in l for t, l in res)
+
+    bad = _legacy(df)
+    bad["plant_map"]["悦杭独贵"] = "别的电站"
+    res = probe.classify_diffs(df, bad)
+    assert any(t == "DEFECT" and "悦杭独贵" in l for t, l in res)
