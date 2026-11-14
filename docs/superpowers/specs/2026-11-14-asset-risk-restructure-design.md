@@ -81,9 +81,9 @@ Tabs removed: `tab_positions.py`, `tab_var.py` from asset-risk; `tab_positions.p
 
 ## 7. Registry unification
 
-`rm_assets` gains `asset_code TEXT UNIQUE NULL` referencing `libs.trading_book.registry` codes (`hangjinqi`, `bameng`, `suyou`, `gushanliang`, `wulate`, `siziwangqi`, and later `wuchuan`, `alashan`). Migration: `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, then an UPDATE seeded from today's `AUTO_NOM_CODE` map. Wind: 零碳46 gets code `lingt46` (already a registry code).
+`rm_assets` gains `asset_code TEXT UNIQUE NULL` referencing `libs.trading_book.registry` codes: `hangjinqi`, `bameng`, `suyou`, `gushanliang`, `wulate`, `siziwangqi`, **`wuchuan`, `alashan`** (user decision 2026-11-14: 武川 and 阿拉善 are first-class BESS assets with the same data as the others; the registry already holds both with `data_path='full'`, exchange account names and WeCom nomination codes, and `rm_assets` rows 武川 / 阿拉善储能 exist). Migration: `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, then an UPDATE seeded from today's `AUTO_NOM_CODE` map plus the two new codes. Wind: 零碳46 gets code `lingt46` (already a registry code).
 
-`libs/asset_risk/registry.py` exposes one function, `asset_identity(engine) -> DataFrame` with columns: `asset_id, name, asset_code, asset_type, plant_name (md_id_cleared_energy), capcomp_rate, invoice_folder, capacity_mw, bess_duration_h, commission_date`. `plant_name` and `capcomp_rate` come from the trading-book registry's `StationRef` (`cleared_names`, plus a new `capcomp_rate` field defaulting 350, 280 for 锡西二/阿拉善/武川). Every former map is a derived dict from this frame.
+`libs/asset_risk/registry.py` exposes one function, `asset_identity(engine) -> DataFrame` with columns: `asset_id, name, asset_code, asset_type, plant_names (tuple, md_id_cleared_energy account names), capcomp_rate, invoice_folder, capacity_mw, bess_duration_h, commission_date`. `plant_names` = `StationRef.md_plant_names` (武川 has two accounts, 旭纯哈乐储能电站 / 旭纯哈乐储能电站二, summed per slot); `capcomp_rate` = the existing `StationRef.subsidy_cny_per_mwh` (no new registry field; 350 default, 280 for alashan/wuchuan). Every former map is a derived dict from this frame.
 
 Consumers switched: tab_diagnostics, tab_waterfall, services/mengxi_nodal/settlement_bridge.py `_RM_ASSET_NAME`, libs/trading_book/waterfall.py `_ATTR_CODE_ALIAS` (bameng→hetao alias stays, now in the registry). Wind constants in `tab_wind_replication.py` (BOOK_ID=6, PLANT, ASSET) resolve from the registry row for `lingt46`.
 
@@ -126,7 +126,7 @@ Tests: one fixture text per existing parser detector (text snippets already exis
 |---|---|---|
 | nominated_mw | `bess_nomination_96` (auto) → `rm_dispatch_chain` (legacy ≤2026-08-30) | MW, +discharge |
 | da_cleared_mw | `rm_dispatch_chain` only (no live source) | MW |
-| rt_cleared_mw | `rm_dispatch_chain` → `md_id_cleared_energy.cleared_energy_mwh` (interval-average MW, **no ×4**) | MW |
+| rt_cleared_mw | `rm_dispatch_chain` → `md_id_cleared_energy.cleared_energy_mwh` summed over the asset's `plant_names` per slot (interval-average MW, **no ×4**; exact names + `data_date` bound, the `AssetBook._CLEARED_SQL` pattern, never LIKE) | MW |
 | actual_mw | `rm_dispatch_chain` → **`bess_actual_96`** (WeCom actuals, new) → `ops_bess_dispatch_15min` | MW |
 | restriction, soc_pct | `rm_dispatch_chain` only | — |
 
@@ -151,7 +151,7 @@ Table `marketdata.rm_waterfall_legs (asset_id, month, leg TEXT CHECK IN ('benchm
 |---|---|---|
 | 1 | Move pure functions to `libs/asset_risk/*`; tabs import from there; `headless_agent` imports `agent_tools` | 95 tests pass unchanged; `python -c "import libs.asset_risk.waterfall"` has no streamlit in `sys.modules` |
 | 2 | Router table + scanner switch + router tests | router tests; existing settlement_ingest suite |
-| 3 | `rm_assets.asset_code` migration (ECS run-task) + registry module + consumers switched | identity frame equals the six old maps on prod data (one-off probe script) |
+| 3 | `rm_assets.asset_code` migration (ECS run-task) + registry module + consumers switched; 武川 and 阿拉善 enter Diagnostics and Waterfall | identity frame equals the six old maps on prod data except the printed exception list (one-off probe script); 武川/阿拉善 rows appear in the coverage table with their nomination, cleared and price counts |
 | 4 | `chain.py` with actuals | Δ执行 rows non-null for 2026-09..11 on prod; existing diagnostics tests |
 | 5 | Agent tools reshaped; position/VaR tabs removed from both apps; retail `tab_pnl` MtM metric removed | headless agent answers a waterfall question via Hermes bridge |
 | 6 | `rm_waterfall_legs` + lazy tabs | cold load of 全部资产 × 3 months < 5 s after first compute |
@@ -174,6 +174,6 @@ Steps 1–2 ship as one asset-risk deploy; 3 and 4 as one; 5 is one asset-risk +
 
 ## 16. Open items recorded, not in scope
 
-- 武川 / 阿拉善 PLANT_MAP (now registry) entries wait for their dispatch-chain data (user decision 2026-11-11).
+- 武川 / 阿拉善 are in scope (supersedes the 2026-11-11 deferral). Known data caveats, surfaced by the coverage table rather than hidden: neither has legacy `rm_dispatch_chain` rows, so their chain is auto-nomination + exchange-cleared + WeCom-actual only, from the dates those feeds cover; 阿拉善's registry price node is still a candidate (the station had not appeared in the price table as of 2026-09), so its 投资标准 leg may report "no prices" until the node is confirmed; 阿拉善 and 武川 settlement bills are ingested through the normal Settlement tab like any other book.
 - `da_cleared_mw` has no live source since the manual chain stopped; the 日前未中标 row will keep showing 无数据 until one exists.
 - The trading-book waterfall (`libs/trading_book/waterfall.py`) delegating to `libs/asset_risk/waterfall.py` is P2 of the book roadmap and a separate change after step 4.
