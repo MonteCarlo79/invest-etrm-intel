@@ -114,6 +114,15 @@ def _load_slot96(engine, table: str, value_col: str, code_to_id: dict[str, int],
     return pd.to_numeric(df.set_index(_KEY)["v"], errors="coerce")
 
 
+def _ops_ts_expr(engine) -> str:
+    """Beijing-wall timestamp for ops_bess_dispatch_15min.interval_start
+    (TIMESTAMPTZ on Postgres; session TZ is UTC, so render via the named zone —
+    never '+08:00', which POSIX-inverts to UTC−8)."""
+    if engine.dialect.name == "sqlite":
+        return "o.interval_start"  # fixture stores Beijing-naive TEXT
+    return "(o.interval_start AT TIME ZONE 'Asia/Shanghai')"
+
+
 def _load_ops_actuals(engine, code_to_id: dict[str, int], start: str | None,
                       end: str | None) -> pd.Series:
     """ops_bess_dispatch_15min.actual_dispatch_mw by (asset_id, interval_start)
@@ -121,17 +130,18 @@ def _load_ops_actuals(engine, code_to_id: dict[str, int], start: str | None,
     empty = pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=_KEY))
     if not inspect(engine).has_table("ops_bess_dispatch_15min", schema="marketdata"):
         return empty
-    sql = """
-        SELECT asset_code, interval_start AS ts, actual_dispatch_mw AS v
-        FROM marketdata.ops_bess_dispatch_15min
-        WHERE asset_code IN :codes
+    ts = _ops_ts_expr(engine)
+    sql = f"""
+        SELECT o.asset_code, {ts} AS ts, o.actual_dispatch_mw AS v
+        FROM marketdata.ops_bess_dispatch_15min o
+        WHERE o.asset_code IN :codes
     """
     params: dict = {"codes": list(code_to_id)}
     if start:
-        sql += " AND interval_start >= :s"
+        sql += f" AND {ts} >= :s"
         params["s"] = start
     if end:
-        sql += " AND interval_start < :e"
+        sql += f" AND {ts} < :e"
         params["e"] = end
     df = pd.read_sql(text(sql).bindparams(bindparam("codes", expanding=True)),
                      engine, params=params)

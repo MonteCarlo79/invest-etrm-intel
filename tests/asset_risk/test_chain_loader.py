@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
-from libs.asset_risk.chain import _load_chain, load_chain
+from libs.asset_risk.chain import _load_chain, _ops_ts_expr, load_chain
 
 
 def _base_engine(with_code: bool = True):
@@ -168,3 +168,25 @@ def test_pre_migration_uses_literal_code_for_actuals():
 
 def test_public_alias():
     assert load_chain is _load_chain
+
+
+class _FakeEngine:
+    def __init__(self, name):
+        self.dialect = type("D", (), {"name": name})()
+
+
+def test_ops_ts_expr_postgres_uses_named_zone():
+    expr = _ops_ts_expr(_FakeEngine("postgresql"))
+    assert "AT TIME ZONE 'Asia/Shanghai'" in expr and "+08" not in expr
+    assert "interval_start" in expr
+
+
+def test_ops_ts_expr_sqlite_raw_column():
+    assert _ops_ts_expr(_FakeEngine("sqlite")) == "o.interval_start"
+
+
+def test_merged_ts_is_tz_naive(sqlite_engine):
+    # legacy + 96-slot + ops + cleared frames all union on CST-naive keys
+    df = _load_chain(sqlite_engine, [1, 3, 9], "2026-09-01", "2026-09-02")
+    assert str(df["ts"].dtype).startswith("datetime64") and df["ts"].dt.tz is None
+    assert df.set_index(["asset_id", "ts"]).index.is_unique
