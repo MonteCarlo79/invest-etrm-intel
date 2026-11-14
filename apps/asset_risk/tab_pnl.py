@@ -1,138 +1,17 @@
 """Tab 3 — Realised P&L: single-book waterfall + KPIs, and portfolio view."""
 from __future__ import annotations
 
-import calendar
-
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
-_CATEGORY_CN = {
-    "charge_energy": "充电电费",
-    "discharge_energy": "放电收入",
-    "capacity_compensation": "容量补偿/非市场化",
-    "transmission": "输配电费",
-    "system_operation": "上网线损费",
-    "coal_capacity_charge": "系统运行费",
-    "basic_fee": "基本电费/力调",
-    "govt_surcharges": "政府基金及附加",
-    "frequency": "调频",
-    "penalty": "偏差费用",
-    "subsidy": "补贴",
-    "rebate": "返还",
-    "generation_revenue": "发电收入",
-    "other": "其他",
-}
+from libs.asset_risk.settlement.analytics import (  # noqa: F401  (re-exported for tests)
+    ASSET_CLASS_OPTIONS, CATEGORY_CN, _REVENUE_CATS, _asset_month_metric, _asset_summary,
+    _days_in_months, _load_settlement_items, _portfolio_matrix, book_matches_classes,
+)
 
-_REVENUE_CATS = ("discharge_energy", "generation_revenue")
-
-ASSET_CLASS_OPTIONS = ["wind", "solar", "bess", "thermal", "load",
-                       "wind+bess", "wind+bess+load", "solar+bess+load"]
-
-
-def book_matches_classes(asset_type: str | None, book_type: str | None, sel_classes: list[str]) -> bool:
-    """True if a book matches any of the selected asset classes.
-
-    Single classes match rm_assets.asset_type; 'load' matches rm_books.book_type;
-    composites are unions (e.g. 'wind+bess+load' = wind/bess assets or load books).
-    """
-    t = asset_type or ""
-    bt = book_type or ""
-    for c in sel_classes:
-        if c == t:
-            return True
-        if c == "load" and bt == "load":
-            return True
-        if c == "wind+bess" and t in ("wind", "bess"):
-            return True
-        if c == "wind+bess+load" and (t in ("wind", "bess") or bt == "load"):
-            return True
-        if c == "solar+bess+load" and (t in ("solar", "bess") or bt == "load"):
-            return True
-    return False
-
-
-def _portfolio_matrix(items_df: pd.DataFrame) -> pd.DataFrame:
-    """Month × asset net-profit matrix with 组合合计 column and 资产合计 row."""
-    df = items_df.copy()
-    df["month"] = pd.to_datetime(df["settlement_month"]).dt.strftime("%Y-%m")
-    mat = df.pivot_table(index="month", columns="asset", values="amount_cny",
-                         aggfunc="sum", fill_value=0)
-    mat = mat.sort_index()
-    mat["组合合计"] = mat.sum(axis=1)
-    total_row = mat.sum(axis=0)
-    total_row.name = "资产合计"
-    return pd.concat([mat, total_row.to_frame().T])
-
-
-def _days_in_months(month_series) -> int:
-    """Total calendar days across the distinct months present in the series."""
-    months = pd.to_datetime(month_series).dt.to_period("M").unique()
-    return sum(calendar.monthrange(p.year, p.month)[1] for p in months)
-
-
-def _load_settlement_items(engine, book_id: int, date_range=None) -> pd.DataFrame:
-    """Category totals for one book, optionally restricted to a settlement_month range.
-
-    date_range is the st.date_input return: empty tuple while unselected, or
-    (start, end) once both dates are picked. Only a complete pair filters
-    (reversed picks are normalized); anything else returns all months.
-    """
-    clause = ""
-    params = {"bid": book_id}
-    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-        start, end = sorted(str(d) for d in date_range)
-        clause = " AND s.settlement_month >= :d_start AND s.settlement_month <= :d_end"
-        params["d_start"], params["d_end"] = start, end
-    with engine.connect() as conn:
-        return pd.read_sql(text(f"""
-            SELECT si.category, SUM(si.amount_cny) as total
-            FROM marketdata.rm_settlement_items si
-            JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
-            WHERE s.book_id = :bid{clause}
-            GROUP BY si.category
-            ORDER BY total DESC
-        """), conn, params=params)
-
-
-def _asset_summary(items_df: pd.DataFrame) -> pd.DataFrame:
-    """Per-asset realised P&L summary.
-
-    Returns DataFrame with columns: asset, net_profit, discharge_mwh,
-    charge_mwh, arb_income, arb_spread (arb_income / discharge_mwh; None when
-    no discharge volume), cycles_per_day (charge_mwh / energy_per_cycle / days;
-    None when capacity data or days are unavailable).
-    """
-    rows = []
-    for asset, g in items_df.groupby("asset"):
-        dis_vol = float(g.loc[g["category"].isin(_REVENUE_CATS), "volume_mwh"].sum())
-        chg_vol = float(g.loc[g["category"] == "charge_energy", "volume_mwh"].sum())
-        rev = float(g.loc[g["category"].isin(_REVENUE_CATS), "amount_cny"].sum())
-        cost = float(g.loc[g["category"] == "charge_energy", "amount_cny"].sum())
-        arb_income = rev + cost
-
-        # Daily average cycles over the months present (needs capacity x duration)
-        energy = None
-        if "capacity_mw" in g.columns:
-            cap = g["capacity_mw"].iloc[0]
-            dur = g["bess_duration_h"].iloc[0] if "bess_duration_h" in g.columns else None
-            if pd.notna(cap) and cap:
-                dur_val = float(dur) if (dur is not None and pd.notna(dur) and dur) else 4.0
-                energy = float(cap) * dur_val
-        days = _days_in_months(g["settlement_month"])
-        cycles = (chg_vol / energy / days) if (energy and days) else None
-
-        rows.append({
-            "asset": asset,
-            "net_profit": float(g["amount_cny"].sum()),
-            "discharge_mwh": dis_vol,
-            "charge_mwh": chg_vol,
-            "arb_income": arb_income,
-            "arb_spread": arb_income / dis_vol if dis_vol else None,
-            "cycles_per_day": cycles,
-        })
-    return pd.DataFrame(rows)
+_CATEGORY_CN = CATEGORY_CN
 
 
 def render_pnl(engine):
@@ -255,97 +134,6 @@ def render_pnl(engine):
             fig.add_hline(y=0.10, line_dash="dash", line_color="red", annotation_text="10% threshold")
             fig.update_layout(title="Monthly Curtailment Rate", yaxis_title="%", height=300)
             st.plotly_chart(fig, use_container_width=True)
-
-
-def _asset_month_metric(items_df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """Month × asset matrix for a per-unit metric, with per-year YTD rows.
-
-    metric: "容量补偿价差" (capcomp ¥/MWh), "套利价差" (arb ¥/MWh),
-            "日均充放次数" (cycles/day via capacity × duration and calendar days),
-            "转化率" (round-trip efficiency = discharge / charge).
-
-    YTD rows are volume-weighted aggregates (sum of numerators ÷ sum of
-    denominators over the year's months), NOT averages of monthly ratios.
-    """
-    df = items_df.copy()
-    df["month"] = pd.to_datetime(df["settlement_month"]).dt.strftime("%Y-%m")
-    rows = []
-    ytd = {}  # (asset, year) -> accumulators
-
-    for (asset, month), g in df.groupby(["asset", "month"]):
-        dis_vol = float(g.loc[g["category"].isin(_REVENUE_CATS), "volume_mwh"].sum())
-        chg_vol = float(g.loc[g["category"] == "charge_energy", "volume_mwh"].sum())
-        cap_amt = float(g.loc[g["category"] == "capacity_compensation", "amount_cny"].sum())
-        rev = float(g.loc[g["category"].isin(_REVENUE_CATS), "amount_cny"].sum())
-        cost = float(g.loc[g["category"] == "charge_energy", "amount_cny"].sum())
-
-        cap = g["capacity_mw"].iloc[0] if "capacity_mw" in g.columns else None
-        dur = g["bess_duration_h"].iloc[0] if "bess_duration_h" in g.columns else None
-        atype = g["asset_type"].iloc[0] if "asset_type" in g.columns else None
-        energy = None
-        if pd.notna(cap) and cap:
-            energy = float(cap) * (float(dur) if (dur is not None and pd.notna(dur) and dur) else 4.0)
-        days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1]
-
-        # Monthly value
-        if metric == "容量补偿价差":
-            val = cap_amt / dis_vol if dis_vol else None
-        elif metric == "套利价差":
-            val = (rev + cost) / dis_vol if dis_vol else None
-        elif metric == "转化率":
-            # Wind: 发电小时数 = generation / installed capacity (RTE is meaningless)
-            val = (dis_vol / float(cap) if (atype == "wind" and pd.notna(cap) and cap)
-                   else (dis_vol / chg_vol if chg_vol else None))
-        else:  # 日均充放次数
-            val = chg_vol / energy / days if (energy and days) else None
-        rows.append({"asset": asset, "month": month, "value": val})
-
-        # Accumulate for YTD
-        acc = ytd.setdefault((asset, month[:4]), {
-            "dis_vol": 0.0, "chg_vol": 0.0, "cap_amt": 0.0,
-            "rev": 0.0, "cost": 0.0, "days": 0, "energy": energy,
-            "atype": atype, "cap": float(cap) if (pd.notna(cap) and cap) else None,
-        })
-        acc["dis_vol"] += dis_vol
-        acc["chg_vol"] += chg_vol
-        acc["cap_amt"] += cap_amt
-        acc["rev"] += rev
-        acc["cost"] += cost
-        acc["days"] += days
-
-    mat = pd.DataFrame(rows).pivot_table(index="month", columns="asset",
-                                         values="value", aggfunc="first")
-    if mat.empty:
-        return mat
-
-    # YTD rows: sum of numerators ÷ sum of denominators
-    ytd_rows = {}
-    for (asset, year), acc in ytd.items():
-        if metric == "容量补偿价差":
-            val = acc["cap_amt"] / acc["dis_vol"] if acc["dis_vol"] else None
-        elif metric == "套利价差":
-            val = (acc["rev"] + acc["cost"]) / acc["dis_vol"] if acc["dis_vol"] else None
-        elif metric == "转化率":
-            if acc.get("atype") == "wind":
-                val = acc["dis_vol"] / acc["cap"] if acc.get("cap") else None
-            else:
-                val = acc["dis_vol"] / acc["chg_vol"] if acc["chg_vol"] else None
-        else:  # 日均充放次数
-            val = (acc["chg_vol"] / acc["energy"] / acc["days"]
-                   if (acc["energy"] and acc["days"]) else None)
-        if val is not None:
-            ytd_rows.setdefault(f"{year} YTD", {})[asset] = val
-
-    # Assemble: each year's months followed by its YTD row
-    years = sorted({m[:4] for m in mat.index})
-    parts = []
-    for year in years:
-        months = [m for m in mat.index if m.startswith(year)]
-        parts.append(mat.loc[months])
-        label = f"{year} YTD"
-        if label in ytd_rows and ytd_rows[label]:
-            parts.append(pd.DataFrame([ytd_rows[label]], index=[label]))
-    return pd.concat(parts)
 
 
 def _render_portfolio(engine, book_ids: list[int] | None = None):

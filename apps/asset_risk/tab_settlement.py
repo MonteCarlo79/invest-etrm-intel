@@ -1,45 +1,18 @@
 """Tab 2 — Settlement: file upload, parsing, analytics."""
 from __future__ import annotations
 
-import hashlib
-import json
-
 import pandas as pd
 import streamlit as st
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
-
-def _content_sha256(data: bytes) -> str:
-    """SHA-256 of uploaded file bytes (content follows bytes, not filename)."""
-    return hashlib.sha256(data).hexdigest()
-
-
-def _already_ingested(engine, book_id: int, settlement_month: str, file_hash: str) -> bool:
-    """True if an identical-content settlement exists at this book+month.
-
-    Guards the rename-reupload duplication: tab uploads historically stored no
-    hash, so a renamed re-upload bypassed both overwrite (name match) and the
-    scanner's hash check (observed 2026-08-17: 苏右/裕昭沙子坝/远景乌拉特 dupes).
-    """
-    with engine.connect() as conn:
-        row = conn.execute(text("""
-            SELECT 1 FROM marketdata.rm_settlements
-            WHERE book_id = :bid AND settlement_month = :month
-              AND raw_data->>'file_hash' = :h LIMIT 1
-        """), {"bid": book_id, "month": settlement_month, "h": file_hash}).first()
-    return row is not None
-
-
-def _has_category(engine, book_id: int, settlement_month: str, category: str) -> bool:
-    """True if any settlement item of this category exists at this book+month."""
-    with engine.connect() as conn:
-        row = conn.execute(text("""
-            SELECT 1 FROM marketdata.rm_settlement_items i
-            JOIN marketdata.rm_settlements s ON s.id = i.settlement_id
-            WHERE s.book_id = :bid AND s.settlement_month = :month
-              AND i.category = :cat LIMIT 1
-        """), {"bid": book_id, "month": settlement_month, "cat": category}).first()
-    return row is not None
+from libs.asset_risk.settlement.analytics import (  # noqa: F401  (re-exported for tests)
+    CATEGORY_CN, _EXCHANGE_SELL_NOTE, _bucket_of, _insert_year_subtotals,
+    compute_merchant_shares, prefer_canonical_settlements,
+)
+from libs.asset_risk.settlement.ledger import (  # noqa: F401  (re-exported for tests)
+    _already_ingested, _content_sha256, _delete_book_month_file,
+    _delete_voucher_settlements, _has_category, insert_settlement,
+)
 
 
 def render_settlement(engine):
@@ -221,52 +194,6 @@ def _process_one_upload(f, book_id, month_mode, manual_month, overwrite, engine)
     else:
         _process_excel(f, book_id, settlement_month, engine, fhash, overwrite=overwrite)
 
-
-
-def _delete_book_month_file(conn, book_id: int, settlement_month, file_name: str):
-    """Delete settlement record(s) + items for book+month+file_name (overwrite path).
-
-    Only called AFTER a successful parse — a refused/failed upload must never
-    destroy existing data (observed 2026-09-14: overwrite checked + scanned
-    charge bill refused would have deleted the hand-ingested records).
-    """
-    conn.execute(text("""
-        DELETE FROM marketdata.rm_settlement_items
-        WHERE settlement_id IN (
-            SELECT id FROM marketdata.rm_settlements
-            WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
-        )
-    """), {"bid": book_id, "month": settlement_month, "fname": file_name})
-
-
-def _delete_voucher_settlements(conn, book_id: int, settlement_month) -> int:
-    """Delete voucher-sourced settlements for book+month, returning count removed.
-
-    The 凭证 fallback (voucher as sole discharge source, 乌海 2026-01/02) has a
-    reverse-order hole: voucher ingested first, then the real 结算单 lands and
-    nothing removes the voucher — both count (乌海 2026-08/09 double-counted
-    现货收入). A 结算单 is authoritative and the voucher is its strict subset,
-    so a successful non-voucher discharge parse supersedes them.
-    """
-    from services.settlement_ingest.scanner import classify_pdf
-    rows = conn.execute(text("""
-        SELECT id, file_name FROM marketdata.rm_settlements
-        WHERE book_id = :bid AND settlement_month = :month
-    """), {"bid": book_id, "month": settlement_month}).fetchall()
-    voucher_ids = [r[0] for r in rows if classify_pdf(r[1] or "") == "voucher"]
-    if not voucher_ids:
-        return 0
-    conn.execute(text(
-        "DELETE FROM marketdata.rm_settlement_items WHERE settlement_id IN :ids"
-    ).bindparams(bindparam("ids", expanding=True)), {"ids": voucher_ids})
-    conn.execute(text(
-        "DELETE FROM marketdata.rm_settlements WHERE id IN :ids"
-    ).bindparams(bindparam("ids", expanding=True)), {"ids": voucher_ids})
-    return len(voucher_ids)
-    conn.execute(text("""
-        DELETE FROM marketdata.rm_settlements
-        WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
-    """), {"bid": book_id, "month": settlement_month, "fname": file_name})
 
 
 def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: str | None = None,
@@ -506,26 +433,7 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
             if n_sup:
                 st.info(f"Superseded {n_sup} voucher settlement(s) for {settlement_month} "
                         "— the 结算单 now carries the discharge data.")
-        result = conn.execute(text("""
-            INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
-            VALUES (:bid, :month, :fname, 'pdf', 'processed', :rd)
-            RETURNING id
-        """), {"bid": book_id, "month": settlement_month, "fname": uploaded.name,
-               "rd": json.dumps({"file_hash": file_hash}) if file_hash else None})
-        settlement_id = result.scalar()
-
-        for item in items:
-            conn.execute(text("""
-                INSERT INTO marketdata.rm_settlement_items
-                    (settlement_id, category, volume_mwh, price_cny_kwh,
-                     amount_cny, peak_period, notes)
-                VALUES (:sid, :cat, :vol, :price, :amt, :peak, :notes)
-            """), {
-                "sid": settlement_id, "cat": item["category"],
-                "vol": item.get("volume_mwh"), "price": item.get("price_cny_kwh"),
-                "amt": item["amount_cny"], "peak": item.get("peak_period"),
-                "notes": item.get("notes"),
-            })
+        insert_settlement(conn, book_id, settlement_month, uploaded.name, "pdf", file_hash, items)
 
     st.success(f"Processed {len(items)} settlement items from PDF.")
 
@@ -563,133 +471,15 @@ def _process_excel(uploaded, book_id: int, settlement_month, engine, file_hash: 
     with engine.begin() as conn:
         if overwrite:
             _delete_book_month_file(conn, book_id, settlement_month, uploaded.name)
-        result = conn.execute(text("""
-            INSERT INTO marketdata.rm_settlements (book_id, settlement_month, file_name, file_type, status, raw_data)
-            VALUES (:bid, :month, :fname, :ftype, 'processed', :rd)
-            RETURNING id
-        """), {"bid": book_id, "month": settlement_month, "fname": uploaded.name, "ftype": "excel",
-               "rd": json.dumps({"file_hash": file_hash}) if file_hash else None})
-        settlement_id = result.scalar()
-
-        for item in items:
-            conn.execute(text("""
-                INSERT INTO marketdata.rm_settlement_items
-                    (settlement_id, category, delivery_date, volume_mwh,
-                     price_cny_kwh, amount_cny, amount_receivable_cny,
-                     amount_settled_cny, amount_diff_cny, counterparty, notes)
-                VALUES (:sid, :cat, :dd, :vol, :price, :amt, :recv, :settled, :diff, :cp, :notes)
-            """), {
-                "sid": settlement_id, "cat": item["category"],
-                "dd": item.get("delivery_date"), "vol": item.get("volume_mwh"),
-                "price": item.get("price_cny_kwh"), "amt": item["amount_cny"],
-                "recv": item.get("amount_receivable_cny"),
-                "settled": item.get("amount_settled_cny"),
-                "diff": item.get("amount_diff_cny"),
-                "cp": item.get("counterparty"), "notes": item.get("notes"),
-            })
+        insert_settlement(conn, book_id, settlement_month, uploaded.name, "excel", file_hash, items)
 
     st.success(f"Processed {len(items)} settlement items.")
-
-
-def _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh,
-                       discharge_col, charge_col, cap_col, is_wind=False, capacity_mw=None):
-    """Build one year's YTD subtotal row with per-unit metrics recalculated
-    from that year's own volumes. Returns a Series named "{year} YTD",
-    or None if the year has no months in pivot."""
-    months = [m for m in pivot.index if m.startswith(year)]
-    if not months:
-        return None
-    row = pivot.loc[months].sum(axis=0)
-    row.name = f"{year} YTD"
-
-    yr_monthly = monthly[monthly["month"].str.startswith(year)]
-    total_discharge_vol = yr_monthly[yr_monthly["category_cn"] == "放电收入"]["volume"].sum()
-    total_charge_vol = yr_monthly[yr_monthly["category_cn"] == "充电电费"]["volume"].sum()
-    yr_days = sum(d for m, d in zip(pivot.index, days_in_month) if m.startswith(year))
-    if total_discharge_vol > 0 and "价差收入" in pivot.columns:
-        # 价差收入 = 放电 + 充电 (不含容量补偿); 度电总价差 = (价差收入 + 容量补偿 + 调频) / 放电量
-        cap_total = row[cap_col] if (cap_col and cap_col in pivot.columns) else 0
-        freq_total = row["调频"] if "调频" in pivot.columns else 0
-        row["度电总价差"] = (row["价差收入"] + cap_total + freq_total) / total_discharge_vol
-        if cap_col and "容量补偿价差" in pivot.columns:
-            row["容量补偿价差"] = cap_total / total_discharge_vol
-        if "套利价差" in pivot.columns:
-            row["套利价差"] = row["价差收入"] / total_discharge_vol
-    if is_wind and capacity_mw and capacity_mw > 0:
-        row["发电小时数"] = round(total_discharge_vol / capacity_mw, 1)
-        row["LF"] = total_discharge_vol / (capacity_mw * yr_days * 24) if yr_days > 0 else 0
-    if energy_per_cycle_mwh and energy_per_cycle_mwh > 0 and "日均充放次数" in pivot.columns:
-        row["日均充放次数"] = round(total_charge_vol / energy_per_cycle_mwh / yr_days, 2) if yr_days > 0 else 0
-    if total_charge_vol > 0 and not is_wind:
-        row["转化率"] = total_discharge_vol / total_charge_vol
-    return row
-
-
-def _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
-                           discharge_col, charge_col, cap_col, is_wind=False, capacity_mw=None):
-    """Insert a "YYYY YTD" subtotal row after each year's last month row.
-    Extends automatically: any year present in the data gets a subtotal."""
-    years = sorted({m[:4] for m in pivot.index})
-    parts = []
-    for year in years:
-        months = [m for m in pivot.index if m.startswith(year)]
-        parts.append(pivot.loc[months])
-        row = _year_subtotal_row(pivot, monthly, year, days_in_month, energy_per_cycle_mwh,
-                                 discharge_col, charge_col, cap_col, is_wind, capacity_mw)
-        if row is not None:
-            parts.append(row.to_frame().T)
-    return pd.concat(parts)
-
-
-# Notes markers written by the exchange-settlement parsers (安徽统推 / 山东 SDTC).
-# The 售电侧合计 row is the NET settlement (not gross discharge); 购电侧合计 is
-# its charge component. Keeping them alongside the grid 电费账单/下网明细
-# double-counts the same physical energy (定远 2026: 净利润 inflated by the
-# 统推净额, e.g. Sep +586,750 on 3,006,518).
-_EXCHANGE_SELL_NOTE = "放电结算: 交易中心售电侧合计"
-_EXCHANGE_BUY_NOTE = "充电结算: 交易中心购电侧合计"
-
-
-def prefer_canonical_settlements(items_df):
-    """Drop exchange-settlement rows when a canonical twin exists for the month.
-
-    Per month: canonical discharge rows exist (电费账单 etc.) → drop 售电侧合计;
-    canonical charge rows exist (下网明细 etc.) → drop 购电侧合计. Months where
-    the exchange settlement is the ONLY source keep their rows.
-    Returns (kept_df, exchange_df) — exchange_df feeds the 口径校验 panel.
-    """
-    sell = items_df["notes"] == _EXCHANGE_SELL_NOTE
-    buy = items_df["notes"] == _EXCHANGE_BUY_NOTE
-    is_dis = items_df["category"].isin(["discharge_energy", "generation_revenue"])
-    is_chg = items_df["category"] == "charge_energy"
-    months_dis = set(items_df.loc[is_dis & ~sell, "month"])
-    months_chg = set(items_df.loc[is_chg & ~buy, "month"])
-    drop = (sell & items_df["month"].isin(months_dis)) | (
-        buy & items_df["month"].isin(months_chg))
-    return items_df.loc[~drop].copy(), items_df.loc[drop].copy()
 
 
 def _render_analytics(book_id: int, engine):
     """Render settlement analytics for selected book — monthly breakdown."""
     import plotly.graph_objects as go
 
-    # Chinese category labels
-    CATEGORY_CN = {
-        "charge_energy": "充电电费",
-        "discharge_energy": "放电收入",
-        "capacity_compensation": "容量补偿/非市场化",
-        "transmission": "输配电费",
-        "system_operation": "上网线损费",
-        "coal_capacity_charge": "系统运行费",
-        "basic_fee": "基本电费/力调",
-        "govt_surcharges": "政府基金及附加",
-        "frequency": "调频",
-        "penalty": "偏差费用",
-        "subsidy": "补贴",
-        "rebate": "返还",
-        "other": "其他",
-        "generation_revenue": "发电收入",
-    }
 
     with engine.connect() as conn:
         items_df = pd.read_sql(text("""
@@ -989,59 +779,6 @@ def _render_analytics(book_id: int, engine):
         st.subheader("对账 (应收 vs 实际结算)")
         st.dataframe(recon[["month", "category_cn", "amount_receivable_cny", "amount_settled_cny", "amount_diff_cny"]],
                      use_container_width=True, hide_index=True)
-
-
-# ── Merchant Exposure (市场化收入占比) ────────────────────────────────────────
-
-_MERCHANT_CATS = ("discharge_energy", "generation_revenue")
-_CONTRACT_CATS = ("capacity_compensation", "subsidy", "rebate", "other")
-_SERVICE_CATS = ("frequency",)
-_COST_CATS = ("charge_energy", "transmission", "system_operation",
-              "coal_capacity_charge", "basic_fee", "govt_surcharges", "penalty")
-
-
-def _bucket_of(category: str) -> str:
-    """Map a settlement category to a merchant-exposure bucket."""
-    if category in _MERCHANT_CATS:
-        return "merchant"
-    if category in _CONTRACT_CATS:
-        return "contract"
-    if category in _SERVICE_CATS:
-        return "services"
-    return "cost"
-
-
-def compute_merchant_shares(items_df):
-    """Per-month bucket sums + merchant share of gross inflows.
-
-    items_df columns: category, month (YYYY-MM), amount_cny.
-    merchant share = merchant / (merchant + contract + services) bucket sums,
-    where bucket sums are netted within the bucket for the month and floored at 0
-    for the inflow denominator. Returns (monthly_df, latest_month_df or None).
-    """
-    if items_df.empty:
-        return pd.DataFrame(), None
-    df = items_df.copy()
-    df["bucket"] = df["category"].map(_bucket_of)
-    monthly = (
-        df[df["bucket"].isin(["merchant", "contract", "services"])]
-        .groupby(["month", "bucket"], as_index=False)["amount_cny"].sum()
-        .pivot(index="month", columns="bucket", values="amount_cny")
-        .fillna(0.0)
-    )
-    for col in ("merchant", "contract", "services"):
-        if col not in monthly.columns:
-            monthly[col] = 0.0
-    monthly["gross"] = (monthly["merchant"].clip(lower=0)
-                        + monthly["contract"].clip(lower=0)
-                        + monthly["services"].clip(lower=0))
-    monthly["merchant_share"] = monthly.apply(
-        lambda r: (r["merchant"] / r["gross"]) if r["gross"] > 1e-9 else None,
-        axis=1,
-    )
-    monthly = monthly.reset_index().sort_values("month")
-    latest = monthly.dropna(subset=["merchant_share"])
-    return monthly, (latest.iloc[-1] if not latest.empty else None)
 
 
 def _render_merchant_share(book_id: int, engine):
