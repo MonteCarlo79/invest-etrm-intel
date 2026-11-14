@@ -50,6 +50,8 @@ RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding('BAAI/bge
 
 # Copy hermes service code and shared modules
 COPY services/ /app/services/
+# libs/: asset-risk headless agent imports libs.asset_risk (restructure 2026-11-14)
+COPY libs/ /app/libs/
 COPY shared/ /app/shared/
 # Distilled persona profile(s) consumed by shared/persona_profile.py at runtime
 COPY skills/colleague/ /app/skills/colleague/
