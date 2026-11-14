@@ -42,6 +42,8 @@ class StationRef:
     md_plant_names: tuple[str, ...] = ()  # exchange (enos) trading-account names
                                        # when they differ from plant_name; several
                                        # accounts are summed. Empty → plant_name.
+    attribution_code: str | None = None  # reports.bess_asset_daily_attribution code
+                                       # when it differs from asset_code
 
     @property
     def cleared_names(self) -> tuple[str, ...]:
@@ -99,6 +101,7 @@ STATIONS: list[StationRef] = [
     ),
     StationRef(
         asset_code="bameng",
+        attribution_code="hetao",
         plant_name="景怡查干哈达储能电站",
         capacity_mw=None,
         substation="河套500kV变电站",

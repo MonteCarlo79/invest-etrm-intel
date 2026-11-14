@@ -51,6 +51,7 @@ from sqlalchemy import text
 
 from libs.trading_book.asset_book import AssetBook
 from libs.trading_book.models import Day, Waterfall, WaterfallLine
+from libs.trading_book.registry import get_stations
 
 _ATTRIBUTION_SQL = """
     SELECT COUNT(*)                               AS n_rows,
@@ -65,15 +66,11 @@ _ATTRIBUTION_SQL = """
       AND trade_date <= CAST(:e AS date)
 """
 
+# See module docstring: registry 'bameng' == attribution-stack 'hetao'; aliases
+# live on StationRef.attribution_code. wuhai matches the attribution stack
+# directly; wuchuan/alashan/lingt46 have no attribution presence (zero-row guard).
 _ATTR_CODE_ALIAS: dict[str, str] = {
-    # See module docstring: registry 'bameng' == attribution-stack 'hetao'.
-    "bameng": "hetao",
-    # Task 11 fleet extension verified (pnl_attribution/app.py ASSET_CODES +
-    # bess_context.py ASSET_PHYSICAL_PARAMS): 'wuhai' matches the attribution
-    # stack directly; wuchuan/alashan/lingt46/alashanzuoqi/erlian have no
-    # attribution-stack presence (their books degrade via the zero-row guard).
-    # No new aliases.
-}
+    s.asset_code: s.attribution_code for s in get_stations() if s.attribution_code}
 
 
 def _attribution_code(asset_code: str) -> str:
