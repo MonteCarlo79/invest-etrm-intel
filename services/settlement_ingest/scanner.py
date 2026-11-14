@@ -12,8 +12,7 @@ from pathlib import Path
 
 from shared.agents.db import get_conn
 from services.settlement_ingest.folder_mapper import resolve_folder_to_asset
-from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
-from services.settlement_ingest.parser_discharge import parse_discharge_settlement_pdf
+from libs.asset_risk.settlement.router import ROUTES, read_bill, route
 
 
 INVOICE_ROOT = os.environ.get(
@@ -201,6 +200,16 @@ def resolve_settlement_month(pdf_path) -> str | None:
         return None
 
 
+# Router skip-route label -> this scanner's own result message
+_SCANNER_SKIP_MSG = {
+    "电网版上网结算单 — content overlaps the 交易中心结算依据; skipped to avoid double-counting. No data written.":
+        "电网版上网结算单 — overlaps 交易中心结算依据, not ingested",
+    "交易结算凭证 — its 电能电费 and every fee row duplicate the grid 上网结算单; skipped to avoid double-counting. "
+    "No data written.":
+        "交易结算凭证 — duplicates the grid 上网结算单, not ingested",
+}
+
+
 def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict]:
     """Scan all invoice folders and ingest new PDFs.
 
@@ -267,113 +276,43 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
 
         # Ingest
         try:
-            if pdf_type == "charge":
-                # Deterministic provincial layouts first — 广西 电费通知单 (灵山):
-                # vision produced 1000x unit errors; 甘肃 layout: Mengxi regex
-                # produces junk, not failure (民勤)
-                import pdfplumber as _pp
-                _text = ""
-                with _pp.open(str(pdf_path)) as _pdf:
-                    _scanned = len(_pdf.pages[0].chars) == 0 and len(_pdf.pages[0].images) > 0
-                    for _pg in _pdf.pages:
-                        _text += (_pg.extract_text() or "") + "\n"
-                if _scanned:
+            if pdf_type in ("charge", "discharge"):
+                # Parser choice = the router shared with the upload tab (one ladder:
+                # deterministic provincial layouts first — vision produced 1000x unit
+                # errors / double counts on 广西, 滨州, 民勤 bills)
+                bill = read_bill(str(pdf_path), pdf_path.name)
+                r = route(bill, pdf_type, "scanner")
+                if r is None:
+                    items = []
+                elif r.kind == "skip":
+                    results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
+                                    "error": _SCANNER_SKIP_MSG[r.label]})
+                    continue
+                elif r.label.startswith("Scanned 电费计算明细"):
                     # Vision+verify path for scanned 电费计算明细 (定远 family)
-                    from services.settlement_ingest.parser_scan_charge import parse_scanned_charge_bill_vision
-                    items = parse_scanned_charge_bill_vision(str(pdf_path))
+                    items = r.parse(bill)
                     if not items:
                         results.append({"path": rel_path, "asset": asset_name, "status": "error",
                                         "error": "scanned charge bill — vision extraction failed 电费合计 verification"})
                         continue
+                elif r.label.startswith("Charge regex parser found nothing"):
+                    # Mengxi regex found nothing — generic vision fallback. route()
+                    # treats a regex error as "no match"; re-run it so the error is
+                    # still reported as status "error", as before.
+                    next(x for x in ROUTES if x.label.startswith("Mengxi charge regex")).parse(bill)
+                    items = r.parse(bill)
                 else:
-                    from services.settlement_ingest.parser_guangxi import (
-                        is_guangxi_charge_bill, parse_guangxi_charge_text,
-                    )
-                    from services.settlement_ingest.parser_wb2 import is_wb2_charge_bill, parse_wb2_charge
-                    if is_wb2_charge_bill(_text):
-                        items = parse_wb2_charge(_text)
-                    elif is_guangxi_charge_bill(_text):
-                        items = parse_guangxi_charge_text(_text)
-                    else:
-                        from services.settlement_ingest.parser_stategrid import (
-                            is_stategrid_charge, parse_stategrid_charge,
-                        )
-                        if is_stategrid_charge(_text):
-                            import pdfplumber as _pp2
-                            with _pp2.open(str(pdf_path)) as _pdf2:
-                                items = parse_stategrid_charge(_pdf2.pages[0].extract_text() or "")
-                        else:
-                            from services.settlement_ingest.parser_gansu import is_gansu_charge_bill, parse_gansu_charge_pdf
-                            if is_gansu_charge_bill(_text):
-                                items = parse_gansu_charge_pdf(str(pdf_path))
-                            else:
-                                items = parse_charging_cost_pdf(str(pdf_path))
-                                if not items:
-                                    # Non-Mengxi charge layout — generic vision fallback
-                                    from services.settlement_ingest.parser_vision import parse_charge_bill_vision
-                                    items = parse_charge_bill_vision(str(pdf_path))
-            elif pdf_type == "discharge":
-                import pdfplumber as _pp
-                _text = ""
-                with _pp.open(str(pdf_path)) as _pdf:
-                    for _pg in _pdf.pages:
-                        _text += (_pg.extract_text() or "") + "\n"
-                from services.settlement_ingest.parser_guangxi import (
-                    is_guangxi_discharge_bill, is_guangxi_grid_duplicate, parse_guangxi_discharge_text,
-                )
-                if is_guangxi_grid_duplicate(_text):
-                    results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
-                                    "error": "电网版上网结算单 — overlaps 交易中心结算依据, not ingested"})
-                    continue
-                from services.settlement_ingest.parser_wb2 import (
-                    is_wb2_discharge_bill, is_wb2_voucher, parse_wb2_discharge,
-                )
-                if is_wb2_voucher(_text):
-                    results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
-                                    "error": "交易结算凭证 — duplicates the grid 上网结算单, not ingested"})
-                    continue
-                if is_wb2_discharge_bill(_text):
-                    items = parse_wb2_discharge(_text)
-                elif is_guangxi_discharge_bill(_text):
-                    items = parse_guangxi_discharge_text(_text)
-                else:
-                    from services.settlement_ingest.parser_stategrid import (
-                        is_stategrid_discharge, parse_stategrid_discharge,
-                    )
-                    if is_stategrid_discharge(_text):
-                        import pdfplumber as _pp2
-                        with _pp2.open(str(pdf_path)) as _pdf2:
-                            items = parse_stategrid_discharge(_pdf2.pages[0].extract_text() or "")
-                    else:
-                        from services.settlement_ingest.parser_stategrid import (
-                            is_local_discharge, is_sdtc_settlement, parse_local_discharge,
-                            parse_sdtc_settlement,
-                        )
-                        if is_sdtc_settlement(_text):
-                            sides = parse_sdtc_settlement(_text)
+                    items = r.parse(bill)
+                    if isinstance(items, dict):
+                        sides = items
+                        if r.label.startswith("山东电力交易中心"):
                             items = []
                             if "售电侧" in sides and not _has_discharge_items(asset_name, month_str):
                                 items.append(sides["售电侧"])
                             if "购电侧" in sides:
                                 items.append(sides["购电侧"])
-                        else:
-                            from services.settlement_ingest.parser_stategrid import (
-                                is_ah_discharge, is_ah_sdtc, parse_ah_discharge, parse_ah_sdtc,
-                            )
-                            if is_ah_sdtc(_text):
-                                sides = parse_ah_sdtc(_text)
-                                items = [s for s in (sides.get("售电侧"), sides.get("购电侧")) if s]
-                            elif is_ah_discharge(_text):
-                                import pdfplumber as _pp2
-                                with _pp2.open(str(pdf_path)) as _pdf2:
-                                    _ah_text = "".join((pg.extract_text() or "") + "\n" for pg in _pdf2.pages)
-                                items = parse_ah_discharge(_ah_text)
-                            elif is_local_discharge(_text):
-                                import pdfplumber as _pp2
-                                with _pp2.open(str(pdf_path)) as _pdf2:
-                                    items = parse_local_discharge(_pdf2.pages[0].extract_text() or "")
-                            else:
-                                items = parse_discharge_settlement_pdf(str(pdf_path))
+                        else:  # 安徽统推: keep both sides
+                            items = [s for s in (sides.get("售电侧"), sides.get("购电侧")) if s]
             elif pdf_type == "voucher":
                 results.append({"path": rel_path, "asset": asset_name, "status": "skipped",
                                 "error": "结算凭证 (trading-center voucher) — duplicates 结算单 data, not ingested"})

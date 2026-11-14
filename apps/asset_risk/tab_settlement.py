@@ -205,9 +205,9 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
     kWh-denominated 下网 bill was mis-extracted as discharge, 1000x unit error).
     parser_charge needs a text layer; parser_discharge (vision) handles any PDF.
     """
-    import io
-    import pdfplumber
+    import tempfile, os
     from services.settlement_ingest.scanner import classify_pdf
+    from libs.asset_risk.settlement.router import ROUTES, read_bill, route
 
     pdf_bytes = uploaded.read()
 
@@ -216,133 +216,70 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
         st.info(f"{uploaded.name}: 发票/核查/电量结算单 file — skipped (not settlement data).")
         return
 
-    voucher_fallback = False
+    voucher_skipped_msg = (f"**{uploaded.name}**: 结算凭证 (trading-center voucher) — skipped. "
+                           "Its content duplicates the 上网/下网结算单; ingesting both would double-count. "
+                           "No data written.")
     if kind == "voucher":
         # 发电侧凭证 fallback: if this book+month has no discharge data yet
         # (no 上网结算单), the voucher is the only discharge source — use it.
         # (observed 乌海 2026-01/02: vouchers are the sole discharge documents)
-        if "发电侧" in uploaded.name and not _has_category(engine, book_id, settlement_month, "discharge_energy"):
-            voucher_fallback = True
-        else:
-            st.info(f"**{uploaded.name}**: 结算凭证 (trading-center voucher) — skipped. "
-                    "Its content duplicates the 上网/下网结算单; ingesting both would double-count. "
-                    "No data written.")
+        if not ("发电侧" in uploaded.name and not _has_category(engine, book_id, settlement_month, "discharge_energy")):
+            st.info(voucher_skipped_msg)
             return
 
-    # Detect if PDF is scanned (image-based) or has extractable text
-    buf = io.BytesIO(pdf_bytes)
-    pdf = pdfplumber.open(buf)
-    page = pdf.pages[0]
-    is_scanned = len(page.chars) == 0 and len(page.images) > 0
-    pdf.close()
-
-    import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(pdf_bytes)
         tmp_path = tmp.name
 
+    # Parser choice = libs.asset_risk.settlement.router (filename semantics pick
+    # the branch, then the first matching detector; see its module docstring for
+    # the incidents behind the ordering). UI messages and DB-dependent rules stay here.
     try:
-        if voucher_fallback:
-            st.info("发电侧结算凭证 — no 上网结算单 for this month; using voucher as discharge source.")
-            from services.settlement_ingest.parser_voucher import parse_generation_voucher
-            items = parse_generation_voucher(tmp_path)
-        elif kind == "discharge" or (kind == "unknown" and is_scanned):
-            items = None
-            if not is_scanned:
-                # Text-layer bill: deterministic regex beats vision.
-                # 广西 交易中心结算依据 (灵山) — vision double-counted parent+child
-                # rows and misread digits; 国网甘肃 类别 layout (民勤) — vision
-                # expects the Mengxi 成分明细 table and fails or hallucinates.
-                bill_text = ""
-                with pdfplumber.open(tmp_path) as _pdf:
-                    for _pg in _pdf.pages:
-                        bill_text += (_pg.extract_text() or "") + "\n"
-                from services.settlement_ingest.parser_guangxi import (
-                    is_guangxi_discharge_bill, is_guangxi_grid_duplicate, parse_guangxi_discharge_text,
-                )
-                if is_guangxi_grid_duplicate(bill_text):
-                    st.info(f"**{uploaded.name}**: 电网版上网结算单 — content overlaps the "
-                            "交易中心结算依据; skipped to avoid double-counting. No data written.")
-                    return
-                from services.settlement_ingest.parser_wb2 import (
-                    is_wb2_discharge_bill, is_wb2_voucher, parse_wb2_discharge,
-                )
-                if is_wb2_voucher(bill_text):
-                    st.info(f"**{uploaded.name}**: 交易结算凭证 — its 电能电费 and every fee row "
-                            "duplicate the grid 上网结算单; skipped to avoid double-counting. "
-                            "No data written.")
-                    return
-                if is_wb2_discharge_bill(bill_text):
-                    items = parse_wb2_discharge(bill_text)
-                    st.info("蒙西上网电费结算单 (成分明细) detected — parsed deterministically (no vision).")
-                elif is_guangxi_discharge_bill(bill_text):
-                    items = parse_guangxi_discharge_text(bill_text)
-                    st.info("广西电力交易结算依据 detected — parsed deterministically (no vision).")
-                else:
-                    # 网上国网 发电侧电费账单 (山东): 上网电费 is the TOTAL (its rows
-                    # decompose it) and page 2 repeats the table — vision counted
-                    # total+components AND both pages (滨州 2026: 4x inflation).
-                    from services.settlement_ingest.parser_stategrid import (
-                        is_stategrid_discharge, parse_stategrid_discharge,
-                    )
-                    if is_stategrid_discharge(bill_text):
-                        with pdfplumber.open(tmp_path) as _pdf:
-                            p1_text = _pdf.pages[0].extract_text() or ""
-                        items = parse_stategrid_discharge(p1_text)
-                        st.info("网上国网发电侧电费账单 detected — parsed deterministically (no vision).")
-                    else:
-                        from services.settlement_ingest.parser_stategrid import (
-                            is_local_discharge, is_sdtc_settlement, parse_local_discharge,
-                            parse_sdtc_settlement,
-                        )
-                        if is_sdtc_settlement(bill_text):
-                            sides = parse_sdtc_settlement(bill_text)
-                            items = []
-                            if "售电侧" in sides:
-                                if _has_category(engine, book_id, settlement_month, "discharge_energy"):
-                                    st.info("交易中心结算单： 售电侧 skipped — this book+month already has "
-                                            "discharge data (it duplicates the 电费账单).")
-                                else:
-                                    items.append(sides["售电侧"])
-                            if "购电侧" in sides:
-                                items.append(sides["购电侧"])
-                            st.info("山东电力交易中心交易结算单 detected — parsed deterministically (no vision).")
-                        else:
-                            from services.settlement_ingest.parser_stategrid import (
-                                is_ah_discharge, is_ah_sdtc, parse_ah_discharge, parse_ah_sdtc,
-                            )
-                            if is_ah_sdtc(bill_text):
-                                # 安徽统推: 售电侧 and 电费账单 are DIFFERENT settlements
-                                # (user decision 2026-09-14: keep both)
-                                sides = parse_ah_sdtc(bill_text)
-                                items = [s for s in (sides.get("售电侧"), sides.get("购电侧")) if s]
-                                st.info("安徽电力交易中心(统推)结算单 detected — parsed deterministically (no vision).")
-                            elif is_ah_discharge(bill_text):
-                                with pdfplumber.open(tmp_path) as _pdf:
-                                    ah_text = "".join((pg.extract_text() or "") + "\n" for pg in _pdf.pages)
-                                items = parse_ah_discharge(ah_text)
-                                st.info("国网安徽发电侧电费账单 detected — parsed deterministically (no vision).")
-                            elif is_local_discharge(bill_text):
-                                with pdfplumber.open(tmp_path) as _pdf:
-                                    p1_text = _pdf.pages[0].extract_text() or ""
-                                items = parse_local_discharge(p1_text)
-                                st.info("山东省地方电厂市场化结算单 detected — parsed deterministically (no vision).")
+        bill = read_bill(tmp_path, uploaded.name)
+        r = route(bill, kind, "upload")
+        if r is None:
+            if kind == "voucher":
+                st.info(voucher_skipped_msg)
+                return
+            items = []
+        elif r.kind == "skip":
+            st.info(f"**{uploaded.name}**: {r.label}")
+            return
+        elif r.kind == "voucher":
+            st.info(r.label)
+            items = r.parse(bill)
+        elif r.kind == "discharge":
+            if r.label.startswith("Detected scanned PDF"):
+                # vision fallback — message only for scanned bills
+                if bill.is_scanned:
+                    st.info(r.label)
+                items = r.parse(bill)
+            else:
+                parsed = r.parse(bill)
+                if isinstance(parsed, dict):
+                    sides = parsed
+                    if r.label.startswith("山东电力交易中心"):
+                        items = []
+                        if "售电侧" in sides:
+                            if _has_category(engine, book_id, settlement_month, "discharge_energy"):
+                                st.info("交易中心结算单： 售电侧 skipped — this book+month already has "
+                                        "discharge data (it duplicates the 电费账单).")
                             else:
-                                from services.settlement_ingest.parser_gansu import is_gansu_bill, parse_gansu_discharge_text
-                                if is_gansu_bill(bill_text):
-                                    items = parse_gansu_discharge_text(bill_text)
-                                    st.info("国网甘肃 bill detected — parsed deterministically (no vision).")
-            if items is None:
-                if is_scanned:
-                    st.info("Detected scanned PDF — using AI Vision to extract data...")
-                from services.settlement_ingest.parser_discharge import parse_discharge_settlement_pdf
-                items = parse_discharge_settlement_pdf(tmp_path)
-        elif kind == "charge" or kind == "unknown":
-            if is_scanned:
+                                items.append(sides["售电侧"])
+                        if "购电侧" in sides:
+                            items.append(sides["购电侧"])
+                    else:
+                        # 安徽统推: 售电侧 and 电费账单 are DIFFERENT settlements
+                        # (user decision 2026-09-14: keep both)
+                        items = [s for s in (sides.get("售电侧"), sides.get("购电侧")) if s]
+                else:
+                    items = parsed
+                st.info(r.label)
+        else:  # charge
+            if r.label.startswith("Scanned 电费计算明细"):
                 # Vision+verify path: accept the extraction ONLY when every page
                 # reconciles with its printed 电费合计 (fee identity), else refuse.
-                from services.settlement_ingest.parser_scan_charge import parse_scanned_charge_bill_vision
-                items = parse_scanned_charge_bill_vision(tmp_path)
+                items = r.parse(bill)
                 if not items:
                     st.warning(
                         f"**{uploaded.name}** looks like a 下网 charge bill but is a scanned image — "
@@ -350,57 +287,22 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
                         "Skipped: no data written. Send it to Claude for hand-processing or obtain the text version."
                     )
                     return
-                st.info("Scanned 电费计算明细 — vision extraction verified against printed totals.")
+                st.info(r.label)
             else:
-                # Deterministic provincial layouts first — the Mengxi regex doesn't
-                # fail on these, it produces junk (民勤 Gansu), and vision produced
-                # 1000x unit errors + digit misreads on 广西 bills (灵山 2026-01..07)
-                bill_text = ""
-                with pdfplumber.open(tmp_path) as _pdf:
-                    for _pg in _pdf.pages:
-                        bill_text += (_pg.extract_text() or "") + "\n"
-                from services.settlement_ingest.parser_guangxi import (
-                    is_guangxi_charge_bill, parse_guangxi_charge_text,
-                )
-                from services.settlement_ingest.parser_wb2 import is_wb2_charge_bill, parse_wb2_charge
-                if is_wb2_charge_bill(bill_text):
-                    items = parse_wb2_charge(bill_text)
-                    st.info("蒙西下网电费核查票 detected — parsed deterministically (no vision).")
-                elif is_guangxi_charge_bill(bill_text):
-                    items = parse_guangxi_charge_text(bill_text)
-                    st.info("广西电网电费通知单 detected — parsed deterministically (no vision).")
+                if r.label.startswith("Charge regex parser found nothing"):
+                    # route() treats a Mengxi-regex error as "no match"; re-run it so
+                    # the error still surfaces as "PDF parsing failed" (no write)
+                    next(x for x in ROUTES if x.label.startswith("Mengxi charge regex")).parse(bill)
+                    items = r.parse(bill)       # silent first vision attempt
                 else:
-                    # 网上国网 用电侧电费账单 (山东): 3-level hierarchy — vision stored
-                    # subtotals AND leaves AND a page-2 repeat (滨州 2026: ~2.7x)
-                    from services.settlement_ingest.parser_stategrid import (
-                        is_stategrid_charge, parse_stategrid_charge,
-                    )
-                    if is_stategrid_charge(bill_text):
-                        with pdfplumber.open(tmp_path) as _pdf:
-                            p1_text = _pdf.pages[0].extract_text() or ""
-                        items = parse_stategrid_charge(p1_text)
-                        st.info("网上国网用电侧电费账单 detected — parsed deterministically (no vision).")
-                    else:
-                        from services.settlement_ingest.parser_gansu import (
-                            is_gansu_charge_bill, parse_gansu_charge_text,
-                        )
-                        if is_gansu_charge_bill(bill_text):
-                            items = parse_gansu_charge_text(bill_text)
-                            st.info("国网甘肃 charge bill detected — parsed deterministically (no vision).")
-                        else:
-                            from services.settlement_ingest.parser_charge import parse_charging_cost_pdf
-                            items = parse_charging_cost_pdf(tmp_path)
-                            if not items:
-                                # Non-Mengxi charge layout — generic vision fallback
-                                from services.settlement_ingest.parser_vision import parse_charge_bill_vision
-                                items = parse_charge_bill_vision(tmp_path)
+                    items = r.parse(bill)
+                    if not r.label.startswith("Mengxi charge regex"):   # Mengxi regex: no message
+                        st.info(r.label)
                 if not items:
                     # Non-Mengxi charge layout (e.g. 甘肃) — generic vision fallback
                     st.info("Charge regex parser found nothing — trying AI Vision (generic provincial layout)...")
                     from services.settlement_ingest.parser_vision import parse_charge_bill_vision
                     items = parse_charge_bill_vision(tmp_path)
-        else:
-            items = []
     except Exception as e:
         st.error(f"PDF parsing failed: {e}")
         return

@@ -97,3 +97,11 @@ def test_detect_errors_never_raise(monkeypatch):
 
 def test_skip_hint_routes_nowhere():
     assert route(_bill("anything"), "skip", "upload") is None
+
+
+def test_tab_and_scanner_share_route_table():
+    # Both callers go through route(); the scanner must see every non-upload-only route the tab sees.
+    from libs.asset_risk.settlement.router import ROUTES
+    tab_labels = [r.label for r in ROUTES]
+    scanner_labels = [r.label for r in ROUTES if not r.upload_only]
+    assert len(tab_labels) - len(scanner_labels) == 1   # exactly the voucher fallback
