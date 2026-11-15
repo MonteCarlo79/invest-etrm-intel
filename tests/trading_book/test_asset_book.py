@@ -12,7 +12,7 @@ import pytest
 
 from libs.trading_book.asset_book import (
     AssetBook,
-    _ACTUAL_SQL, _CLEARED_SQL, _STRATEGY_SQL, _cst_naive_window, _to_96,
+    _CLEARED_SQL, _actual_sql, _STRATEGY_SQL, _cst_naive_window, _to_96,
 )
 from libs.trading_book.registry import get_station
 
@@ -25,7 +25,7 @@ def test_window_is_naive_cst():
 
 def test_sql_targets_right_tables():
     assert "md_id_cleared_energy" in _CLEARED_SQL
-    assert "ops_bess_dispatch_15min" in _ACTUAL_SQL
+    assert "ops_bess_dispatch_15min" in _actual_sql(None)
     assert "Asia/Shanghai" not in _CLEARED_SQL  # columns already CST-naive; no rendering needed
 
 
@@ -142,7 +142,7 @@ def _fake_read_sql(monkeypatch, frames):
 def test_multi_account_cleared_sums_accounts_exact_names(monkeypatch):
     # 武川 trades as 旭纯哈乐 + 旭纯哈乐二: exact names, SUM per slot, no LIKE.
     calls = _fake_read_sql(monkeypatch, lambda sql, p: pd.DataFrame({
-        "datetime": ["2026-10-15 00:15:00"], "cleared_price": [300.0],
+        "datetime": ["2026-10-15 00:00:00"], "cleared_price": [300.0],
         "cleared_energy_mwh": [-500.0]}))
     out = AssetBook(None, get_station("wuchuan")).cleared(DAY)
     sql, params = calls[0]
@@ -184,3 +184,58 @@ def test_single_account_alias_strategy(monkeypatch):
     out = AssetBook(None, get_station("alashan")).strategies(DAY)
     assert calls[0][1]["pn"] == "景敖乌珠日储能电站"
     assert len(out) == 1 and out[0].series == [5.0] * 96
+
+
+# ── 2026-11-15: md_id_cleared_energy frame (row D → slot D + 15 min) ────────
+
+def test_cleared_row_maps_to_next_slot_and_prev_day_2345_fills_slot0(monkeypatch):
+    calls = _fake_read_sql(monkeypatch, lambda sql, p: pd.DataFrame({
+        "datetime": ["2026-10-14 23:45:00", "2026-10-15 01:45:00",
+                     "2026-10-15 23:45:00"],
+        "cleared_price": [111.0, 222.0, 999.0],
+        "cleared_energy_mwh": [-11.0, 22.0, 99.0]}))
+    out = AssetBook(None, get_station("suyou")).cleared(DAY)
+    assert out.cleared_mw[0] == -11.0 and out.cleared_price[0] == 111.0
+    assert out.cleared_mw[8] == 22.0 and out.cleared_price[8] == 222.0  # 01:45 → 02:00
+    assert out.cleared_mw[7] != out.cleared_mw[7]  # NaN: nothing stamped 01:30
+    assert 99.0 not in out.cleared_mw  # day's 23:45 row belongs to next day 00:00
+    _, params = calls[0]
+    assert params["s"] == "2026-10-14 23:45:00"
+    assert params["e"] == "2026-10-15 23:45:00"
+    assert params["ds"] == "2026-10-14" and params["de"] == "2026-10-16"
+
+
+class _Eng:
+    def __init__(self, name):
+        self.dialect = type("D", (), {"name": name})()
+
+
+def test_actual_ops_fallback_renders_named_zone_on_pg():
+    sql = _actual_sql(_Eng("postgresql"))
+    assert "AT TIME ZONE 'Asia/Shanghai'" in sql
+    assert "+08" not in sql
+    # bounds compare against the rendered Beijing-wall expression
+    assert sql.count("AT TIME ZONE 'Asia/Shanghai'") >= 3
+
+
+def test_actual_ops_fallback_sqlite_reads_raw_column():
+    import numpy as np
+    from sqlalchemy import create_engine
+
+    eng = create_engine("sqlite://")
+    sql = _actual_sql(eng)
+    assert "AT TIME ZONE" not in sql
+    with eng.begin() as c:
+        c.exec_driver_sql("ATTACH DATABASE ':memory:' AS marketdata")
+        c.exec_driver_sql(
+            "CREATE TABLE marketdata.ops_bess_dispatch_15min (asset_code TEXT,"
+            " interval_start TEXT, nominated_dispatch_mw REAL, actual_dispatch_mw REAL)")
+        c.exec_driver_sql(
+            "INSERT INTO marketdata.ops_bess_dispatch_15min VALUES"
+            " ('suyou', '2026-10-15 08:00:00', 5.0, 4.0)")
+        from sqlalchemy import text
+        df = pd.read_sql(text(sql), c, params={
+            "ac": "suyou", "s": "2026-10-15 00:00:00", "e": "2026-10-16 00:00:00"})
+    assert len(df) == 1
+    out = _to_96(df, "interval_start", "actual_dispatch_mw")
+    assert out[32] == 4.0 and np.isnan(out[0])

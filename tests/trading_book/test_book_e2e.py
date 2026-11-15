@@ -43,7 +43,9 @@ _STACK = {"bands": [(0.0, 400.0, 10000.0), (400.0, 800.0, 20000.0)],
 def _frame_for(sql_text: str) -> pd.DataFrame:
     """Fake read_sql dispatcher — routes on the source table in the SQL."""
     if "md_id_cleared_energy" in sql_text:
-        ts = pd.date_range(f"{DAY} 00:00", periods=96, freq="15min")
+        # row stamped D → slot D + 15 min: the day's 96 slots read rows
+        # stamped [D-1 23:45, D 23:45)
+        ts = pd.date_range(f"{DAY} 00:00", periods=96, freq="15min") - pd.Timedelta(minutes=15)
         return pd.DataFrame({"datetime": ts,
                              "cleared_price": np.full(96, 350.0),
                              "cleared_energy_mwh": np.full(96, 20.0)})

@@ -1,11 +1,17 @@
 """AssetBook data readers — 蒙西 cleared/actual/strategy series (spec 2026-10-31).
 
-Source timestamp columns are all CST-naive wall clock
-(md_id_cleared_energy.datetime, ops_bess_dispatch_15min.interval_start), so
-day windows are naive CST literals ("YYYY-MM-DD 00:00:00") compared via
-CAST(:s AS timestamp) — no '+08' suffix and no AT TIME ZONE rendering
-anywhere (POSIX-inversion guard; the '+08:00' interval literal renders
-UTC-8 walls).
+md_id_cleared_energy.datetime is CST-naive wall clock, so its day windows
+are naive CST literals ("YYYY-MM-DD 00:00:00") compared via
+CAST(:s AS timestamp). FRAME (owner decision 2026-11-15, canonical constant
+MD_ROW_TO_SLOT in libs/asset_risk/chain.py): an md_id_cleared_energy row
+stamped D belongs to the 15-min slot starting at D + 15 min, for both energy
+and price — so the day's 96 slots read rows stamped [D-1 23:45, D 23:45).
+
+ops_bess_dispatch_15min.interval_start is TIMESTAMPTZ and the DB session TZ
+is UTC, so it is rendered to Beijing wall via the NAMED zone
+(AT TIME ZONE 'Asia/Shanghai') — never the '+08:00' literal, which
+PostgreSQL treats POSIX-inverted (UTC-8 walls). sqlite test fixtures store
+Beijing-naive TEXT and read the raw column.
 
 nodal_strategy_daily has no scope column: the nodal-agent scope is the
 model_version family ('nodal_agent_v1', …), latest created_at row per
@@ -25,6 +31,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
+from libs.asset_risk.chain import MD_ROW_TO_SLOT
 from libs.trading_book.models import (
     ActualDispatch,
     ClearedDispatch,
@@ -66,13 +73,24 @@ _CLEARED_SQL = """
     ORDER BY datetime
 """
 
-_ACTUAL_SQL = """
-    SELECT interval_start, nominated_dispatch_mw, actual_dispatch_mw
+def _actual_sql(engine) -> str:
+    """ops_bess_dispatch_15min fallback read with interval_start as Beijing
+    wall clock (same pattern as libs/asset_risk/chain.py::_ops_ts_expr).
+    engine=None (DB-free unit tests) renders the Postgres form."""
+    dialect = getattr(getattr(engine, "dialect", None), "name", "postgresql")
+    if dialect == "sqlite":
+        ts = "interval_start"  # fixture stores Beijing-naive TEXT
+        lo, hi = ":s", ":e"
+    else:
+        ts = "(interval_start AT TIME ZONE 'Asia/Shanghai')"
+        lo, hi = "CAST(:s AS timestamp)", "CAST(:e AS timestamp)"
+    return f"""
+    SELECT {ts} AS interval_start, nominated_dispatch_mw, actual_dispatch_mw
     FROM marketdata.ops_bess_dispatch_15min
     WHERE asset_code = :ac
-      AND interval_start >= CAST(:s AS timestamp)
-      AND interval_start <  CAST(:e AS timestamp)
-    ORDER BY interval_start
+      AND {ts} >= {lo}
+      AND {ts} <  {hi}
+    ORDER BY 1
 """
 
 _STRATEGY_SQL = """
@@ -140,12 +158,22 @@ class AssetBook(TradingBook):
         per-interval MW — pass through, no unit conversion)."""
         self._require_strategy_layer()
         s, e = _cst_naive_window(day)
+        # Row stamped D → slot D + MD_ROW_TO_SLOT: read rows stamped
+        # [day 00:00 − 15 min, day+1 00:00 − 15 min).
+        s_row = pd.Timestamp(s) - MD_ROW_TO_SLOT
+        e_row = pd.Timestamp(e) - MD_ROW_TO_SLOT
         df = pd.read_sql(
             text(_CLEARED_SQL).bindparams(bindparam("pns", expanding=True)),
             self._engine,
             params={"pns": list(self.station.cleared_names),
-                    "ds": str(day - timedelta(days=1)),
-                    "de": str(day + timedelta(days=1)), "s": s, "e": e})
+                    "ds": s_row.strftime("%Y-%m-%d"),
+                    "de": str(day + timedelta(days=1)),
+                    "s": s_row.strftime("%Y-%m-%d %H:%M:%S"),
+                    "e": e_row.strftime("%Y-%m-%d %H:%M:%S")})
+        if not df.empty:
+            df = df.assign(datetime=pd.to_datetime(df["datetime"]) + MD_ROW_TO_SLOT)
+            # _to_96 slots by clock time only — drop anything outside the day
+            df = df[df["datetime"].dt.date == day]
         return ClearedDispatch(
             day=day,
             cleared_mw=_to_96(df, "datetime", "cleared_energy_mwh"),
@@ -174,7 +202,7 @@ class AssetBook(TradingBook):
         if nom.empty or act.empty:
             s, e = _cst_naive_window(day)
             df = pd.read_sql(
-                text(_ACTUAL_SQL), self._engine,
+                text(_actual_sql(self._engine)), self._engine,
                 params={"ac": self.station.asset_code, "s": s, "e": e})
             if nom.empty and not df.empty:
                 nom = df[["interval_start", "nominated_dispatch_mw"]]

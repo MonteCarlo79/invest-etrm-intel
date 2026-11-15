@@ -7,8 +7,16 @@ Settlement pricing rule (confirmed by user 2026-08-29):
   - discharging energy is settled at the 15-MIN nodal price
   Verified: with correct timezone alignment this reproduces invoice effective
   prices within ±6% on all four well-covered assets (2026-06).
-Price rows are timestamped at period END; dispatch interval_start at period START,
-so interval t prices at t + 15min.
+FRAME (owner decision 2026-11-15, canonical constant MD_ROW_TO_SLOT in
+libs/asset_risk/chain.py): an md price row stamped D prices the dispatch slot
+starting at D + 15 min, i.e. interval t prices from the row stamped t - 15min
+(the mengxi loader shifts whole rows -15 min; prod probe: legacy chain
+rt_cleared_mw at slot T matched md cleared energy stamped T-15 with r~0.99 vs
+0.92 at lag 0). _load_prices re-indexes the series to slot starts. This
+replaces the earlier "period-END, t prices at t + 15min" reading — a 30-min
+move; the 2026-06 ±6% invoice check below was made under that older reading
+and has not been re-run under this frame. Applied to both sources: cleared_price
+was verified identical to node_price at the same stamps, so they share a frame.
 
 TIMEZONE: rm_dispatch_chain.interval_start is timestamptz (UTC instants); the price
 series are Beijing-wall naive timestamps. `interval_start::timestamp` is session-TZ
@@ -25,6 +33,8 @@ Price sources per asset:
 from __future__ import annotations
 
 import pandas as pd
+
+from libs.asset_risk.chain import MD_ROW_TO_SLOT
 
 # rm_assets.name → (source_kind, source_key)
 PRICE_SOURCES = {
@@ -50,33 +60,40 @@ def _load_dispatch(cur, asset_id: int, start: str, end: str) -> pd.DataFrame:
 
 
 def _load_prices(cur, kind: str, key: str, start: str, end: str) -> pd.Series:
+    """Price series indexed by dispatch SLOT START (row stamp + MD_ROW_TO_SLOT).
+
+    The lower bound reads one row early (start - 15 min) so the day's 00:00
+    slot keeps its price from the previous day's 23:45 row."""
+    s_row = (pd.Timestamp(start) - MD_ROW_TO_SLOT).strftime("%Y-%m-%d %H:%M:%S")
     if kind == "nodal":
         cur.execute("""
             SELECT datetime, node_price FROM marketdata.md_rt_nodal_price
             WHERE node_name = %s AND datetime >= %s::timestamp
               AND datetime < %s::timestamp + interval '1 day'
             ORDER BY datetime
-        """, (key, start, end))
+        """, (key, s_row, end))
     else:
         cur.execute("""
             SELECT datetime, cleared_price FROM marketdata.md_id_cleared_energy
             WHERE plant_name = %s AND datetime >= %s::timestamp
               AND datetime < %s::timestamp + interval '1 day'
             ORDER BY datetime
-        """, (key, start, end))
+        """, (key, s_row, end))
     rows = cur.fetchall()
     if not rows:
         return pd.Series(dtype=float)
-    s = pd.Series({pd.Timestamp(r[0]): float(r[1]) for r in rows if r[1] is not None})
+    s = pd.Series({pd.Timestamp(r[0]) + MD_ROW_TO_SLOT: float(r[1])
+                   for r in rows if r[1] is not None})
     return s[~s.index.duplicated(keep="last")].sort_index()
 
 
 def compute_day(dispatch: pd.DataFrame, prices: pd.Series) -> dict | None:
-    """Compute one asset-day's modeled arbitrage numbers."""
+    """Compute one asset-day's modeled arbitrage numbers.
+
+    `prices` must be indexed by slot start (as returned by _load_prices)."""
     if dispatch.empty:
         return None
-    p_end = dispatch["ts"] + pd.Timedelta(minutes=15)
-    p15 = p_end.map(prices)  # NaN where no price row
+    p15 = dispatch["ts"].map(prices)  # prices are slot-start indexed; NaN where no row
 
     actual = dispatch["actual_mw"].astype(float)
     charge_mwh = (-actual.clip(upper=0)).sum() * 0.25
