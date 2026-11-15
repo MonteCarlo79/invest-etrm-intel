@@ -104,3 +104,25 @@ def test_recompute_bypasses_and_clears_leg_caches():
     assert "_cached_benchmark_leg.clear()" in src and "_cached_forecast_leg.clear()" in src
     assert "_wf.benchmark_leg if force_legs else _cached_benchmark_leg" in src
     assert "_wf.forecast_optimal_leg if force_legs else _cached_forecast_leg" in src
+
+
+# --- F10: captions -----------------------------------------------------------
+
+def test_caveats_no_times_four_on_cleared_energy():
+    assert "×4" not in tw._CAVEATS_MD
+    assert "交易所出清电量（md_id_cleared_energy）补齐" in tw._CAVEATS_MD
+
+
+def test_bench_note_captions_split_by_note():
+    rows = [{"asset": "A", "month": "2026-09", "note": "节点填充电价"},
+            {"asset": "B", "month": "2026-09", "note": "no prices"},
+            {"asset": "C", "month": "2026-10", "note": "no complete price day"},
+            {"asset": "D", "month": "2026-09", "note": ""},
+            {"asset": "E", "month": "2026-09", "note": "lp empty"}]
+    filled, zero = tw._bench_note_captions(rows)
+    assert filled.endswith("投资标准按节点填充电价计算：A") and "B" not in filled
+    assert zero == "投资标准无可用电价，按 ¥0 显示：B 2026-09、C 2026-10"
+
+
+def test_bench_note_captions_none_when_clean():
+    assert tw._bench_note_captions([{"asset": "D", "month": "2026-09", "note": ""}]) == (None, None)

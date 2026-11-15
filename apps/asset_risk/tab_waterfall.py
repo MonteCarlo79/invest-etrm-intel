@@ -174,9 +174,21 @@ _CAVEATS_MD = """
 - commission_date 缺失的资产按 Year 0（最新参数）处理，并在下方列出警告。
 - 偏差归因的预测最优采用 ols_rt_time_v1 小时级预测调度、按实际小时均价结算（沿用 strategy_comparison 口径；与 15 分钟口径存在基差）。
 - LP 窗口 1 天、SOC 窗口起点为 0；价格或调度链缺失的日期跳过（见数据覆盖）。引擎跳过任何含空槽的日期；当月出清电价（md_id_cleared_energy.cleared_price）无完整日时，投资标准回退至节点填充电价（md_mengxi_nodal_price_96_filled.avg_node_price，同一节点市场价、完整 96 槽），并在页面标注。
-- 申报腿数据来源：2026-09 起为企业微信自动抓取的调度计划表（marketdata.bess_nomination_96，每日两次自动更新）；此前为人工上传的调度计划表（rm_dispatch_chain，止于 2026-08-30）。重叠时段以自动抓取为准；9 月以后的出清腿由交易所出清电量（md_id_cleared_energy ×4）补齐。
+- 申报腿数据来源：2026-09 起为企业微信自动抓取的调度计划表（marketdata.bess_nomination_96，每日两次自动更新）；此前为人工上传的调度计划表（rm_dispatch_chain，止于 2026-08-30）。重叠时段以自动抓取为准；9 月以后的出清腿由交易所出清电量（md_id_cleared_energy）补齐。
 - 出清腿校验：出清放电量与账单放电量偏差 >30% 的 (资产, 月) 判为出清数据不可信，该腿按账单口径降级展示并在页面标注（2026-11-05 用户确认阈值；触发例：查干哈达 2026-09 出清 294k MWh vs 账单 107k MWh）。
 """
+
+
+def _bench_note_captions(bench_rows: list[dict]) -> tuple[str | None, str | None]:
+    """(filled-price fallback caption, no-price ¥0 caption) from benchmark notes."""
+    filled = sorted({b["asset"] for b in bench_rows if b.get("note") == "节点填充电价"})
+    zero = sorted((b["asset"], b["month"]) for b in bench_rows
+                  if b.get("note") in ("no prices", "no complete price day"))
+    filled_cap = ("投资标准价格回退：以下资产当月出清电价无完整日（缺口 ~32%），"
+                  f"投资标准按节点填充电价计算：{'、'.join(filled)}") if filled else None
+    zero_cap = ("投资标准无可用电价，按 ¥0 显示："
+                + "、".join(f"{a} {m}" for a, m in zero)) if zero else None
+    return filled_cap, zero_cap
 
 
 def render_waterfall(engine):
@@ -321,10 +333,9 @@ def render_waterfall(engine):
         columns=["asset", "month", "arb_cny", "dis_mwh", "cap_cny"])
     if missing_commission:
         st.warning(f"以下资产 commission_date 缺失，按 Year 0 参数计算：{'、'.join(missing_commission)}")
-    noted = sorted({b["asset"] for b in bench_rows if b.get("note")})
-    if noted:
-        st.caption("投资标准价格回退：以下资产当月出清电价无完整日（缺口 ~32%），"
-                   f"投资标准按节点填充电价计算：{'、'.join(noted)}")
+    for cap in _bench_note_captions(bench_rows):
+        if cap:
+            st.caption(cap)
 
     missing_bills = _wf.missing_bill_keys(actual, assets["name"].tolist(), sel_months)
     if missing_bills:
