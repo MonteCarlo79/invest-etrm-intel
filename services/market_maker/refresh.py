@@ -100,6 +100,29 @@ def _read(engine, sql: str, params: dict, expand: str | None = None) -> pd.DataF
         return pd.read_sql(stmt, c, params=params)
 
 
+def wind_trades_frame(engine, prov: str) -> pd.DataFrame:
+    """traded_points input rows from wind_trades for the province's mapped assets (省内/正常/volume>0)."""
+    if prov not in WIND_TRADES_ASSETS:
+        return trades_from_wind_trades(None, prov)
+    wt = _read(engine, "SELECT delivery_month, channel, energy_kind, volume_mwh, energy_price"
+                       " FROM marketdata.wind_trades WHERE asset_name IN :names",
+               {"names": WIND_TRADES_ASSETS[prov]}, "names")
+    for col in ("volume_mwh", "energy_price"):
+        wt[col] = pd.to_numeric(wt[col], errors="coerce")
+    return trades_from_wind_trades(wt, prov)
+
+
+def contract_owners(engine, books: pd.DataFrame) -> dict[int, str]:
+    """R3: {load book_id: province} for the book that owns the province's retail contracts —
+    the lowest book_id load book in that province (same rule as refresh())."""
+    owners: dict[str, int] = {}
+    for bid in sorted(int(b) for b in books.loc[books["book_type"] == "load", "book_id"]):
+        prov = load_book_province(engine, bid)
+        if prov is not None and prov not in owners:
+            owners[prov] = bid
+    return {bid: prov for prov, bid in owners.items()}
+
+
 def _province_curve(engine, prov, load_book_ids, months, as_of) -> pd.DataFrame:
     manual = load_curve(engine, prov, as_of)
     manual = manual[manual["source"] == "manual"]
@@ -109,12 +132,7 @@ def _province_curve(engine, prov, load_book_ids, months, as_of) -> pd.DataFrame:
                            " WHERE book_id IN :b", {"b": list(load_book_ids)}, "b")
         trades.append(trades_from_position_volumes(pv, prov))
     if prov in WIND_TRADES_ASSETS:
-        wt = _read(engine, "SELECT delivery_month, channel, energy_kind, volume_mwh, energy_price"
-                           " FROM marketdata.wind_trades WHERE asset_name IN :names",
-                   {"names": WIND_TRADES_ASSETS[prov]}, "names")
-        for col in ("volume_mwh", "energy_price"):
-            wt[col] = pd.to_numeric(wt[col], errors="coerce")
-        trades.append(trades_from_wind_trades(wt, prov))
+        trades.append(wind_trades_frame(engine, prov))
     trades = [t for t in trades if not t.empty]
     traded = traded_points(pd.concat(trades, ignore_index=True)) if trades else None
     hourly = load_spot_hourly(engine, prov, as_of - timedelta(days=730), as_of)

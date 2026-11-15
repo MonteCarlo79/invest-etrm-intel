@@ -136,7 +136,7 @@ def test_seeded_var(tmp_path, monkeypatch):
     warns = [w.value for w in at.warning]
     assert any(w.startswith("VaR excludes") and "冀南" in w for w in warns), warns
     assert any("no peak/offpeak mark" in t for t in _texts(at))
-    assert any(t.startswith("Risk covers delivery months from ") for t in _texts(at))
+    assert any(t.startswith("VaR/delta cover months from ") and t.endswith("current delivery month excluded") for t in _texts(at))
     per_book = at.dataframe[0].value
     assert not any("delivered" in i for i in per_book.index) and len(per_book) == 12
     hist = {m.label: m.value for m in at.metric}
@@ -175,7 +175,8 @@ def test_forward_only_and_delivered():
     exp = pd.DataFrame({"delivery_month": [date(2026, 10, 1), date(2026, 11, 1), date(2026, 12, 1)],
                         "net_mwh": [1.0, 2.0, 3.0]})
     out = forward_only(exp, date(2026, 11, 15))
-    assert out["net_mwh"].tolist() == [2.0, 3.0]
+    assert out["net_mwh"].tolist() == [3.0]  # I1: current delivery month excluded
+    assert forward_only(exp, date(2026, 11, 1))["net_mwh"].tolist() == [2.0, 3.0]  # 1st: horizon starts Nov
     assert forward_only(exp.iloc[:0], date(2026, 11, 15)).empty
     assert is_delivered(date(2026, 10, 1), date(2026, 11, 1))
     assert not is_delivered(date(2026, 11, 1), date(2026, 11, 30))

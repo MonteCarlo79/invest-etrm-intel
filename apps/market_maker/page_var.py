@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from apps.market_maker.data import (
-    DASH, SERIES, book_name_map, fmt_num, forward_only, get_curve, month_label, month_start,
+    DASH, SERIES, book_name_map, coverage_note, fmt_num, forward_only, get_curve, month_label,
     price_scenarios, selected_positions,
 )
 from libs.risk.bess_greeks import bess_monthly_greeks
@@ -105,8 +105,7 @@ def render_var(engine, sel: dict) -> None:
     if pos.empty:
         st.info("No positions for the selected books and provinces — no delta or VaR to show.")
     else:
-        st.caption(f"Risk covers delivery months from {month_label(month_start(sel['as_of']))} on; "
-                   "the current month is partly delivered.")
+        st.caption(coverage_note(sel["as_of"]))
         exp = forward_only(exposure(pos, curve), sel["as_of"])
         if exp.empty:
             st.info("No open positions in forward delivery months — no delta or VaR to show.")

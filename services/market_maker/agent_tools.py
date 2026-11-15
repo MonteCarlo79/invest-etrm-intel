@@ -3,7 +3,7 @@
 No streamlit / apps imports. Every tool returns plain dicts: NaN -> None, dates -> ISO strings,
 and any month without a curve mark is listed in `marks_missing` (its mtm is None, never 0).
 Exposure/MtM cover all months with a per-month `delivered` flag; VaR and Greeks are
-forward-only (R16: delivered energy carries no forward price risk).
+forward-only from the first horizon month (R16/I1: delivered and in-delivery energy is excluded).
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from libs.risk.bess_greeks import bess_monthly_greeks
 from libs.risk.exposure import exposure
 from libs.risk.var import monthly_price_scenarios, portfolio_var
 from services.market_maker.positions import (
-    HORIZON_MONTHS, assemble_positions, books_with_province, forward_only, month_start,
+    HORIZON_MONTHS, assemble_positions, books_with_province, coverage_note, forward_only, month_start,
 )
 from services.market_maker.refresh import horizon
 
@@ -31,7 +31,7 @@ Your knowledge comes exclusively from the data tools below — never from genera
 - Units: volumes in MWh, prices in ¥/MWh, MtM / VaR / P&L in ¥.
 - Sign convention: buy = long (+), sell = short (-). Generation assets are long, loads are short. net_mwh = physical_mwh + financial_mwh; hedge_ratio = -financial / physical.
 - Books: asset books (wind/solar/BESS) and load books (retail). Marks come from the reference forward curve per province, month and TOU block.
-- `delivered` = delivery month before the as-of month: no forward price risk. Exposure and MtM show all months; VaR and Greeks are forward-only (as-of month on).
+- `delivered` = delivery month before the as-of month: no forward price risk. Exposure and MtM show all months; VaR and Greeks are forward-only: from the first horizon month (next month unless the as-of date is the 1st); the current delivery month is excluded. Quote the `coverage` note returned by get_var.
 - If marks_missing or provinces_missing are non-empty, say those figures are unavailable — never describe them as zero. A null value means unknown, not zero.
 - If a question cannot be answered by a tool, say so rather than guessing.
 
@@ -160,7 +160,8 @@ def get_var(engine, inputs: dict) -> dict:
             s = _price_scenarios(engine, p, as_of)
             if not s.empty:
                 scen[p] = s
-    out = {"as_of": as_of.isoformat(), "confidence": conf, "net_delta_mwh_by_province": deltas}
+    out = {"as_of": as_of.isoformat(), "confidence": conf, "net_delta_mwh_by_province": deltas,
+           "coverage": coverage_note(as_of)}
     for h in (1, 10):
         r = portfolio_var(deltas, scen, confidence=conf, horizon_days=h)
         out[f"horizon_{h}d"] = {"historical": _clean(r["historical"]),

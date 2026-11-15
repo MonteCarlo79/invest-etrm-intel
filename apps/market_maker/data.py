@@ -13,7 +13,7 @@ import streamlit as st
 from libs.curves.store import load_curve, load_spot_hourly
 from libs.risk.var import monthly_price_scenarios
 from services.market_maker.positions import (  # noqa: F401  (re-exported for the pages)
-    assemble_positions, books_with_province, forward_only, month_start,
+    assemble_positions, books_with_province, coverage_note, forward_only, month_start,
 )
 from services.market_maker.refresh import horizon
 
