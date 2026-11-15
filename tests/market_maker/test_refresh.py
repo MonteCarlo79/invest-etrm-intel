@@ -72,7 +72,11 @@ def _seed(c):
                    " annual_price_cny_mwh, annual_volume_mwh) VALUES (21,'2026-12-03',18,350,10),"
                    "(22,'2026-12-04',3,330,10)"))
     c.execute(text("INSERT INTO marketdata.wind_trades (asset_name, delivery_month, channel, energy_kind,"
-                   " volume_mwh, energy_price) VALUES ('新_悦盛昌渠#1期','2027-01-01','省内','正常',100,300)"))
+                   " volume_mwh, energy_price) VALUES ('新_悦盛昌渠#1期','2027-01-01','省内','正常',100,300),"
+                   "('other asset','2027-03-01','省内','正常',100,999)"))
+    # past-month traded point (outside the horizon) must not be saved (R14)
+    c.execute(text("INSERT INTO marketdata.rm_position_volumes (book_id, delivery_date, hour,"
+                   " annual_price_cny_mwh, annual_volume_mwh) VALUES (21,'2026-10-03',18,999,10)"))
     spot = [{"p": p, "t": datetime(2025, 12, 1) + timedelta(hours=h)}
             for p in ("河北南网", "蒙西") for h in range(72)]
     c.execute(text("INSERT INTO marketdata.spot_prices_hourly VALUES (:p,:t,400,NULL)"), spot)
@@ -138,7 +142,7 @@ def test_refresh_writes_asset_books_only_and_curves(engine):
     before = _counts(engine)
     out = rf.refresh(engine, AS_OF, horizon_months=12)
     assert out["books"] == {6: 12, 7: 12, 8: "no dispatch chain", 9: "no dispatch source",
-                            21: "in-memory", 22: "contracts assigned to book 21", 23: "no province"}
+                            21: "in-memory: 24 rows", 22: "contracts assigned to book 21", 23: "no province"}
     assert engine.chain_calls == [((2,), False)]
     with engine.connect() as c:
         phys = pd.read_sql(text("SELECT book_id, direction, volume_mwh, start_date, province FROM "
@@ -179,3 +183,67 @@ def test_dry_run_writes_nothing(engine):
     real = rf.refresh(engine, AS_OF, horizon_months=12)
     assert dry["books"] == real["books"] and dry["curves"] == real["curves"]
     assert dry["skipped"] == real["skipped"]
+
+
+def test_saved_curve_only_horizon_months(engine):
+    rf.refresh(engine, AS_OF, horizon_months=12)
+    with engine.connect() as c:
+        dd = [r[0] for r in c.execute(text("SELECT DISTINCT delivery_date FROM marketdata.rm_forward_curves"
+                                           " WHERE curve_date='2026-11-15'"))]
+    assert "2026-10-01" not in dd and "2027-03-01" not in dd  # past month; foreign wind asset
+    assert min(dd) == "2026-12-01"
+
+
+def test_book_error_isolated(engine, monkeypatch):
+    real = rf.replace_physical
+
+    def boom(eng, book_id, rows):
+        if book_id == 6:
+            raise RuntimeError("disk full")
+        return real(eng, book_id, rows)
+
+    monkeypatch.setattr(rf, "replace_physical", boom)
+    out = rf.refresh(engine, AS_OF, horizon_months=12)
+    assert out["books"][6] == "error: RuntimeError: disk full"
+    assert out["books"][7] == 12 and out["curves"] == {"冀南": 3, "蒙西": 5}
+    assert out["errors"] == [(6, "error: RuntimeError: disk full")]
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM marketdata.rm_positions WHERE source='physical'"
+                              " AND book_id=7")).scalar() == 12
+
+
+def test_curve_error_isolated(engine, monkeypatch):
+    real = rf.save_curve
+
+    def boom(eng, curve, curve_date):
+        if set(curve.province) == {"冀南"}:
+            raise ValueError("bad")
+        return real(eng, curve, curve_date=curve_date)
+
+    monkeypatch.setattr(rf, "save_curve", boom)
+    out = rf.refresh(engine, AS_OF, horizon_months=12)
+    assert out["curves"] == {"冀南": "error: ValueError: bad", "蒙西": 5}
+    assert out["errors"] == [("冀南", "error: ValueError: bad")]
+    assert out["books"][6] == 12
+
+
+def test_main_exit_codes(engine, monkeypatch):
+    monkeypatch.setattr(rf, "_engine", lambda: engine)
+    assert rf.main(["--as-of", "2026-11-15"]) == 0
+    monkeypatch.setattr(rf, "refresh", lambda *a, **k: {"books": {}, "curves": {}, "skipped": [],
+                                                        "errors": [(1, "error: X: y")], "warnings": []})
+    assert rf.main(["--as-of", "2026-11-15"]) == 1
+
+
+def test_stale_physical_rows_flagged(engine):
+    rf.refresh(engine, AS_OF, horizon_months=12)
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM marketdata.wind_dispatch_15min"))
+    out = rf.refresh(engine, AS_OF, horizon_months=12)
+    msg = out["books"][6]
+    assert msg.startswith("stale: kept 12 physical rows (last uploaded_at ")
+    assert (6, msg) in out["warnings"] and out["errors"] == []
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM marketdata.rm_positions WHERE source='physical'"
+                              " AND book_id=6")).scalar() == 12
+    assert out["books"][8] == "no dispatch chain"  # never had rows: plain skip

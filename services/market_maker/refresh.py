@@ -27,6 +27,7 @@ from libs.positions.store import (
 from libs.trading_book.registry import get_station
 
 WIND_DISPATCH_PLANT = {"lingt46": "悦盛昌渠风光储电站"}
+WIND_TRADES_ASSETS = {"蒙西": ["新_悦盛昌渠#1期"]}
 HISTORY_DAYS = 400
 _PV_COLS = ("delivery_date, hour, annual_price_cny_mwh, annual_volume_mwh,"
             " monthly_auction_price_cny_mwh, monthly_auction_volume_mwh,"
@@ -107,9 +108,10 @@ def _province_curve(engine, prov, load_book_ids, months, as_of) -> pd.DataFrame:
         pv = _read(engine, f"SELECT {_PV_COLS} FROM marketdata.rm_position_volumes"
                            " WHERE book_id IN :b", {"b": list(load_book_ids)}, "b")
         trades.append(trades_from_position_volumes(pv, prov))
-    if prov == "蒙西":
+    if prov in WIND_TRADES_ASSETS:
         wt = _read(engine, "SELECT delivery_month, channel, energy_kind, volume_mwh, energy_price"
-                           " FROM marketdata.wind_trades", {})
+                           " FROM marketdata.wind_trades WHERE asset_name IN :names",
+                   {"names": WIND_TRADES_ASSETS[prov]}, "names")
         for col in ("volume_mwh", "energy_price"):
             wt[col] = pd.to_numeric(wt[col], errors="coerce")
         trades.append(trades_from_wind_trades(wt, prov))
@@ -117,48 +119,81 @@ def _province_curve(engine, prov, load_book_ids, months, as_of) -> pd.DataFrame:
     traded = traded_points(pd.concat(trades, ignore_index=True)) if trades else None
     hourly = load_spot_hourly(engine, prov, as_of - timedelta(days=730), as_of)
     spot = spot_seasonal(hourly, prov, months)
-    return reference_curve(manual, traded, spot)
+    curve = reference_curve(manual, traded, spot)
+    return curve[curve["delivery_month"].isin(months)].reset_index(drop=True)  # R14
+
+
+def _physical_state(engine, book_id: int) -> tuple[int, object]:
+    with engine.connect() as c:
+        n, last = c.execute(text("SELECT count(*), max(uploaded_at) FROM marketdata.rm_positions"
+                                 " WHERE book_id = :b AND source = 'physical'"), {"b": book_id}).one()
+    return int(n), last
 
 
 def refresh(engine, as_of: date, horizon_months: int = 12, dry_run: bool = False) -> dict:
+    """Per-book / per-province failures are isolated: recorded as "error: ..." in
+    books/curves and listed in errors; the rest of the run continues."""
     months = horizon(as_of, horizon_months)
     start, end = as_of - timedelta(days=HISTORY_DAYS), as_of
     books = load_books(engine)
-    out: dict = {"books": {}, "curves": {}, "skipped": []}
+    out: dict = {"books": {}, "curves": {}, "skipped": [], "errors": [], "warnings": []}
 
-    def skip(bid, reason):
-        out["books"][bid] = reason
-        out["skipped"].append((bid, reason))
+    def fail(section, key, e):
+        msg = f"error: {type(e).__name__}: {e}"
+        out[section][key] = msg
+        out["errors"].append((key, msg))
 
     curve_provs: dict[str, list[int]] = {}
     for b in books[books["book_type"] == "asset"].itertuples(index=False):
         bid = int(b.book_id)
-        rows, reason = _asset_rows(engine, b, months, start, end)
-        if reason:
-            skip(bid, reason)
-            continue
-        out["books"][bid] = len(rows) if dry_run else replace_physical(engine, bid, rows)
-        curve_provs.setdefault(b.province, [])
+        try:
+            rows, reason = _asset_rows(engine, b, months, start, end)
+            if reason:
+                n, last = _physical_state(engine, bid)
+                if n:
+                    msg = f"stale: kept {n} physical rows (last uploaded_at {last})"
+                    out["books"][bid] = msg
+                    out["warnings"].append((bid, msg))
+                else:
+                    out["books"][bid] = reason
+                out["skipped"].append((bid, reason))
+                continue
+            out["books"][bid] = len(rows) if dry_run else replace_physical(engine, bid, rows)
+            curve_provs.setdefault(b.province, [])
+        except Exception as e:  # noqa: BLE001 — isolate per book
+            fail("books", bid, e)
 
     contract_owner: dict[str, int] = {}
     for b in books[books["book_type"] == "load"].sort_values("book_id").itertuples(index=False):
         bid = int(b.book_id)
-        prov = load_book_province(engine, bid)
-        if prov is None:
-            skip(bid, "no province")
-            continue
-        curve_provs.setdefault(prov, []).append(bid)
-        if prov in contract_owner:
-            out["books"][bid] = f"contracts assigned to book {contract_owner[prov]}"
-            continue
-        contract_owner[prov] = bid
-        load_book_physical(engine, bid, prov, months, as_of)  # validate; never persisted
-        out["books"][bid] = "in-memory"
+        try:
+            prov = load_book_province(engine, bid)
+            if prov is None:
+                out["books"][bid] = "no province"
+                out["skipped"].append((bid, "no province"))
+                continue
+            curve_provs.setdefault(prov, []).append(bid)
+            if prov in contract_owner:
+                out["books"][bid] = f"contracts assigned to book {contract_owner[prov]}"
+                continue
+            contract_owner[prov] = bid
+            n = len(load_book_physical(engine, bid, prov, months, as_of))  # never persisted (R13)
+            out["books"][bid] = f"in-memory: {n} rows"
+        except Exception as e:  # noqa: BLE001
+            fail("books", bid, e)
 
     for prov in sorted(curve_provs):
-        curve = _province_curve(engine, prov, curve_provs[prov], months, as_of)
-        out["curves"][prov] = len(curve) if dry_run else save_curve(engine, curve, curve_date=as_of)
+        try:
+            curve = _province_curve(engine, prov, curve_provs[prov], months, as_of)
+            out["curves"][prov] = len(curve) if dry_run else save_curve(engine, curve, curve_date=as_of)
+        except Exception as e:  # noqa: BLE001
+            fail("curves", prov, e)
     return out
+
+
+def _engine():
+    from services.retail_risk.loader import get_engine
+    return get_engine()
 
 
 def main(argv=None) -> int:
@@ -167,11 +202,14 @@ def main(argv=None) -> int:
     ap.add_argument("--horizon-months", type=int, default=12)
     ap.add_argument("--apply", action="store_true", help="write to the DB (default: summary only)")
     a = ap.parse_args(argv)
-    from services.retail_risk.loader import get_engine
-    res = refresh(get_engine(), a.as_of, a.horizon_months, dry_run=not a.apply)
+    res = refresh(_engine(), a.as_of, a.horizon_months, dry_run=not a.apply)
     print(("APPLIED" if a.apply else "DRY RUN (pass --apply to write)"))
     print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
-    return 0
+    for key, msg in res["warnings"]:
+        print(f"WARNING {key}: {msg}")
+    for key, msg in res["errors"]:
+        print(f"ERROR {key}: {msg}")
+    return 1 if res["errors"] else 0
 
 
 if __name__ == "__main__":
