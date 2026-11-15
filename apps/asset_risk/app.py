@@ -51,31 +51,36 @@ except Exception:
 
 st.title("Asset Risk Management")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+LABELS = [
     "Asset Config", "Settlement", "Realised P&L", "Agent",
-    "Dispatch Diagnostics", "收益瀑布 P&L Waterfall"
-])
+    "Dispatch Diagnostics", "收益瀑布 P&L Waterfall",
+]
 
-with tab1:
+# st.tabs executes every tab body on each rerun; a radio renders only the
+# selected page, so the waterfall LP / chain load run only when selected.
+page = st.radio("页面", LABELS, horizontal=True, key="asset_risk_page",
+                label_visibility="collapsed")
+
+if page == "Asset Config":
     from apps.asset_risk.tab_asset_config import render_asset_config
     render_asset_config(engine)
 
-with tab2:
+elif page == "Settlement":
     from apps.asset_risk.tab_settlement import render_settlement
     render_settlement(engine)
 
-with tab3:
+elif page == "Realised P&L":
     from apps.asset_risk.tab_pnl import render_pnl
     render_pnl(engine)
 
-with tab4:
+elif page == "Agent":
     from apps.asset_risk.tab_agent import render_agent
     render_agent(engine)
 
-with tab5:
+elif page == "Dispatch Diagnostics":
     from apps.asset_risk.tab_diagnostics import render_diagnostics
     render_diagnostics(engine)
 
-with tab6:
+elif page == "收益瀑布 P&L Waterfall":
     from apps.asset_risk.tab_waterfall import render_waterfall
     render_waterfall(engine)
