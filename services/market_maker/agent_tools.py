@@ -18,6 +18,7 @@ from libs.risk.exposure import exposure
 from libs.risk.var import monthly_price_scenarios, portfolio_var
 from services.market_maker.positions import (
     HORIZON_MONTHS, assemble_positions, books_with_province, coverage_note, forward_only, month_start,
+    skipped_notes,
 )
 from services.market_maker.refresh import horizon
 
@@ -33,6 +34,7 @@ Your knowledge comes exclusively from the data tools below — never from genera
 - Books: asset books (wind/solar/BESS) and load books (retail). Marks come from the reference forward curve per province, month and TOU block.
 - `delivered` = delivery month before the as-of month: no forward price risk. Exposure and MtM show all months; VaR and Greeks are forward-only: from the first horizon month (next month unless the as-of date is the 1st); the current delivery month is excluded. Quote the `coverage` note returned by get_var.
 - If marks_missing or provinces_missing are non-empty, say those figures are unavailable — never describe them as zero. A null value means unknown, not zero.
+- If a tool result has a non-empty 'skipped' list, state that these books/rows are excluded and the totals are incomplete.
 - If a question cannot be answered by a tool, say so rather than guessing.
 
 ## Question -> tool
@@ -109,7 +111,9 @@ def _ids(inputs: dict):
 
 def _exposure_frame(engine, inputs: dict, as_of: date) -> pd.DataFrame:
     pos = assemble_positions(engine, _ids(inputs), as_of)
-    return exposure(pos, load_curve(engine, None, as_of))
+    exp = exposure(pos, load_curve(engine, None, as_of))
+    exp.attrs["skipped"] = skipped_notes(pos)
+    return exp
 
 
 def _price_scenarios(engine, province: str, as_of: date) -> pd.Series:
@@ -135,7 +139,9 @@ def get_exposure(engine, inputs: dict) -> dict:
     exp = _exposure_frame(engine, inputs, as_of)
     cols = ["book_id", "province", "delivery_month", "tou_block", "physical_mwh", "financial_mwh",
             "net_mwh", "hedge_ratio"]
-    return _exposure_payload(exp, as_of, cols)
+    out = _exposure_payload(exp, as_of, cols)
+    out["skipped"] = skipped_notes(exp)
+    return out
 
 
 def get_mtm(engine, inputs: dict) -> dict:
@@ -152,7 +158,8 @@ def get_mtm(engine, inputs: dict) -> dict:
 def get_var(engine, inputs: dict) -> dict:
     as_of = _today()
     conf = float(inputs.get("confidence", 0.95))
-    exp = forward_only(_exposure_frame(engine, inputs, as_of), as_of)
+    full = _exposure_frame(engine, inputs, as_of)
+    exp = forward_only(full, as_of)
     deltas = exp.groupby("province")["net_mwh"].sum().to_dict() if not exp.empty else {}
     scen = {}
     for p, d in deltas.items():
@@ -161,7 +168,7 @@ def get_var(engine, inputs: dict) -> dict:
             if not s.empty:
                 scen[p] = s
     out = {"as_of": as_of.isoformat(), "confidence": conf, "net_delta_mwh_by_province": deltas,
-           "coverage": coverage_note(as_of)}
+           "coverage": coverage_note(as_of), "skipped": skipped_notes(full)}
     for h in (1, 10):
         r = portfolio_var(deltas, scen, confidence=conf, horizon_days=h)
         out[f"horizon_{h}d"] = {"historical": _clean(r["historical"]),

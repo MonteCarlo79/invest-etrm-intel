@@ -21,9 +21,11 @@ HORIZON_MONTHS = 12
 def books_with_province(engine) -> pd.DataFrame:
     """rm_books + asset attributes; load books get their position-derived province."""
     books = load_books(engine)
+    notes = skipped_notes(books)
     for i, b in books.iterrows():
         if b["book_type"] == "load" and pd.isna(b["province"]):
             books.at[i, "province"] = load_book_province(engine, int(b["book_id"]))
+    books.attrs["skipped"] = notes  # load_books' skipped books (unmapped asset province)
     return books
 
 
@@ -49,9 +51,10 @@ def _wind_trade_rows(engine, book, months: list[date]) -> pd.DataFrame:
 def assemble_positions(engine, book_ids: list[int] | None, as_of: date) -> pd.DataFrame:
     """Full book: stored rows + in-memory rows (R13): load-book contract shorts (owner book only,
     R3) and wind_trades forward sells of mapped wind books. None = all books."""
-    books = load_books(engine)
+    books = books_with_province(engine)
     ids = [int(b) for b in books["book_id"]] if book_ids is None else [int(b) for b in book_ids]
-    frames = [load_positions(engine, ids)]
+    stored = load_positions(engine, ids)
+    frames = [stored]
     months = horizon(as_of, HORIZON_MONTHS)
     for bid, prov in contract_owners(engine, books).items():
         if bid in ids:
@@ -59,9 +62,20 @@ def assemble_positions(engine, book_ids: list[int] | None, as_of: date) -> pd.Da
     for _, b in books[(books["book_type"] == "asset") & books["book_id"].isin(ids)].iterrows():
         frames.append(_wind_trade_rows(engine, b, months))
     frames = [f for f in frames if not f.empty]
-    if not frames:
-        return pd.DataFrame(columns=POSITION_COLUMNS)
-    return pd.concat(frames, ignore_index=True)
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=POSITION_COLUMNS)
+    out.attrs["skipped"] = skipped_notes(books, stored)  # pd.concat drops attrs: re-attach
+    return out
+
+
+def skipped_notes(*frames) -> list[str]:
+    """I6: books / rows skipped on read (unmapped province), from frames' attrs, de-duplicated.
+    Non-empty means the totals built from these frames are incomplete."""
+    notes: list[str] = []
+    for f in frames:
+        for n in (getattr(f, "attrs", None) or {}).get("skipped", []):
+            if n not in notes:
+                notes.append(n)
+    return notes
 
 
 def month_start(as_of) -> date:

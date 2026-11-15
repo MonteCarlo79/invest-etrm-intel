@@ -217,3 +217,19 @@ def test_refresh_button_uses_today_not_sidebar_as_of(tmp_path, monkeypatch):
     at.button(key="mm_refresh").click().run()
     assert not at.exception, [e.message for e in at.exception]
     assert seen == [date.today()]
+
+
+def test_skipped_province_warned_on_exposure_and_var(tmp_path, monkeypatch):
+    def seed(c):
+        _seed(c)
+        c.execute(text("INSERT INTO marketdata.rm_assets (id, name, asset_type, province, asset_code)"
+                       " VALUES (99,'湖北站','wind','hubei','hb')"))
+        c.execute(text("INSERT INTO marketdata.rm_books VALUES (99,'hubei wind','asset',99)"))
+    _make_db(tmp_path, monkeypatch, seed)
+    for label in ("Exposure & MtM", "VaR & Greeks"):
+        at = _page(label)
+        warns = [w.value for w in at.warning]
+        assert any(w.startswith("Excluded (unmapped province)") and "book 99" in w for w in warns), \
+            (label, warns)
+    at = _page("Exposure & MtM")
+    assert "Current delivery month shown here but excluded from VaR/delta." in _texts(at)

@@ -50,3 +50,40 @@ def test_province_contract_short_counted_once(engine):
     only22 = assemble_positions(engine, [22], AS_OF)
     assert not (only22["basis"] == "contract_forecast").any()
     assert rf.contract_owners(engine, rf.load_books(engine)) == {21: "冀南"}
+
+
+def _add_unmapped(eng):
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO marketdata.rm_assets VALUES (9,'湖北站','wind','hubei',50,NULL,'hb')"))
+        c.execute(text("INSERT INTO marketdata.rm_books VALUES (30,'hubei wind','asset',9)"))
+        c.execute(text("INSERT INTO marketdata.rm_positions (book_id, instrument_type, province, channel,"
+                       " direction, volume_mwh, price_cny_mwh, start_date, end_date, status, source)"
+                       " VALUES (21,'bilateral','火星','annual','buy',100,380,'2026-12-01','2026-12-31',"
+                       "'open','bilateral')"))
+
+
+def test_skipped_notes_survive_assembly(engine):
+    from services.market_maker.positions import books_with_province, skipped_notes
+    _add_unmapped(engine)
+    books = books_with_province(engine)
+    assert 30 not in set(books["book_id"])
+    assert any("book 30" in n and "hubei" in n for n in skipped_notes(books))
+    pos = assemble_positions(engine, None, AS_OF)
+    notes = skipped_notes(pos)
+    assert any("book 30" in n for n in notes) and any("火星" in n for n in notes)
+    assert not (pos["province"] == "火星").any()
+    clean = assemble_positions(engine, [7], AS_OF)
+    assert any("book 30" in n for n in skipped_notes(clean))  # book-level skip still reported
+    assert skipped_notes(pd.DataFrame()) == []
+
+
+def test_contract_owners_reuses_books_province(engine, monkeypatch):
+    from services.market_maker.positions import books_with_province
+    books = books_with_province(engine)
+
+    def no_query(*a, **k):
+        raise AssertionError("contract_owners must not query when province is known")
+
+    monkeypatch.setattr(rf, "load_book_province", no_query)
+    known = books[books["province"].notna() | (books["book_type"] != "load")]
+    assert rf.contract_owners(engine, known) == {21: "冀南"}

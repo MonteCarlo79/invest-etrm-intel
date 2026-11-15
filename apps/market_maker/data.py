@@ -14,6 +14,7 @@ from libs.curves.store import load_curve, load_spot_hourly
 from libs.risk.var import monthly_price_scenarios
 from services.market_maker.positions import (  # noqa: F401  (re-exported for the pages)
     assemble_positions, books_with_province, coverage_note, forward_only, month_start,
+    skipped_notes,
 )
 from services.market_maker.refresh import horizon
 
@@ -66,7 +67,16 @@ def sidebar_selection(engine, books: pd.DataFrame, today: date) -> dict:
 
 def selected_positions(engine, sel: dict) -> pd.DataFrame:
     pos = book_positions(engine, sel["book_ids"], sel["as_of"])
-    return pos[pos["province"].isin(sel["provinces"])].reset_index(drop=True)
+    out = pos[pos["province"].isin(sel["provinces"])].reset_index(drop=True)
+    out.attrs["skipped"] = skipped_notes(pos, sel["books"])
+    return out
+
+
+def warn_skipped(pos: pd.DataFrame) -> None:
+    """I6: unmapped-province books/rows are excluded on read; say so — totals are incomplete."""
+    notes = skipped_notes(pos)
+    if notes:
+        st.warning("Excluded (unmapped province) — totals below are incomplete: " + "; ".join(notes))
 
 
 def book_name_map(sel: dict) -> dict[int, str]:

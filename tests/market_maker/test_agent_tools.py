@@ -153,3 +153,27 @@ def test_import_is_streamlit_and_apps_free(mod):
             "print(bad); sys.exit(1 if bad else 0)" % mod)
     r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_skipped_notes_in_var_and_exposure(monkeypatch):
+    pos = _pos([dict(volume_mwh=1000)])
+    pos.attrs["skipped"] = ["book 30: unknown province: 'hubei'"]
+    monkeypatch.setattr(at, "assemble_positions", lambda e, ids, a: pos)
+    monkeypatch.setattr(at, "load_curve", lambda e, p, a: _curve(M1))
+    monkeypatch.setattr(at, "_price_scenarios", lambda e, p, a: pd.Series(dtype=float))
+    monkeypatch.setattr(at, "_today", lambda: AS_OF)
+    for tool in ("get_var", "get_exposure"):
+        r = at.execute_tool(tool, {}, object())
+        assert r["skipped"] == ["book 30: unknown province: 'hubei'"], tool
+        json.dumps(r)
+
+
+def test_skipped_empty_when_clean(wired, monkeypatch):
+    monkeypatch.setattr(at, "_price_scenarios", lambda e, p, a: pd.Series(dtype=float))
+    assert at.execute_tool("get_var", {}, object())["skipped"] == []
+    assert at.execute_tool("get_exposure", {}, object())["skipped"] == []
+
+
+def test_prompt_mentions_skipped():
+    assert ("If a tool result has a non-empty 'skipped' list, state that these books/rows are "
+            "excluded and the totals are incomplete.") in at.AGENT_BASE_SYSTEM

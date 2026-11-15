@@ -8,7 +8,7 @@ import streamlit as st
 
 from apps.market_maker.data import (
     DASH, PHYS_FIN_COLORS, book_name_map, fmt_num, get_curve, is_delivered, month_label,
-    selected_positions,
+    selected_positions, warn_skipped,
 )
 from libs.risk.exposure import exposure
 
@@ -25,10 +25,12 @@ def _layout(fig, title: str, ytitle: str):
 def render_exposure(engine, sel: dict) -> None:
     st.subheader("Exposure & MtM")
     pos = selected_positions(engine, sel)
+    warn_skipped(pos)
     if pos.empty:
         st.info("No positions for the selected books and provinces — no exposure to show.")
         return
     st.caption("Months marked (delivered) are before the as-of month and carry no forward price risk.")
+    st.caption("Current delivery month shown here but excluded from VaR/delta.")
     exp = exposure(pos, get_curve(engine, sel["as_of"]))
     names = book_name_map(sel)
     exp["month"] = [month_label(m) + (" (delivered)" if is_delivered(m, sel["as_of"]) else "")

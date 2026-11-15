@@ -7,7 +7,7 @@ import streamlit as st
 
 from apps.market_maker.data import (
     DASH, SERIES, book_name_map, coverage_note, fmt_num, forward_only, get_curve, month_label,
-    price_scenarios, selected_positions,
+    price_scenarios, selected_positions, warn_skipped,
 )
 from libs.risk.bess_greeks import bess_monthly_greeks
 from libs.risk.exposure import exposure
@@ -102,6 +102,7 @@ def render_var(engine, sel: dict) -> None:
     st.subheader("VaR & Greeks")
     curve = get_curve(engine, sel["as_of"])
     pos = selected_positions(engine, sel)
+    warn_skipped(pos)
     if pos.empty:
         st.info("No positions for the selected books and provinces — no delta or VaR to show.")
     else:

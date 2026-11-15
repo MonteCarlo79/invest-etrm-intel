@@ -114,10 +114,14 @@ def wind_trades_frame(engine, prov: str) -> pd.DataFrame:
 
 def contract_owners(engine, books: pd.DataFrame) -> dict[int, str]:
     """R3: {load book_id: province} for the book that owns the province's retail contracts —
-    the lowest book_id load book in that province (same rule as refresh())."""
+    the lowest book_id load book in that province (same rule as refresh()). Uses the books
+    frame's province when set (books_with_province); queries only for missing ones."""
     owners: dict[str, int] = {}
-    for bid in sorted(int(b) for b in books.loc[books["book_type"] == "load", "book_id"]):
-        prov = load_book_province(engine, bid)
+    load = books[books["book_type"] == "load"].sort_values("book_id")
+    for bid, prov in zip(load["book_id"], load["province"]):
+        bid = int(bid)
+        if not isinstance(prov, str):
+            prov = load_book_province(engine, bid)
         if prov is not None and prov not in owners:
             owners[prov] = bid
     return {bid: prov for prov, bid in owners.items()}
