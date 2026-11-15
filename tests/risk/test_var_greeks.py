@@ -187,3 +187,18 @@ def test_portfolio_var_all_thin_returns_none_with_missing():
     out = portfolio_var({"蒙西": 10.0}, {"蒙西": pd.Series([1.0, 2, 3, 4, 5], index=idx)})
     assert out["historical"] is None and out["n_scenarios"] == 5
     assert out["provinces_missing"] == ["蒙西"]
+
+
+def test_bess_greeks_non_positive_mark_is_flagged_not_crash():
+    # Prod 2026-11-16: 蒙西 2027-02 offpeak mark −4.86 → math domain error in Margrabe log.
+    curve = pd.DataFrame([
+        {"province": "蒙西", "delivery_month": dt.date(2027, 2, 1), "tou_block": "peak", "price_cny_mwh": 88.3, "source": "spot_seasonal"},
+        {"province": "蒙西", "delivery_month": dt.date(2027, 2, 1), "tou_block": "offpeak", "price_cny_mwh": -4.86, "source": "spot_seasonal"},
+        {"province": "蒙西", "delivery_month": dt.date(2027, 3, 1), "tou_block": "peak", "price_cny_mwh": 146.6, "source": "spot_seasonal"},
+        {"province": "蒙西", "delivery_month": dt.date(2027, 3, 1), "tou_block": "offpeak", "price_cny_mwh": 39.2, "source": "spot_seasonal"},
+    ], columns=CURVE_COLUMNS)
+    g = bess_monthly_greeks(100, 2, 0.85, [dt.date(2027, 2, 1), dt.date(2027, 3, 1)], curve, "蒙西",
+                            0.6, 0.6, as_of=dt.date(2026, 11, 16))
+    feb, mar = g.iloc[0], g.iloc[1]
+    assert math.isnan(feb["value_cny"]) and "undefined" in feb["note"]
+    assert mar["note"] == "" and mar["value_cny"] > 0

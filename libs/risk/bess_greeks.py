@@ -63,6 +63,9 @@ def bess_monthly_greeks(power_mw, duration_h, roundtrip_eff, months: list[date],
             rows.append([m, n, pk if pk is not None else nan, off if off is not None else nan,
                          nan, nan, nan, nan, "no peak/offpeak mark"])
             continue
+        if min(pk, off) <= 1.0:  # lognormal Margrabe needs F > 0; ±1 bump needs F > 1 (蒙西 has negative offpeak months)
+            rows.append([m, n, pk, off, nan, nan, nan, nan, "mark <= 1 ¥/MWh: lognormal strip undefined"])
+            continue
         v = value(pk, off, peak_vol, offpeak_vol, d0, n)
         dpk = (value(pk + 1, off, peak_vol, offpeak_vol, d0, n)
                - value(pk - 1, off, peak_vol, offpeak_vol, d0, n)) / 2.0
