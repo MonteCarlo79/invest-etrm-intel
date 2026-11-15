@@ -327,3 +327,60 @@ def test_get_waterfall_passes_inputs_key(wf_engine, _fake_legs, monkeypatch):
     _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-06"]}, wf_engine)
     expected = ls.legs_inputs_key(100.0, 4.0, "2024-06-01", 350.0)
     assert seen == [("benchmark", expected), ("forecast", expected)]
+
+
+def _add_chain_month(eng, day):
+    with eng.begin() as conn:
+        for i in range(8):
+            h, m = divmod(i * 15, 60)
+            mw = 10.0 if i < 4 else -10.0
+            conn.execute(text(
+                "INSERT INTO marketdata.rm_dispatch_chain "
+                "(asset_id, interval_start, nominated_mw, da_cleared_mw, rt_cleared_mw, "
+                "actual_mw) VALUES (1, :ts, :mw, :mw, :mw, :mw)"),
+                {"ts": f"{day} {h:02d}:{m:02d}:00", "mw": mw})
+            h2, m2 = divmod((i + 1) * 15, 60)
+            conn.execute(text(
+                "INSERT INTO marketdata.md_id_cleared_energy VALUES (:p, :ts, :d, :price, :mw)"),
+                {"p": _PLANT, "ts": f"{day} {h2:02d}:{m2:02d}:00", "d": day,
+                 "price": 300.0 if i < 4 else 100.0, "mw": mw})
+
+
+_BILL_ROWS = ("容量补偿", "系统运行费+线损", "其他费用", "结算口径/价格基差")
+
+
+def test_get_waterfall_unbilled_month_is_not_zero(wf_engine, _fake_legs):
+    _add_chain_month(wf_engine, "2026-07-01")
+    r = _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-07"]}, wf_engine)
+    assert r["stage_totals"]["实际"] is None
+    assert r["stage_totals"]["Δ执行与费用"] is None
+    assert r["stage_totals"]["出清"] == pytest.approx(5500.0)
+    assert r["actual_bills_missing"] == ["悦杭独贵 2026-07"]
+    assert r["actual_complete"] is False
+    assert "不代表收入为零" in r["note"] and "悦杭独贵 2026-07" in r["note"]
+    exec_rows = [x for x in r["attribution"] if x["偏差区间"] == "Δ执行与费用"]
+    for x in exec_rows:
+        if x["成因"].startswith(_BILL_ROWS):
+            assert x["cny"] is None, x["成因"]
+    chain_rows = [x for x in exec_rows if x["成因"].startswith("设备非响应事件")]
+    assert chain_rows and chain_rows[0]["cny"] is not None
+    json.dumps(r)
+
+
+def test_get_waterfall_partial_months_lists_only_unbilled(wf_engine, _fake_legs):
+    _add_chain_month(wf_engine, "2026-07-01")
+    r = _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-06", "2026-07"]},
+                      wf_engine)
+    assert r["actual_bills_missing"] == ["悦杭独贵 2026-07"]
+    assert r["actual_complete"] is False and r["stage_totals"]["实际"] is None
+
+
+def test_get_waterfall_all_billed_complete(wf_engine, _fake_legs):
+    r = _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-06"]}, wf_engine)
+    assert r["actual_complete"] is True and r["actual_bills_missing"] == []
+    assert "note" not in r
+
+
+def test_system_prompt_missing_bills_rule():
+    flat = " ".join(_AGENT_BASE_SYSTEM.split())
+    assert "actual_complete=false" in flat and "never describe 实际 or Δ执行与费用" in flat

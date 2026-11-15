@@ -12,6 +12,9 @@ Your knowledge comes exclusively from the data tools below — never from genera
 training data or external information. Do not state any P&L, waterfall, diagnostic,
 merchant-share or deviation figure unless it was returned by a tool call in this
 conversation.
+If a tool returns actual_complete=false / actual_bills_missing, say settlement bills
+for those asset-months are not yet ingested; never describe 实际 or Δ执行与费用 for
+them as zero, collapsed, or a loss.
 
 ## Domain conventions
 - Money: CNY (元). Energy volumes: MWh. Prices: ¥/MWh unless stated otherwise.
@@ -285,6 +288,7 @@ def _get_waterfall(inputs: dict, engine) -> dict:
     bench = pd.DataFrame(bench_rows) if bench_rows else pd.DataFrame(
         columns=["asset", "month", "arb_cny", "dis_mwh", "cap_cny"])
 
+    missing = wf_mod.missing_bill_keys(actual, assets["name"].tolist(), months)
     if actual.empty:
         actual = pd.DataFrame([{"asset": n, "month": m, "arb_cny": 0.0, "cap_cny": 0.0,
                                 "fee_cny": 0.0, "other_cny": 0.0}
@@ -294,11 +298,26 @@ def _get_waterfall(inputs: dict, engine) -> dict:
     stage_totals = {s: float(wf.loc[wf["stage"] == s, "cny"].sum()) for s in wf_mod._STAGES}
     attr = wf_mod.attribution_rows(df, wf, bench, nominated, cleared, actual, bench_rows)
     attr = attr.drop(columns=[c for c in attr.columns if c.endswith("_fmt")])
-    return {
+    missing_labels = [f"{a} {m}" for a, m in missing]
+    if missing:
+        stage_totals["实际"] = None
+        stage_totals["Δ执行与费用"] = None
+        bill_rows = ((attr["偏差区间"] == "Δ执行与费用")
+                     & attr["成因"].str.startswith(wf_mod.BILL_DEPENDENT_CAUSES))
+        attr["cny"] = attr["cny"].astype(object)
+        attr.loc[bill_rows, "cny"] = None
+        attr["mwh"] = attr["mwh"].astype(object)
+        attr.loc[bill_rows, "mwh"] = None
+    out = {
         "stage_totals": stage_totals,
         "attribution": _records(attr),
         "cleared_untrusted": [f"{a} {m}" for a, m in cleared_untrusted],
+        "actual_bills_missing": missing_labels,
+        "actual_complete": not missing,
     }
+    if missing:
+        out["note"] = wf_mod.MISSING_BILLS_NOTE.format(keys="、".join(missing_labels))
+    return out
 
 
 def _get_merchant_share(inputs: dict, engine) -> dict:

@@ -418,3 +418,13 @@ def test_stage_arbitrage_empty_frame_keeps_columns():
     # the cap line must not crash on it
     capped = stage_capacity(out["dis_mwh"], out["asset"], {})
     assert len(capped) == 0
+
+
+# --- F5: missing bills ----------------------------------------------------------
+
+def test_missing_bill_keys():
+    from libs.asset_risk.waterfall import missing_bill_keys
+    actual = pd.DataFrame({"asset": ["A1"], "month": ["2026-09"]})
+    assert missing_bill_keys(actual, ["A1", "A2"], ["2026-09", "2026-10"]) == [
+        ("A1", "2026-10"), ("A2", "2026-09"), ("A2", "2026-10")]
+    assert missing_bill_keys(pd.DataFrame(), ["A1"], ["2026-09"]) == [("A1", "2026-09")]

@@ -82,6 +82,20 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
 # Stage math (pure)
 # ---------------------------------------------------------------------------
 
+def missing_bill_keys(actual, assets, months):
+    """(asset, month) pairs with no settlement-bill row — bills usually land
+    mid next month, so these must not be read as zero revenue."""
+    have = set(zip(actual["asset"], actual["month"])) if not actual.empty else set()
+    return [(a, m) for a in assets for m in months if (a, m) not in have]
+
+
+MISSING_BILLS_NOTE = ("以下资产×月份尚无结算单（通常次月中旬发布）：{keys}；"
+                      "实际段与Δ执行与费用不可用，不代表收入为零。")
+
+# Δ执行与费用 attribution rows whose value depends on the settlement bills.
+BILL_DEPENDENT_CAUSES = ("容量补偿", "系统运行费+线损", "其他费用", "结算口径/价格基差")
+
+
 def stage_arbitrage(df: pd.DataFrame, mw_col: str) -> pd.DataFrame:
     """Per (asset, month): discharge/charge volumes and arbitrage ¥ for a MW column.
 

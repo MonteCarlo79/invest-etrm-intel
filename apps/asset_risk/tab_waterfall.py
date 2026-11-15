@@ -295,6 +295,10 @@ def render_waterfall(engine):
         st.caption("投资标准价格回退：以下资产当月出清电价无完整日（缺口 ~32%），"
                    f"投资标准按节点填充电价计算：{'、'.join(noted)}")
 
+    missing_bills = _wf.missing_bill_keys(actual, assets["name"].tolist(), sel_months)
+    if missing_bills:
+        st.warning(_wf.MISSING_BILLS_NOTE.format(
+            keys="、".join(f"{a} {m}" for a, m in missing_bills)))
     actual_has_bills = not actual.empty and len(actual) > 0
     if not actual_has_bills:
         actual = pd.DataFrame([{"asset": n, "month": m, "arb_cny": 0.0, "cap_cny": 0.0,
