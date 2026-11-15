@@ -4,8 +4,7 @@ from __future__ import annotations
 import pandas as pd
 from sqlalchemy import bindparam, inspect, text
 
-from libs.asset_risk.diagnostics import AUTO_NOM_CODE, PLANT_MAP
-from libs.asset_risk.registry import asset_identity, has_asset_code
+from libs.asset_risk.registry import asset_identity
 
 # md_id_cleared_energy row stamped D = chain slot D+15min, for BOTH
 # cleared_energy_mwh and cleared_price (same row). Owner decision 2026-11-15:
@@ -67,10 +66,9 @@ def _asset_keys(engine, asset_ids: list[int], nom_code_map: dict[str, str] | Non
                 plant_map: dict[str, str] | None) -> pd.DataFrame:
     """(asset_id, asset, capacity_mw, asset_code, plant_names) per requested id.
 
-    Post-migration (rm_assets.asset_code present): code + ALL exchange plant
-    names from the registry identity frame (武川 has two accounts). Pre-migration:
-    nom_code_map / plant_map (None → the legacy literal AUTO_NOM_CODE / PLANT_MAP),
-    one plant name per asset — exactly today's behaviour for the six stations.
+    Code + ALL exchange plant names from the registry identity frame (武川 has
+    two accounts); nom_code_map / plant_map are accepted for signature
+    compatibility and ignored.
     """
     with engine.connect() as conn:
         a = pd.read_sql(
@@ -79,15 +77,9 @@ def _asset_keys(engine, asset_ids: list[int], nom_code_map: dict[str, str] | Non
             .bindparams(bindparam("ids", expanding=True)),
             conn, params={"ids": asset_ids})
     a["asset_id"] = a["asset_id"].astype(int)
-    if has_asset_code(engine):
-        ident = asset_identity(engine).set_index("asset_id")
-        a["asset_code"] = [ident["asset_code"].get(i) for i in a["asset_id"]]
-        a["plant_names"] = [tuple(ident["plant_names"].get(i) or ()) for i in a["asset_id"]]
-    else:
-        codes = AUTO_NOM_CODE if nom_code_map is None else nom_code_map
-        plants = PLANT_MAP if plant_map is None else plant_map
-        a["asset_code"] = [codes.get(n) for n in a["asset"]]
-        a["plant_names"] = [(plants[n],) if n in plants else () for n in a["asset"]]
+    ident = asset_identity(engine).set_index("asset_id")
+    a["asset_code"] = [ident["asset_code"].get(i) for i in a["asset_id"]]
+    a["plant_names"] = [tuple(ident["plant_names"].get(i) or ()) for i in a["asset_id"]]
     return a
 
 

@@ -4,7 +4,7 @@ against the live DB by callers, not here.
 """
 from datetime import date
 
-from services.mengxi_nodal.settlement_bridge import _DDL, _RM_ASSET_NAME, _spread_lump
+from services.mengxi_nodal.settlement_bridge import _DDL, _spread_lump
 
 
 def test_ddl_has_accrual_grade():
@@ -37,31 +37,6 @@ def test_spread_lump_residual_lands_on_last_day():
 def test_spread_lump_single_day_and_negative():
     rows = _spread_lump(-500.0, date(2026, 3, 31), date(2026, 3, 31))
     assert rows == [(date(2026, 3, 31), -500.0, "accrual")]
-
-
-def test_book_name_map_covers_settlement_capable_stations():
-    # Every station with a settlement read path (full / settlement_only) must
-    # resolve to an rm_assets.name; registry_only stations are pre-mapped only
-    # when an rm entry already exists (wuchuan/alashan) — the refresh writer
-    # skips them loudly either way.
-    from libs.trading_book.registry import get_stations
-    for s in get_stations():
-        if s.data_path != "registry_only":
-            assert _RM_ASSET_NAME[s.asset_code]
-
-
-def test_task11_rm_names():
-    # Verified against the rm_assets probe (task brief).
-    assert _RM_ASSET_NAME["wuhai"] == "乌海康富"
-    assert _RM_ASSET_NAME["wuchuan"] == "武川"
-    assert _RM_ASSET_NAME["alashan"] == "阿拉善储能"
-    assert _RM_ASSET_NAME["lingt46"] == "零碳46风电"
-
-
-def test_wind_without_rm_book_absent_from_map():
-    # W-3/W-4 have no rm_assets entry — deliberately unmapped.
-    assert "alashanzuoqi" not in _RM_ASSET_NAME
-    assert "erlian" not in _RM_ASSET_NAME
 
 
 def test_registry_only_stations_skip_loudly(capsys):

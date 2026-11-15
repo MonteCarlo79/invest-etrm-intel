@@ -19,13 +19,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
-from libs.asset_risk.registry import has_asset_code
 
 # PLANT/ASSET key wind_dispatch_15min / wind_settlement_monthly, whose names differ
 # from the registry's lingt46 plant name — kept literal on purpose.
 PLANT = "悦盛昌渠风光储电站"
 ASSET = "新_悦盛昌渠#1期"
-BOOK_ID = 6  # fallback when rm_assets has no asset_code column / no lingt46 book
+BOOK_ID = 6  # fallback when no lingt46 book row is found
 WIND_ASSET_CODE = "lingt46"
 WIND_LABEL = "零碳46风电(悦盛昌渠)"
 
@@ -68,9 +67,7 @@ def _load_monthly(_engine) -> pd.DataFrame:
 
 def _book_id(engine) -> int:
     """rm_books id of the lingt46 asset book (via rm_assets.asset_code); BOOK_ID
-    when the column is missing (pre-migration) or no book is found."""
-    if not has_asset_code(engine):
-        return BOOK_ID
+    when no book is found."""
     with engine.connect() as conn:
         bid = conn.execute(text(
             "SELECT b.id FROM marketdata.rm_books b "

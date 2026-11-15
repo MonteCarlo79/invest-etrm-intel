@@ -5,12 +5,12 @@ import numpy as np
 import pandas as pd
 
 from libs.asset_risk.registry import (
-    asset_identity, capcomp_rate_map, has_asset_code, nom_code_map, plant_map,
+    asset_identity, capcomp_rate_map, nom_code_map, plant_map,
 )
 from libs.trading_book.registry import get_station
 
-# Legacy literal maps — read only as the fallback when rm_assets has no asset_code
-# column yet (pre-migration); render paths get their maps from load_maps().
+# Legacy literal maps — no longer used by load_maps()/chain_asset_names(); kept only
+# for scripts/asset_risk/probe_identity.py and benchmark_leg's asset_code default.
 # rm_assets.name → md_id_cleared_energy.plant_name (validated map)
 PLANT_MAP = {
     "悦杭独贵": "悦杭独贵储能电站",
@@ -47,9 +47,7 @@ def load_maps(engine) -> tuple[dict[str, str], dict[str, str], dict[str, float]]
     """(plant_map_first_name, nom_code_map, capcomp_rate_map) keyed by rm_assets.name,
     derived from the registry identity frame. Multi-account stations (武川) map to
     their FIRST plant name here (prices); cross-account cleared sums are Task 11.
-    Pre-migration (no asset_code column) → the legacy literal dicts."""
-    if not has_asset_code(engine):
-        return dict(PLANT_MAP), dict(AUTO_NOM_CODE), dict(CAPCOMP_RATE)
+"""
     ident = asset_identity(engine)
     pm = {n: names[0] for n, names in plant_map(ident).items() if names}
     return pm, nom_code_map(ident), capcomp_rate_map(ident)
@@ -58,9 +56,7 @@ def load_maps(engine) -> tuple[dict[str, str], dict[str, str], dict[str, float]]
 def chain_asset_names(engine) -> set[str]:
     """rm_assets names eligible for the dispatch-chain tabs: registry station with
     data_path 'full' and at least one cleared plant name (keeps settlement_only
-    乌海/零碳46 out). Pre-migration → the legacy six (PLANT_MAP keys)."""
-    if not has_asset_code(engine):
-        return set(PLANT_MAP)
+    乌海/零碳46 out)."""
     ident = asset_identity(engine)
     return {r.name for r in ident.itertuples()
             if r.asset_code and r.plant_names and get_station(r.asset_code).data_path == "full"}

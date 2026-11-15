@@ -193,7 +193,8 @@ def wf_engine():
         conn.execute(text("ATTACH DATABASE ':memory:' AS marketdata"))
         conn.execute(text("CREATE TABLE marketdata.rm_assets "
                           "(id INTEGER PRIMARY KEY, name TEXT, asset_type TEXT, province TEXT, "
-                          "capacity_mw REAL, bess_duration_h REAL, commission_date TEXT)"))
+                          "capacity_mw REAL, bess_duration_h REAL, commission_date TEXT, "
+                          "asset_code TEXT)"))
         conn.execute(text("CREATE TABLE marketdata.rm_books "
                           "(id INTEGER PRIMARY KEY, name TEXT, book_type TEXT, asset_id INTEGER)"))
         conn.execute(text("CREATE TABLE marketdata.rm_settlements "
@@ -217,7 +218,7 @@ def wf_engine():
                           "source_file TEXT, created_at TEXT, "
                           "PRIMARY KEY (asset_code, data_date, slot))"))
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
-                          "(1, '悦杭独贵', 'bess', '内蒙古', 100, 4.0, '2024-06-01')"))
+                          "(1, '悦杭独贵', 'bess', '内蒙古', 100, 4.0, '2024-06-01', 'hangjinqi')"))
         conn.execute(text("INSERT INTO marketdata.rm_books VALUES (1, 'B1', 'asset', 1)"))
         conn.execute(text("INSERT INTO marketdata.rm_settlements VALUES (1, 1, '2026-06-01')"))
         conn.execute(text("INSERT INTO marketdata.rm_settlement_items "

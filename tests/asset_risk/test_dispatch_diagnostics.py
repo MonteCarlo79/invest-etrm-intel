@@ -28,7 +28,7 @@ def sqlite_engine():
         conn.execute(text("ATTACH DATABASE ':memory:' AS marketdata"))
         conn.execute(text("CREATE TABLE marketdata.rm_assets "
                           "(id INTEGER PRIMARY KEY, name TEXT, asset_type TEXT, province TEXT, "
-                          "capacity_mw REAL, bess_duration_h REAL)"))
+                          "capacity_mw REAL, bess_duration_h REAL, asset_code TEXT)"))
         conn.execute(text("CREATE TABLE marketdata.rm_dispatch_chain "
                           "(id INTEGER PRIMARY KEY, asset_id INTEGER, interval_start TEXT, "
                           "soc_pct REAL, nominated_mw REAL, da_cleared_mw REAL, "
@@ -38,7 +38,7 @@ def sqlite_engine():
                           "(plant_name TEXT, datetime TEXT, cleared_price REAL, "
                           "cleared_energy_mwh REAL)"))
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
-                          "(1, 'A1', 'bess', 'test', 100, 4.0), (2, 'A2', 'bess', 'test', 200, 4.0)"))
+                          "(1, 'A1', 'bess', 'test', 100, 4.0, NULL), (2, 'A2', 'bess', 'test', 200, 4.0, NULL)"))
 
         def chain(aid, ts, nom, da, rt, act, res=None, src="xlsx"):
             conn.execute(text("INSERT INTO marketdata.rm_dispatch_chain "
@@ -92,7 +92,7 @@ def sqlite_engine():
         chain(2, "2026-07-01 00:00:00", 10, 10, 10, 5)
         # Asset 3 锡西二 — capacity rate 280 (named-asset test)
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
-                          "(3, '锡西二', 'bess', 'test', 100, 4.0)"))
+                          "(3, '锡西二', 'bess', 'test', 100, 4.0, NULL)"))
         chain(3, "2026-06-01 00:00:00", 10, 10, 10, 5)
 
         # Prices for P1: chain slot T is priced by the md row stamped T−15min
@@ -306,7 +306,7 @@ def _add_mapped_asset(eng):
     an overlapping auto nomination, and an auto-only slot beyond the chain."""
     with eng.connect() as conn:
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
-                          "(7, '裕昭沙子坝', 'bess', 'test', 500, 4.0)"))
+                          "(7, '裕昭沙子坝', 'bess', 'test', 500, 4.0, 'gushanliang')"))
         conn.execute(text(
             "INSERT INTO marketdata.rm_dispatch_chain "
             "(asset_id, interval_start, nominated_mw, da_cleared_mw, "

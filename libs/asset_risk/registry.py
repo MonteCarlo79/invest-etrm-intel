@@ -7,7 +7,7 @@ Rows without asset_code get plant_names=() and the default capcomp rate.
 from __future__ import annotations
 
 import pandas as pd
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 
 from libs.trading_book.registry import get_station
 
@@ -25,21 +25,20 @@ CAPCOMP_DEFAULT = 350.0
 _PASSTHROUGH = ["asset_type", "invoice_folder", "capacity_mw", "bess_duration_h", "commission_date"]
 
 
-def has_asset_code(engine) -> bool:
-    """True when marketdata.rm_assets carries the asset_code column (added by the
-    Task 9 migration; absent in production until it runs). Consumers fall back to
-    their legacy literal maps when False."""
-    cols = inspect(engine).get_columns("rm_assets", schema="marketdata")
-    return any(c["name"] == "asset_code" for c in cols)
-
-
 def asset_identity(engine) -> pd.DataFrame:
     raw = pd.read_sql(text("SELECT * FROM marketdata.rm_assets ORDER BY id"), engine)
     rows = []
     for r in raw.to_dict("records"):
         code = r.get("asset_code")
         code = code if isinstance(code, str) and code else None
-        st = get_station(code) if code else None
+        st = None
+        if code:
+            try:
+                st = get_station(code)
+            except KeyError:
+                print(f"WARNING: rm_assets.asset_code {code!r} (asset {r['name']!r}) "
+                      "is not in the trading-book registry; treated as no code")
+                code = None
         rate = st.subsidy_cny_per_mwh if st is not None and st.subsidy_cny_per_mwh is not None else CAPCOMP_DEFAULT
         row = {"asset_id": r["id"], "name": r["name"], "asset_code": code,
                "plant_names": tuple(st.cleared_names) if st is not None else (),

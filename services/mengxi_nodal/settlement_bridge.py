@@ -25,10 +25,9 @@ statuses count ('processed' and 'flagged' alike — flagged rows still carry rea
 money; the flag is a recon hint, not an exclusion).
 
 asset_code → book resolution goes through the rm_assets short name, read at
-call time from the registry identity frame (libs.asset_risk.registry.rm_name_map)
-when rm_assets carries asset_code; pre-migration it falls back to the literal
-_RM_ASSET_NAME (removed in Task 12) — the same names services/settlement_ingest/folder_mapper.py
-maps the stations' invoice folders to (book_type='asset').
+call time from the registry identity frame (libs.asset_risk.registry.rm_name_map),
+the same names services/settlement_ingest/folder_mapper.py maps the stations'
+invoice folders to (book_type='asset').
 
 Task 11 fleet extension: registry_only stations (no data path yet — e.g.
 alashanzuoqi/erlian have no rm_assets entry at all) are skipped LOUDLY
@@ -43,7 +42,7 @@ from datetime import date, timedelta
 import pandas as pd
 from sqlalchemy import text
 
-from libs.asset_risk.registry import asset_identity, has_asset_code, rm_name_map
+from libs.asset_risk.registry import asset_identity, rm_name_map
 from libs.trading_book.registry import get_station
 from libs.trading_book.settlement_bridge import month_bounds
 
@@ -59,25 +58,6 @@ CREATE TABLE IF NOT EXISTS reports.book_settled_daily (
     PRIMARY KEY (asset_code, data_date, source)
 )
 """
-
-# Registry asset_code -> marketdata.rm_assets.name (short name; matches the
-# folder_mapper fallback values, e.g. "B-11 内蒙四子王旗" -> "四子王旗" — the
-# rm short name is NOT always a substring of the registry plant_name).
-# Task 11: wuhai/wuchuan/alashan/lingt46 verified against the rm_assets probe;
-# alashanzuoqi/erlian have no rm_assets entry and are deliberately absent.
-# FALLBACK ONLY (pre-migration, no rm_assets.asset_code) — see _rm_name().
-_RM_ASSET_NAME: dict[str, str] = {
-    "suyou": "景蓝乌尔图",
-    "hangjinqi": "悦杭独贵",
-    "siziwangqi": "四子王旗",
-    "gushanliang": "裕昭沙子坝",
-    "bameng": "景怡查干哈达",
-    "wulate": "远景乌拉特",
-    "wuhai": "乌海康富",
-    "wuchuan": "武川",
-    "alashan": "阿拉善储能",
-    "lingt46": "零碳46风电",
-}
 
 _BOOK_SQL = """
     SELECT b.id
@@ -122,10 +102,7 @@ def _spread_lump(amount: float, month_start: date,
 
 
 def _rm_name(engine, asset_code: str) -> str | None:
-    """rm_assets.name for a registry code: identity frame when the asset_code
-    column exists, literal _RM_ASSET_NAME otherwise."""
-    if not has_asset_code(engine):
-        return _RM_ASSET_NAME.get(asset_code)
+    """rm_assets.name for a registry code, from the identity frame."""
     return rm_name_map(asset_identity(engine)).get(asset_code)
 
 

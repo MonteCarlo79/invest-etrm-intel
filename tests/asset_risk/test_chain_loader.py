@@ -11,14 +11,13 @@ from sqlalchemy import create_engine, text
 from libs.asset_risk.chain import _load_chain, _ops_ts_expr, load_chain
 
 
-def _base_engine(with_code: bool = True):
+def _base_engine():
     eng = create_engine("sqlite:///:memory:")
-    code_col = ", asset_code TEXT" if with_code else ""
     with eng.begin() as conn:
         conn.execute(text("ATTACH DATABASE ':memory:' AS marketdata"))
         conn.execute(text("CREATE TABLE marketdata.rm_assets "
                           "(id INTEGER PRIMARY KEY, name TEXT, asset_type TEXT, province TEXT, "
-                          f"capacity_mw REAL, bess_duration_h REAL{code_col})"))
+                          "capacity_mw REAL, bess_duration_h REAL, asset_code TEXT)"))
         conn.execute(text("CREATE TABLE marketdata.rm_dispatch_chain "
                           "(id INTEGER PRIMARY KEY, asset_id INTEGER, interval_start TEXT, "
                           "soc_pct REAL, nominated_mw REAL, da_cleared_mw REAL, "
@@ -173,18 +172,6 @@ def test_identity_columns_filled_and_shape(sqlite_engine):
 def test_month_without_overlap_does_not_raise(sqlite_engine):
     # 武川 has cleared rows only — no actual×nominated overlap → no guard trip
     assert not _load_chain(sqlite_engine, [3], None, None).empty
-
-
-def test_pre_migration_uses_literal_code_for_actuals():
-    eng = _base_engine(with_code=False)
-    with eng.begin() as conn:
-        conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
-                          "(1, '裕昭沙子坝', 'bess', 'test', 100, 4.0)"))
-        _chain(conn, 1, "2026-09-01 00:00:00", 10, None)
-        conn.execute(text("INSERT INTO marketdata.bess_actual_96 (asset_code, data_date, slot, "
-                          "actual_mw) VALUES ('gushanliang', '2026-09-01', 1, 6.0)"))
-    df = _load_chain(eng, [1], None, None)
-    assert df.iloc[0]["actual_mw"] == 6.0
 
 
 def test_public_alias():
