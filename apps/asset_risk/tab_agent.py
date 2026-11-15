@@ -209,7 +209,12 @@ def _call_agent(user_message: str, engine, api_key: str, history: list[dict]) ->
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                result = _execute_tool(block.name, block.input, engine)
+                try:
+                    result = _execute_tool(block.name, block.input, engine)
+                except Exception as exc:
+                    # Return the error as data so the agent can self-correct
+                    # (same pattern as services/asset_risk/headless_agent).
+                    result = {"error": str(exc)}
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,

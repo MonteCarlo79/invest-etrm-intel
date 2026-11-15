@@ -308,8 +308,9 @@ def test_headless_agent_uses_shared_system_prompt():
          patch("services.asset_risk.headless_agent._make_engine", return_value=MagicMock()):
         run_asset_risk_query("q", api_key="k", pg_url="postgresql://x")
     system = client.messages.create.call_args.kwargs["system"]
-    assert system.startswith("今天是 ")
-    assert _AGENT_BASE_SYSTEM in system
+    # F9: the prompt opens with the grounding rule; the date line follows it.
+    assert system.startswith(_AGENT_BASE_SYSTEM)
+    assert "今天是 " in system[len(_AGENT_BASE_SYSTEM):]
     tool_names = {t["name"] for t in client.messages.create.call_args.kwargs["tools"]}
     assert "get_waterfall" in tool_names and "get_var" not in tool_names
 
@@ -449,3 +450,33 @@ def test_get_deviation_analysis_sign_guard_returns_error(wf_engine):
     bad = _execute_tool("get_deviation_analysis", {"book_id": 1, "start_date": "2026-07-01",
                                                    "end_date": "2026-07-31"}, wf_engine)
     assert "sign disagreement" in bad["error"]
+
+
+def test_system_prompt_opens_with_grounding_rule():
+    assert _AGENT_BASE_SYSTEM.startswith(
+        "Your knowledge comes exclusively from the data tools below — never from general")
+    flat = " ".join(_AGENT_BASE_SYSTEM.split())
+    assert flat.index("Do not state any") < flat.index("You are the Asset Risk agent")
+
+
+def test_tab_agent_tool_exception_becomes_error_result(monkeypatch):
+    """F8: a raising tool is returned to the model as {"error": ...}."""
+    from unittest.mock import MagicMock
+    import apps.asset_risk.tab_agent as ta
+    tool_block = MagicMock(type="tool_use", id="t1", input={"book_id": 1})
+    tool_block.name = "get_book_pnl"
+    r1 = MagicMock(stop_reason="tool_use", content=[tool_block])
+    r2 = MagicMock(stop_reason="end_turn", content=[MagicMock(text="done", type="text")])
+    client = MagicMock()
+    client.messages.create.side_effect = [r1, r2]
+    monkeypatch.setattr("shared.anthropic_client.make_client", lambda key: client)
+    monkeypatch.setattr(ta, "_build_system", lambda engine: "sys")
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(ta, "_execute_tool", boom)
+    assert ta._call_agent("q", MagicMock(), "k", []) == "done"
+    msgs = client.messages.create.call_args_list[1].kwargs["messages"]
+    tool_msg = next(m for m in msgs if m["role"] == "user" and isinstance(m["content"], list))
+    assert json.loads(tool_msg["content"][0]["content"]) == {"error": "db down"}
