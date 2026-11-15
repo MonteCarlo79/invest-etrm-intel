@@ -47,11 +47,10 @@ def _metrics(pos: pd.DataFrame, curve: pd.DataFrame, scen: dict, as_of: date) ->
 
 
 def _diff(a, b) -> float:
-    a_none, b_none = a is None, b is None
-    if a_none or b_none:
-        return 0.0 if a_none and b_none else math.inf
-    if math.isnan(a) and math.isnan(b):
-        return 0.0
+    a_na = a is None or math.isnan(a)
+    b_na = b is None or math.isnan(b)
+    if a_na or b_na:
+        return 0.0 if (a is None) == (b is None) and a_na and b_na else math.inf
     return abs(a - b)
 
 
@@ -109,6 +108,7 @@ def main(argv=None) -> int:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col]).dt.date
     scen2 = {}
+    # VaR depends only on scenario values and order, not on the index dtype.
     for stem in names:
         df = _read(_find(snap, stem))
         scen2[str(df["province"].iloc[0])] = pd.Series(df["value"].to_numpy(),
