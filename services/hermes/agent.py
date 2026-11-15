@@ -89,8 +89,12 @@ CAPABILITY AREAS — understand which domain the user is working in:
   Use MARKET_AGENT(deal) for any deal structuring or project finance calculation.
 
 📉 Asset Risk
-  Book P&L, position mark-to-market, VaR, portfolio exposure.
-  Use MARKET_AGENT(asset-risk) for any asset book risk question.
+  Asset book realised P&L, settlements, deviation analysis, P&L waterfall, merchant share.
+  Use MARKET_AGENT(asset-risk) for settlement and realised-P&L questions on asset books.
+
+📒 Market Maker (central risk book)
+  Positions, exposure and hedge ratios, mark-to-market, VaR, BESS Greeks, forward curves — across asset AND retail books.
+  Use MARKET_AGENT(market-maker) for any forward risk / exposure / VaR question.
 
 🏪 Retail Risk
   Customer margins, procurement coverage, contract expiry pipeline, customer P&L rankings.
@@ -208,7 +212,7 @@ EMAIL_SUMMARY — check and summarise recent unread emails
   reply: you will generate after seeing results
 
 MARKET_AGENT — ask a specialist market agent a data question
-  params: {"market": "gb|au|ercot|caiso|pjm|ph|po|bess-map|spot|mengxi|deal|asset-risk|retail-risk|internet", "question": "the full question to ask"}
+  params: {"market": "gb|au|ercot|caiso|pjm|ph|po|bess-map|spot|mengxi|deal|asset-risk|market-maker|retail-risk|internet", "question": "the full question to ask"}
   reply: you will generate after seeing results
   note: use when user asks about specific market data, BESS revenues, prices, assets, economics
 
@@ -294,7 +298,8 @@ Rules:
 - When user asks about market data, prices, revenues, BESS economics, or a specific market, use MARKET_AGENT.
 - For MARKET_AGENT market keys: gb=GB/Great Britain (9 tools: system price, EPEX, ancillary, BESS leaderboard/revenue index/assets, Elexon ops, KB search), au=Australia NEM, ercot=Texas, caiso=California, pjm=PJM, ph=Philippines, po=Portugal (all via intl_market_common: spot price, ancillary, BESS leaderboard/revenue index/assets, KB search), bess-map=China BESS economics for all provinces (get_bess_economics, get_dispatch_detail, get_mengxi_capacity, get_irr_estimate), spot=China spot electricity prices + DA/RT spreads + fundamentals + BESS P&L + KB (7 tools), mengxi=Inner Mongolia BESS operations (P&L attribution waterfall, 15-min dispatch data, RT prices, strategy comparison, KB — use for trading ops questions about the 4 IM BESS assets), internet=web search/URL reading/GitHub/YouTube/RSS/Bilibili.
 - Use MARKET_AGENT(deal) for any question about deal structuring, PPA pricing, revenue floors/caps/collars, project IRR/NPV/DSCR, dispatch valuation, Monte Carlo simulation, or project finance terms. These require financial model tools — do NOT use REPLY for these.
-- Use MARKET_AGENT(asset-risk) for any question about book P&L, position mark-to-market (MtM), value at risk (VaR), unrealised P&L, portfolio exposure, or asking what assets/books exist. Key terms: 账面盈亏/头寸/风险敞口/VaR/book/position/MTM.
+- Use MARKET_AGENT(asset-risk) for any question about realised book P&L, settlements (结算单/凭证), deviation analysis, the P&L waterfall, merchant share, or asking what assets exist. Key terms: 账面盈亏/结算/偏差/瀑布/book P&L/settlement.
+- Use MARKET_AGENT(market-maker) for any question about positions, net exposure, hedge ratio, mark-to-market (MtM), value at risk (VaR), stress tests, BESS delta/vega Greeks, or forward/reference curves — across asset and retail books. Key terms: 头寸/风险敞口/套保比例/VaR/MtM/Greeks/远期曲线/position/exposure/hedge.
 - Use MARKET_AGENT(retail-risk) for any question about retail customer margins, procurement coverage ratio, customer P&L ranking, contract expiry pipeline, or unhedged load. Key terms: 零售/代理/客户利润/合同到期/采购覆盖率/retail/coverage/margin.
 - Use MARKET_AGENT(mengxi) for operational/trading questions about the 4 Inner Mongolia BESS assets (景蓝乌尔图/悦杭独贵/景通四益堂储/裕昭沙子坝): P&L breakdown, dispatch execution, RT prices, strategy comparison. Use MARKET_AGENT(bess-map) for province-level BESS economics (capture rates, IRR, theoretical revenue) including 蒙西 as a market.
 - When user asks to "search the web", "look up a URL", "read this link", "search GitHub", "find on YouTube/Bilibili/B站", "check RSS", or research any topic online, use MARKET_AGENT(internet). IMPORTANT: "搜索" (search) in Chinese is an explicit internet search request — use MARKET_AGENT(internet) whenever "搜索" appears in the message, especially combined with "最新" (latest) or "网上". This takes PRIORITY over all other routing rules (bess-map, spot, etc.).
