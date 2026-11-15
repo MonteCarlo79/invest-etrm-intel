@@ -164,11 +164,11 @@ def sqlite_engine():
         chain(1, "2026-06-01 00:00:00", 10, 8)     # discharge nomination/cleared
         chain(1, "2026-06-01 00:15:00", -12, -10)  # charge
         chain(1, "2026-06-01 00:30:00", 10, 8)
-        # Prices: 300 for the first two intervals (at ts+15min), missing third
+        # Prices: 300 for the first two intervals (md row stamped slot−15min), missing third
         conn.execute(text("INSERT INTO marketdata.md_id_cleared_energy VALUES "
-                          "('P1', '2026-06-01 00:15:00', 300.0, 0)"))
+                          "('P1', '2026-05-31 23:45:00', 300.0, 0)"))
         conn.execute(text("INSERT INTO marketdata.md_id_cleared_energy VALUES "
-                          "('P1', '2026-06-01 00:30:00', 300.0, 0)"))
+                          "('P1', '2026-06-01 00:00:00', 300.0, 0)"))
         conn.commit()
     yield eng
     eng.dispose()
@@ -393,7 +393,8 @@ def test_benchmark_leg_no_fallback_when_cleared_complete(sqlite_engine, lp_solve
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
                           "(8, '裕昭沙子坝', 'bess', 'test', 500, 4.0, '2025-12-25')"))
         for n in range(96):
-            ts = pd.Timestamp("2026-06-02") + pd.Timedelta(minutes=15 * (n + 1))
+            # row stamped D prices slot D+15min → rows 06-01 23:45..06-02 23:30
+            ts = pd.Timestamp("2026-06-02") + pd.Timedelta(minutes=15 * (n - 1))
             px = 10.0 if n < 48 else 100.0
             conn.execute(text("INSERT INTO marketdata.md_id_cleared_energy "
                               "(plant_name, datetime, cleared_price, cleared_energy_mwh) "
@@ -428,3 +429,33 @@ def test_missing_bill_keys():
     assert missing_bill_keys(actual, ["A1", "A2"], ["2026-09", "2026-10"]) == [
         ("A1", "2026-10"), ("A2", "2026-09"), ("A2", "2026-10")]
     assert missing_bill_keys(pd.DataFrame(), ["A1"], ["2026-09"]) == [("A1", "2026-09")]
+
+
+def test_benchmark_leg_price_index_is_md_datetime_plus_15(sqlite_engine, monkeypatch):
+    """LP price series index = md_id_cleared_energy.datetime + 15min (chain slot
+    frame, owner decision 2026-11-15); rows mapping outside the month are dropped."""
+    import services.bess_map.optimisation_engine as oe
+    from libs.asset_risk.waterfall import benchmark_leg
+
+    with sqlite_engine.connect() as conn:
+        conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
+                          "(8, '裕昭沙子坝', 'bess', 'test', 500, 4.0, '2025-12-25')"))
+        for ts, px in (("2026-05-31 23:45:00", 11.0),   # → slot 06-01 00:00 (in month)
+                       ("2026-06-01 00:00:00", 12.0),   # → slot 06-01 00:15
+                       ("2026-06-30 23:45:00", 13.0)):  # → slot 07-01 00:00 (out)
+            conn.execute(text("INSERT INTO marketdata.md_id_cleared_energy "
+                              "(plant_name, datetime, cleared_price, cleared_energy_mwh) "
+                              "VALUES ('裕昭沙子坝储能电站', :t, :p, 1.0)"), {"t": ts, "p": px})
+        conn.commit()
+    seen = []
+
+    def fake_lp(series, **kw):
+        seen.append(series.copy())
+        return pd.DataFrame(), pd.Series(dtype=float)
+
+    monkeypatch.setattr(oe, "compute_dispatch_from_15min_prices", fake_lp)
+    benchmark_leg(sqlite_engine, 8, "2026-06", 500.0, 4.0, "2025-12-25",
+                  350.0, "裕昭沙子坝储能电站", asset_name="")
+    s = seen[0]
+    assert list(s.index) == [pd.Timestamp("2026-06-01 00:00"), pd.Timestamp("2026-06-01 00:15")]
+    assert list(s.values) == [11.0, 12.0]

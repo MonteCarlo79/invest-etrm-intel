@@ -7,6 +7,13 @@ from sqlalchemy import bindparam, inspect, text
 from libs.asset_risk.diagnostics import AUTO_NOM_CODE, PLANT_MAP
 from libs.asset_risk.registry import asset_identity, has_asset_code
 
+# md_id_cleared_energy row stamped D = chain slot D+15min, for BOTH
+# cleared_energy_mwh and cleared_price (same row). Owner decision 2026-11-15:
+# read-only prod probe (2026-06..08, 4 stations) matched rm_dispatch_chain
+# rt_cleared_mw at slot T to the md row at T−15min with r≈0.983–0.990
+# (0.92 at lag 0, 0.80 at +15). Consistent with the loader's −15min TIME_RULES row shift.
+MD_ROW_TO_SLOT = pd.Timedelta(minutes=15)
+
 
 def _ts_expr(engine) -> str:
     """Beijing-wall timestamp expression for rm_dispatch_chain.interval_start."""
@@ -160,6 +167,8 @@ def _load_cleared_sum(engine, plant_to_id: dict[str, int], start: str | None,
 
     UNIT: md_id_cleared_energy.cleared_energy_mwh is interval-average MW
     (mislabeled name, verified 2026-11-05) — no ×4. Exact plant_name IN, never LIKE.
+    FRAME: row stamped D → slot D + MD_ROW_TO_SLOT; the [start, end) slot window
+    therefore reads rows stamped [start−15min, end−15min).
     """
     sql = """
         SELECT plant_name, datetime AS ts, cleared_energy_mwh AS v
@@ -168,19 +177,20 @@ def _load_cleared_sum(engine, plant_to_id: dict[str, int], start: str | None,
     """
     params: dict = {"plants": list(plant_to_id)}
     if start:
+        s_row = pd.Timestamp(start) - MD_ROW_TO_SLOT
         sql += " AND data_date >= :ds AND datetime >= :s"
-        params["ds"] = start[:10]
-        params["s"] = start
+        params["ds"] = s_row.strftime("%Y-%m-%d")
+        params["s"] = s_row.strftime("%Y-%m-%d %H:%M:%S")
     if end:
         sql += " AND data_date <= :de AND datetime < :e"
         params["de"] = end[:10]
-        params["e"] = end
+        params["e"] = (pd.Timestamp(end) - MD_ROW_TO_SLOT).strftime("%Y-%m-%d %H:%M:%S")
     df = pd.read_sql(text(sql).bindparams(bindparam("plants", expanding=True)),
                      engine, params=params)
     if df.empty:
         return pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=_KEY))
     df["asset_id"] = df["plant_name"].map(plant_to_id)
-    df["ts"] = pd.to_datetime(df["ts"])
+    df["ts"] = pd.to_datetime(df["ts"]) + MD_ROW_TO_SLOT
     df["v"] = pd.to_numeric(df["v"], errors="coerce")
     return df.groupby(_KEY)["v"].sum(min_count=1)
 
@@ -209,7 +219,7 @@ def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None
     - nominated_mw: WeCom bess_nomination_96 overrides the legacy chain on overlap
       and extends it;
     - rt_cleared_mw: legacy chain, else md_id_cleared_energy summed over all the
-      asset's exchange accounts;
+      asset's exchange accounts (row stamped D → slot D + MD_ROW_TO_SLOT);
     - actual_mw: legacy chain, else bess_actual_96, else
       ops_bess_dispatch_15min.actual_dispatch_mw;
     - da_cleared_mw / restriction / soc_pct: legacy chain only (NaN elsewhere).
@@ -272,7 +282,12 @@ load_chain = _load_chain
 
 
 def _load_prices(engine, plants: list[str], start: str | None, end: str | None) -> pd.DataFrame:
+    """Raw md_id_cleared_energy price rows (datetime = md stamp, NOT the slot).
+    The lower bound is pulled back by MD_ROW_TO_SLOT so the window's first slot
+    (priced by the row stamped start−15min) has its row."""
     start, end = _month_token_bounds(start, end)
+    if start:
+        start = (pd.Timestamp(start) - MD_ROW_TO_SLOT).strftime("%Y-%m-%d %H:%M:%S")
     sql = """
         SELECT plant_name, datetime, cleared_price
         FROM marketdata.md_id_cleared_energy
@@ -294,7 +309,8 @@ def _load_prices(engine, plants: list[str], start: str | None, end: str | None) 
 
 def _attach_prices(chain: pd.DataFrame, prices: pd.DataFrame,
                    plant_map: dict[str, str]) -> pd.DataFrame:
-    """Add price_cny_mwh: per-plant RT price mapped at ts + 15min (period-end).
+    """Add price_cny_mwh: per-plant RT price for chain slot ts from the md row
+    stamped ts − MD_ROW_TO_SLOT (owner decision 2026-11-15).
     NaN where no price row — MWh sums keep the row, ¥ sums skip it."""
     df = chain.copy()
     df["price_cny_mwh"] = pd.NA
@@ -302,10 +318,10 @@ def _attach_prices(chain: pd.DataFrame, prices: pd.DataFrame,
         p = prices[prices["plant_name"] == plant]
         if p.empty:
             continue
-        s = pd.Series({pd.Timestamp(r[0]): float(r[1])
+        s = pd.Series({pd.Timestamp(r[0]) + MD_ROW_TO_SLOT: float(r[1])
                        for r in zip(p["datetime"], p["cleared_price"]) if pd.notna(r[1])})
         s = s[~s.index.duplicated(keep="last")].sort_index()
         mask = df["asset"] == asset
-        df.loc[mask, "price_cny_mwh"] = (df.loc[mask, "ts"] + pd.Timedelta(minutes=15)).map(s)
+        df.loc[mask, "price_cny_mwh"] = df.loc[mask, "ts"].map(s)
     df["price_cny_mwh"] = pd.to_numeric(df["price_cny_mwh"], errors="coerce")
     return df

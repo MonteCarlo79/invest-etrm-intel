@@ -7,8 +7,9 @@ Metric definitions (validated 2026-09-01, docs/handoff-2026-08-30):
   exec gap chg = Σ(actual−rt)×0.25×price   where rt_cleared < −0.5 (reads negative)
   bid fail dis = Σ(nom−da)×0.25×price      where nominated > 0.5
   bid fail chg = Σ(da−nom)×(−0.25)×price   where nominated < −0.5
-Price join: plant RT cleared price at interval_start(Beijing) + 15min (period-end
-stamp — the AT TIME ZONE pattern from services/arb_match/compute.py; never ::timestamp).
+Price join: chain slot T = interval_start AT TIME ZONE 'Asia/Shanghai' (never
+::timestamp) is priced by the md_id_cleared_energy row stamped T − 15min
+(libs.asset_risk.chain.MD_ROW_TO_SLOT; owner decision 2026-11-15, probe r≈0.99).
 """
 from __future__ import annotations
 

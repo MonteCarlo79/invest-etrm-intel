@@ -6,6 +6,7 @@ unmodified (same harness as tests/asset_risk/test_pnl_filters.py).
 """
 import json
 
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
@@ -235,11 +236,12 @@ def wf_engine():
                 "(asset_id, interval_start, nominated_mw, da_cleared_mw, rt_cleared_mw, "
                 "actual_mw) VALUES (1, :ts, :mw, :mw, :mw, :act)"),
                 {"ts": ts, "mw": mw, "act": act})
-            h2, m2 = divmod((i + 1) * 15, 60)
+            # md row stamped D prices chain slot D+15min → row at slot − 15min
+            row_ts = pd.Timestamp(ts) - pd.Timedelta(minutes=15)
             conn.execute(text(
                 "INSERT INTO marketdata.md_id_cleared_energy VALUES "
-                "(:p, :ts, '2026-06-01', :price, :mw)"),
-                {"p": _PLANT, "ts": f"2026-06-01 {h2:02d}:{m2:02d}:00",
+                "(:p, :ts, :d, :price, :mw)"),
+                {"p": _PLANT, "ts": str(row_ts), "d": str(row_ts.date()),
                  "price": 300.0 if i < 4 else 100.0, "mw": mw})
     yield eng
     eng.dispose()
@@ -340,10 +342,11 @@ def _add_chain_month(eng, day):
                 "(asset_id, interval_start, nominated_mw, da_cleared_mw, rt_cleared_mw, "
                 "actual_mw) VALUES (1, :ts, :mw, :mw, :mw, :mw)"),
                 {"ts": f"{day} {h:02d}:{m:02d}:00", "mw": mw})
-            h2, m2 = divmod((i + 1) * 15, 60)
+            # md row stamped D prices chain slot D+15min → row at slot − 15min
+            row_ts = pd.Timestamp(f"{day} {h:02d}:{m:02d}:00") - pd.Timedelta(minutes=15)
             conn.execute(text(
                 "INSERT INTO marketdata.md_id_cleared_energy VALUES (:p, :ts, :d, :price, :mw)"),
-                {"p": _PLANT, "ts": f"{day} {h2:02d}:{m2:02d}:00", "d": day,
+                {"p": _PLANT, "ts": str(row_ts), "d": str(row_ts.date()),
                  "price": 300.0 if i < 4 else 100.0, "mw": mw})
 
 

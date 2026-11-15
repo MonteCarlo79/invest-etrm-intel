@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy import bindparam, text
 
 from libs.asset_risk.standard_params import params_for_asset
-from libs.asset_risk.chain import _attach_prices, _load_chain, _load_prices
+from libs.asset_risk.chain import MD_ROW_TO_SLOT, _attach_prices, _load_chain, _load_prices
 from libs.asset_risk.diagnostics import (
     AUTO_NOM_CODE,
     CAPCOMP_RATE_DEFAULT,
@@ -163,8 +163,8 @@ def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str,
                               asset_code: str | None = None) -> pd.Series:
     """Filled nodal RT price (md_mengxi_nodal_price_96_filled.avg_node_price)
     for the station's own registry node — the same market price, complete
-    96-slot days. metric_time stamps interval START (no −15min shift, unlike
-    md_id_cleared_energy.cleared_price which stamps period end). Empty series
+    96-slot days. metric_time stamps interval START and is used as-is (no
+    MD_ROW_TO_SLOT shift — that applies only to md_id_cleared_energy rows). Empty series
     when the asset has no registry mapping/node."""
     from libs.trading_book.registry import get_station
 
@@ -195,8 +195,9 @@ def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
     """Investment-standard leg: LP perfect-foresight with standard params for one
     asset-month. Cached on (asset_id, month, ...) — historical inputs immutable.
 
-    LP input prices are shifted −15min so each interval-start index maps to the
-    period-END price stamp (same alignment as arb_match).
+    LP input prices are indexed at md datetime + MD_ROW_TO_SLOT (the chain slot
+    frame, owner decision 2026-11-15), so LP day boundaries follow chain days;
+    rows mapping outside the month are dropped.
     """
     from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices  # lazy (pulp)
 
@@ -208,10 +209,12 @@ def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
     if prices.empty:
         return {"arb_cny": 0.0, "dis_mwh": 0.0, "chg_mwh": 0.0, "cap_cny": 0.0,
                 "days_solved": 0, "days_skipped": 0, "age": params["age"], "note": "no prices"}
-    s = pd.Series({pd.Timestamp(t) - pd.Timedelta(minutes=15): float(v)
-                   for t, v in zip(prices["datetime"], prices["cleared_price"]) if pd.notna(v)})
+    s = pd.Series({pd.Timestamp(t) + MD_ROW_TO_SLOT: float(v)
+                   for t, v in zip(prices["datetime"], prices["cleared_price"]) if pd.notna(v)},
+                  dtype=float)
     s = s[~s.index.duplicated(keep="last")].sort_index()
     s.index = pd.DatetimeIndex(s.index)
+    s = s[(s.index >= month_start) & (s.index < pd.Timestamp(month_end))]
 
     def _run(series):
         return compute_dispatch_from_15min_prices(
@@ -321,7 +324,9 @@ def forecast_optimal_leg(engine, asset_id: int, month: str, capacity_mw: float,
     prices = _load_prices(engine, [plant], None, month_end)
     if prices.empty:
         return {"arb_cny": 0.0, "note": "no prices"}
-    s = pd.Series({pd.Timestamp(t): float(v) for t, v in zip(prices["datetime"], prices["cleared_price"])
+    # index in the chain slot frame (md datetime + MD_ROW_TO_SLOT) before hourly mean
+    s = pd.Series({pd.Timestamp(t) + MD_ROW_TO_SLOT: float(v)
+                   for t, v in zip(prices["datetime"], prices["cleared_price"])
                    if pd.notna(v)}).sort_index()
     hourly = s.resample("h").mean().dropna()
     hourly_df = pd.DataFrame({"rt_price": hourly})

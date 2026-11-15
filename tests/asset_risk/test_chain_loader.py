@@ -76,13 +76,15 @@ def sqlite_engine():
         conn.execute(text("INSERT INTO marketdata.ops_bess_dispatch_15min VALUES "
                           "('gushanliang', '2026-09-01 00:15:00', 10, 88), "
                           "('gushanliang', '2026-09-01 00:30:00', 10, 7.5)"))
-        _cleared(conn, "裕昭沙子坝储能电站", "2026-09-01 02:00:00", 3.0)
+        # md_id_cleared_energy rows stamped D belong to chain slot D+15min
+        # (owner decision 2026-11-15, probe r≈0.99): 01:45 row → 02:00 slot
+        _cleared(conn, "裕昭沙子坝储能电站", "2026-09-01 01:45:00", 3.0)
         # out-of-range day must not leak in
-        _cleared(conn, "裕昭沙子坝储能电站", "2026-09-05 02:00:00", 1.0)
-        # asset 3 武川: two exchange accounts
-        _cleared(conn, "旭纯哈乐储能电站", "2026-09-01 01:00:00", 10.0)
-        _cleared(conn, "旭纯哈乐储能电站二", "2026-09-01 01:00:00", 15.0)
-        _cleared(conn, "旭纯哈乐储能电站二", "2026-09-01 01:15:00", -4.0)
+        _cleared(conn, "裕昭沙子坝储能电站", "2026-09-05 01:45:00", 1.0)
+        # asset 3 武川: two exchange accounts (00:45 → slot 01:00, 01:00 → slot 01:15)
+        _cleared(conn, "旭纯哈乐储能电站", "2026-09-01 00:45:00", 10.0)
+        _cleared(conn, "旭纯哈乐储能电站二", "2026-09-01 00:45:00", 15.0)
+        _cleared(conn, "旭纯哈乐储能电站二", "2026-09-01 01:00:00", -4.0)
         # asset 9: no asset_code → legacy rows only
         _chain(conn, 9, "2026-09-01 00:00:00", 5, 4)
         _chain(conn, 9, "2026-09-01 00:15:00", -5, -4)
@@ -131,6 +133,25 @@ def test_sign_disagreement_raises(sqlite_engine_bad_sign):
 def test_no_times_four_on_cleared(sqlite_engine):
     df = _load_chain(sqlite_engine, [1], "2026-09-01", "2026-09-02").set_index("ts")
     assert df.loc["2026-09-01 02:00:00", "rt_cleared_mw"] == 3.0   # stored 3.0 → 3.0
+
+
+def test_cleared_row_lands_on_next_slot(sqlite_engine):
+    # row stamped 01:45 is chain slot 02:00; nothing lands on 01:45 itself
+    df = _load_chain(sqlite_engine, [1], "2026-09-01", "2026-09-02").set_index("ts")
+    assert pd.Timestamp("2026-09-01 01:45:00") not in df.index
+    assert df.loc["2026-09-01 02:00:00", "rt_cleared_mw"] == 3.0
+
+
+def test_cleared_window_edges_follow_slot_frame(sqlite_engine):
+    # prev-day 23:45 row = this day's 00:00 slot (in window);
+    # this day's 23:45 row = next day's 00:00 slot (out of window)
+    with sqlite_engine.begin() as conn:
+        _cleared(conn, "裕昭沙子坝储能电站", "2026-08-31 23:45:00", 6.0)
+        _cleared(conn, "裕昭沙子坝储能电站", "2026-09-01 23:45:00", 8.0)
+    df = _load_chain(sqlite_engine, [1], "2026-09-01", "2026-09-02").set_index("ts")
+    assert df.loc["2026-09-01 00:00:00", "rt_cleared_mw"] == 6.0
+    assert df.index.max() < pd.Timestamp("2026-09-02")
+    assert 8.0 not in set(df["rt_cleared_mw"].dropna())
 
 
 # --- additional coverage beyond the brief ---

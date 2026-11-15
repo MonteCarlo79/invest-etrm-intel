@@ -95,20 +95,20 @@ def sqlite_engine():
                           "(3, '锡西二', 'bess', 'test', 100, 4.0)"))
         chain(3, "2026-06-01 00:00:00", 10, 10, 10, 5)
 
-        # Prices for P1: 300 at every ts+15min except interval 0's target (00:15),
-        # so interval 0 stays unpriced (MWh counted, ¥ skipped)
+        # Prices for P1: chain slot T is priced by the md row stamped T−15min
+        # (owner decision 2026-11-15). 300 for slots 1..95 (rows 00:00..23:30);
+        # interval 0's row (2026-05-31 23:45) is deliberately missing, so
+        # interval 0 stays unpriced (MWh counted, ¥ skipped)
         def price(ts):
             conn.execute(text("INSERT INTO marketdata.md_id_cleared_energy "
                               "(plant_name, datetime, cleared_price, cleared_energy_mwh) "
                               "VALUES ('P1', :ts, 300.0, 0)"), {"ts": ts})
 
-        for n in range(96):
-            if n == 1:
-                continue  # interval 0's price target — deliberately missing
-            price(quarter(n))
-        price("2026-07-01 00:15:00")  # asset 2's interval (P2 uses same value via map)
+        for n in range(95):
+            price(quarter(n))  # row stamped quarter(n) prices slot quarter(n+1)
+        price("2026-06-30 23:45:00")  # asset 2's 07-01 00:00 slot (P2 via map)
         conn.execute(text("UPDATE marketdata.md_id_cleared_energy SET plant_name='P2' "
-                          "WHERE datetime='2026-07-01 00:15:00'"))
+                          "WHERE datetime='2026-06-30 23:45:00'"))
         conn.commit()
     yield eng
     eng.dispose()
@@ -149,14 +149,33 @@ def test_load_chain_month_tokens(sqlite_engine):
     assert set(df["asset"]) == {"A2"}
 
 
-def test_attach_prices_period_end(sqlite_engine):
+def test_attach_prices_slot_frame(sqlite_engine):
     chain = _load_chain(sqlite_engine, [1], None, None)
     prices = _load_prices(sqlite_engine, ["P1"], None, "2026-06-02")
     df = _attach_prices(chain, prices, {"A1": "P1"})
     first = df[df["ts"] == "2026-06-01 00:00:00"].iloc[0]
     second = df[df["ts"] == "2026-06-01 00:15:00"].iloc[0]
     assert pd.isna(first["price_cny_mwh"])          # unpriced interval stays NaN
-    assert second["price_cny_mwh"] == 300.0         # priced at ts+15min
+    assert second["price_cny_mwh"] == 300.0         # priced by row stamped ts−15min
+
+
+def test_attach_prices_row_prices_next_slot():
+    # a price row stamped 00:45 prices chain slot 01:00 (not 00:45, not 00:30)
+    chain = pd.DataFrame({"asset": ["A1"] * 3,
+                          "ts": pd.to_datetime(["2026-06-01 00:30", "2026-06-01 00:45",
+                                                "2026-06-01 01:00"])})
+    prices = pd.DataFrame({"plant_name": ["P1"],
+                           "datetime": pd.to_datetime(["2026-06-01 00:45"]),
+                           "cleared_price": [123.0]})
+    df = _attach_prices(chain, prices, {"A1": "P1"}).set_index("ts")
+    assert df.loc["2026-06-01 01:00", "price_cny_mwh"] == 123.0
+    assert df["price_cny_mwh"].notna().sum() == 1
+
+
+def test_load_prices_includes_row_for_first_slot(sqlite_engine):
+    # window starting 07-01 must load the 06-30 23:45 row (it prices slot 07-01 00:00)
+    df = _load_prices(sqlite_engine, ["P2"], "2026-07-01", "2026-07-02")
+    assert list(df["datetime"].astype(str)) == ["2026-06-30 23:45:00"]
 
 
 # --- metric helpers ---
@@ -303,7 +322,8 @@ def _add_mapped_asset(eng):
         conn.execute(text(
             "INSERT INTO marketdata.md_id_cleared_energy "
             "(plant_name, datetime, cleared_price, cleared_energy_mwh) "
-            "VALUES ('裕昭沙子坝储能电站', '2026-09-01 00:15:00', 300.0, -2.5)"))
+            # stamped 00:00 → chain slot 00:15 (md row D = slot D+15min)
+            "VALUES ('裕昭沙子坝储能电站', '2026-09-01 00:00:00', 300.0, -2.5)"))
         conn.commit()
     from services.mengxi_nodal.nomination_curves import ensure_table as en
     en(eng)
