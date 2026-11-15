@@ -90,6 +90,7 @@ def execute_tool(name: str, inputs: dict, engine) -> dict:
                 SELECT COALESCE(SUM(volume_mwh), 0) AS forward_mwh
                 FROM marketdata.rm_positions
                 WHERE book_id = :bid AND direction = 'buy' AND status = 'open'
+                  AND (source IS NULL OR source <> 'physical')
             """), {"bid": book_id}).scalar()
 
             contracted_f = float(contracted or 0)
