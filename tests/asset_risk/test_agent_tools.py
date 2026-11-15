@@ -312,3 +312,18 @@ def test_headless_agent_uses_shared_system_prompt():
     assert _AGENT_BASE_SYSTEM in system
     tool_names = {t["name"] for t in client.messages.create.call_args.kwargs["tools"]}
     assert "get_waterfall" in tool_names and "get_var" not in tool_names
+
+
+def test_get_waterfall_passes_inputs_key(wf_engine, _fake_legs, monkeypatch):
+    import libs.asset_risk.legs_store as ls
+    seen = []
+    real = ls.get_or_compute
+
+    def spy(engine, leg, asset_id, month, compute, **kw):
+        seen.append((leg, kw.get("inputs_key")))
+        return real(engine, leg, asset_id, month, compute, **kw)
+
+    monkeypatch.setattr(ls, "get_or_compute", spy)
+    _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-06"]}, wf_engine)
+    expected = ls.legs_inputs_key(100.0, 4.0, "2024-06-01", 350.0)
+    assert seen == [("benchmark", expected), ("forecast", expected)]

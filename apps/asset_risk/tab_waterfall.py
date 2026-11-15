@@ -22,7 +22,7 @@ import streamlit as st
 from sqlalchemy import text
 
 from libs.asset_risk import waterfall as _wf
-from libs.asset_risk.legs_store import ensure_table, get_or_compute
+from libs.asset_risk.legs_store import ensure_table, get_or_compute, legs_inputs_key
 from libs.asset_risk.waterfall import (
     CLEARED_VOLUME_TOLERANCE,
     _COMPONENT_CN,
@@ -257,19 +257,20 @@ def render_waterfall(engine):
         a, month, commission_iso = item
         rate = rate_map.get(a["name"], CAPCOMP_RATE_DEFAULT)
         aid = int(a["id"])
+        ikey = legs_inputs_key(a["capacity_mw"], a["bess_duration_h"], commission_iso, rate)
         r = get_or_compute(
             engine, "benchmark", aid, month,
             lambda: _wf.benchmark_leg(engine, aid, month, float(a["capacity_mw"]),
                                       float(a["bess_duration_h"]), commission_iso, rate,
                                       plant_map[a["name"]], asset_name=a["name"],
                                       asset_code=nom_map.get(a["name"])),
-            force=force_legs)
+            force=force_legs, inputs_key=ikey)
         fr = get_or_compute(
             engine, "forecast", aid, month,
             lambda: _wf.forecast_optimal_leg(engine, aid, month, float(a["capacity_mw"]),
                                              float(a["bess_duration_h"]), commission_iso,
                                              plant_map[a["name"]]),
-            force=force_legs)
+            force=force_legs, inputs_key=ikey)
         return {"asset": a["name"], "month": month, **r, "fc_arb_cny": fr.get("arb_cny") or 0.0}
 
     if len(work) > 1:

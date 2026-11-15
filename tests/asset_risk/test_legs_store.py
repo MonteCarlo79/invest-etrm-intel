@@ -81,3 +81,76 @@ def test_benchmark_zero_days_solved_not_stored(sqlite_engine):
 def test_normal_benchmark_still_stored(sqlite_engine):
     get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", lambda: {"arb_cny": 5.0, "days_solved": 30, "note": "节点填充电价"}, today=date(2026, 11, 14))
     assert _row_count(sqlite_engine) == 1
+
+
+# --- F3: partially-solved benchmarks are not frozen ---------------------------
+
+def _bench(days_solved, days_skipped, note):
+    return {"arb_cny": 5.0, "dis_mwh": 1.0, "chg_mwh": 1.0, "cap_cny": 1.0,
+            "days_solved": days_solved, "days_skipped": days_skipped, "age": 0, "note": note}
+
+
+def test_partial_benchmark_without_fallback_not_stored(sqlite_engine):
+    out = get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", lambda: _bench(20, 11, ""),
+                         today=date(2026, 11, 14))
+    assert out["days_skipped"] == 11 and _row_count(sqlite_engine) == 0
+
+
+def test_full_benchmark_stored(sqlite_engine):
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", lambda: _bench(30, 0, ""),
+                   today=date(2026, 11, 14))
+    assert _row_count(sqlite_engine) == 1
+
+
+def test_partial_benchmark_with_filled_fallback_stored(sqlite_engine):
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", lambda: _bench(27, 3, "节点填充电价"),
+                   today=date(2026, 11, 14))
+    assert _row_count(sqlite_engine) == 1
+
+
+# --- F4: inputs fingerprint -----------------------------------------------------
+
+def test_legs_inputs_key_stable_and_sensitive():
+    from libs.asset_risk.legs_store import legs_inputs_key
+    k = legs_inputs_key(100.0, 2.0, "2024-06-30", 350.0)
+    assert k == legs_inputs_key(100.0000001, 2.0, "2024-06-30", 350)
+    assert k != legs_inputs_key(100.0, 2.0, "2024-07-01", 350.0)
+    assert k != legs_inputs_key(100.0, 2.0, None, 350.0)
+    assert k != legs_inputs_key(100.0, 4.0, "2024-06-30", 350.0)
+    assert k != legs_inputs_key(100.0, 2.0, "2024-06-30", 280.0)
+    assert isinstance(k, str) and k
+
+
+def test_same_inputs_key_served_from_store(sqlite_engine):
+    from libs.asset_risk.legs_store import legs_inputs_key
+    calls = []
+    key = legs_inputs_key(100.0, 2.0, "2024-06-30", 350.0)
+    f = lambda: calls.append(1) or _bench(30, 0, "")
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", f, today=date(2026, 11, 14), inputs_key=key)
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", f, today=date(2026, 11, 14), inputs_key=key)
+    assert calls == [1]
+    assert _stored(sqlite_engine, 1, "2026-09", "benchmark")["inputs_key"] == key
+
+
+def test_changed_inputs_key_recomputes_and_updates_row(sqlite_engine):
+    from libs.asset_risk.legs_store import legs_inputs_key
+    old = legs_inputs_key(100.0, 2.0, "2024-06-30", 350.0)
+    new = legs_inputs_key(100.0, 2.0, "2023-06-30", 350.0)
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", lambda: _bench(30, 0, ""),
+                   today=date(2026, 11, 14), inputs_key=old)
+    out = get_or_compute(sqlite_engine, "benchmark", 1, "2026-09",
+                         lambda: _bench(30, 0, "") | {"arb_cny": 9.0},
+                         today=date(2026, 11, 14), inputs_key=new)
+    assert out["arb_cny"] == 9.0
+    row = _stored(sqlite_engine, 1, "2026-09", "benchmark")
+    assert row["arb_cny"] == 9.0 and row["inputs_key"] == new and _row_count(sqlite_engine) == 1
+
+
+def test_none_inputs_key_serves_any_stored_row(sqlite_engine):
+    from libs.asset_risk.legs_store import legs_inputs_key
+    calls = []
+    f = lambda: calls.append(1) or _bench(30, 0, "")
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", f, today=date(2026, 11, 14),
+                   inputs_key=legs_inputs_key(1, 1, None, 350))
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", f, today=date(2026, 11, 14))
+    assert calls == [1]

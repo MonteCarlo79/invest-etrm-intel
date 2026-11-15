@@ -209,7 +209,7 @@ def _get_waterfall(inputs: dict, engine) -> dict:
     """Same assembly as apps/asset_risk/tab_waterfall.render_waterfall, minus
     Streamlit; the expensive LP legs go through the persistent legs store."""
     from libs.asset_risk import waterfall as wf_mod
-    from libs.asset_risk.legs_store import ensure_table, get_or_compute
+    from libs.asset_risk import legs_store
     from libs.asset_risk.chain import _attach_prices, _load_chain, _load_prices
     from libs.asset_risk.diagnostics import CAPCOMP_RATE_DEFAULT, load_maps
 
@@ -257,7 +257,7 @@ def _get_waterfall(inputs: dict, engine) -> dict:
 
     cleared, cleared_untrusted = wf_mod.guard_cleared_leg(cleared, actual)
 
-    ensure_table(engine)
+    legs_store.ensure_table(engine)
     bench_rows = []
     for _, a in assets.iterrows():
         commission_iso = (str(a["commission_date"])[:10]
@@ -265,17 +265,21 @@ def _get_waterfall(inputs: dict, engine) -> dict:
         for month in months:
             rate = rate_map.get(a["name"], CAPCOMP_RATE_DEFAULT)
             aid = int(a["id"])
-            r = get_or_compute(
+            ikey = legs_store.legs_inputs_key(a["capacity_mw"], a["bess_duration_h"],
+                                              commission_iso, rate)
+            r = legs_store.get_or_compute(
                 engine, "benchmark", aid, month,
                 lambda: wf_mod.benchmark_leg(engine, aid, month, float(a["capacity_mw"]),
                                              float(a["bess_duration_h"]), commission_iso, rate,
                                              plant_map[a["name"]], asset_name=a["name"],
-                                             asset_code=nom_map.get(a["name"])))
-            fr = get_or_compute(
+                                             asset_code=nom_map.get(a["name"])),
+                inputs_key=ikey)
+            fr = legs_store.get_or_compute(
                 engine, "forecast", aid, month,
                 lambda: wf_mod.forecast_optimal_leg(engine, aid, month, float(a["capacity_mw"]),
                                                     float(a["bess_duration_h"]), commission_iso,
-                                                    plant_map[a["name"]]))
+                                                    plant_map[a["name"]]),
+                inputs_key=ikey)
             bench_rows.append({"asset": a["name"], "month": month, **r,
                                "fc_arb_cny": fr.get("arb_cny") or 0.0})
     bench = pd.DataFrame(bench_rows) if bench_rows else pd.DataFrame(
