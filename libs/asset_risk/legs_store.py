@@ -31,6 +31,18 @@ _SELECT = text("SELECT " + ", ".join(_VALUE_COLS) + ", note FROM marketdata.rm_w
                "WHERE asset_id = :asset_id AND month = :month AND leg = :leg")
 
 
+DEGENERATE_NOTES = frozenset({"no prices", "no complete price day", "no forecast", "lp empty"})
+
+
+def _is_persistable(leg: str, result: dict) -> bool:
+    """Zero-valued fallbacks (feed lag etc.) must not be frozen into the store."""
+    if result.get("note") in DEGENERATE_NOTES:
+        return False
+    if leg == "benchmark" and (result.get("days_solved") or 0) == 0:
+        return False
+    return True
+
+
 def ensure_table(engine) -> None:
     ddl = DDL
     if engine.dialect.name == "sqlite":
@@ -54,7 +66,7 @@ def get_or_compute(engine, leg: str, asset_id: int, month: str, compute: Callabl
         if row is not None:
             return {k: row[k] for k in _VALUE_COLS} | {"note": row["note"] or ""}
     result = compute()
-    if is_month_complete(month, today or date.today()):
+    if is_month_complete(month, today or date.today()) and _is_persistable(leg, result):
         params = dict(key)
         for c in _FLOAT_COLS:
             params[c] = float(result[c]) if result.get(c) is not None else None

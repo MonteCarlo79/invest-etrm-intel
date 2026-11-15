@@ -62,3 +62,22 @@ def test_forecast_partial_dict_roundtrips_with_none(sqlite_engine):
 def test_is_month_complete_boundary():
     assert not is_month_complete("2026-10", date(2026, 11, 3))
     assert is_month_complete("2026-10", date(2026, 11, 4))
+
+
+def test_degenerate_note_returned_not_stored_and_recomputed(sqlite_engine):
+    calls = []
+    f = lambda: calls.append(1) or {"arb_cny": 0.0, "dis_mwh": 0.0, "chg_mwh": 0.0, "cap_cny": 0.0, "days_solved": 0, "days_skipped": 30, "age": 0, "note": "no prices"}
+    out = get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", f, today=date(2026, 11, 14))
+    assert out["note"] == "no prices" and _row_count(sqlite_engine) == 0
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", f, today=date(2026, 11, 14))
+    assert calls == [1, 1]
+
+
+def test_benchmark_zero_days_solved_not_stored(sqlite_engine):
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", lambda: {"arb_cny": 0.0, "days_solved": 0, "note": ""}, today=date(2026, 11, 14))
+    assert _row_count(sqlite_engine) == 0
+
+
+def test_normal_benchmark_still_stored(sqlite_engine):
+    get_or_compute(sqlite_engine, "benchmark", 1, "2026-09", lambda: {"arb_cny": 5.0, "days_solved": 30, "note": "节点填充电价"}, today=date(2026, 11, 14))
+    assert _row_count(sqlite_engine) == 1
