@@ -19,6 +19,8 @@ CONSTRAINT_LOOKUP_SQL = (
     " AND pg_get_constraintdef(oid) ILIKE '%source%'"
 )
 
+LOCK_TIMEOUT_SQL = "SET LOCAL lock_timeout = '5s'"
+
 _DROP_RE = re.compile(r"DROP CONSTRAINT IF EXISTS \w+")
 
 
@@ -41,12 +43,15 @@ def run(engine, apply: bool, out=print) -> int:
             out("ABORT: more than one CHECK constraint mentions source; inspect manually.")
             return 1
         stmts = build_statements(names[0] if names else None)
+    out(LOCK_TIMEOUT_SQL + ";  -- first statement inside the apply transaction")
     for s in stmts:
         out(s + ";")
     if not apply:
         out("-- dry-run: nothing executed (use --apply)")
         return 0
     with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            conn.execute(text(LOCK_TIMEOUT_SQL))  # fail fast instead of queueing behind live readers
         for s in stmts:
             conn.execute(text(s))
     out("-- applied")

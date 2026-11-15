@@ -106,7 +106,9 @@ def test_load_books(engine):
 
 def test_migration_statements():
     st = migrate.build_statements("weird_name")
-    assert len(st) == 7
+    assert len(st) == 8
+    upd = next(i for i, s in enumerate(st) if s.startswith("UPDATE marketdata.rm_positions SET source"))
+    assert st[upd + 1] == "ALTER TABLE marketdata.rm_positions ALTER COLUMN source SET DEFAULT 'bilateral'"
     assert any("DROP CONSTRAINT IF EXISTS weird_name" in s for s in st)
     assert not any("rm_forward_curves_source_check\n" in s and "DROP" in s for s in st)
     assert not any("UNIQUE INDEX" in s for s in st)
@@ -128,3 +130,53 @@ def test_dry_run_and_multi_constraint_abort():
     t = "\n".join(lines)
     assert "DROP CONSTRAINT IF EXISTS old_chk" in t and "dry-run" in t and "DUP" not in t.upper()
     assert migrate.run(Eng(["a", "b"]), apply=True, out=lines.append) == 1
+
+
+class _RecConn:
+    def __init__(s, dialect, log): s.dialect, s.log = type("D", (), {"name": dialect})(), log
+    def __enter__(s): return s
+    def __exit__(s, *a): pass
+    def execute(s, q, *a):
+        s.log.append(str(q))
+        return iter([])
+
+
+class _RecEng:
+    def __init__(s, dialect): s.dialect, s.log = dialect, []
+    def connect(s): return _RecConn(s.dialect, [])
+    def begin(s): return _RecConn(s.dialect, s.log)
+
+
+def test_apply_sets_lock_timeout_first_on_postgres():
+    eng = _RecEng("postgresql")
+    assert migrate.run(eng, apply=True, out=lambda *_: None) == 0
+    assert eng.log[0] == "SET LOCAL lock_timeout = '5s'"
+    assert eng.log[1:] == migrate.build_statements(None)
+    lite = _RecEng("sqlite")
+    migrate.run(lite, apply=True, out=lambda *_: None)
+    assert not any("lock_timeout" in q for q in lite.log)
+
+
+def test_migration_sql_resolves_in_container_layout(tmp_path):
+    """Dockerfile copies scripts/market_maker/ and the .sql to the same paths under /app."""
+    import shutil
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(migrate.__file__).resolve().parents[2]
+    (tmp_path / "scripts" / "market_maker").mkdir(parents=True)
+    (tmp_path / "db" / "ddl" / "marketdata").mkdir(parents=True)
+    shutil.copy(root / "scripts" / "market_maker" / "migrate.py", tmp_path / "scripts" / "market_maker")
+    shutil.copy(migrate.SQL_PATH, tmp_path / "db" / "ddl" / "marketdata")
+    code = ("import runpy; m = runpy.run_path('scripts/market_maker/migrate.py');"
+            "print(len(m['build_statements']()))")
+    r = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "8"
+    docker = (root / "apps" / "market_maker" / "Dockerfile").read_text()
+    assert "COPY scripts/market_maker/ ./scripts/market_maker/" in docker
+    assert ("COPY db/ddl/marketdata/market_maker_migration.sql "
+            "./db/ddl/marketdata/market_maker_migration.sql") in docker
+    ignore = (root / ".dockerignore").read_text().splitlines()
+    assert "!scripts/market_maker/" in ignore
+    assert "!db/ddl/marketdata/market_maker_migration.sql" in ignore

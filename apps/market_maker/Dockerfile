@@ -12,6 +12,9 @@ COPY services/ ./services/
 COPY shared/ ./shared/
 COPY auth/ ./auth/
 COPY apps/market_maker/ ./apps/market_maker/
+# migration runner: scripts/market_maker/migrate.py resolves the .sql as <workdir>/db/ddl/marketdata/
+COPY scripts/market_maker/ ./scripts/market_maker/
+COPY db/ddl/marketdata/market_maker_migration.sql ./db/ddl/marketdata/market_maker_migration.sql
 
 ENV PYTHONPATH=/app
 

@@ -6,6 +6,7 @@ ALTER TABLE marketdata.rm_positions ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE marketdata.rm_positions ADD COLUMN IF NOT EXISTS tou_block TEXT;
 ALTER TABLE marketdata.rm_positions ADD COLUMN IF NOT EXISTS basis TEXT;
 UPDATE marketdata.rm_positions SET source = 'bilateral' WHERE source IS NULL;
+ALTER TABLE marketdata.rm_positions ALTER COLUMN source SET DEFAULT 'bilateral';
 ALTER TABLE marketdata.rm_forward_curves ADD COLUMN IF NOT EXISTS tou_block TEXT;
 ALTER TABLE marketdata.rm_forward_curves DROP CONSTRAINT IF EXISTS rm_forward_curves_source_check;
 ALTER TABLE marketdata.rm_forward_curves ADD CONSTRAINT rm_forward_curves_source_check

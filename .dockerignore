@@ -158,6 +158,8 @@ apps/bess-inner-mongolia/
 !libs/decision_models/
 !apps/market_maker/
 !services/market_maker/
+!scripts/market_maker/
+!db/ddl/marketdata/market_maker_migration.sql
 
 # retail-risk image exceptions
 !apps/retail_risk/
