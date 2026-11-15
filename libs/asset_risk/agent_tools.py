@@ -416,24 +416,32 @@ def execute_tool(name: str, inputs: dict, engine) -> dict:
             if chain.empty:
                 return {"message": "No dispatch-chain data in range."}
 
-            def _mwh(col):  # MW × 0.25 h per 15-min interval
-                return float(chain[col].sum() * 0.25)
+            cols = {"nominated": "nominated_mw", "da_cleared": "da_cleared_mw",
+                    "rt_cleared": "rt_cleared_mw", "actual": "actual_mw"}
+            slots = {k: int(chain[c].notna().sum()) for k, c in cols.items()}
 
-            nom = _mwh("nominated_mw")
-            da = _mwh("da_cleared_mw")
-            rt = _mwh("rt_cleared_mw")
-            act = _mwh("actual_mw")
+            def _mwh(key):  # MW × 0.25 h per 15-min interval; None when no data at all
+                return float(chain[cols[key]].sum() * 0.25) if slots[key] else None
+
+            def _diff(a, b):
+                return None if a is None or b is None else a - b
+
+            nom = _mwh("nominated")
+            da = _mwh("da_cleared")
+            rt = _mwh("rt_cleared")
+            act = _mwh("actual")
             return {
                 "start_date": start,
                 "end_date": str(inputs["end_date"])[:10],
                 "intervals": int(len(chain)),
+                "slots_with_data": slots,
                 "nominated_mwh": nom,
                 "da_cleared_mwh": da,
                 "rt_cleared_mwh": rt,
                 "actual_mwh": act,
-                "da_vs_nominated_mwh": da - nom,
-                "rt_vs_da_mwh": rt - da,
-                "actual_vs_rt_mwh": act - rt,
+                "da_vs_nominated_mwh": _diff(da, nom),
+                "rt_vs_da_mwh": _diff(rt, da),
+                "actual_vs_rt_mwh": _diff(act, rt),
                 "restricted_intervals": int(chain["restriction"].notna().sum()),
             }
 

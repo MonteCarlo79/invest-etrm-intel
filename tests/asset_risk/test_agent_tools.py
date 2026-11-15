@@ -384,3 +384,30 @@ def test_get_waterfall_all_billed_complete(wf_engine, _fake_legs):
 def test_system_prompt_missing_bills_rule():
     flat = " ".join(_AGENT_BASE_SYSTEM.split())
     assert "actual_complete=false" in flat and "never describe 实际 or Δ执行与费用" in flat
+
+
+def test_deviation_analysis_all_nan_column_is_none(sqlite_engine):
+    with sqlite_engine.begin() as conn:
+        for i in range(4):
+            conn.execute(text(
+                "INSERT INTO marketdata.rm_dispatch_chain "
+                "(asset_id, interval_start, nominated_mw, da_cleared_mw, rt_cleared_mw, actual_mw) "
+                "VALUES (2, :ts, 10, NULL, 8, :act)"),
+                {"ts": f"2026-04-02 00:{i*15:02d}:00", "act": 7 if i < 3 else None})
+    r = _execute_tool("get_deviation_analysis",
+                      {"book_id": 9, "start_date": "2026-04-02", "end_date": "2026-04-02"},
+                      sqlite_engine)
+    assert r["da_cleared_mwh"] is None
+    assert r["da_vs_nominated_mwh"] is None and r["rt_vs_da_mwh"] is None
+    assert r["nominated_mwh"] == pytest.approx(10.0)
+    assert r["actual_vs_rt_mwh"] == pytest.approx(5.25 - 8.0)
+    assert r["slots_with_data"] == {"nominated": 4, "da_cleared": 0, "rt_cleared": 4, "actual": 3}
+    assert r["intervals"] == 4
+    json.dumps(r)
+
+
+def test_deviation_analysis_slots_with_data_full(sqlite_engine):
+    r = _execute_tool("get_deviation_analysis",
+                      {"book_id": 7, "start_date": "2026-02-01", "end_date": "2026-02-01"},
+                      sqlite_engine)
+    assert r["slots_with_data"] == {"nominated": 12, "da_cleared": 12, "rt_cleared": 12, "actual": 12}
