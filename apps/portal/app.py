@@ -325,6 +325,13 @@ _QUICK_ASK_SYSTEM = {
         "Keep answers under 150 words. No tool calls — answer from your domain knowledge."
         + _deal_structurer_framework()
     ),
+    "market_maker": (
+        "You are the Market Maker risk analyst — central risk book for asset and retail books. "
+        "You give concise, expert answers on: position conventions, exposure and hedge ratios, "
+        "mark-to-market, VaR methodology, BESS spread-option Greeks, and forward-curve building. "
+        "Keep answers under 150 words. No tool calls and no live data: for actual positions, "
+        "MtM or VaR figures, tell the user to open the Market Maker app."
+    ),
     "gb_analyst": (
         "You are the GB Analyst — Great Britain BESS market intelligence specialist. "
         "You give concise, expert answers on: GB BESS leaderboard performance, EPEX DA "
@@ -395,6 +402,7 @@ _DEV_PORTS = {
     "pjm-market":       "8511",
     "caiso-market":     "8512",
     "deal-structurer":  "8522",
+    "market-maker":     "8530",
 }
 
 
@@ -761,6 +769,34 @@ with col_deal:
         agent_key="deal_structurer",
         available=True,
     )
+
+# ── Row 3: Market Maker (central risk book) ─────────────────────────────
+col_mm, _col_mm_pad = st.columns(2)
+
+with col_mm:
+    _render_agent_section(
+        icon="📒",
+        name="Market Maker",
+        subtitle="Central Risk Book · Positions · MtM · VaR & Greeks",
+        description=(
+            "One risk book across asset-risk and retail-risk books: physical generation and "
+            "BESS positions, retail purchases and contract shorts, reference forward curves, "
+            "exposure and hedge ratios, mark-to-market, portfolio VaR and BESS spread-option "
+            "Greeks. Includes a grounded Risk Agent."
+        ),
+        capabilities=[
+            "Positions: physical + bilateral rows per book, province, month and TOU block",
+            "Exposure & MtM: net MWh, hedge ratio, marks against the reference curve",
+            "VaR & Greeks: historical / parametric VaR, stress, BESS Margrabe-strip delta/vega",
+            "Curves: traded > spot-seasonal reference curves, manual CSV overrides",
+            "Risk Agent: answers only from tool data, flags excluded books and provinces",
+        ],
+        app_slug="market-maker",
+        agent_key="market_maker",
+        available=True,
+    )
+
+st.markdown("<br>", unsafe_allow_html=True)
 
 st.markdown("### International Markets")
 st.caption("Live BESS market intelligence across global electricity markets.")
