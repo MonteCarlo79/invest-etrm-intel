@@ -199,3 +199,21 @@ def test_risk_agent_page_renders_without_llm(tmp_path, monkeypatch):
     _make_db(tmp_path, monkeypatch)
     at = _page("Risk Agent")
     assert any("No LLM configured" in w.value for w in at.warning)
+
+
+def test_refresh_button_uses_today_not_sidebar_as_of(tmp_path, monkeypatch):
+    import services.market_maker.refresh as rf_mod
+    _make_db(tmp_path, monkeypatch)
+    seen = []
+
+    def fake_refresh(engine, as_of, dry_run=False, **kw):
+        seen.append(as_of)
+        return {"books": {}, "curves": {}, "skipped": [], "errors": [], "warnings": []}
+
+    monkeypatch.setattr(rf_mod, "refresh", fake_refresh)
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    at.date_input(key="mm_as_of").set_value(date(2026, 1, 15)).run()
+    at.radio(key="mm_page").set_value("Curves").run()
+    at.button(key="mm_refresh").click().run()
+    assert not at.exception, [e.message for e in at.exception]
+    assert seen == [date.today()]

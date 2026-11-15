@@ -139,7 +139,8 @@ def _refresh_section(engine, sel: dict) -> None:
     if st.button("Refresh physical positions & curves", key="mm_refresh"):
         from services.market_maker.refresh import refresh
         with st.spinner("Refreshing…"):
-            st.session_state["mm_refresh_result"] = refresh(engine, sel["as_of"], dry_run=False)
+            # refresh writes curve_date = as_of: always today, never the sidebar as-of (M2)
+            st.session_state["mm_refresh_result"] = refresh(engine, date.today(), dry_run=False)
         clear_caches()
     res = st.session_state.get("mm_refresh_result")
     if res:
