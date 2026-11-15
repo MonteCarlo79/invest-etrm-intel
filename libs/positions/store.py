@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from libs.positions.conventions import (
-    POSITION_COLUMNS, Position, canonical_province, positions_frame, signed_mwh,
+    POSITION_COLUMNS, PROVINCE_ALIASES, Position, canonical_province, positions_frame, signed_mwh,
 )
 
 
@@ -99,3 +99,36 @@ def load_books(engine) -> pd.DataFrame:
     df["province"] = [None if (b is None or pd.isna(p)) else canonical_province(p)
                       for b, p in zip(df["asset_id"], df["province"])]
     return df
+
+
+def load_book_province(engine, book_id: int) -> str | None:
+    """Most frequent canonical province among the book's rm_positions rows (ties: name order)."""
+    with engine.connect() as conn:
+        raw = conn.execute(text("SELECT province FROM marketdata.rm_positions WHERE book_id = :b"),
+                           {"b": book_id}).scalars().all()
+    provs = pd.Series([canonical_province(p) for p in raw if p is not None], dtype=object)
+    if provs.empty:
+        return None
+    counts = provs.value_counts()
+    return sorted(counts[counts == counts.max()].index)[0]
+
+
+def load_book_physical(engine, book_id: int, province: str, months: list[date],
+                       as_of: date) -> pd.DataFrame:
+    """In-memory physical sell rows for a load book from the province's active retail
+    contracts. No DB writes: load books are owned by the retail-risk loader."""
+    from libs.positions.physical import load_positions as contract_positions
+
+    prov = canonical_province(province)
+    aliases = list(PROVINCE_ALIASES[prov])
+    names = [f":p{i}" for i in range(len(aliases))]
+    sql = ("SELECT cc.contract_type, cc.price_cny_mwh, cc.start_date, cc.end_date,"
+           " cc.annual_forecast_mwh, cc.monthly_forecast"
+           " FROM marketdata.rm_customer_contracts cc"
+           " JOIN marketdata.rm_customers cu ON cu.id = cc.customer_id"
+           " WHERE cc.contract_status = 'active' AND cc.end_date >= :as_of"
+           f" AND cu.province IN ({','.join(names)})")
+    params: dict = {"as_of": as_of, **{f"p{i}": a for i, a in enumerate(aliases)}}
+    with engine.connect() as conn:
+        contracts = pd.read_sql(text(sql), conn, params=params)
+    return positions_frame(contract_positions(book_id, prov, contracts, months, as_of))
