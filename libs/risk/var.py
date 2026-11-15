@@ -78,6 +78,9 @@ def monthly_price_scenarios(
     return rolled.diff().dropna().iloc[-lookback_days:]
 
 
+MIN_SCENARIOS = 20
+
+
 def portfolio_var(
     net_delta_mwh_by_province: dict[str, float],
     scenarios: dict[str, pd.Series],
@@ -90,19 +93,35 @@ def portfolio_var(
     parametric: z × sqrt(dᵀΣd) × sqrt(horizon), Σ from the aligned series.
     Fewer than 20 aligned scenarios → both None. Zero-delta provinces are
     excluded before the join; non-zero-delta provinces without a scenario
-    series are reported in `provinces_missing` / `delta_missing_mwh`.
+    series, or whose history would cut the aligned sample below 20 (added
+    greedily by |delta|), are reported in `provinces_missing` / `delta_missing_mwh`.
     Units: deltas in MWh, scenarios in CNY/MWh, VaR in CNY.
     """
     deltas = net_delta_mwh_by_province
     missing = sorted(p for p, d in deltas.items() if d != 0 and p not in scenarios)
     extra = {"provinces_missing": missing,
              "delta_missing_mwh": {p: float(deltas[p]) for p in missing}}
-    provs = [p for p, d in deltas.items() if d != 0 and p in scenarios]
-    if not provs:
+    cand = sorted((p for p, d in deltas.items() if d != 0 and p in scenarios),
+                  key=lambda p: -abs(float(deltas[p])))
+    if not cand:
         return {"historical": None, "parametric": None, "n_scenarios": 0, **extra}
-    aligned = pd.concat({p: scenarios[p] for p in provs}, axis=1, join="inner").dropna()
+    # Greedy by |delta|: a province whose history would shrink the aligned sample below
+    # MIN_SCENARIOS is reported missing instead of nulling the whole portfolio VaR.
+    provs, aligned = [], None
+    for p in cand:
+        trial = scenarios[p].dropna().rename(p).to_frame() if aligned is None else \
+            aligned.join(scenarios[p].dropna().rename(p), how="inner")
+        if len(trial) >= MIN_SCENARIOS:
+            provs, aligned = provs + [p], trial
+        else:
+            missing.append(p)
+            extra["delta_missing_mwh"][p] = float(deltas[p])
+    missing.sort()
+    if aligned is None:  # every candidate too thin on its own: report the longest history
+        n = max(int(scenarios[p].dropna().size) for p in cand)
+        return {"historical": None, "parametric": None, "n_scenarios": n, **extra}
     n = int(len(aligned))
-    if n < 20:
+    if n < MIN_SCENARIOS:
         return {"historical": None, "parametric": None, "n_scenarios": n, **extra}
     d = np.array([float(net_delta_mwh_by_province[p]) for p in provs])
     x = aligned[provs].to_numpy(dtype=float)

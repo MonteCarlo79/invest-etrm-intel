@@ -162,3 +162,28 @@ def test_parametric_z_follows_confidence():
     nd = NormalDist()
     assert p90 / p95 == pytest.approx(nd.inv_cdf(0.90) / nd.inv_cdf(0.95))
     assert p975 / p95 == pytest.approx(nd.inv_cdf(0.975) / nd.inv_cdf(0.95))
+
+
+def test_portfolio_var_thin_province_reported_missing_not_nulling_portfolio():
+    # Prod 2026-11-16: 浙江 had 28 scenarios on sparse dates; the inner join left 4 rows and
+    # nulled the whole VaR. A thin province is now reported missing; the rest still compute.
+    idx = pd.date_range("2026-01-01", periods=100, freq="D")
+    rng = np.random.default_rng(0)
+    big = pd.Series(rng.normal(0, 10, 100), index=idx)
+    other = pd.Series(rng.normal(0, 5, 100), index=idx)
+    thin = pd.Series(rng.normal(0, 5, 4), index=idx[::25])
+    out = portfolio_var({"蒙西": 1000.0, "冀南": -50.0, "浙江": -200.0},
+                        {"蒙西": big, "冀南": other, "浙江": thin})
+    assert out["historical"] is not None and out["parametric"] is not None
+    assert out["n_scenarios"] == 100
+    assert out["provinces_missing"] == ["浙江"]
+    assert out["delta_missing_mwh"] == {"浙江": -200.0}
+    ref = portfolio_var({"蒙西": 1000.0, "冀南": -50.0}, {"蒙西": big, "冀南": other})
+    assert out["historical"] == ref["historical"] and out["parametric"] == ref["parametric"]
+
+
+def test_portfolio_var_all_thin_returns_none_with_missing():
+    idx = pd.date_range("2026-01-01", periods=5, freq="D")
+    out = portfolio_var({"蒙西": 10.0}, {"蒙西": pd.Series([1.0, 2, 3, 4, 5], index=idx)})
+    assert out["historical"] is None and out["n_scenarios"] == 5
+    assert out["provinces_missing"] == ["蒙西"]
