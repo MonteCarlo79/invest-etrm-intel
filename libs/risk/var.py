@@ -64,6 +64,7 @@ def monthly_price_scenarios(
 
     v1 proxy for forward-month moves. Input: hourly frame with `datetime`,
     `price`. Output: Series indexed by date, last `lookback_days` values.
+    Units: CNY/MWh per day.
     """
     df = pd.DataFrame({"datetime": pd.to_datetime(hourly["datetime"]),
                        "price": pd.to_numeric(hourly["price"], errors="coerce")})
@@ -85,15 +86,22 @@ def portfolio_var(
 
     historical: −quantile(1−confidence) of Σ delta × Δprice, × sqrt(horizon), floored at 0.
     parametric: z × sqrt(dᵀΣd) × sqrt(horizon), Σ from the aligned series.
-    Fewer than 20 aligned scenarios → both None.
+    Fewer than 20 aligned scenarios → both None. Zero-delta provinces are
+    excluded before the join; non-zero-delta provinces without a scenario
+    series are reported in `provinces_missing` / `delta_missing_mwh`.
+    Units: deltas in MWh, scenarios in CNY/MWh, VaR in CNY.
     """
-    provs = [p for p, d in net_delta_mwh_by_province.items() if p in scenarios]
+    deltas = net_delta_mwh_by_province
+    missing = sorted(p for p, d in deltas.items() if d != 0 and p not in scenarios)
+    extra = {"provinces_missing": missing,
+             "delta_missing_mwh": {p: float(deltas[p]) for p in missing}}
+    provs = [p for p, d in deltas.items() if d != 0 and p in scenarios]
     if not provs:
-        return {"historical": None, "parametric": None, "n_scenarios": 0}
+        return {"historical": None, "parametric": None, "n_scenarios": 0, **extra}
     aligned = pd.concat({p: scenarios[p] for p in provs}, axis=1, join="inner").dropna()
     n = int(len(aligned))
     if n < 20:
-        return {"historical": None, "parametric": None, "n_scenarios": n}
+        return {"historical": None, "parametric": None, "n_scenarios": n, **extra}
     d = np.array([float(net_delta_mwh_by_province[p]) for p in provs])
     x = aligned[provs].to_numpy(dtype=float)
     sqrt_h = np.sqrt(horizon_days)
@@ -104,4 +112,4 @@ def portfolio_var(
     cov = np.atleast_2d(np.cov(x, rowvar=False))
     z = Z_SCORES.get(confidence, 1.6449)
     para = float(z * np.sqrt(max(float(d @ cov @ d), 0.0)) * sqrt_h)
-    return {"historical": float(hist), "parametric": para, "n_scenarios": n}
+    return {"historical": float(hist), "parametric": para, "n_scenarios": n, **extra}

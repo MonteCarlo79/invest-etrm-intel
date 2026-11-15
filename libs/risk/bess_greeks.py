@@ -8,6 +8,10 @@ Each month is a strip of n_days daily calls. T_i continues the strip
 convention (i/252 for day i of remaining life counted from `as_of`), so a
 month starting d0 days after as_of is valued as
 _strip_value(d0 + n) − _strip_value(d0).
+Time base: calendar days / 252 (inherited from bess_spread_call_strip), whereas
+libs.risk.greeks.option_greeks uses calendar days / 365.
+Units: delta_peak_mwh / delta_offpeak_mwh in MWh (CNY per CNY/MWh),
+vega_cny_per_volpt in CNY per 0.01 vol on both legs, value_cny in CNY.
 """
 from __future__ import annotations
 

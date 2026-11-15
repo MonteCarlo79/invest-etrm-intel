@@ -72,7 +72,7 @@ def test_option_greeks_empty_zero():
     out = option_greeks(pd.DataFrame(columns=["direction", "volume_mwh", "strike_cny_mwh",
                                               "option_type", "delivery_month", "province"]),
                         _curve([]), 0.3, AS_OF)
-    assert all(v == 0.0 for v in out.values())
+    assert all(v == 0 for v in out.values())
     assert {"delta_mwh", "gamma", "vega"} <= set(out)
 
 
@@ -122,3 +122,27 @@ def test_bess_missing_offpeak_nan_row():
     assert math.isnan(r.delta_peak_mwh) and math.isnan(r.delta_offpeak_mwh)
     assert math.isnan(r.vega_cny_per_volpt)
     assert r.note == "no peak/offpeak mark"
+
+
+def test_missing_province_flagged():
+    out = portfolio_var({"蒙西": 100.0, "山东": -40.0}, {"蒙西": _alt(100)})
+    ref = portfolio_var({"蒙西": 100.0}, {"蒙西": _alt(100)})
+    assert out["parametric"] == ref["parametric"] and out["historical"] == ref["historical"]
+    assert out["provinces_missing"] == ["山东"]
+    assert out["delta_missing_mwh"] == {"山东": -40.0}
+    assert ref["provinces_missing"] == [] and ref["delta_missing_mwh"] == {}
+
+
+def test_zero_delta_province_excluded_from_join():
+    out = portfolio_var({"蒙西": 100.0, "山东": 0.0}, {"蒙西": _alt(100), "山东": _alt(10)})
+    assert out["n_scenarios"] == 100
+    assert out["provinces_missing"] == []
+
+
+def test_option_greeks_n_unpriced_int():
+    pos = pd.DataFrame([dict(direction="buy", volume_mwh=1.0, strike_cny_mwh=300.0,
+                             option_type="c", delivery_month=M, province="山东")])
+    out = option_greeks(pos, _curve([("蒙西", M, "base", 300.0)]), 0.3, AS_OF)
+    assert out["n_unpriced"] == 1 and isinstance(out["n_unpriced"], int)
+    empty = option_greeks(pos.iloc[:0], _curve([]), 0.3, AS_OF)
+    assert isinstance(empty["n_unpriced"], int)

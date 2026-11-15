@@ -51,7 +51,9 @@ def option_greeks(option_positions, curve, vol: float, as_of) -> dict[str, float
     Forward = curve mark for (province, delivery_month, tou_block or 'base').
     T = years from `as_of` to delivery-month start; T <= 0 → intrinsic-only
     (delta ±1 if in the money else 0; gamma/vega/theta 0). Rows without a
-    forward mark are skipped and counted in `n_unpriced`.
+    forward mark are skipped and counted in `n_unpriced` (int).
+    Units: delta in MWh (CNY per CNY/MWh), gamma in MWh per CNY/MWh, vega in
+    CNY per 0.01 vol, theta in CNY per calendar day; T uses calendar days / 365.
     """
     import pandas as pd
 
@@ -59,15 +61,16 @@ def option_greeks(option_positions, curve, vol: float, as_of) -> dict[str, float
     from libs.options.black_scholes import b76_greeks
     from libs.positions.conventions import signed_mwh
 
-    out = {"delta_mwh": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0, "n_unpriced": 0.0}
+    out = {"delta_mwh": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0}
+    n_unpriced = 0
     if option_positions is None or option_positions.empty:
-        return out
+        return {**out, "n_unpriced": 0}
     as_of_ts = pd.Timestamp(as_of)
     for r in option_positions.to_dict("records"):
         block = r.get("tou_block") or "base"
         F = curve_lookup(curve, r["province"], r["delivery_month"], block)
         if F is None:
-            out["n_unpriced"] += 1
+            n_unpriced += 1
             continue
         K = float(r["strike_cny_mwh"])
         flag = "c" if str(r["option_type"]).lower().startswith("c") else "p"
@@ -86,4 +89,4 @@ def option_greeks(option_positions, curve, vol: float, as_of) -> dict[str, float
         out["gamma"] += q * g["gamma"]
         out["vega"] += q * g["vega"]
         out["theta"] += q * g["theta"]
-    return {k: float(v) for k, v in out.items()}
+    return {**{k: float(v) for k, v in out.items()}, "n_unpriced": n_unpriced}
