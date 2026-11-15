@@ -64,3 +64,26 @@ def test_curve_lookup_fallback():
     assert curve_lookup(c, "蒙西", date(2026, 2, 1), "peak") is None
     c = pd.concat([c, _row("manual", 400.0, "peak")])
     assert curve_lookup(c, "蒙西", date(2026, 1, 1), "peak") == 400.0
+
+
+def _tr(vols, prices=None, month=date(2026, 1, 1)):
+    n = len(vols)
+    return pd.DataFrame({"province": ["蒙西"] * n, "delivery_month": [month] * n,
+                         "tou_block": ["base"] * n, "volume_mwh": vols,
+                         "price_cny_mwh": prices or [300.0] * n})
+
+
+def test_traded_points_netting_and_negative_ignored():
+    assert traded_points(_tr([100, -100])).iloc[0:1].price_cny_mwh.tolist() == [300.0]
+    assert len(traded_points(_tr([-50, -20]))) == 0
+
+
+def test_traded_timestamp_month_lookup():
+    out = traded_points(_tr([10], month=pd.Timestamp("2026-01-01")))
+    assert curve_lookup(reference_curve(out), "蒙西", date(2026, 1, 1)) == 300.0
+    assert curve_lookup(out, "蒙西", pd.Timestamp("2026-01-01")) == 300.0
+
+
+def test_reference_curve_nan_manual_does_not_shadow():
+    c = reference_curve(_row("manual", float("nan")), _row("traded", 2))
+    assert len(c) == 1 and c.source.iloc[0] == "traded"

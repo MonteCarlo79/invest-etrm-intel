@@ -16,6 +16,11 @@ def _empty() -> pd.DataFrame:
     return pd.DataFrame(columns=CURVE_COLUMNS)
 
 
+def _to_month(v) -> date:
+    ts = pd.Timestamp(v)
+    return date(ts.year, ts.month, 1)
+
+
 def spot_seasonal(hourly: pd.DataFrame, province: str, months: list[date],
                   lookback_years: int = 2) -> pd.DataFrame:
     """Mean hourly price per block over the same calendar month of the prior
@@ -40,13 +45,17 @@ def spot_seasonal(hourly: pd.DataFrame, province: str, months: list[date],
 
 def traded_points(trades: pd.DataFrame) -> pd.DataFrame:
     t = trades.dropna(subset=["volume_mwh", "price_cny_mwh"])
-    t = t[t["volume_mwh"] != 0].copy()
+    t = t[t["volume_mwh"] > 0].copy()
     if t.empty:
         return _empty()
+    t["delivery_month"] = t["delivery_month"].map(_to_month)
     t["_pv"] = t["price_cny_mwh"] * t["volume_mwh"]
     g = t.groupby(["province", "delivery_month", "tou_block"], as_index=False)[
         ["_pv", "volume_mwh"]].sum()
     g["price_cny_mwh"] = g["_pv"] / g["volume_mwh"]
+    g = g[g["price_cny_mwh"].map(pd.notna) & (g["price_cny_mwh"].abs() != float("inf"))]
+    if g.empty:
+        return _empty()
     g["source"] = "traded"
     return g[CURVE_COLUMNS].reset_index(drop=True)
 
@@ -56,6 +65,10 @@ def reference_curve(*sources: pd.DataFrame) -> pd.DataFrame:
     if not frames:
         return _empty()
     df = pd.concat(frames, ignore_index=True)
+    df = df.dropna(subset=["price_cny_mwh"])
+    if df.empty:
+        return _empty()
+    df["delivery_month"] = df["delivery_month"].map(_to_month)
     df["_p"] = df["source"].map(_PRIORITY).fillna(len(_PRIORITY))
     df = df.sort_values("_p", kind="stable").drop_duplicates(
         ["province", "delivery_month", "tou_block"], keep="first")
@@ -67,7 +80,9 @@ def curve_lookup(curve: pd.DataFrame, province: str, month: date,
                  tou_block: str = "base") -> float | None:
     if curve is None or curve.empty:
         return None
-    sub = curve[(curve.province == province) & (curve.delivery_month == month)]
+    month = _to_month(month)
+    sub = curve[(curve.province == province)
+                & (curve.delivery_month.map(_to_month) == month)]
     for b in (tou_block, "base"):
         hit = sub[sub.tou_block == b]
         if not hit.empty:
