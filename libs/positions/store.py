@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+import logging
 from datetime import date
 
 import pandas as pd
@@ -10,6 +11,20 @@ from sqlalchemy import text
 from libs.positions.conventions import (
     POSITION_COLUMNS, PROVINCE_ALIASES, Position, canonical_province, positions_frame, signed_mwh,
 )
+
+
+log = logging.getLogger(__name__)
+
+
+def _read_province(name, what: str, skipped: list) -> str | None:
+    """Read paths (I6): an unmapped province skips the row/book with a warning instead of
+    raising. Write paths (replace_physical, save_curve) still raise."""
+    try:
+        return canonical_province(name)
+    except ValueError as e:
+        log.warning("skipping %s: %s", what, e)
+        skipped.append(f"{what}: {e}")
+        return None
 
 
 def _d(v) -> date:
@@ -41,8 +56,11 @@ def load_positions(engine, book_ids: list[int] | None = None, status: str = "ope
     with engine.connect() as conn:
         raw = conn.execute(text(sql), params).mappings().all()
     out: list[Position] = []
+    skipped: list[str] = []
     for r in raw:
-        prov = canonical_province(r["province"])
+        prov = _read_province(r["province"], f"rm_positions row (book {r['book_id']})", skipped)
+        if prov is None:
+            continue
         start, end = _d(r["start_date"]), _d(r["end_date"])
         pieces = list(_month_pieces(start, end))
         total_days = sum(d for _, d in pieces)
@@ -60,7 +78,9 @@ def load_positions(engine, book_ids: list[int] | None = None, status: str = "ope
                 instrument_type=r["instrument_type"], channel=r["channel"],
                 basis=r["basis"] or "",
             ))
-    return positions_frame(out)
+    df = positions_frame(out)
+    df.attrs["skipped"] = skipped
+    return df
 
 
 def replace_physical(engine, book_id: int, rows: list[Position]) -> int:
@@ -96,8 +116,19 @@ def load_books(engine) -> pd.DataFrame:
             " FROM marketdata.rm_books b LEFT JOIN marketdata.rm_assets a ON a.id = b.asset_id"
             " ORDER BY b.id")).mappings().all()
     df = pd.DataFrame([dict(r) for r in raw], columns=cols)
-    df["province"] = [None if (b is None or pd.isna(p)) else canonical_province(p)
-                      for b, p in zip(df["asset_id"], df["province"])]
+    skipped: list[str] = []
+    provs, keep = [], []
+    for bid, aid, p in zip(df["book_id"], df["asset_id"], df["province"]):
+        if aid is None or pd.isna(aid) or p is None or pd.isna(p):
+            provs.append(None)
+            keep.append(True)
+            continue
+        prov = _read_province(p, f"book {bid}", skipped)
+        provs.append(prov)
+        keep.append(prov is not None)
+    df["province"] = provs
+    df = df[pd.Series(keep, index=df.index, dtype=bool)].reset_index(drop=True)
+    df.attrs["skipped"] = skipped
     return df
 
 
@@ -106,7 +137,10 @@ def load_book_province(engine, book_id: int) -> str | None:
     with engine.connect() as conn:
         raw = conn.execute(text("SELECT province FROM marketdata.rm_positions WHERE book_id = :b"),
                            {"b": book_id}).scalars().all()
-    provs = pd.Series([canonical_province(p) for p in raw if p is not None], dtype=object)
+    skipped: list[str] = []
+    mapped = [_read_province(p, f"rm_positions province (book {book_id})", skipped)
+              for p in raw if p is not None]
+    provs = pd.Series([p for p in mapped if p is not None], dtype=object)
     if provs.empty:
         return None
     counts = provs.value_counts()

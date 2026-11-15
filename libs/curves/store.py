@@ -1,6 +1,7 @@
 """DB store for the reference curve (marketdata.rm_forward_curves, product='reference')."""
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 import pandas as pd
@@ -9,8 +10,11 @@ from sqlalchemy import bindparam, text
 from libs.curves.curve import CURVE_COLUMNS, _to_month
 from libs.positions.conventions import PROVINCE_ALIASES, canonical_province
 
+log = logging.getLogger(__name__)
+
 PRODUCT = "reference"
 _PRICE_COLS = ("rt_price", "da_price")
+PROVINCE_ALIASES_FLAT = frozenset(a for al in PROVINCE_ALIASES.values() for a in al)
 
 
 def load_curve(engine, province: str | None = None, as_of: date | None = None) -> pd.DataFrame:
@@ -31,6 +35,13 @@ def load_curve(engine, province: str | None = None, as_of: date | None = None) -
         df = pd.read_sql(stmt, c, params=params)
     if df.empty:
         return pd.DataFrame(columns=CURVE_COLUMNS)
+    known = df["province"].isin(PROVINCE_ALIASES_FLAT)
+    if not known.all():  # read path (I6): skip unmapped provinces, never raise
+        log.warning("load_curve: skipping %d rows with unmapped province(s) %s", int((~known).sum()),
+                    sorted(set(df.loc[~known, "province"].astype(str))))
+        df = df[known]
+        if df.empty:
+            return pd.DataFrame(columns=CURVE_COLUMNS)
     df["province"] = df["province"].map(canonical_province)
     df["curve_date"] = pd.to_datetime(df["curve_date"])
     df = df[df["curve_date"] == df.groupby("province")["curve_date"].transform("max")]

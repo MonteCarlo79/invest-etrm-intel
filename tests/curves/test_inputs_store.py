@@ -101,3 +101,14 @@ def test_save_alias_then_canonical_no_duplicates(eng):
     save_curve(eng, mk("冀南"), date(2026, 11, 15))
     got = load_curve(eng)
     assert len(got) == 1 and got.province.iloc[0] == "冀南"
+
+
+def test_load_curve_skips_unmapped_province(eng, caplog):
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO marketdata.rm_forward_curves (province, product, curve_date, "
+                       "delivery_date, price_cny_kwh, source, tou_block) VALUES "
+                       "('hubei','reference','2026-11-15','2026-12-01',0.3,'manual','base'),"
+                       "('蒙西','reference','2026-11-15','2026-12-01',0.4,'manual','base')"))
+    with caplog.at_level("WARNING"):
+        got = load_curve(eng)
+    assert got.province.tolist() == ["蒙西"] and "hubei" in caplog.text

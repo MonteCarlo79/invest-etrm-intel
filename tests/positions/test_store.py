@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.pool import StaticPool
 
 from libs.positions.conventions import Position
-from libs.positions.store import load_books, load_positions, replace_physical
+from libs.positions.store import load_book_province, load_books, load_positions, replace_physical
 from scripts.market_maker import migrate
 
 
@@ -65,11 +65,14 @@ def test_status_and_book_filter(engine):
     assert len(load_positions(engine, [])) == 0
 
 
-def test_unknown_province_raises(engine):
+def test_unknown_province_skipped_on_read_raises_on_write(engine, caplog):
     with engine.begin() as c:
         _bilateral(c, province="火星")
-    with pytest.raises(ValueError, match="火星"):
-        load_positions(engine)
+        _bilateral(c, book_id=22)
+    with caplog.at_level("WARNING"):
+        df = load_positions(engine)
+    assert set(df.book_id) == {22}  # I6: unmapped row skipped, not raised
+    assert any("火星" in m for m in df.attrs["skipped"]) and "火星" in caplog.text
     with pytest.raises(ValueError, match="火星"):
         replace_physical(engine, 1, [Position(1, "火星", "buy", 1.0, date(2026, 1, 1))])
 
@@ -102,6 +105,28 @@ def test_load_books(engine):
                                 "province", "capacity_mw", "bess_duration_h"]
     assert df.set_index("book_id").province[1] == "蒙西"
     assert df.set_index("book_id").province.isna()[21]
+
+
+def test_load_books_skips_unmapped_asset_province(engine, caplog):
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO marketdata.rm_assets VALUES (1,'A','bess','蒙西',100,2,'WH'),"
+                       "(2,'B','wind','hubei',50,NULL,'HB')"))
+        c.execute(text("INSERT INTO marketdata.rm_books VALUES (1,'a','asset',1),(2,'b','asset',2),"
+                       "(21,'load','load',NULL)"))
+    with caplog.at_level("WARNING"):
+        df = load_books(engine)
+    assert df.book_id.tolist() == [1, 21]
+    assert df.attrs["skipped"] and "hubei" in df.attrs["skipped"][0] and "hubei" in caplog.text
+
+
+def test_load_book_province_ignores_unmapped_rows(engine):
+    with engine.begin() as c:
+        _bilateral(c, province="火星")
+        _bilateral(c, province="火星")
+        _bilateral(c, province="河北南网")
+        _bilateral(c, book_id=30, province="火星")
+    assert load_book_province(engine, 21) == "冀南"
+    assert load_book_province(engine, 30) is None
 
 
 def test_migration_statements():
