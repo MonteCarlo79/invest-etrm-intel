@@ -19,7 +19,7 @@ import streamlit as st
 from sqlalchemy import bindparam, text
 
 from libs.asset_risk.chain import (  # noqa: F401  (re-exported for tabs/tests)
-    _attach_prices, _load_chain, _load_prices, _month_token_bounds, _ts_expr,
+    _attach_prices, _check_sign, _load_chain, _load_prices, _month_token_bounds, _ts_expr,
 )
 from libs.asset_risk.diagnostics import (  # noqa: F401  (re-exported for tabs/tests)
     AUTO_NOM_CODE, CAPCOMP_RATE, CAPCOMP_RATE_DEFAULT, PLANT_MAP,
@@ -39,6 +39,14 @@ def _load_assets(engine) -> pd.DataFrame:
         ), conn)
     return df[df["name"].isin(chain_asset_names(engine))].reset_index(drop=True)
 
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_chain(_engine, ids: tuple[int, ...], start: str | None,
+                  end: str | None) -> pd.DataFrame:
+    plant_map, nom_map, _ = load_maps(_engine)
+    return _load_chain(_engine, list(ids), start, end, nom_code_map=nom_map,
+                       plant_map=plant_map, check_sign=False)
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +131,15 @@ def render_diagnostics(engine):
         return
     sel_ids = assets[assets["name"].isin(sel_assets)]["id"].tolist()
 
-    chain = _load_chain(engine, sel_ids, start, end,
-                        nom_code_map=nom_map, plant_map=plant_map)
+    chain = _cached_chain(engine, tuple(sorted(int(i) for i in sel_ids)), start, end).copy()
     if chain.empty:
         st.info("所选范围无调度链数据。")
         return
+    try:
+        _check_sign(chain)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
     prices = _load_prices(engine, [plant_map[a] for a in sel_assets], start, end)
     df = _attach_prices(chain, prices, {a: plant_map[a] for a in sel_assets})
     df["month"] = df["ts"].dt.strftime("%Y-%m")

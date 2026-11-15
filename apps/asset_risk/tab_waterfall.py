@@ -43,7 +43,7 @@ from libs.asset_risk.diagnostics import (
     load_maps,
     exec_gap_monthly,
 )
-from libs.asset_risk.chain import _attach_prices, _load_chain, _load_prices
+from libs.asset_risk.chain import _attach_prices, _check_sign, _load_chain, _load_prices
 
 
 
@@ -130,6 +130,27 @@ def _ensure_legs_table(_engine):
     return True
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_chain(_engine, ids: tuple[int, ...]) -> pd.DataFrame:
+    """Full-history chain for the waterfall's month list (sign guard deferred to
+    the displayed subset)."""
+    plant_map, nom_map, _ = load_maps(_engine)
+    return _load_chain(_engine, list(ids), None, None, nom_code_map=nom_map,
+                       plant_map=plant_map, check_sign=False)
+
+
+# The current (incomplete) month is never persisted by get_or_compute — these
+# short-TTL wrappers stop the default view re-solving its LPs on every rerun.
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_benchmark_leg(_engine, *args, **kwargs):
+    return _wf.benchmark_leg(_engine, *args, **kwargs)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_forecast_leg(_engine, *args, **kwargs):
+    return _wf.forecast_optimal_leg(_engine, *args, **kwargs)
+
+
 
 _DEFINITIONS_MD = """
 **偏差定义（来源：蒙西储能 2026 上半年复盘，slides 7–18）**
@@ -175,8 +196,7 @@ def render_waterfall(engine):
         return
 
     plant_map, nom_map, rate_map = load_maps(engine)
-    chain = _load_chain(engine, assets["id"].tolist(), None, None,
-                        nom_code_map=nom_map, plant_map=plant_map)
+    chain = _cached_chain(engine, tuple(sorted(int(i) for i in assets["id"]))).copy()
     if chain.empty:
         st.info("No dispatch-chain data.")
         return
@@ -195,6 +215,9 @@ def render_waterfall(engine):
     _ensure_legs_table(engine)
     force_legs = st.button("重算所选月份", key="wf_recompute",
                            help="忽略已存储的投资标准/预测最优腿，对所选资产×月份重新求解并覆盖")
+    if force_legs:
+        _cached_benchmark_leg.clear()
+        _cached_forecast_leg.clear()
 
     df = chain[chain["month"].isin(sel_months)].copy()
     month_end = (pd.Timestamp(max(sel_months) + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
@@ -212,6 +235,11 @@ def render_waterfall(engine):
         # frame → KeyError: 'dis_mwh' on the cap line.
         st.info("所选资产在所选月份没有调度链数据（该月链条由其他资产贡献）。")
         return
+    try:
+        _check_sign(df)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
 
     # --- legs ---
     nominated = stage_arbitrage(df, "nominated_mw")
@@ -258,16 +286,19 @@ def render_waterfall(engine):
         rate = rate_map.get(a["name"], CAPCOMP_RATE_DEFAULT)
         aid = int(a["id"])
         ikey = legs_inputs_key(a["capacity_mw"], a["bess_duration_h"], commission_iso, rate)
+        # 重算 bypasses the TTL cache so it really re-solves.
+        bench_fn = _wf.benchmark_leg if force_legs else _cached_benchmark_leg
+        fc_fn = _wf.forecast_optimal_leg if force_legs else _cached_forecast_leg
         r = get_or_compute(
             engine, "benchmark", aid, month,
-            lambda: _wf.benchmark_leg(engine, aid, month, float(a["capacity_mw"]),
+            lambda: bench_fn(engine, aid, month, float(a["capacity_mw"]),
                                       float(a["bess_duration_h"]), commission_iso, rate,
                                       plant_map[a["name"]], asset_name=a["name"],
                                       asset_code=nom_map.get(a["name"])),
             force=force_legs, inputs_key=ikey)
         fr = get_or_compute(
             engine, "forecast", aid, month,
-            lambda: _wf.forecast_optimal_leg(engine, aid, month, float(a["capacity_mw"]),
+            lambda: fc_fn(engine, aid, month, float(a["capacity_mw"]),
                                              float(a["bess_duration_h"]), commission_iso,
                                              plant_map[a["name"]]),
             force=force_legs, inputs_key=ikey)
