@@ -56,5 +56,5 @@ def test_snapshot_recompute_with_marked_mtm(engine, monkeypatch, capsys):
     rc = vs.main(["--as-of", AS_OF.isoformat()])
     out = capsys.readouterr().out
     mtm = [l for l in out.splitlines() if l.startswith("total_mtm_cny:")][0]
-    assert "db=None" not in mtm and "snapshot=None" not in mtm
+    assert "None" not in mtm and "nan" not in mtm
     assert rc == 0 and "MAX_ABS_DIFF 0.0" in out
