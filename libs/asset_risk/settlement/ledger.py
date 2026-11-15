@@ -41,7 +41,7 @@ def _has_category(engine, book_id: int, settlement_month: str, category: str) ->
 
 
 def _delete_book_month_file(conn, book_id: int, settlement_month, file_name: str):
-    """Delete settlement record(s) + items for book+month+file_name (overwrite path).
+    """Delete settlement headers + items for book+month+file_name (overwrite path).
 
     Only called AFTER a successful parse — a refused/failed upload must never
     destroy existing data (observed 2026-09-14: overwrite checked + scanned
@@ -53,6 +53,12 @@ def _delete_book_month_file(conn, book_id: int, settlement_month, file_name: str
             SELECT id FROM marketdata.rm_settlements
             WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
         )
+    """), {"bid": book_id, "month": settlement_month, "fname": file_name})
+    # Header rows too: an orphan header keeps its file_hash and makes
+    # _already_ingested report an identical re-upload as already ingested.
+    conn.execute(text("""
+        DELETE FROM marketdata.rm_settlements
+        WHERE book_id = :bid AND settlement_month = :month AND file_name = :fname
     """), {"bid": book_id, "month": settlement_month, "fname": file_name})
 
 

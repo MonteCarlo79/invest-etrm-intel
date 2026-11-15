@@ -87,3 +87,45 @@ def test_insert_settlement_pdf_and_excel_items(sqlite_engine):
                                  "FROM marketdata.rm_settlement_items ORDER BY settlement_id")).fetchall()
     assert rows[0][:4] == (sid1, "discharge_energy", 100.0, "peak") and rows[0][4] is None
     assert rows[1][:3] == (sid2, "capacity_compensation", 50.0) and rows[1][4] == 10.0
+
+
+def test_overwrite_leaves_single_header_and_no_orphans(sqlite_engine):
+    from libs.asset_risk.settlement.ledger import insert_settlement, _delete_book_month_file
+    old = [{"category": "discharge_energy", "amount_cny": 100.0}]
+    new = [{"category": "discharge_energy", "amount_cny": 120.0}]
+    other = [{"category": "discharge_energy", "amount_cny": 5.0}]
+    with sqlite_engine.begin() as conn:
+        insert_settlement(conn, 7, "2026-03-01", "a.pdf", "pdf", "hold", old)
+        insert_settlement(conn, 7, "2026-03-01", "other.pdf", "pdf", "hother", other)
+    with sqlite_engine.begin() as conn:
+        _delete_book_month_file(conn, 7, "2026-03-01", "a.pdf")
+        new_id = insert_settlement(conn, 7, "2026-03-01", "a.pdf", "pdf", "hnew", new)
+    with sqlite_engine.connect() as conn:
+        heads = conn.execute(text(
+            "SELECT id FROM marketdata.rm_settlements WHERE file_name = 'a.pdf'")).fetchall()
+        orphans = conn.execute(text(
+            "SELECT COUNT(*) FROM marketdata.rm_settlements s WHERE NOT EXISTS "
+            "(SELECT 1 FROM marketdata.rm_settlement_items i WHERE i.settlement_id = s.id)")).scalar()
+        items = conn.execute(text(
+            "SELECT amount_cny FROM marketdata.rm_settlement_items WHERE settlement_id = :s"),
+            {"s": new_id}).fetchall()
+        n_other = conn.execute(text(
+            "SELECT COUNT(*) FROM marketdata.rm_settlements WHERE file_name = 'other.pdf'")).scalar()
+    assert [h[0] for h in heads] == [new_id]
+    assert orphans == 0
+    assert items == [(120.0,)]
+    assert n_other == 1
+
+
+def test_already_ingested_false_for_old_hash_after_overwrite(sqlite_engine):
+    from libs.asset_risk.settlement.ledger import insert_settlement, _delete_book_month_file
+    with sqlite_engine.begin() as conn:
+        insert_settlement(conn, 7, "2026-03-01", "a.pdf", "pdf", "hold",
+                          [{"category": "discharge_energy", "amount_cny": 1.0}])
+    assert _already_ingested(sqlite_engine, 7, "2026-03-01", "hold") is True
+    with sqlite_engine.begin() as conn:
+        _delete_book_month_file(conn, 7, "2026-03-01", "a.pdf")
+        insert_settlement(conn, 7, "2026-03-01", "a.pdf", "pdf", "hnew",
+                          [{"category": "discharge_energy", "amount_cny": 2.0}])
+    assert _already_ingested(sqlite_engine, 7, "2026-03-01", "hold") is False
+    assert _already_ingested(sqlite_engine, 7, "2026-03-01", "hnew") is True
