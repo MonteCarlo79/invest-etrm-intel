@@ -12,6 +12,8 @@ conversation.
 If a tool returns actual_complete=false / actual_bills_missing, say settlement bills
 for those asset-months are not yet ingested; never describe 实际 or Δ执行与费用 for
 them as zero, collapsed, or a loss.
+If a tool returns benchmark_complete=false, say the investment-standard benchmark is
+unavailable for those asset-months; never describe 投资标准 as zero or Δ策略与预测 as a gain.
 
 You are the Asset Risk agent for a Chinese electricity trading company's risk app.
 
@@ -218,6 +220,7 @@ def _get_waterfall(inputs: dict, engine) -> dict:
     from libs.asset_risk import legs_store
     from libs.asset_risk.chain import _attach_prices, _check_sign, _load_chain, _load_prices
     from libs.asset_risk.diagnostics import CAPCOMP_RATE_DEFAULT, load_maps
+    from libs.asset_risk.legs_store import DEGENERATE_NOTES
 
     months = sorted({str(m)[:7] for m in inputs["months"]})
     if not months:
@@ -269,6 +272,7 @@ def _get_waterfall(inputs: dict, engine) -> dict:
 
     legs_store.ensure_table(engine)
     bench_rows = []
+    bench_bad = []
     for _, a in assets.iterrows():
         commission_iso = (str(a["commission_date"])[:10]
                           if pd.notna(a.get("commission_date")) else None)
@@ -290,6 +294,8 @@ def _get_waterfall(inputs: dict, engine) -> dict:
                                                     float(a["bess_duration_h"]), commission_iso,
                                                     plant_map[a["name"]]),
                 inputs_key=ikey)
+            if r.get("note") in DEGENERATE_NOTES:
+                bench_bad.append(f"{a['name']} {month}")
             bench_rows.append({"asset": a["name"], "month": month, **r,
                                "fc_arb_cny": fr.get("arb_cny") or 0.0})
     bench = pd.DataFrame(bench_rows) if bench_rows else pd.DataFrame(
@@ -315,15 +321,30 @@ def _get_waterfall(inputs: dict, engine) -> dict:
         attr.loc[bill_rows, "cny"] = None
         attr["mwh"] = attr["mwh"].astype(object)
         attr.loc[bill_rows, "mwh"] = None
+    if bench_bad:
+        stage_totals["投资标准"] = None
+        stage_totals["Δ策略与预测"] = None
+        bench_dep = ((attr["偏差区间"] == "Δ策略与预测")
+                     & attr["成因"].str.startswith(("预测误差", "容量补偿")))
+        attr["cny"] = attr["cny"].astype(object)
+        attr.loc[bench_dep, "cny"] = None
+        attr["mwh"] = attr["mwh"].astype(object)
+        attr.loc[bench_dep, "mwh"] = None
     out = {
         "stage_totals": stage_totals,
         "attribution": _records(attr),
+        "benchmark_unavailable": bench_bad,
+        "benchmark_complete": not bench_bad,
         "cleared_untrusted": [f"{a} {m}" for a, m in cleared_untrusted],
         "actual_bills_missing": missing_labels,
         "actual_complete": not missing,
     }
     if missing:
         out["note"] = wf_mod.MISSING_BILLS_NOTE.format(keys="、".join(missing_labels))
+    if bench_bad:
+        bnote = ("以下资产×月份投资标准无可用电价（结算电价缺失且无节点填充电价）："
+                 + "、".join(bench_bad) + "；投资标准与Δ策略与预测不可用。")
+        out["note"] = (out["note"] + " " + bnote) if out.get("note") else bnote
     return out
 
 

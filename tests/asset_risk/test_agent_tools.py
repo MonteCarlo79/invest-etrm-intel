@@ -289,6 +289,37 @@ def test_get_waterfall_tool(wf_engine, _fake_legs):
     json.dumps(r)
 
 
+def test_get_waterfall_degenerate_benchmark_flagged(wf_engine, monkeypatch):
+    import libs.asset_risk.waterfall as wf
+    monkeypatch.setattr(wf, "benchmark_leg", lambda *a, **k: {
+        "arb_cny": 0.0, "dis_mwh": 0.0, "chg_mwh": 0.0, "cap_cny": 0.0,
+        "days_solved": 0, "days_skipped": 30, "age": 0, "note": "no prices"})
+    monkeypatch.setattr(wf, "forecast_optimal_leg",
+                        lambda *a, **k: {"arb_cny": 2500.0, "note": ""})
+    r = _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-06"]}, wf_engine)
+    assert r["benchmark_complete"] is False
+    assert r["benchmark_unavailable"] == ["悦杭独贵 2026-06"]
+    assert r["stage_totals"]["投资标准"] is None
+    assert r["stage_totals"]["Δ策略与预测"] is None
+    assert "投资标准无可用电价" in r["note"]
+    seg = [x for x in r["attribution"] if x["偏差区间"] == "Δ策略与预测"]
+    dep = [x for x in seg if x["成因"].startswith(("预测误差", "容量补偿"))]
+    assert len(dep) == 2 and all(x["cny"] is None and x["mwh"] is None for x in dep)
+    keep = [x for x in seg if x["成因"].startswith("申报策略选择")]
+    assert keep and keep[0]["cny"] is not None
+    json.dumps(r)
+
+
+def test_get_waterfall_normal_benchmark_complete(wf_engine, _fake_legs):
+    r = _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-06"]}, wf_engine)
+    assert r["benchmark_complete"] is True and r["benchmark_unavailable"] == []
+    assert r["stage_totals"]["投资标准"] is not None
+
+
+def test_system_prompt_has_benchmark_rule():
+    assert "benchmark_complete=false" in _AGENT_BASE_SYSTEM
+
+
 def test_get_waterfall_unit_ratio_error(wf_engine, _fake_legs):
     with wf_engine.begin() as conn:
         conn.execute(text("UPDATE marketdata.rm_settlement_items SET volume_mwh = 3 "
