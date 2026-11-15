@@ -6,6 +6,8 @@ Two methods:
 """
 from __future__ import annotations
 
+from statistics import NormalDist
+
 import numpy as np
 import pandas as pd
 
@@ -110,6 +112,6 @@ def portfolio_var(
     hist = max(-float(np.quantile(pnl, 1 - confidence)) * sqrt_h, 0.0)
 
     cov = np.atleast_2d(np.cov(x, rowvar=False))
-    z = Z_SCORES.get(confidence, 1.6449)
+    z = NormalDist().inv_cdf(confidence)  # any confidence, not just 0.95 / 0.99 (M4)
     para = float(z * np.sqrt(max(float(d @ cov @ d), 0.0)) * sqrt_h)
     return {"historical": float(hist), "parametric": para, "n_scenarios": n, **extra}

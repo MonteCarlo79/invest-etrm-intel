@@ -146,3 +146,19 @@ def test_option_greeks_n_unpriced_int():
     assert out["n_unpriced"] == 1 and isinstance(out["n_unpriced"], int)
     empty = option_greeks(pos.iloc[:0], _curve([]), 0.3, AS_OF)
     assert isinstance(empty["n_unpriced"], int)
+
+
+def test_parametric_z_follows_confidence():
+    from statistics import NormalDist
+    import pytest
+    import numpy as np
+    import pandas as pd
+    from libs.risk.var import portfolio_var
+    idx = pd.date_range("2026-01-01", periods=60)
+    scen = {"蒙西": pd.Series(np.sin(np.arange(60)) * 10, index=idx)}
+    p95 = portfolio_var({"蒙西": 100.0}, scen, confidence=0.95)["parametric"]
+    p90 = portfolio_var({"蒙西": 100.0}, scen, confidence=0.90)["parametric"]
+    p975 = portfolio_var({"蒙西": 100.0}, scen, confidence=0.975)["parametric"]
+    nd = NormalDist()
+    assert p90 / p95 == pytest.approx(nd.inv_cdf(0.90) / nd.inv_cdf(0.95))
+    assert p975 / p95 == pytest.approx(nd.inv_cdf(0.975) / nd.inv_cdf(0.95))
