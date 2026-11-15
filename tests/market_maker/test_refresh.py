@@ -247,3 +247,19 @@ def test_stale_physical_rows_flagged(engine):
         assert c.execute(text("SELECT count(*) FROM marketdata.rm_positions WHERE source='physical'"
                               " AND book_id=6")).scalar() == 12
     assert out["books"][8] == "no dispatch chain"  # never had rows: plain skip
+
+
+def test_skipped_book_province_still_gets_curve(engine):
+    # I7: 广西's only book is a BESS with no dispatch chain (skipped) -> still a spot_seasonal curve
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO marketdata.rm_assets VALUES (5,'灵山','bess','guangxi',100,2,'lingshan')"))
+        c.execute(text("INSERT INTO marketdata.rm_books VALUES (10,'lingshan','asset',5)"))
+        c.execute(text("INSERT INTO marketdata.spot_prices_hourly VALUES (:p,:t,300,NULL)"),
+                  [{"p": "广西", "t": datetime(2025, 12, 1) + timedelta(hours=h)} for h in range(72)])
+    out = rf.refresh(engine, AS_OF, horizon_months=12)
+    assert out["books"][10] == "no dispatch chain"
+    assert out["curves"]["广西"] > 0
+    with engine.connect() as c:
+        src = {r[0] for r in c.execute(text("SELECT source FROM marketdata.rm_forward_curves"
+                                            " WHERE province='广西'"))}
+    assert src == {"spot_seasonal"}

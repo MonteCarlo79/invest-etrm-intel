@@ -165,6 +165,8 @@ def refresh(engine, as_of: date, horizon_months: int = 12, dry_run: bool = False
     for b in books[books["book_type"] == "asset"].itertuples(index=False):
         bid = int(b.book_id)
         try:
+            if b.province is not None:  # I7: skipped books' provinces still get a curve
+                curve_provs.setdefault(b.province, [])
             rows, reason = _asset_rows(engine, b, months, start, end)
             if reason:
                 n, last = _physical_state(engine, bid)
@@ -177,7 +179,6 @@ def refresh(engine, as_of: date, horizon_months: int = 12, dry_run: bool = False
                 out["skipped"].append((bid, reason))
                 continue
             out["books"][bid] = len(rows) if dry_run else replace_physical(engine, bid, rows)
-            curve_provs.setdefault(b.province, [])
         except Exception as e:  # noqa: BLE001 — isolate per book
             fail("books", bid, e)
 
