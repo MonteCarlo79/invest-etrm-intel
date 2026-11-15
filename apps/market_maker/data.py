@@ -88,6 +88,25 @@ def book_name_map(sel: dict) -> dict[int, str]:
     return {int(b): n for b, n in zip(sel["books"]["book_id"], sel["books"]["book_name"])}
 
 
+def month_start(as_of) -> date:
+    ts = pd.Timestamp(as_of)
+    return date(ts.year, ts.month, 1)
+
+
+def is_delivered(delivery_month, as_of) -> bool:
+    """Delivery month strictly before the as-of month (fully delivered)."""
+    return pd.Timestamp(delivery_month) < pd.Timestamp(month_start(as_of))
+
+
+def forward_only(exp: pd.DataFrame, as_of) -> pd.DataFrame:
+    """R16: keep delivery months from the as-of month on; delivered energy has no forward
+    price risk, so delta / VaR / stress must not include it."""
+    if exp.empty:
+        return exp
+    keep = pd.to_datetime(exp["delivery_month"]) >= pd.Timestamp(month_start(as_of))
+    return exp[keep].reset_index(drop=True)
+
+
 def month_label(v) -> str:
     return pd.Timestamp(v).strftime("%Y-%m")
 

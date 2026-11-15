@@ -7,7 +7,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from apps.market_maker.data import (
-    DASH, PHYS_FIN_COLORS, book_name_map, fmt_num, get_curve, month_label, selected_positions,
+    DASH, PHYS_FIN_COLORS, book_name_map, fmt_num, get_curve, is_delivered, month_label,
+    selected_positions,
 )
 from libs.risk.exposure import exposure
 
@@ -27,9 +28,11 @@ def render_exposure(engine, sel: dict) -> None:
     if pos.empty:
         st.info("No positions for the selected books and provinces — no exposure to show.")
         return
+    st.caption("Months marked (delivered) are before the as-of month and carry no forward price risk.")
     exp = exposure(pos, get_curve(engine, sel["as_of"]))
     names = book_name_map(sel)
-    exp["month"] = exp["delivery_month"].map(month_label)
+    exp["month"] = [month_label(m) + (" (delivered)" if is_delivered(m, sel["as_of"]) else "")
+                    for m in exp["delivery_month"]]
     exp["book"] = exp["book_id"].map(lambda b: f"{b} · {names.get(int(b), '?')}")
 
     st.markdown("**Net MWh by month × book** (buy +, sell −)")

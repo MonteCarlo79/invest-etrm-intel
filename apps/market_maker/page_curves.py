@@ -47,9 +47,19 @@ def parse_manual_csv(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     return pd.DataFrame(rows, columns=CURVE_COLUMNS), errors
 
 
+def read_manual_csv(f) -> tuple[pd.DataFrame, list[str]]:
+    """parse_manual_csv on an uploaded file; unreadable files become an error, not a traceback."""
+    try:
+        return parse_manual_csv(pd.read_csv(f))
+    except Exception as e:  # noqa: BLE001 — malformed upload: report it
+        return pd.DataFrame(columns=CURVE_COLUMNS), [f"could not read the CSV: {type(e).__name__}: {e}"]
+
+
 def merge_manual(engine, manual: pd.DataFrame, curve_date: date) -> pd.DataFrame:
     """save_curve replaces the whole (province, curve_date) set, so carry the latest saved
-    curve forward and let the new manual points win (listed first = kept on ties)."""
+    curve forward. reference_curve resolves duplicate (province, month, block) points by source
+    priority (manual > traded > spot_seasonal); between two manual points the new upload wins
+    because it is listed first (stable sort)."""
     frames = [manual]
     for prov in sorted(manual["province"].unique()):
         frames.append(load_curve(engine, prov, curve_date))
@@ -105,7 +115,7 @@ def _upload_section(engine) -> None:
     f = st.file_uploader("Manual points CSV", type=["csv"], key="mm_curve_csv")
     if f is None:
         return
-    manual, errors = parse_manual_csv(pd.read_csv(f))
+    manual, errors = read_manual_csv(f)
     for e in errors:
         st.error(e)
     if manual.empty:

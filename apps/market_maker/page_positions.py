@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from apps.market_maker.data import book_name_map, month_label, selected_positions
+from apps.market_maker.data import book_name_map, is_delivered, month_label, selected_positions
 
 _BADGE = {"physical": "blue", "bilateral": "orange", "manual": "green"}
 _COLS = ["delivery_month", "province", "tou_block", "direction", "volume_mwh", "price_cny_mwh",
@@ -18,12 +18,14 @@ def render_positions(engine, sel: dict) -> None:
         return
     names = book_name_map(sel)
     st.caption(f"{len(pos):,} rows (month pieces) across {pos['book_id'].nunique()} books. "
-               "Load-book physical rows are computed in memory from active retail contracts.")
+               "Load-book physical rows are computed in memory from active retail contracts. "
+               "delivered = delivery month before the as-of month.")
     for bid, g in pos.groupby("book_id", sort=True):
         counts = g["source"].value_counts()
         badges = " ".join(f":{_BADGE.get(s, 'gray')}-badge[{s} · {n}]" for s, n in counts.items())
         st.markdown(f"**{bid} · {names.get(int(bid), '?')}** &nbsp; {badges}")
         view = g[_COLS].copy()
+        view.insert(1, "delivered", [is_delivered(m, sel["as_of"]) for m in view["delivery_month"]])
         view["delivery_month"] = view["delivery_month"].map(month_label)
         view.loc[view["source"] != "physical", "basis"] = ""
         st.dataframe(view.sort_values(["delivery_month", "province", "tou_block"]),
