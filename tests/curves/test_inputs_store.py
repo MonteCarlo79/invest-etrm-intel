@@ -112,3 +112,15 @@ def test_load_curve_skips_unmapped_province(eng, caplog):
     with caplog.at_level("WARNING"):
         got = load_curve(eng)
     assert got.province.tolist() == ["蒙西"] and "hubei" in caplog.text
+
+
+def test_save_curve_drops_rows_without_source(eng, caplog):
+    curve = pd.DataFrame([["蒙西", date(2026, 12, 1), "base", 300.0, "traded"],
+                          ["蒙西", date(2026, 12, 1), "peak", 400.0, None],
+                          ["蒙西", date(2026, 12, 1), "offpeak", 200.0, ""]], columns=CURVE_COLUMNS)
+    with caplog.at_level("WARNING"):
+        assert save_curve(eng, curve, date(2026, 11, 15)) == 1
+    assert "without a source" in caplog.text
+    with eng.connect() as c:
+        rows = c.execute(text("SELECT tou_block, source FROM marketdata.rm_forward_curves")).all()
+    assert rows == [("base", "traded")]

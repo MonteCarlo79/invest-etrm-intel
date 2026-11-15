@@ -56,11 +56,15 @@ def save_curve(engine, curve: pd.DataFrame, curve_date: date) -> int:
     """Idempotent: DELETE-then-INSERT in one transaction, scoped to
     (province, product='reference', curve_date) for provinces in `curve`."""
     c = curve.dropna(subset=["delivery_month", "price_cny_mwh"])
+    no_src = c["source"].isna() | (c["source"].astype(str).str.strip() == "")
+    if no_src.any():  # M3: never write source '' — drop with a warning
+        log.warning("save_curve: dropping %d rows without a source", int(no_src.sum()))
+        c = c[~no_src]
     if c.empty:
         return 0
     rows = [{"province": canonical_province(r.province), "product": PRODUCT, "cd": curve_date,
              "dd": _to_month(r.delivery_month), "blk": r.tou_block,
-             "kwh": float(r.price_cny_mwh) / 1000.0, "src": "" if pd.isna(r.source) else r.source}
+             "kwh": float(r.price_cny_mwh) / 1000.0, "src": r.source}
             for r in c.itertuples()]
     with engine.begin() as conn:
         for prov in {r["province"] for r in rows}:
