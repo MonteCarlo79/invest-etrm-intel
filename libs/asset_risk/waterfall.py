@@ -89,6 +89,15 @@ def missing_bill_keys(actual, assets, months):
     return [(a, m) for a in assets for m in months if (a, m) not in have]
 
 
+def restrict_to_keys(df, keys):
+    """Rows of df whose (asset, month) is in keys (pure; empty-safe)."""
+    keys = set(keys)
+    if df.empty or not keys:
+        return df.iloc[0:0]
+    mask = [(a, m) in keys for a, m in zip(df["asset"], df["month"])]
+    return df[mask]
+
+
 MISSING_BILLS_NOTE = ("以下资产×月份尚无结算单（通常次月中旬发布）：{keys}；"
                       "实际段与Δ执行与费用不可用，不代表收入为零。")
 

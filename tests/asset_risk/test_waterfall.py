@@ -459,3 +459,14 @@ def test_benchmark_leg_price_index_is_md_datetime_plus_15(sqlite_engine, monkeyp
     s = seen[0]
     assert list(s.index) == [pd.Timestamp("2026-06-01 00:00"), pd.Timestamp("2026-06-01 00:15")]
     assert list(s.values) == [11.0, 12.0]
+
+
+def test_restrict_to_keys_filters_asset_month_pairs():
+    from libs.asset_risk.waterfall import restrict_to_keys
+    df = pd.DataFrame({"asset": ["A", "A", "B"], "month": ["2026-05", "2026-06", "2026-06"],
+                       "arb_cny": [1.0, 2.0, 3.0]})
+    out = restrict_to_keys(df, [("A", "2026-06"), ("B", "2026-06")])
+    assert out[["asset", "month"]].values.tolist() == [["A", "2026-06"], ["B", "2026-06"]]
+    assert restrict_to_keys(df, []).empty
+    empty = pd.DataFrame(columns=["asset", "month"])
+    assert restrict_to_keys(empty, [("A", "2026-06")]).empty

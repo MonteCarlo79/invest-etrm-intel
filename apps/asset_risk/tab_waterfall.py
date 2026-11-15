@@ -347,6 +347,19 @@ def render_waterfall(engine):
                                 "fee_cny": 0.0, "other_cny": 0.0}
                                for n in assets["name"] for m in sel_months])
         st.caption("所选月份无结算单 — 实际段显示为 0（账单尚未发布；通常次月中旬可得）。")
+    elif missing_bills:
+        # Partial selection: chart only asset-months that have bills.
+        missing_set = set(missing_bills)
+        billed_keys = [(n, m) for n in assets["name"] for m in sel_months
+                       if (n, m) not in missing_set]
+        st.info("以下资产×月份无结算单，已从瀑布图中排除："
+                + "、".join(f"{a} {m}" for a, m in missing_bills))
+        bench = _wf.restrict_to_keys(bench, billed_keys)
+        nominated = _wf.restrict_to_keys(nominated, billed_keys)
+        cleared = _wf.restrict_to_keys(cleared, billed_keys)
+        actual = _wf.restrict_to_keys(actual, billed_keys)
+        df = _wf.restrict_to_keys(df, billed_keys)
+        bench_rows = [r for r in bench_rows if (r["asset"], r["month"]) in set(billed_keys)]
 
     wf = build_waterfall(bench, nominated, cleared, actual)
 
@@ -356,11 +369,16 @@ def render_waterfall(engine):
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("投资标准", f"¥{sum(_tot('投资标准', c) for c in ('arb_cny', 'cap_cny')):,.0f}")
+    _nobill_help = "部分资产×月份尚无结算单"
     k2.metric("实际收益（账单）",
+              "—" if missing_bills else
               f"¥{sum(_tot('实际', c) for c in ('arb_cny', 'cap_cny', 'fee_cny', 'other_cny')):,.0f}",
-              help="现货收益 + 容量补偿 − 系统运行费 − 线损费用（复盘 slide 3 口径）")
-    k3.metric("实际套利", f"¥{_tot('实际', 'arb_cny'):,.0f}")
-    k4.metric("实际容量补偿", f"¥{_tot('实际', 'cap_cny'):,.0f}")
+              help=_nobill_help if missing_bills else
+              "现货收益 + 容量补偿 − 系统运行费 − 线损费用（复盘 slide 3 口径）")
+    k3.metric("实际套利", "—" if missing_bills else f"¥{_tot('实际', 'arb_cny'):,.0f}",
+              help=_nobill_help if missing_bills else None)
+    k4.metric("实际容量补偿", "—" if missing_bills else f"¥{_tot('实际', 'cap_cny'):,.0f}",
+              help=_nobill_help if missing_bills else None)
 
     st.plotly_chart(stage_waterfall_figure(wf), use_container_width=True)
     st.plotly_chart(deviation_breakdown_figure(wf), use_container_width=True)
