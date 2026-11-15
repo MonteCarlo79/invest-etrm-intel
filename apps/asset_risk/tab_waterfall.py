@@ -22,6 +22,7 @@ import streamlit as st
 from sqlalchemy import text
 
 from libs.asset_risk import waterfall as _wf
+from libs.asset_risk.legs_store import ensure_table, get_or_compute
 from libs.asset_risk.waterfall import (
     CLEARED_VOLUME_TOLERANCE,
     _COMPONENT_CN,
@@ -123,14 +124,10 @@ def deviation_breakdown_figure(wf: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     return fig
-@st.cache_data(show_spinner=False)
-def benchmark_leg(_engine, *args, **kwargs):
-    return _wf.benchmark_leg(_engine, *args, **kwargs)
-
-
-@st.cache_data(show_spinner=False)
-def forecast_optimal_leg(_engine, *args, **kwargs):
-    return _wf.forecast_optimal_leg(_engine, *args, **kwargs)
+@st.cache_resource(show_spinner=False)
+def _ensure_legs_table(_engine):
+    ensure_table(_engine)
+    return True
 
 
 
@@ -195,6 +192,9 @@ def render_waterfall(engine):
     if not sel_months:
         st.info("请选择月份。")
         return
+    _ensure_legs_table(engine)
+    force_legs = st.button("重算所选月份", key="wf_recompute",
+                           help="忽略已存储的投资标准/预测最优腿，对所选资产×月份重新求解并覆盖")
 
     df = chain[chain["month"].isin(sel_months)].copy()
     month_end = (pd.Timestamp(max(sel_months) + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
@@ -256,14 +256,21 @@ def render_waterfall(engine):
     def _solve(item):
         a, month, commission_iso = item
         rate = rate_map.get(a["name"], CAPCOMP_RATE_DEFAULT)
-        r = benchmark_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
-                          float(a["bess_duration_h"]), commission_iso, rate,
-                          plant_map[a["name"]], asset_name=a["name"],
-                          asset_code=nom_map.get(a["name"]))
-        fr = forecast_optimal_leg(engine, int(a["id"]), month, float(a["capacity_mw"]),
-                                  float(a["bess_duration_h"]), commission_iso,
-                                  plant_map[a["name"]])
-        return {"asset": a["name"], "month": month, **r, "fc_arb_cny": fr.get("arb_cny", 0.0)}
+        aid = int(a["id"])
+        r = get_or_compute(
+            engine, "benchmark", aid, month,
+            lambda: _wf.benchmark_leg(engine, aid, month, float(a["capacity_mw"]),
+                                      float(a["bess_duration_h"]), commission_iso, rate,
+                                      plant_map[a["name"]], asset_name=a["name"],
+                                      asset_code=nom_map.get(a["name"])),
+            force=force_legs)
+        fr = get_or_compute(
+            engine, "forecast", aid, month,
+            lambda: _wf.forecast_optimal_leg(engine, aid, month, float(a["capacity_mw"]),
+                                             float(a["bess_duration_h"]), commission_iso,
+                                             plant_map[a["name"]]),
+            force=force_legs)
+        return {"asset": a["name"], "month": month, **r, "fc_arb_cny": fr.get("arb_cny") or 0.0}
 
     if len(work) > 1:
         status = st.status(f"正在计算投资标准基准 (LP ×{len(work)})…", expanded=False)

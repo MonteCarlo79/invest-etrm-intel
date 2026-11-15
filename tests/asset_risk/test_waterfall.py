@@ -358,7 +358,7 @@ def test_benchmark_leg_falls_back_to_filled_nodal(sqlite_engine, lp_solver):
     """When the cleared-price feed has no complete 96-slot day in the month,
     benchmark_leg falls back to md_mengxi_nodal_price_96_filled (the
     station's own registry node) and flags note='节点填充电价'."""
-    from apps.asset_risk.tab_waterfall import benchmark_leg
+    from libs.asset_risk.waterfall import benchmark_leg
 
     with sqlite_engine.connect() as conn:
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
@@ -387,7 +387,7 @@ def test_benchmark_leg_falls_back_to_filled_nodal(sqlite_engine, lp_solver):
 
 def test_benchmark_leg_no_fallback_when_cleared_complete(sqlite_engine, lp_solver):
     """Complete cleared-price days keep the original source (note stays '')."""
-    from apps.asset_risk.tab_waterfall import benchmark_leg
+    from libs.asset_risk.waterfall import benchmark_leg
 
     with sqlite_engine.connect() as conn:
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
