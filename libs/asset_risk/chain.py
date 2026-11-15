@@ -202,7 +202,8 @@ def _check_sign(df: pd.DataFrame) -> None:
 
 def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None,
                 nom_code_map: dict[str, str] | None = None,
-                plant_map: dict[str, str] | None = None) -> pd.DataFrame:
+                plant_map: dict[str, str] | None = None,
+                check_sign: bool = True) -> pd.DataFrame:
     """Dispatch chain per (asset_id, ts), CST-naive 15-min slots. Sources by priority:
 
     - nominated_mw: WeCom bess_nomination_96 overrides the legacy chain on overlap
@@ -214,7 +215,9 @@ def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None
     - da_cleared_mw / restriction / soc_pct: legacy chain only (NaN elsewhere).
 
     Slots present only in the new sources extend the chain. Raises ValueError on
-    an actual/nominated sign disagreement (see _check_sign). Assets without an
+    an actual/nominated sign disagreement (see _check_sign) unless
+    check_sign=False — callers that display a subset filter first and run
+    _check_sign on what they show. Assets without an
     asset_code (post-migration) or outside the literal maps (pre-migration)
     return legacy rows only.
     """
@@ -260,7 +263,8 @@ def _load_chain(engine, asset_ids: list[int], start: str | None, end: str | None
     out["capacity_mw"] = out["asset_id"].map(ident["capacity_mw"])
     out["ts"] = pd.to_datetime(out["ts"])
     out = out.sort_values(_KEY, kind="stable").reset_index(drop=True)[CHAIN_COLUMNS]
-    _check_sign(out)
+    if check_sign:
+        _check_sign(out)
     return out
 
 

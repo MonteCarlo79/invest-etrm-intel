@@ -201,3 +201,8 @@ def test_zero_sum_month_does_not_raise():
         _chain(conn, 1, "2026-06-01 00:00:00", 0.0, 5.0)
     df = _load_chain(eng, [1], None, None)
     assert len(df) == 1 and df.iloc[0]["actual_mw"] == 5.0
+
+
+def test_check_sign_false_returns_rows(sqlite_engine_bad_sign):
+    df = _load_chain(sqlite_engine_bad_sign, [1], None, None, check_sign=False)
+    assert len(df) == 2

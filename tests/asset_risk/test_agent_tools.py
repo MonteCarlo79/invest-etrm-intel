@@ -411,3 +411,41 @@ def test_deviation_analysis_slots_with_data_full(sqlite_engine):
                       {"book_id": 7, "start_date": "2026-02-01", "end_date": "2026-02-01"},
                       sqlite_engine)
     assert r["slots_with_data"] == {"nominated": 12, "da_cleared": 12, "rt_cleared": 12, "actual": 12}
+
+
+def _add_bad_sign_day(eng, day):
+    """Σ actual·nominated < 0 for 悦杭独贵 on `day` (sign conventions disagree)."""
+    with eng.begin() as conn:
+        for i, (nom, act) in enumerate([(10.0, -10.0), (-10.0, 10.0)]):
+            conn.execute(text(
+                "INSERT INTO marketdata.rm_dispatch_chain "
+                "(asset_id, interval_start, nominated_mw, da_cleared_mw, rt_cleared_mw, "
+                "actual_mw) VALUES (1, :ts, :n, :n, :n, :a)"),
+                {"ts": f"{day} 00:{i * 15:02d}:00", "n": nom, "a": act})
+
+
+def test_get_waterfall_sign_guard_scoped_to_selected_months(wf_engine, _fake_legs):
+    _add_bad_sign_day(wf_engine, "2026-07-15")
+    _add_chain_month(wf_engine, "2026-08-01")
+    ok = _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-06", "2026-08"]},
+                       wf_engine)
+    assert "error" not in ok and ok["stage_totals"]["出清"] is not None
+    bad = _execute_tool("get_waterfall", {"asset": "悦杭独贵", "months": ["2026-07"]}, wf_engine)
+    assert "sign disagreement" in bad["error"] and "悦杭独贵 2026-07" in bad["error"]
+
+
+def test_get_diagnostics_sign_guard_returns_error(wf_engine):
+    _add_bad_sign_day(wf_engine, "2026-07-15")
+    ok = _execute_tool("get_diagnostics", {"asset": "悦杭独贵", "start_date": "2026-06-01",
+                                           "end_date": "2026-06-30"}, wf_engine)
+    assert "error" not in ok
+    bad = _execute_tool("get_diagnostics", {"asset": "悦杭独贵", "start_date": "2026-07-01",
+                                            "end_date": "2026-07-31"}, wf_engine)
+    assert "sign disagreement" in bad["error"]
+
+
+def test_get_deviation_analysis_sign_guard_returns_error(wf_engine):
+    _add_bad_sign_day(wf_engine, "2026-07-15")
+    bad = _execute_tool("get_deviation_analysis", {"book_id": 1, "start_date": "2026-07-01",
+                                                   "end_date": "2026-07-31"}, wf_engine)
+    assert "sign disagreement" in bad["error"]

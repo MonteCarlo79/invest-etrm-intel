@@ -176,7 +176,7 @@ def _chain_assets(engine) -> pd.DataFrame:
 
 
 def _get_diagnostics(inputs: dict, engine) -> dict:
-    from libs.asset_risk.chain import _attach_prices, _load_chain, _load_prices
+    from libs.asset_risk.chain import _attach_prices, _check_sign, _load_chain, _load_prices
     from libs.asset_risk.diagnostics import (
         bid_fail_monthly, exec_gap_monthly, find_defect_events, load_maps,
         restriction_monthly,
@@ -191,9 +191,13 @@ def _get_diagnostics(inputs: dict, engine) -> dict:
     end = str(pd.Timestamp(str(inputs["end_date"])[:10]) + pd.Timedelta(days=1))[:10]
     plant_map, nom_map, rate_map = load_maps(engine)
     chain = _load_chain(engine, sel["id"].tolist(), start, end,
-                        nom_code_map=nom_map, plant_map=plant_map)
+                        nom_code_map=nom_map, plant_map=plant_map, check_sign=False)
     if chain.empty:
         return {"message": "No dispatch-chain data in range."}
+    try:
+        _check_sign(chain)
+    except ValueError as e:
+        return {"error": str(e)}
     prices = _load_prices(engine, [plant_map[name]], start, end)
     df = _attach_prices(chain, prices, {name: plant_map[name]})
     df["month"] = df["ts"].dt.strftime("%Y-%m")
@@ -213,7 +217,7 @@ def _get_waterfall(inputs: dict, engine) -> dict:
     Streamlit; the expensive LP legs go through the persistent legs store."""
     from libs.asset_risk import waterfall as wf_mod
     from libs.asset_risk import legs_store
-    from libs.asset_risk.chain import _attach_prices, _load_chain, _load_prices
+    from libs.asset_risk.chain import _attach_prices, _check_sign, _load_chain, _load_prices
     from libs.asset_risk.diagnostics import CAPCOMP_RATE_DEFAULT, load_maps
 
     months = sorted({str(m)[:7] for m in inputs["months"]})
@@ -229,13 +233,17 @@ def _get_waterfall(inputs: dict, engine) -> dict:
     plant_map, nom_map, rate_map = load_maps(engine)
     month_end = (pd.Timestamp(max(months) + "-01") + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
     chain = _load_chain(engine, assets["id"].tolist(), min(months), month_end,
-                        nom_code_map=nom_map, plant_map=plant_map)
+                        nom_code_map=nom_map, plant_map=plant_map, check_sign=False)
     if chain.empty:
         return {"message": "No dispatch-chain data for the selected asset/months."}
     chain["month"] = chain["ts"].dt.strftime("%Y-%m")
     df = chain[chain["month"].isin(months)].copy()
     if df.empty:
         return {"message": "No dispatch-chain data for the selected asset/months."}
+    try:
+        _check_sign(df)
+    except ValueError as e:
+        return {"error": str(e)}
     prices = _load_prices(engine, [plant_map[a] for a in assets["name"]], min(months), month_end)
     df = _attach_prices(df, prices, {a: plant_map[a] for a in assets["name"]})
 
@@ -408,13 +416,17 @@ def execute_tool(name: str, inputs: dict, engine) -> dict:
             ), conn, params={"bid": inputs["book_id"]})
             if asset.empty or pd.isna(asset["asset_id"].iloc[0]):
                 return {"message": "Book has no linked asset."}
-            from libs.asset_risk.chain import _load_chain
+            from libs.asset_risk.chain import _check_sign, _load_chain
             from libs.asset_risk.diagnostics import load_maps
             plant_map, nom_map, _ = load_maps(engine)
             chain = _load_chain(engine, [int(asset["asset_id"].iloc[0])], start, end_excl,
-                                nom_code_map=nom_map, plant_map=plant_map)
+                                nom_code_map=nom_map, plant_map=plant_map, check_sign=False)
             if chain.empty:
                 return {"message": "No dispatch-chain data in range."}
+            try:
+                _check_sign(chain)
+            except ValueError as e:
+                return {"error": str(e)}
 
             cols = {"nominated": "nominated_mw", "da_cleared": "da_cleared_mw",
                     "rt_cleared": "rt_cleared_mw", "actual": "actual_mw"}
