@@ -106,3 +106,20 @@ def test_bess_positive_net_stays_buy():
     s = _series("2026-01-01", "2026-12-31", 2.0)
     rows = bess_positions(3, "蒙西", s, [date(2027, 4, 1)])
     assert (rows[0].direction, rows[0].volume_mwh) == ("buy", 60.0)
+
+
+def test_thin_latest_same_month_falls_back_to_prior_full_year():
+    # as_of 2026-12-02: Dec-2026 has 1 day, Dec-2025 is full -> Dec-2027 uses Dec-2025
+    s = pd.concat([_series("2025-12-01", "2025-12-31", 10.0),
+                   _series("2026-01-01", "2026-11-30", 3.0),
+                   _series("2026-12-01", "2026-12-01", 99.0)])
+    r = expected_monthly_mwh(s, [date(2027, 12, 1)]).iloc[0]
+    assert r.basis == "same_month" and r.volume_mwh == 310.0
+
+
+def test_thin_same_month_everywhere_uses_trailing_90d():
+    s = pd.concat([_series("2026-01-01", "2026-11-30", 3.0),
+                   _series("2026-12-01", "2026-12-05", 99.0)])
+    r = expected_monthly_mwh(s, [date(2027, 12, 1)]).iloc[0]
+    assert r.basis == "trailing_90d"
+    assert abs(r.volume_mwh - s.iloc[-90:].mean() * 31) < 1e-9

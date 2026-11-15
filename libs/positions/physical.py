@@ -11,6 +11,7 @@ import pandas as pd
 from libs.positions.conventions import Position
 
 MIN_HISTORY_DAYS = 30
+MIN_SAME_MONTH_DAYS = 20  # a thin latest year falls back to an older full one
 _PRICED_TYPES = ("fixed", "peak_offpeak")
 
 
@@ -32,10 +33,10 @@ def expected_monthly_mwh(daily_mwh: pd.Series, months: list[date]) -> pd.DataFra
             mean, basis = s.mean(), "insufficient_history"
         else:
             same = s[(s.index.month == m.month) & (s.index < start)]
-            if not same.empty:
-                latest = same.index.max()
-                same = same[(same.index.year == latest.year)]
-                mean, basis = same.mean(), "same_month"
+            counts = same.groupby(same.index.year).size()
+            full = sorted(counts[counts >= MIN_SAME_MONTH_DAYS].index)
+            if full:  # most recent year with enough days in that calendar month
+                mean, basis = same[same.index.year == full[-1]].mean(), "same_month"
             else:
                 mean, basis = trailing.mean(), "trailing_90d"
         out.append((m, float(mean) * days, basis))
