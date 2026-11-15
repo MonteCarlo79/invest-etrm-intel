@@ -53,3 +53,55 @@ def parametric_var(
     z = Z_SCORES.get(confidence, 1.6449)
     var_value = abs(delta_mwh) * sigma_price * z * np.sqrt(horizon_days)
     return float(var_value)
+
+
+def monthly_price_scenarios(
+    hourly: pd.DataFrame,
+    window_days: int = 30,
+    lookback_days: int = 252,
+) -> pd.Series:
+    """Daily change of the trailing-`window_days` mean price (CNY/MWh).
+
+    v1 proxy for forward-month moves. Input: hourly frame with `datetime`,
+    `price`. Output: Series indexed by date, last `lookback_days` values.
+    """
+    df = pd.DataFrame({"datetime": pd.to_datetime(hourly["datetime"]),
+                       "price": pd.to_numeric(hourly["price"], errors="coerce")})
+    df = df.dropna(subset=["price"])
+    if df.empty:
+        return pd.Series(dtype=float)
+    daily = df.groupby(df["datetime"].dt.normalize())["price"].mean().sort_index()
+    rolled = daily.rolling(window_days, min_periods=window_days).mean()
+    return rolled.diff().dropna().iloc[-lookback_days:]
+
+
+def portfolio_var(
+    net_delta_mwh_by_province: dict[str, float],
+    scenarios: dict[str, pd.Series],
+    confidence: float = 0.95,
+    horizon_days: int = 1,
+) -> dict:
+    """Multi-province VaR over aligned (inner-joined) daily scenario series.
+
+    historical: −quantile(1−confidence) of Σ delta × Δprice, × sqrt(horizon), floored at 0.
+    parametric: z × sqrt(dᵀΣd) × sqrt(horizon), Σ from the aligned series.
+    Fewer than 20 aligned scenarios → both None.
+    """
+    provs = [p for p, d in net_delta_mwh_by_province.items() if p in scenarios]
+    if not provs:
+        return {"historical": None, "parametric": None, "n_scenarios": 0}
+    aligned = pd.concat({p: scenarios[p] for p in provs}, axis=1, join="inner").dropna()
+    n = int(len(aligned))
+    if n < 20:
+        return {"historical": None, "parametric": None, "n_scenarios": n}
+    d = np.array([float(net_delta_mwh_by_province[p]) for p in provs])
+    x = aligned[provs].to_numpy(dtype=float)
+    sqrt_h = np.sqrt(horizon_days)
+
+    pnl = x @ d
+    hist = max(-float(np.quantile(pnl, 1 - confidence)) * sqrt_h, 0.0)
+
+    cov = np.atleast_2d(np.cov(x, rowvar=False))
+    z = Z_SCORES.get(confidence, 1.6449)
+    para = float(z * np.sqrt(max(float(d @ cov @ d), 0.0)) * sqrt_h)
+    return {"historical": float(hist), "parametric": para, "n_scenarios": n}
