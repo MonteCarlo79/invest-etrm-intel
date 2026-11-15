@@ -152,6 +152,13 @@ apps/bess-inner-mongolia/
 !services/operating_assets/
 !apps/asset_risk/
 
+# market-maker image exceptions
+!libs/positions/
+!libs/curves/
+!libs/decision_models/
+!apps/market_maker/
+!services/market_maker/
+
 # retail-risk image exceptions
 !apps/retail_risk/
 
