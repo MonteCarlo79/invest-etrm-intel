@@ -58,11 +58,10 @@ EMPTY_MSG = {
     "Exposure & MtM": "No positions for the selected books and provinces — no exposure to show.",
     "VaR & Greeks": "No positions for the selected books and provinces — no delta or VaR to show.",
     "Curves": "No reference curve saved yet. Upload manual points below or run Refresh (Admin).",
-    "Risk Agent": "Risk Agent arrives in Task 10.",
 }
 
 
-@pytest.mark.parametrize("label", LABELS)
+@pytest.mark.parametrize("label", [l for l in LABELS if l != "Risk Agent"])
 def test_empty_db_pages(tmp_path, monkeypatch, label):
     _make_db(tmp_path, monkeypatch)
     at = _page(label)
@@ -191,3 +190,11 @@ def test_read_manual_csv_reports_bad_file():
     manual, errors = read_manual_csv(io.BytesIO("province,delivery_month,tou_block,price_cny_mwh\n"
                                                 "蒙西,2027-01,peak,500\n".encode()))
     assert len(manual) == 1 and not errors
+
+
+def test_risk_agent_page_renders_without_llm(tmp_path, monkeypatch):
+    for k in ("ANTHROPIC_API_KEY", "BEDROCK_REGION", "AWS_REGION"):
+        monkeypatch.delenv(k, raising=False)
+    _make_db(tmp_path, monkeypatch)
+    at = _page("Risk Agent")
+    assert any("No LLM configured" in w.value for w in at.warning)

@@ -1,7 +1,7 @@
 """Market agent bridge — routes Hermes MARKET_AGENT requests to the correct headless agent.
 
 Market keys:
-    gb, au, ercot, caiso, pjm, ph, po, bess-map, spot
+    gb, au, ercot, caiso, pjm, ph, po, bess-map, spot, market-maker
 """
 from __future__ import annotations
 
@@ -69,6 +69,10 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "",
         from services.asset_risk.headless_agent import run_asset_risk_query
         return run_asset_risk_query(question=question, api_key=api_key, pg_url=pg_url)
 
+    if market in ("market-maker", "risk-book"):
+        from services.market_maker.headless_agent import run_market_maker_query
+        return run_market_maker_query(question=question, api_key=api_key, pg_url=pg_url)
+
     if market in ("retail-risk", "retail"):
         from services.retail_risk.headless_agent import run_retail_risk_query
         return run_retail_risk_query(question=question, api_key=api_key, pg_url=pg_url)
@@ -77,7 +81,7 @@ def run_market_query(market: str, question: str, api_key: str, pg_url: str = "",
         from services.hermes.internet_agent import run_internet_query
         return run_internet_query(question=question, api_key=api_key)
 
-    return f"Unknown market '{market}'. Available: gb, au, ercot, caiso, pjm, ph, po, bess-map, spot, mengxi, deal, asset-risk, retail-risk, internet"
+    return f"Unknown market '{market}'. Available: gb, au, ercot, caiso, pjm, ph, po, bess-map, spot, mengxi, deal, asset-risk, market-maker, retail-risk, internet"
 
 
 def _run_spot_query(question: str, api_key: str, kb_app: str | None = "strategist") -> str:
