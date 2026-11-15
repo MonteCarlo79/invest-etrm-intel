@@ -68,6 +68,9 @@ def test_save_load_roundtrip_idempotent_and_scoped(eng):
         n = c.execute(text("SELECT count(*) FROM marketdata.rm_forward_curves "
                            "WHERE product='reference'")).scalar()
         assert n == 2
+        assert sorted(x[0] for x in c.execute(text(
+            "SELECT province FROM marketdata.rm_forward_curves "
+            "WHERE product='reference'"))) == ["冀南", "蒙西"]
         assert c.execute(text("SELECT count(*) FROM marketdata.rm_forward_curves "
                               "WHERE product='scenario'")).scalar() == 1
     got = load_curve(eng).sort_values("province").reset_index(drop=True)
@@ -88,3 +91,13 @@ def test_load_spot_hourly_aliases(eng):
     out = load_spot_hourly(eng, "冀南", date(2026, 5, 1), date(2026, 5, 31))
     assert sorted(out.price) == [200.0, 210.0]
     assert {"datetime", "price"} <= set(out.columns)
+
+
+def test_save_alias_then_canonical_no_duplicates(eng):
+    def mk(name):
+        return pd.DataFrame([[name, date(2026, 5, 1), "base", 300.0, "traded"]],
+                            columns=CURVE_COLUMNS)
+    save_curve(eng, mk("河北南网"), date(2026, 11, 15))
+    save_curve(eng, mk("冀南"), date(2026, 11, 15))
+    got = load_curve(eng)
+    assert len(got) == 1 and got.province.iloc[0] == "冀南"

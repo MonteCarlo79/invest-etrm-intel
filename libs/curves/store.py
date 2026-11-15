@@ -47,15 +47,16 @@ def save_curve(engine, curve: pd.DataFrame, curve_date: date) -> int:
     c = curve.dropna(subset=["delivery_month", "price_cny_mwh"])
     if c.empty:
         return 0
-    rows = [{"province": r.province, "product": PRODUCT, "cd": curve_date,
+    rows = [{"province": canonical_province(r.province), "product": PRODUCT, "cd": curve_date,
              "dd": _to_month(r.delivery_month), "blk": r.tou_block,
-             "kwh": float(r.price_cny_mwh) / 1000.0, "src": r.source}
+             "kwh": float(r.price_cny_mwh) / 1000.0, "src": "" if pd.isna(r.source) else r.source}
             for r in c.itertuples()]
     with engine.begin() as conn:
         for prov in {r["province"] for r in rows}:
-            conn.execute(text("DELETE FROM marketdata.rm_forward_curves WHERE province = :p "
-                              "AND product = :prod AND curve_date = :cd"),
-                         {"p": prov, "prod": PRODUCT, "cd": curve_date})
+            conn.execute(text("DELETE FROM marketdata.rm_forward_curves WHERE province IN :p "
+                              "AND product = :prod AND curve_date = :cd"
+                              ).bindparams(bindparam("p", expanding=True)),
+                         {"p": tuple(PROVINCE_ALIASES[prov]), "prod": PRODUCT, "cd": curve_date})
         conn.execute(text(
             "INSERT INTO marketdata.rm_forward_curves (province, product, curve_date, "
             "delivery_date, delivery_hour, tou_block, price_cny_kwh, source) "
