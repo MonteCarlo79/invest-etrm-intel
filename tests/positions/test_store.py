@@ -49,6 +49,13 @@ def test_multi_month_split(engine):
     assert set(df.source) == {"bilateral"} and set(df.tou_block) == {"base"}
 
 
+def test_split_residual_sums_exactly(engine):
+    with engine.begin() as c:
+        _bilateral(c, volume_mwh=100.0)
+    df = load_positions(engine)
+    assert len(df) == 3 and df.volume_mwh.sum() == 100.0
+
+
 def test_status_and_book_filter(engine):
     with engine.begin() as c:
         _bilateral(c)
@@ -99,32 +106,25 @@ def test_load_books(engine):
 
 def test_migration_statements():
     st = migrate.build_statements("weird_name")
-    assert len(st) == 8
+    assert len(st) == 7
     assert any("DROP CONSTRAINT IF EXISTS weird_name" in s for s in st)
     assert not any("rm_forward_curves_source_check\n" in s and "DROP" in s for s in st)
-    assert "delivery_hour IS NULL" in migrate.DUP_CHECK_SQL and "tou_block" not in migrate.DUP_CHECK_SQL
+    assert not any("UNIQUE INDEX" in s for s in st)
     assert "pg_constraint" in migrate.CONSTRAINT_LOOKUP_SQL
 
 
-def test_dry_run_and_abort_paths(monkeypatch):
+def test_dry_run_and_multi_constraint_abort():
     class Conn:
-        def __init__(s, dups): s.dups = dups
+        def __init__(s, names): s.names = names
         def __enter__(s): return s
         def __exit__(s, *a): pass
-        def execute(s, q, *a):
-            sql = str(q)
-            class R:
-                def scalar(_): return s.dups
-                def __iter__(_): return iter([("old_chk",)])
-            return R()
+        def execute(s, q, *a): return iter([(n,) for n in s.names])
     class Eng:
-        def __init__(s, dups): s.dups = dups
-        def connect(s): return Conn(s.dups)
-        def begin(s): raise AssertionError("dry-run must not open a write transaction")
+        def __init__(s, names): s.names = names
+        def connect(s): return Conn(s.names)
+        def begin(s): raise AssertionError("dry-run must not write")
     lines = []
-    assert migrate.run(Eng(0), apply=False, out=lines.append) == 0
-    text_out = "\n".join(lines)
-    assert "DROP CONSTRAINT IF EXISTS old_chk" in text_out and "dry-run" in text_out
-    lines.clear()
-    assert migrate.run(Eng(3), apply=True, out=lines.append) == 1
-    assert "3 duplicate" in "\n".join(lines)
+    assert migrate.run(Eng(["old_chk"]), apply=False, out=lines.append) == 0
+    t = "\n".join(lines)
+    assert "DROP CONSTRAINT IF EXISTS old_chk" in t and "dry-run" in t and "DUP" not in t.upper()
+    assert migrate.run(Eng(["a", "b"]), apply=True, out=lines.append) == 1

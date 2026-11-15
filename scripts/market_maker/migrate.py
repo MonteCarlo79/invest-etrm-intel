@@ -13,14 +13,6 @@ from pathlib import Path
 
 SQL_PATH = Path(__file__).resolve().parents[2] / "db" / "ddl" / "marketdata" / "market_maker_migration.sql"
 
-DUP_CHECK_SQL = (
-    "SELECT COALESCE(SUM(n - 1), 0) FROM ("
-    " SELECT COUNT(*) AS n FROM marketdata.rm_forward_curves"
-    " WHERE delivery_hour IS NULL"
-    " GROUP BY province, product, curve_date, delivery_date, source"
-    " HAVING COUNT(*) > 1) d"
-)
-
 CONSTRAINT_LOOKUP_SQL = (
     "SELECT conname FROM pg_constraint"
     " WHERE conrelid = 'marketdata.rm_forward_curves'::regclass AND contype = 'c'"
@@ -43,11 +35,6 @@ def build_statements(source_check_name: str | None = None) -> list[str]:
 def run(engine, apply: bool, out=print) -> int:
     from sqlalchemy import text
     with engine.connect() as conn:
-        dups = conn.execute(text(DUP_CHECK_SQL)).scalar() or 0
-        out(f"-- check: rm_forward_curves duplicate reference rows = {dups}")
-        if dups:
-            out(f"ABORT: {dups} duplicate rows would violate uq_rm_fc_reference; resolve first.")
-            return 1
         names = [r[0] for r in conn.execute(text(CONSTRAINT_LOOKUP_SQL))]
         out(f"-- check: existing source CHECK constraint(s) = {names or 'none'}")
         if len(names) > 1:

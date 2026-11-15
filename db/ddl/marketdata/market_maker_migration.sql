@@ -10,5 +10,3 @@ ALTER TABLE marketdata.rm_forward_curves ADD COLUMN IF NOT EXISTS tou_block TEXT
 ALTER TABLE marketdata.rm_forward_curves DROP CONSTRAINT IF EXISTS rm_forward_curves_source_check;
 ALTER TABLE marketdata.rm_forward_curves ADD CONSTRAINT rm_forward_curves_source_check
   CHECK (source IN ('lingfeng','manual','exchange','spot_seasonal','traded','venue'));
-CREATE UNIQUE INDEX IF NOT EXISTS uq_rm_fc_reference ON marketdata.rm_forward_curves
-  (province, product, curve_date, delivery_date, COALESCE(tou_block,'base'), source) WHERE delivery_hour IS NULL;

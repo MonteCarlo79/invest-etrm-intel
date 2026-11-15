@@ -47,10 +47,13 @@ def load_positions(engine, book_ids: list[int] | None = None, status: str = "ope
         pieces = list(_month_pieces(start, end))
         total_days = sum(d for _, d in pieces)
         vol = float(r["volume_mwh"])
-        for first, days in pieces:
+        allocated = 0.0
+        for i, (first, days) in enumerate(pieces):
+            piece = vol - allocated if i == len(pieces) - 1 else vol * days / total_days
+            allocated += piece
             out.append(Position(
                 book_id=int(r["book_id"]), province=prov, direction=r["direction"],
-                volume_mwh=vol * days / total_days, delivery_month=first,
+                volume_mwh=piece, delivery_month=first,
                 tou_block=r["tou_block"] or "base",
                 price_cny_mwh=None if r["price_cny_mwh"] is None else float(r["price_cny_mwh"]),
                 source=r["source"] or "bilateral",
