@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import calendar
 import json
+from dataclasses import replace
 from datetime import date
 
 import pandas as pd
@@ -56,7 +57,11 @@ def generation_positions(book_id, province, daily_gen_mwh, months) -> list[Posit
 
 
 def bess_positions(book_id, province, daily_net_discharge_mwh, months) -> list[Position]:
-    return _rows(book_id, province, daily_net_discharge_mwh, months)
+    # Net discharge is normally negative (round-trip losses): emit a readable sell row.
+    return [
+        replace(p, direction="sell", volume_mwh=abs(p.volume_mwh)) if p.volume_mwh < 0 else p
+        for p in _rows(book_id, province, daily_net_discharge_mwh, months)
+    ]
 
 
 def _forecast(v) -> dict:

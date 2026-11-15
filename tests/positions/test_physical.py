@@ -93,3 +93,16 @@ def test_contract_ending_mid_year_stops():
     rows = load_positions(1, "浙江", df, months, date(2026, 11, 15))
     assert [r for r in rows if r.price_cny_mwh is not None and r.delivery_month == date(2027, 6, 1)]
     assert not [r for r in rows if r.price_cny_mwh is not None and r.delivery_month == date(2027, 7, 1)]
+
+
+def test_bess_negative_net_is_sell():
+    s = _series("2026-01-01", "2026-12-31", -2.0)
+    rows = bess_positions(3, "蒙西", s, [date(2027, 4, 1)])
+    assert len(rows) == 1
+    assert (rows[0].direction, rows[0].volume_mwh, rows[0].source) == ("sell", 60.0, "physical")
+
+
+def test_bess_positive_net_stays_buy():
+    s = _series("2026-01-01", "2026-12-31", 2.0)
+    rows = bess_positions(3, "蒙西", s, [date(2027, 4, 1)])
+    assert (rows[0].direction, rows[0].volume_mwh) == ("buy", 60.0)
