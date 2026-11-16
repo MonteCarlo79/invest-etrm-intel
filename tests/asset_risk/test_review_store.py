@@ -118,3 +118,19 @@ def test_tab_smoke(tmp_path, monkeypatch):
     at = AppTest.from_string(SCRIPT, default_timeout=60).run()
     assert not at.exception, [e.message for e in at.exception]
     assert len(at.dataframe) >= 2
+
+
+def test_parse_many_bad_file_does_not_stop_batch(monkeypatch):
+    import apps.asset_risk.tab_review as tr
+    errors: list[str] = []
+    monkeypatch.setattr(tr.st, "error", lambda m: errors.append(m))
+    monkeypatch.setattr(tr.st, "session_state", {})
+
+    def fake_parse(data, name):
+        if name == "bad.pptx":
+            raise ValueError("corrupt zip")
+        return pd.DataFrame({"x": [1]}), []
+    monkeypatch.setattr(tr, "parse_bess_deck", fake_parse)
+    tr._parse_many([("bad.pptx", b"x"), ("good.pptx", b"y")])
+    assert [p["name"] for p in tr.st.session_state["review_parsed"]] == ["good.pptx"]
+    assert len(errors) == 1 and "bad.pptx" in errors[0]

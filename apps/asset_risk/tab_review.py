@@ -51,14 +51,24 @@ def _actuals_by_code(engine) -> pd.DataFrame:
 def _parse_many(items: list[tuple[str, bytes]]) -> None:
     parsed = []
     for name, data in items:
-        df, notes = parse_bess_deck(data, name)
+        try:
+            df, notes = parse_bess_deck(data, name)
+        except Exception as e:  # noqa: BLE001 — one bad deck must not stop the batch
+            st.error(f"{name}: 解析失败 — {e}")
+            continue
         parsed.append({"name": name, "hash": hashlib.sha256(data).hexdigest(), "df": df, "notes": notes})
     st.session_state["review_parsed"] = parsed
 
 
+@st.cache_resource(show_spinner=False)
+def _ensure_review_table(_engine):
+    store.ensure_table(_engine)
+    return True
+
+
 def render_review(engine) -> None:
     st.subheader("复盘 Review")
-    store.ensure_table(engine)
+    _ensure_review_table(engine)
     st.caption("最新上传覆盖同月数据")
 
     with st.expander("复盘 deck 上传 (BESS pptx)", expanded=False):
