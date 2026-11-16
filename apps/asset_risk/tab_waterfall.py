@@ -35,6 +35,7 @@ from libs.asset_risk.waterfall import (
     build_waterfall,
     guard_cleared_leg,
     ic_leg,
+    ic_passthrough,
     stage_arbitrage,
     stage_capacity,
 )
@@ -405,34 +406,23 @@ def render_waterfall(engine):
         df = _wf.restrict_to_keys(df, billed_keys)
         bench_rows = [r for r in bench_rows if (r["asset"], r["month"]) in set(billed_keys)]
 
-    # --- 投决预期 (IC) stage: only asset-months with an IC case; the other legs are
-    # restricted to the same asset-months so the 市场偏差 bridge closes.
+    # --- 投决预期 (IC) stage. Other legs are never restricted: asset-months without
+    # an IC case enter this stage at their own 投资标准 value (市场偏差 = 0).
     ic_leg_df = None
     try:
         ic_all = ic_case.load_ic(engine)
     except Exception:
         ic_all = pd.DataFrame(columns=ic_case.IC_COLUMNS)   # table not created yet
     if not ic_all.empty and not bench.empty:
-        use_ic = st.checkbox("含投决预期 (IC)", value=True, key="wf_use_ic",
-                             help="仅包含有投决边界的资产×月份；关闭则显示全部资产的原四段瀑布")
-        if use_ic:
-            keys = sorted(set(zip(bench["asset"], bench["month"])))
-            commission = {r["name"]: r.get("commission_date") for _, r in assets.iterrows()}
-            leg, no_ic = ic_leg(ic_all, keys, nom_map, commission)
-            if leg.empty:
-                st.caption("所选资产×月份均无投决预期数据，瀑布不含投决预期段。")
-            else:
-                ic_keys = list(zip(leg["asset"], leg["month"]))
-                if no_ic:
-                    st.caption("以下资产×月份无投决预期（无投决边界或早于投运日），已从含投决预期的瀑布中排除："
-                               + "、".join(f"{a} {m}" for a, m in no_ic))
-                    bench = _wf.restrict_to_keys(bench, ic_keys)
-                    nominated = _wf.restrict_to_keys(nominated, ic_keys)
-                    cleared = _wf.restrict_to_keys(cleared, ic_keys)
-                    actual = _wf.restrict_to_keys(actual, ic_keys)
-                    df = _wf.restrict_to_keys(df, ic_keys)
-                    bench_rows = [r for r in bench_rows if (r["asset"], r["month"]) in set(ic_keys)]
-                ic_leg_df = leg
+        keys = sorted(set(zip(bench["asset"], bench["month"])))
+        commission = {r["name"]: r.get("commission_date") for _, r in assets.iterrows()}
+        leg, no_ic = ic_leg(ic_all, keys, nom_map, commission)
+        if leg.empty:
+            st.caption("所选资产×月份均无投决预期数据，瀑布不含投决预期段。")
+        else:
+            if no_ic:
+                st.caption("无投决边界，按投资标准计入: " + "、".join(f"{a} {m}" for a, m in no_ic))
+            ic_leg_df = ic_passthrough(leg, no_ic, bench)
 
     wf = build_waterfall(bench, nominated, cleared, actual, ic=ic_leg_df)
 
@@ -477,7 +467,7 @@ def render_waterfall(engine):
 
     # --- stage × month matrix ---
     st.markdown("**各段收益 by 资产 × 月 (¥)**")
-    mat_src = pd.concat(([ic_leg_df.assign(stage="投决预期")[["asset", "month", "stage", "arb_cny", "cap_cny"]]]
+    mat_src = pd.concat(([ic_leg_df.assign(stage="投决预期")[["asset", "month", "stage", "arb_cny", "cap_cny", "fee_cny"]]]
                          if ic_leg_df is not None else []) + [
         bench.assign(stage="投资标准")[["asset", "month", "stage", "arb_cny", "cap_cny"]],
         nominated.assign(stage="申报")[["asset", "month", "stage", "arb_cny", "cap_cny"]],
@@ -485,6 +475,8 @@ def render_waterfall(engine):
         actual.assign(stage="实际")[["asset", "month", "stage", "arb_cny", "cap_cny"]],
     ], ignore_index=True)
     mat_src["total_cny"] = mat_src["arb_cny"] + mat_src["cap_cny"]
+    if "fee_cny" in mat_src.columns:   # only the IC leg carries fee_cny (grid fee, negative)
+        mat_src["total_cny"] += mat_src["fee_cny"].fillna(0.0)
     mat = mat_src.pivot_table(index="month", columns="stage", values="total_cny",
                               aggfunc="sum", fill_value=0)
     st.dataframe(mat.style.format("¥{:,.0f}"), use_container_width=True)

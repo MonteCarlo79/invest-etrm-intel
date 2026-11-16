@@ -74,17 +74,29 @@ def test_waterfall_ic_stage_first_and_bridge_closes():
         assert g("投决预期") + g("市场偏差") == pytest.approx(g("投资标准"))
 
 
-def test_all_assets_sum_only_assets_with_ic():
+def test_all_assets_passthrough_keeps_existing_legs_and_closes_bridge():
+    from libs.asset_risk.waterfall import ic_passthrough
     ic_all = _ic_rows("wuchuan", cod=date(2026, 7, 20))
     keys = [("武川", "2026-09"), ("阿拉善", "2026-09")]
     leg, missing = ic_leg(ic_all, keys, NAMES, COD)
     assert missing == [("阿拉善", "2026-09")]
-    bench = pd.concat([_leg("武川", "2026-09", 100), _leg("阿拉善", "2026-09", 500)])
-    bench = restrict_to_keys(bench, list(zip(leg["asset"], leg["month"])))
-    wf = build_waterfall(bench, bench, bench, bench, ic=leg)
-    assert wf[wf["stage"] == "投资标准"]["cny"].sum() == 100          # 阿拉善 excluded
-    assert wf[wf["stage"] == "投决预期"]["cny"].sum() == pytest.approx(
-        leg[["arb_cny", "cap_cny", "fee_cny"]].sum().sum())
+    bench = pd.concat([_leg("武川", "2026-09", 100, cap=10), _leg("阿拉善", "2026-09", 500, cap=7)])
+    nom, clr, act = (bench.assign(arb_cny=bench["arb_cny"] * f) for f in (0.9, 0.8, 0.7))
+    plain = build_waterfall(bench, nom, clr, act)
+    full = ic_passthrough(leg, missing, bench)
+    wf = build_waterfall(bench, nom, clr, act, ic=full)
+    tot = lambda w, s, c=None: w[(w["stage"] == s) & ((w["component"] == c) if c else True)]["cny"].sum()
+    for st_ in ("投资标准", "申报", "出清", "实际", "Δ策略与预测", "Δ出清校核", "Δ执行与费用"):
+        assert tot(wf, st_) == pytest.approx(tot(plain, st_))      # existing legs unchanged
+    # pass-through asset enters at its own 投资标准 and contributes 0 deviation
+    pt = full[full["asset"] == "阿拉善"].iloc[0]
+    assert (pt["arb_cny"], pt["cap_cny"], pt["fee_cny"]) == (500, 7, 0)
+    only_pt = build_waterfall(bench[bench["asset"] == "阿拉善"], nom[nom["asset"] == "阿拉善"],
+                              clr[clr["asset"] == "阿拉善"], act[act["asset"] == "阿拉善"],
+                              ic=full[full["asset"] == "阿拉善"])
+    assert tot(only_pt, "市场偏差") == 0
+    for c in ("arb_cny", "cap_cny", "fee_cny", "other_cny"):       # bridge identity
+        assert tot(wf, "投决预期", c) + tot(wf, "市场偏差", c) == pytest.approx(tot(wf, "投资标准", c))
 
 
 # ---------------- upload expander smoke (sqlite + ATTACH) ----------------

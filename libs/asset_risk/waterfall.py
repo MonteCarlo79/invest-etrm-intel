@@ -302,6 +302,19 @@ def ic_leg(ic: pd.DataFrame, keys, name_to_code: dict, commission: dict
     return pd.DataFrame(rows, columns=cols), missing
 
 
+def ic_passthrough(leg: pd.DataFrame, missing, bench: pd.DataFrame) -> pd.DataFrame:
+    """Add keys without an IC case to the 投决预期 leg at their own 投资标准 value
+    (arb/cap from bench, fee 0), so their 市场偏差 is 0 and the other legs never
+    change. Keys absent from bench are dropped."""
+    if not missing or bench.empty:
+        return leg
+    miss = set(missing)
+    pt = bench[[(a, m) in miss for a, m in zip(bench["asset"], bench["month"])]]
+    pt = pt.groupby(["asset", "month"], as_index=False)[["arb_cny", "cap_cny"]].sum()
+    pt["fee_cny"] = 0.0
+    return pd.concat([leg, pt], ignore_index=True)
+
+
 def build_waterfall(bench: pd.DataFrame, nominated: pd.DataFrame,
                     cleared: pd.DataFrame, actual: pd.DataFrame,
                     ic: pd.DataFrame | None = None) -> pd.DataFrame:
