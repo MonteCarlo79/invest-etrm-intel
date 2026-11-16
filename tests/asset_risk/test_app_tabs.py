@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 ASSET_LABELS = [
     "Asset Config", "Settlement", "Realised P&L", "Agent",
-    "Dispatch Diagnostics", "收益瀑布 P&L Waterfall",
+    "Dispatch Diagnostics", "收益瀑布 P&L Waterfall", "复盘 Review",
 ]
 
 EXPECTED = {
@@ -60,7 +60,7 @@ def test_asset_risk_lazy_pages():
                 guarded.add(id(sub))
     imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
                and any(a.name.startswith("render_") for a in n.names)]
-    assert len(imports) == 6
+    assert len(imports) == 7
     assert all(id(i) in guarded for i in imports)
 
 

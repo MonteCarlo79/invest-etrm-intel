@@ -53,7 +53,7 @@ st.title("Asset Risk Management")
 
 LABELS = [
     "Asset Config", "Settlement", "Realised P&L", "Agent",
-    "Dispatch Diagnostics", "收益瀑布 P&L Waterfall",
+    "Dispatch Diagnostics", "收益瀑布 P&L Waterfall", "复盘 Review",
 ]
 
 # st.tabs executes every tab body on each rerun; a radio renders only the
@@ -84,3 +84,7 @@ elif page == "Dispatch Diagnostics":
 elif page == "收益瀑布 P&L Waterfall":
     from apps.asset_risk.tab_waterfall import render_waterfall
     render_waterfall(engine)
+
+elif page == "复盘 Review":
+    from apps.asset_risk.tab_review import render_review
+    render_review(engine)
