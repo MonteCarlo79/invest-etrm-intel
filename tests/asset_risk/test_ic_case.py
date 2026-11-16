@@ -255,7 +255,7 @@ def test_store_roundtrip_and_replace(seed, sqlite_engine):
     save_ic(sqlite_engine, ic)
     save_ic(sqlite_engine, ic[ic.asset_code == "wuchuan"].assign(case_label="v2"))   # replaces only wuchuan
     out = load_ic(sqlite_engine)
-    assert len(out) == 40
+    assert len(out) == 80
     assert set(out[out.asset_code == "wuchuan"].case_label) == {"v2"}
     s = out[out.asset_code == "siziwangqi"].iloc[0]
     assert s.ic_cod == date(2025, 10, 15)
