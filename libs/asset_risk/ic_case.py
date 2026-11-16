@@ -207,6 +207,10 @@ def parse_ic_workbook(path_or_buffer, file_name: str) -> tuple[pd.DataFrame, lis
     # Sheets whose title has stray whitespace are older duplicates (e.g. '…汇总 ' = 0429 version): last.
     for ws in sorted(wb.worksheets, key=lambda w: w.title != w.title.strip()):
         t = ws.title
+        if t.strip() == "苏尼特-杭锦旗-乌拉特":
+            notes.append(f"{t}: IC boundaries in an unsupported layout — not parsed "
+                         "(苏右/乌拉特 have no IC case yet)")
+            continue
         if "IPMT" in t:
             parser = _parse_format_a
         elif "测算边界汇总" in t:

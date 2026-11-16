@@ -103,7 +103,7 @@ def test_skips_have_notes(seed):
     df, notes = parse_ic_workbook(seed, "ic.xlsx")
     assert set(df.asset_code) == {"wuchuan", "siziwangqi"}
     assert any("锡盟" in n for n in notes)
-    assert any("苏尼特" in n for n in notes)
+    assert any("苏尼特" in n and "unsupported layout" in n and "苏右/乌拉特 have no IC case yet" in n for n in notes)
 
 
 def test_format_b_two_columns_uses_last(tmp_path):
