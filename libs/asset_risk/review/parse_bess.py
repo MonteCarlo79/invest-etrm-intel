@@ -30,7 +30,8 @@ _BREAKDOWN_ROWS = [("策略申报", "strategy"), ("实时出清", "cleared"), ("
 def deck_month(texts: list[str], file_name: str = "") -> date | None:
     """Month from a title "（N月）" + date line "YYYY.M"; the date line is the publication
     month, so a label later in the year than the date month belongs to the previous year.
-    Falls back to "N月" in the file name (year from the date line or a 20xx in the file name)."""
+    Falls back to "N月" in the file name; without a date line the year comes from a 20xx in
+    the file name."""
     blob = "\n".join(texts)
     m = re.search(r"[（(]\s*(\d{1,2})\s*月\s*[）)]", blob)
     d = re.search(r"(20\d{2})\s*[.\-/年]\s*(\d{1,2})", blob)
@@ -39,11 +40,11 @@ def deck_month(texts: list[str], file_name: str = "") -> date | None:
     if n is None:
         fm = re.search(r"(\d{1,2})月", file_name or "")
         n = int(fm.group(1)) if fm else None
-        if year is None:
-            fy = re.search(r"(20\d{2})", file_name or "")
-            year = int(fy.group(1)) if fy else None
     elif d and n > int(d.group(2)):
         year -= 1
+    if year is None:   # title label but no date line: year from the file name
+        fy = re.search(r"(20\d{2})", file_name or "")
+        year = int(fy.group(1)) if fy else None
     if n is None or year is None or not 1 <= n <= 12:
         return None
     return date(year, n, 1)

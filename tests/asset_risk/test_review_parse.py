@@ -76,6 +76,8 @@ def test_deck_month_labels():
     assert deck_month(["no label"], "蒙西6月内部复盘.pptx") is None  # no year anywhere
     assert deck_month(["2026.7"], "蒙西6月内部复盘.pptx") == date(2026, 6, 1)
     assert deck_month(["上半年复盘"], "上半年.pptx") is None
+    assert deck_month(["蒙西储能场站复盘（9月）"], "2026蒙西复盘.pptx") == date(2026, 9, 1)  # no date line
+    assert deck_month(["蒙西储能场站复盘（9月）"], "x.pptx") is None
 
 
 def test_overview_and_breakdown(tmp_path):
