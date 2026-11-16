@@ -15,24 +15,13 @@ from datetime import date, datetime
 import pandas as pd
 from sqlalchemy import text
 
+from libs.asset_risk.review.aliases import STATION_ALIASES
+
 IC_COLUMNS = ["asset_code", "op_year", "soh", "cycles_per_year", "charge_price", "discharge_price",
               "dod", "rte", "capcomp_rate", "capcomp_years", "grid_fee", "capacity_mw", "energy_mwh",
               "ic_cod", "case_label", "source_file"]
 
 OP_YEARS = 20
-
-# Global Constraints alias table. Unknown names are reported, never guessed.
-STATION_ALIASES = {
-    "suyou": ["苏右", "远景景蓝", "景蓝乌尔图"],
-    "hangjinqi": ["杭锦旗", "悦杭独贵"],
-    "siziwangqi": ["四子王旗", "四子王", "景通四益堂"],
-    "gushanliang": ["谷山梁", "固山梁", "裕昭新能源", "裕昭沙子坝"],
-    "wuhai": ["乌海", "乌海康富"],
-    "wulate": ["乌拉特", "远景乌拉特"],
-    "bameng": ["巴盟", "景怡查干哈达"],
-    "wuchuan": ["武川"],
-    "alashan": ["阿拉善"],
-}
 
 # Format A "Table I" SOH curve (also used for Format B, whose sheets only describe it in prose).
 SOH_TABLE_I = [0.946, 0.923, 0.905, 0.888, 0.872, 0.857, 0.844, 0.83, 0.818, 0.806, 0.794, 0.783,
