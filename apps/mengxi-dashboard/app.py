@@ -1577,7 +1577,7 @@ with tab_trader:
         "6. Respond concisely with actionable insights for the trading team.\n"
         "7. Asset codes: suyou / hangjinqi / siziwangqi / gushanliang.\n"
         "8. Use get_review_metrics for monthly 复盘 reported figures (strategy/cleared/executed "
-        "revenue, cycles, spreads); revenue = spot + capcomp before fees, CNY."
+        "revenue, cycles, spreads); strategy/cleared/executed_revenue_cny = spot + capacity compensation before fees; total_revenue_cny = after 系统运行费/线损/调频分摊; ¥."
     )
 
     def _build_trader_system() -> str:
@@ -1656,7 +1656,7 @@ with tab_trader:
                 "Get monthly 复盘 (review) reported metrics per asset: total_revenue_cny, "
                 "unit_capacity_revenue, daily_cycles, spot_spread, capcomp_unit_price, "
                 "sysop_fee_unit, and {strategy,cleared,executed}_{revenue_cny,charge_mwh,"
-                "discharge_mwh}. Revenue = spot + capcomp before fees, CNY. Read-only."
+                "discharge_mwh}. Units: strategy/cleared/executed_revenue_cny = spot + capacity compensation before fees; total_revenue_cny = after 系统运行费/线损/调频分摊; ¥. Read-only."
             ),
             "input_schema": {
                 "type": "object",

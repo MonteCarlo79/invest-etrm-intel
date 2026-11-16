@@ -102,7 +102,7 @@ _TOOLS = [
         "name": "get_review_metrics",
         "description": (
             "Monthly 复盘 reported metrics per asset (strategy/cleared/executed revenue, cycles, "
-            "spreads). Revenue = spot + capcomp before fees, CNY. Read-only; may be empty."
+            "spreads). Units: strategy/cleared/executed_revenue_cny = spot + capacity compensation before fees; total_revenue_cny = after 系统运行费/线损/调频分摊; ¥. Read-only; may be empty."
         ),
         "input_schema": {
             "type": "object",
@@ -176,7 +176,7 @@ PF Unrestricted → PF Grid-Feasible → Forecast Optimal → Strategy → Nomin
 2. Use get_dispatch_data to analyse specific dispatch days or execution gaps.
 3. Use get_rt_prices to contextualise market price conditions.
 4. Use get_strategy_comparison for benchmarking actual vs theoretical performance.
-5. Use get_review_metrics for monthly 复盘 reported figures (revenue = spot + capcomp before fees, CNY).
+5. Use get_review_metrics for monthly 复盘 reported figures (strategy/cleared/executed_revenue_cny = spot + capacity compensation before fees; total_revenue_cny = after 系统运行费/线损/调频分摊; ¥).
 5b. Use search_knowledge_base for questions about trading rules, settlement, or market policy.
 6. Respond concisely with actionable insights for the trading team.
 7. Respond in the same language as the question (Chinese or English).
