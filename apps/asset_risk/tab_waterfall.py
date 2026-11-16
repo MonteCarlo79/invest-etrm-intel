@@ -28,11 +28,13 @@ from libs.asset_risk.waterfall import (
     _COMPONENT_CN,
     _COMPONENT_COLORS,
     _STAGES,
+    _STAGES_IC,
     _load_nodal_prices_filled,
     _load_settlement_actuals,
     attribution_rows,
     build_waterfall,
     guard_cleared_leg,
+    ic_leg,
     stage_arbitrage,
     stage_capacity,
 )
@@ -43,6 +45,7 @@ from libs.asset_risk.diagnostics import (
     load_maps,
     exec_gap_monthly,
 )
+from libs.asset_risk import ic_case
 from libs.asset_risk.chain import _attach_prices, _check_sign, _load_chain, _load_prices
 
 
@@ -68,7 +71,7 @@ def stage_waterfall_figure(wf: pd.DataFrame) -> go.Figure:
     math, no overlapping segments. Stage bars absolute, delta bars relative.
     """
     stage_totals = {}
-    for stage in ("投资标准", "申报", "出清", "实际"):
+    for stage in ("投决预期", "投资标准", "申报", "出清", "实际"):
         stage_totals[stage] = float(wf[wf["stage"] == stage]["cny"].sum())
     d1 = stage_totals["申报"] - stage_totals["投资标准"]
     d2 = stage_totals["出清"] - stage_totals["申报"]
@@ -85,6 +88,13 @@ def stage_waterfall_figure(wf: pd.DataFrame) -> go.Figure:
              f"<b>¥{stage_totals['出清'] / 1e6:,.2f}M</b>",
              f"{d3 / 1e6:+,.2f}M",
              f"<b>¥{stage_totals['实际'] / 1e6:,.2f}M</b>"]
+
+    if (wf["stage"] == "投决预期").any():
+        d0 = stage_totals["投资标准"] - stage_totals["投决预期"]
+        x = ["投决预期", "市场偏差"] + x
+        measures = ["absolute", "relative"] + measures
+        y = [stage_totals["投决预期"], d0] + y
+        texts = [f"<b>¥{stage_totals['投决预期'] / 1e6:,.2f}M</b>", f"{d0 / 1e6:+,.2f}M"] + texts
 
     fig = go.Figure(go.Waterfall(
         x=x, measure=measures, y=y, text=texts, textposition="outside",
@@ -105,6 +115,8 @@ def deviation_breakdown_figure(wf: pd.DataFrame) -> go.Figure:
     grouped bars (no overlap) — makes compensation structure explicit, e.g.
     套利 −1.40M next to 容量补偿 +1.72M."""
     delta_stages = ["Δ策略与预测", "Δ出清校核", "Δ执行与费用"]
+    if (wf["stage"] == "市场偏差").any():
+        delta_stages = ["市场偏差"] + delta_stages
     comps = ["arb_cny", "cap_cny", "fee_cny", "other_cny"]
     fig = go.Figure()
     for c in comps:
@@ -179,6 +191,37 @@ _CAVEATS_MD = """
 """
 
 
+def render_ic_upload(engine):
+    """Expander: IC assumptions workbook -> parse -> preview + notes -> save."""
+    with st.expander("投决边界上传 (IC assumptions)"):
+        up = st.file_uploader("投决边界 xlsx（内蒙古储能项目经评边界值 / 投委会预审会）",
+                              type=["xlsx"], key="wf_ic_upload")
+        if up is None:
+            return
+        try:
+            ic_df, notes = ic_case.parse_ic_workbook(up, up.name)
+        except Exception as e:  # unreadable/corrupt workbook: report, never crash the tab
+            st.error(f"无法解析 {up.name}: {e}")
+            return
+        for n in notes:
+            st.caption(n)
+        if ic_df.empty:
+            st.warning("未解析到任何投决边界（见上方说明）。")
+            return
+        prev = (ic_df.groupby("asset_code")
+                .agg(case_label=("case_label", "first"), capacity_mw=("capacity_mw", "first"),
+                     energy_mwh=("energy_mwh", "first"), ic_cod=("ic_cod", "first"),
+                     y1_cycles=("cycles_per_year", "first"), y1_charge=("charge_price", "first"),
+                     y1_discharge=("discharge_price", "first"), grid_fee=("grid_fee", "first"))
+                .reset_index())
+        st.dataframe(prev, use_container_width=True, hide_index=True)
+        st.caption("保存将按 asset_code 覆盖已存储的投决边界（价格/费用单位 ¥/MWh）。")
+        if st.button("保存", key="wf_ic_save"):
+            ic_case.ensure_table(engine)
+            ic_case.save_ic(engine, ic_df)
+            st.success(f"已保存 {ic_df['asset_code'].nunique()} 个资产的投决边界。")
+
+
 def _bench_note_captions(bench_rows: list[dict]) -> tuple[str | None, str | None]:
     """(filled-price fallback caption, no-price ¥0 caption) from benchmark notes."""
     filled = sorted({b["asset"] for b in bench_rows if b.get("note") == "节点填充电价"})
@@ -206,6 +249,7 @@ def render_waterfall(engine):
     if assets.empty:
         st.warning("No BESS assets found.")
         return
+    render_ic_upload(engine)
 
     plant_map, nom_map, rate_map = load_maps(engine)
     chain = _cached_chain(engine, tuple(sorted(int(i) for i in assets["id"]))).copy()
@@ -361,7 +405,36 @@ def render_waterfall(engine):
         df = _wf.restrict_to_keys(df, billed_keys)
         bench_rows = [r for r in bench_rows if (r["asset"], r["month"]) in set(billed_keys)]
 
-    wf = build_waterfall(bench, nominated, cleared, actual)
+    # --- 投决预期 (IC) stage: only asset-months with an IC case; the other legs are
+    # restricted to the same asset-months so the 市场偏差 bridge closes.
+    ic_leg_df = None
+    try:
+        ic_all = ic_case.load_ic(engine)
+    except Exception:
+        ic_all = pd.DataFrame(columns=ic_case.IC_COLUMNS)   # table not created yet
+    if not ic_all.empty and not bench.empty:
+        use_ic = st.checkbox("含投决预期 (IC)", value=True, key="wf_use_ic",
+                             help="仅包含有投决边界的资产×月份；关闭则显示全部资产的原四段瀑布")
+        if use_ic:
+            keys = sorted(set(zip(bench["asset"], bench["month"])))
+            commission = {r["name"]: r.get("commission_date") for _, r in assets.iterrows()}
+            leg, no_ic = ic_leg(ic_all, keys, nom_map, commission)
+            if leg.empty:
+                st.caption("所选资产×月份均无投决预期数据，瀑布不含投决预期段。")
+            else:
+                ic_keys = list(zip(leg["asset"], leg["month"]))
+                if no_ic:
+                    st.caption("以下资产×月份无投决预期（无投决边界或早于投运日），已从含投决预期的瀑布中排除："
+                               + "、".join(f"{a} {m}" for a, m in no_ic))
+                    bench = _wf.restrict_to_keys(bench, ic_keys)
+                    nominated = _wf.restrict_to_keys(nominated, ic_keys)
+                    cleared = _wf.restrict_to_keys(cleared, ic_keys)
+                    actual = _wf.restrict_to_keys(actual, ic_keys)
+                    df = _wf.restrict_to_keys(df, ic_keys)
+                    bench_rows = [r for r in bench_rows if (r["asset"], r["month"]) in set(ic_keys)]
+                ic_leg_df = leg
+
+    wf = build_waterfall(bench, nominated, cleared, actual, ic=ic_leg_df)
 
     # --- KPI strip ---
     def _tot(stage, comp):
@@ -404,7 +477,8 @@ def render_waterfall(engine):
 
     # --- stage × month matrix ---
     st.markdown("**各段收益 by 资产 × 月 (¥)**")
-    mat_src = pd.concat([
+    mat_src = pd.concat(([ic_leg_df.assign(stage="投决预期")[["asset", "month", "stage", "arb_cny", "cap_cny"]]]
+                         if ic_leg_df is not None else []) + [
         bench.assign(stage="投资标准")[["asset", "month", "stage", "arb_cny", "cap_cny"]],
         nominated.assign(stage="申报")[["asset", "month", "stage", "arb_cny", "cap_cny"]],
         cleared.assign(stage="出清")[["asset", "month", "stage", "arb_cny", "cap_cny"]],

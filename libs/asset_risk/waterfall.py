@@ -20,6 +20,8 @@ _COMPONENT_COLORS = {"arb_cny": "#3498db", "cap_cny": "#9b59b6",
                      "fee_cny": "#e74c3c", "other_cny": "#95a5a6"}
 _COMPONENT_CN = {"arb_cny": "套利", "cap_cny": "容量补偿", "fee_cny": "系统运行费+线损", "other_cny": "其他费用"}
 _STAGES = ["投资标准", "Δ策略与预测", "申报", "Δ出清校核", "出清", "Δ执行与费用", "实际"]
+# With an investment-committee case: 投决预期 → 市场偏差 → 投资标准 → ...
+_STAGES_IC = ["投决预期", "市场偏差"] + _STAGES
 
 # 出清腿降级阈值 (user-set 2026-11-05): 查干哈达 2026-09 cleared 294k MWh vs
 # billed 107k MWh (2.76×; synthetic ±834 MWh/15min rows) — a broken 出清 feed
@@ -269,13 +271,48 @@ def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
 # Waterfall assembly (pure)
 # ---------------------------------------------------------------------------
 
+def ic_leg(ic: pd.DataFrame, keys, name_to_code: dict, commission: dict
+           ) -> tuple[pd.DataFrame, list[tuple[str, str]]]:
+    """投决预期 leg for (asset name, 'YYYY-MM') keys.
+
+    Returns (leg, no_ic_keys). leg columns: asset, month, arb_cny, cap_cny, fee_cny
+    (fee_cny = −grid fee, the same sign as the 实际 fee leg, so stacking is a plain
+    sum), dis_mwh, chg_mwh. Keys without IC rows, without a usable cod, or before
+    cod are NOT zero-filled — they are returned in no_ic_keys.
+    commission: asset name → rm_assets.commission_date (date/Timestamp/str/None).
+    """
+    from libs.asset_risk.ic_case import ic_month_value
+
+    rows, missing = [], []
+    for name, month in keys:
+        cod = commission.get(name)
+        try:
+            cod = None if cod is None or pd.isna(cod) else pd.Timestamp(cod).date()
+        except (ValueError, TypeError):
+            cod = None
+        code = name_to_code.get(name)
+        v = ic_month_value(ic, code, pd.Timestamp(month + "-01").date(), cod) if code else None
+        if v is None:
+            missing.append((name, month))
+            continue
+        rows.append({"asset": name, "month": month, "arb_cny": v["arbitrage_cny"],
+                     "cap_cny": v["capcomp_cny"], "fee_cny": -v["grid_fee_cny"],
+                     "dis_mwh": v["discharge_mwh"], "chg_mwh": v["charge_mwh"]})
+    cols = ["asset", "month", "arb_cny", "cap_cny", "fee_cny", "dis_mwh", "chg_mwh"]
+    return pd.DataFrame(rows, columns=cols), missing
+
+
 def build_waterfall(bench: pd.DataFrame, nominated: pd.DataFrame,
-                    cleared: pd.DataFrame, actual: pd.DataFrame) -> pd.DataFrame:
+                    cleared: pd.DataFrame, actual: pd.DataFrame,
+                    ic: pd.DataFrame | None = None) -> pd.DataFrame:
     """Long frame: stage × component → cny, with bridge deviations.
 
     Stages: 投资标准, Δ策略与预测 (=申报−标准), 申报, Δ出清校核 (=出清−申报),
     出清, Δ执行与费用 (=实际−出清), 实际. Components: arb_cny, cap_cny, fee_cny, other_cny
     (fee/other are zero except in the 实际 leg and its incoming deviation).
+    Optional ic (ic_leg output, same asset-months as the other legs) prepends 投决预期
+    and 市场偏差 (=投资标准−投决预期); fee_cny there is the IC grid fee. Without ic the
+    output is unchanged.
     Bridge identity per component: std + d1 = nom; nom + d2 = clr; clr + d3 = act.
     """
     comps = ["arb_cny", "cap_cny", "fee_cny", "other_cny"]
@@ -293,16 +330,24 @@ def build_waterfall(bench: pd.DataFrame, nominated: pd.DataFrame,
     for stage in ("投资标准", "申报", "出清"):
         for c in comps:
             totals[stage].setdefault(c, 0.0)
-    for stage, prev, delta_name in [("申报", "投资标准", "Δ策略与预测"),
-                                    ("出清", "申报", "Δ出清校核"),
-                                    ("实际", "出清", "Δ执行与费用")]:
+    transitions = [("申报", "投资标准", "Δ策略与预测"),
+                   ("出清", "申报", "Δ出清校核"),
+                   ("实际", "出清", "Δ执行与费用")]
+    stages = ("投资标准", "申报", "出清", "实际")
+    stage_list = _STAGES
+    if ic is not None and not ic.empty:
+        totals["投决预期"] = {c: _tot(ic, c) for c in comps}
+        transitions.insert(0, ("投资标准", "投决预期", "市场偏差"))
+        stages = ("投决预期",) + stages
+        stage_list = _STAGES_IC
+    for stage, prev, delta_name in transitions:
         for c in comps:
             rows.append({"stage": delta_name, "component": c,
                          "cny": totals[stage][c] - totals[prev][c]})
-    for stage in ("投资标准", "申报", "出清", "实际"):
+    for stage in stages:
         for c in comps:
             rows.append({"stage": stage, "component": c, "cny": totals[stage][c]})
-    order = {s: i for i, s in enumerate(_STAGES)}
+    order = {s: i for i, s in enumerate(stage_list)}
     out = pd.DataFrame(rows)
     out["stage_order"] = out["stage"].map(order)
     return out.sort_values(["stage_order", "component"]).reset_index(drop=True)
