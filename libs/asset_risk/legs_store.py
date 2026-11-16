@@ -41,12 +41,17 @@ def _is_persistable(leg: str, result: dict) -> bool:
         return False
     if leg == "benchmark" and (result.get("days_solved") or 0) == 0:
         return False
-    # A benchmark with skipped days is only frozen when the filled-price fallback
+    # A benchmark with skipped days is only frozen when a nodal-price fallback
     # succeeded; otherwise the gap may be feed lag that later fills in.
     if (leg == "benchmark" and (result.get("days_skipped") or 0) > 0
-            and result.get("note") != "节点填充电价"):
+            and "节点" not in (result.get("note") or "")):
         return False
     return True
+
+
+# Bump when the price series feeding the legs changes, so stored legs are recomputed.
+# px2: slot-wise merge cleared > node RT (md_rt_nodal_price) > filled (2026-11-16).
+PRICE_SOURCE_VERSION = "px2"
 
 
 def legs_inputs_key(capacity_mw, duration_h, commission_iso, capcomp_rate) -> str:
@@ -55,7 +60,7 @@ def legs_inputs_key(capacity_mw, duration_h, commission_iso, capcomp_rate) -> st
         return "None" if v is None else f"{round(float(v), 4):.4f}"
     canon = "|".join([_num(capacity_mw), _num(duration_h),
                       "None" if not commission_iso else str(commission_iso)[:10],
-                      _num(capcomp_rate)])
+                      _num(capcomp_rate), PRICE_SOURCE_VERSION])
     return hashlib.sha1(canon.encode("utf-8")).hexdigest()
 
 

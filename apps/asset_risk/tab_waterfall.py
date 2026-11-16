@@ -36,7 +36,9 @@ from libs.asset_risk.waterfall import (
     guard_cleared_leg,
     ic_leg,
     ic_passthrough,
-    ic_scale_to_bench,
+    bench_coverage_gaps,
+    chain_coverage_days,
+    ic_scale_to_chain,
     stage_arbitrage,
     stage_capacity,
 )
@@ -268,11 +270,11 @@ def render_ic_upload(engine):
 
 def _bench_note_captions(bench_rows: list[dict]) -> tuple[str | None, str | None]:
     """(filled-price fallback caption, no-price ¥0 caption) from benchmark notes."""
-    filled = sorted({b["asset"] for b in bench_rows if b.get("note") == "节点填充电价"})
+    filled = sorted({b["asset"] for b in bench_rows if "节点" in (b.get("note") or "")})
     zero = sorted((b["asset"], b["month"]) for b in bench_rows
                   if b.get("note") in ("no prices", "no complete price day"))
-    filled_cap = ("投资标准价格回退：以下资产当月出清电价无完整日（缺口 ~32%），"
-                  f"投资标准按节点填充电价计算：{'、'.join(filled)}") if filled else None
+    filled_cap = ("投资标准价格回退：以下资产当月出清电价存在缺口，"
+                  f"投资标准按节点价格（RT/填充）逐槽补缺计算：{'、'.join(filled)}") if filled else None
     zero_cap = ("投资标准无可用电价，按 ¥0 显示："
                 + "、".join(f"{a} {m}" for a, m in zero)) if zero else None
     return filled_cap, zero_cap
@@ -340,6 +342,9 @@ def render_waterfall(engine):
     except ValueError as e:
         st.error(str(e))
         st.stop()
+
+    commission_by_name = {r["name"]: r.get("commission_date") for _, r in assets.iterrows()}
+    chain_days = chain_coverage_days(df, commission_by_name)
 
     # --- legs ---
     nominated = stage_arbitrage(df, "nominated_mw")
@@ -449,6 +454,12 @@ def render_waterfall(engine):
         df = _wf.restrict_to_keys(df, billed_keys)
         bench_rows = [r for r in bench_rows if (r["asset"], r["month"]) in set(billed_keys)]
 
+    gaps = bench_coverage_gaps(bench, chain_days)
+    if gaps:
+        st.warning("投资标准仅求解 " + "、".join(f"{n}/{y}" for _, _, n, y in gaps)
+                   + " 天（价格不完整），投资标准与市场偏差在该月不可比: "
+                   + "、".join(f"{a} {m}" for a, m, _, _ in gaps))
+
     # --- 投决预期 (IC) stage. Other legs are never restricted: asset-months without
     # an IC case enter this stage at their own 投资标准 value (市场偏差 = 0).
     ic_leg_df = None
@@ -465,9 +476,9 @@ def render_waterfall(engine):
         else:
             if no_ic:
                 st.caption("无投决边界，按投资标准计入: " + "、".join(f"{a} {m}" for a, m in no_ic))
-            leg, scaled = ic_scale_to_bench(leg, bench)
+            leg, scaled = ic_scale_to_chain(leg, chain_days)
             if scaled:
-                st.caption("投决预期按投资标准已求解天数折算: " + "、".join(f"{a} {m}" for a, m in scaled))
+                st.caption("投决预期按申报数据覆盖天数折算: " + "、".join(f"{a} {m}" for a, m in scaled))
             ic_leg_df = ic_passthrough(leg, no_ic, bench)
 
     wf = build_waterfall(bench, nominated, cleared, actual, ic=ic_leg_df)

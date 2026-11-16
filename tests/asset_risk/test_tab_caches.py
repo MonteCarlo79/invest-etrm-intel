@@ -114,13 +114,13 @@ def test_caveats_no_times_four_on_cleared_energy():
 
 
 def test_bench_note_captions_split_by_note():
-    rows = [{"asset": "A", "month": "2026-09", "note": "节点填充电价"},
+    rows = [{"asset": "A", "month": "2026-09", "note": "出清价+节点RT价"},
             {"asset": "B", "month": "2026-09", "note": "no prices"},
             {"asset": "C", "month": "2026-10", "note": "no complete price day"},
             {"asset": "D", "month": "2026-09", "note": ""},
             {"asset": "E", "month": "2026-09", "note": "lp empty"}]
     filled, zero = tw._bench_note_captions(rows)
-    assert filled.endswith("投资标准按节点填充电价计算：A") and "B" not in filled
+    assert filled.endswith("投资标准按节点价格（RT/填充）逐槽补缺计算：A") and "B" not in filled
     assert zero == "投资标准无可用电价，按 ¥0 显示：B 2026-09、C 2026-10"
 
 

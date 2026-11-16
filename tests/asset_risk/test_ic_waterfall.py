@@ -153,29 +153,59 @@ def test_seed_dry_run_then_apply(tmp_path, capsys):
     assert len(load_ic(eng)) == 20
 
 
-def test_ic_scaled_by_bench_days_solved_passthrough_untouched():
-    from libs.asset_risk.waterfall import ic_passthrough, ic_scale_to_bench
+def test_ic_scaled_by_chain_coverage_not_bench_days():
+    from libs.asset_risk.waterfall import ic_passthrough, ic_scale_to_chain
     ic_all = _ic_rows("wuchuan", cod=date(2026, 7, 20))
     keys = [("武川", "2026-09"), ("武川", "2026-07"), ("阿拉善", "2026-09")]
     leg, missing = ic_leg(ic_all, keys, NAMES, COD)
     raw = leg.set_index("month")
     assert raw.loc["2026-09", "ic_days"] == 30 and raw.loc["2026-07", "ic_days"] == 12   # from cod 07-20
+    # bench solved 0 days for 武川 09 — must NOT zero the IC leg any more
     bench = pd.DataFrame([
-        {"asset": "武川", "month": "2026-09", "arb_cny": 1.0, "cap_cny": 0.0, "days_solved": 20},
-        {"asset": "武川", "month": "2026-07", "arb_cny": 1.0, "cap_cny": 0.0, "days_solved": 31},  # > ic_days
+        {"asset": "武川", "month": "2026-09", "arb_cny": 0.0, "cap_cny": 0.0, "days_solved": 0},
+        {"asset": "武川", "month": "2026-07", "arb_cny": 1.0, "cap_cny": 0.0, "days_solved": 31},
         {"asset": "阿拉善", "month": "2026-09", "arb_cny": 500.0, "cap_cny": 7.0, "days_solved": 10}])
-    out, scaled = ic_scale_to_bench(leg, bench)
+    cov = {("武川", "2026-09"): 20, ("武川", "2026-07"): 31}     # 07: > ic_days -> capped
+    out, scaled = ic_scale_to_chain(leg, cov)
     assert scaled == [("武川", "2026-09")]
     s = out.set_index("month")
     for c in ("arb_cny", "cap_cny", "fee_cny"):
         assert s.loc["2026-09", c] == pytest.approx(raw.loc["2026-09", c] * 20 / 30)
+        assert s.loc["2026-09", c] != 0 or raw.loc["2026-09", c] == 0
         assert s.loc["2026-07", c] == pytest.approx(raw.loc["2026-07", c])        # capped at 1
     full = ic_passthrough(out, missing, bench)
     pt = full[full["asset"] == "阿拉善"].iloc[0]
     assert (pt["arb_cny"], pt["cap_cny"], pt["fee_cny"]) == (500, 7, 0)            # pass-through unscaled
-    # no days_solved column -> unchanged, nothing scaled
-    same, none = ic_scale_to_bench(leg, bench.drop(columns="days_solved"))
+    # no chain coverage for an asset-month -> unscaled; empty coverage -> unchanged
+    same, none = ic_scale_to_chain(leg, {("其他", "2026-09"): 3})
     assert none == [] and same.equals(leg)
+    same, none = ic_scale_to_chain(leg, {})
+    assert none == [] and same.equals(leg)
+
+
+def test_chain_coverage_days_counts_nominated_days_from_cod():
+    from libs.asset_risk.waterfall import chain_coverage_days
+    ts = pd.to_datetime(["2026-09-01 00:15", "2026-09-01 00:30", "2026-09-02 00:15",
+                         "2026-09-03 00:15", "2026-09-04 00:15"])
+    chain = pd.DataFrame({"asset": "武川", "month": "2026-09", "ts": ts,
+                          "nominated_mw": [1.0, 2.0, None, 3.0, 4.0]})
+    assert chain_coverage_days(chain, {})[("武川", "2026-09")] == 3          # 09-02 has no 申报
+    assert chain_coverage_days(chain, {"武川": date(2026, 9, 3)})[("武川", "2026-09")] == 2
+    assert chain_coverage_days(chain.iloc[0:0]) == {}
+
+
+def test_bench_coverage_gaps_flags_below_90pct():
+    from libs.asset_risk.waterfall import bench_coverage_gaps
+    bench = pd.DataFrame([
+        {"asset": "A", "month": "2026-09", "days_solved": 0},
+        {"asset": "A", "month": "2026-11", "days_solved": 1},
+        {"asset": "B", "month": "2026-09", "days_solved": 27},     # 27 >= 0.9*30 ok
+        {"asset": "B", "month": "2026-10", "days_solved": 26},     # 26 < 27 flagged
+        {"asset": "C", "month": "2026-09", "days_solved": 0}])     # no chain data: not flagged
+    cov = {("A", "2026-09"): 30, ("A", "2026-11"): 11, ("B", "2026-09"): 30, ("B", "2026-10"): 30}
+    assert bench_coverage_gaps(bench, cov) == [
+        ("A", "2026-09", 0, 30), ("A", "2026-11", 1, 11), ("B", "2026-10", 26, 30)]
+    assert bench_coverage_gaps(bench, {}) == []
 
 
 def test_review_overlay_skips_actual_without_bills(monkeypatch):

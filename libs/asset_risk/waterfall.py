@@ -199,6 +199,64 @@ def _load_nodal_prices_filled(engine, asset_name: str, start: str, end: str,
     return s[~s.index.duplicated(keep="last")].sort_index()
 
 
+def _load_nodal_rt_prices(engine, asset_name: str, start: str, end: str,
+                          asset_code: str | None = None) -> pd.Series:
+    """Nodal RT price (md_rt_nodal_price.node_price) for the station's registry node,
+    indexed in the chain slot frame (row datetime + MD_ROW_TO_SLOT — the same shift as
+    md_id_cleared_energy, verified r=0.997 / MAE ¥1.1). `start`/`end` bound the SLOT
+    window; the query is widened by the shift. Empty series when no registry node."""
+    from libs.trading_book.registry import get_station
+
+    code = asset_code or AUTO_NOM_CODE.get(asset_name)
+    if not code:
+        return pd.Series(dtype=float)
+    station = get_station(code)
+    if not station.price_nodes:
+        return pd.Series(dtype=float)
+    s0 = pd.Timestamp(start) - MD_ROW_TO_SLOT
+    e0 = pd.Timestamp(end) - MD_ROW_TO_SLOT
+    df = pd.read_sql(text("""
+        SELECT datetime, node_price
+        FROM marketdata.md_rt_nodal_price
+        WHERE node_name = :node AND datetime >= :s AND datetime < :e
+        ORDER BY datetime
+    """), engine, params={"node": station.price_nodes[0], "s": str(s0), "e": str(e0)})
+    if df.empty:
+        return pd.Series(dtype=float)
+    s = pd.Series({pd.Timestamp(t) + MD_ROW_TO_SLOT: float(v)
+                   for t, v in zip(df["datetime"], df["node_price"]) if pd.notna(v)},
+                  dtype=float)
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
+PRICE_SOURCE_LABELS = ("出清价", "节点RT价", "节点填充价")
+
+
+def merge_price_sources(cleared: pd.Series, rt: pd.Series, filled: pd.Series
+                        ) -> tuple[pd.Series, str]:
+    """Slot-wise merge in priority order cleared > node RT > filled (combine_first, so each
+    source fills only slots missing from the previous ones). Returns (series, note) where
+    note names the sources that contributed at least one slot joined by '+'; '' when
+    cleared alone supplied every slot (or nothing was supplied at all)."""
+    out = pd.Series(dtype=float)
+    used = []
+    for label, src in zip(PRICE_SOURCE_LABELS, (cleared, rt, filled)):
+        if src is None or len(src) == 0:
+            continue
+        merged = out.combine_first(src) if len(out) else src.copy()
+        if len(merged) > len(out):
+            used.append(label)
+        out = merged
+    out = out.sort_index()
+    note = "" if used in ([], [PRICE_SOURCE_LABELS[0]]) else "+".join(used)
+    return out, note
+
+
+def _complete_days_only(s: pd.Series) -> bool:
+    """True when the series is non-empty and every date present has all 96 slots."""
+    return len(s) > 0 and bool((s.groupby(s.index.date).size() >= 96).all())
+
+
 def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
                   duration_h: float, commission_iso: str | None,
                   capcomp_rate: float, plant: str,
@@ -240,18 +298,17 @@ def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
             # 悦杭独贵: 903.1 vs 904.6 MWh). Subsidy is added outside as dis_mwh x rate.
         )
 
-    dispatch_df, profit_s = _run(s)
     price_note = ""
-    if len(profit_s) == 0:
-        # Cleared-price feed has no COMPLETE 96-slot day this month (the engine
-        # skips any day with a NaN slot; 2026-10: ~32% nulls). Fall back to the
-        # filled nodal price — the same market price, complete days.
-        s2 = _load_nodal_prices_filled(engine, asset_name,
-                                       month_start.strftime("%Y-%m-%d"), month_end,
-                                       asset_code=asset_code)
-        if not s2.empty:
-            dispatch_df, profit_s = _run(s2)
-            price_note = "节点填充电价"
+    if not _complete_days_only(s):
+        # Cleared feed has gaps (2026-09..11: 38-49% null). Fill slot-wise from the node
+        # RT price, then the filled table; the engine skips any day with a NaN slot.
+        m0 = month_start.strftime("%Y-%m-%d")
+        rt = _load_nodal_rt_prices(engine, asset_name, m0, month_end, asset_code=asset_code)
+        filled = _load_nodal_prices_filled(engine, asset_name, m0, month_end,
+                                           asset_code=asset_code)
+        s, price_note = merge_price_sources(s, rt, filled)
+        s = s[(s.index >= month_start) & (s.index < pd.Timestamp(month_end))]
+    dispatch_df, profit_s = _run(s)
     if len(profit_s) == 0:
         return {"arb_cny": 0.0, "dis_mwh": 0.0, "chg_mwh": 0.0, "cap_cny": 0.0,
                 "days_solved": 0,
@@ -302,24 +359,49 @@ def ic_leg(ic: pd.DataFrame, keys, name_to_code: dict, commission: dict
     return pd.DataFrame(rows, columns=cols), missing
 
 
-def ic_scale_to_bench(leg: pd.DataFrame, bench: pd.DataFrame
-                      ) -> tuple[pd.DataFrame, list[tuple[str, str]]]:
-    """Scale each IC asset-month (arb/cap/fee) by bench days_solved / ic_days (ruling R6),
-    so 市场偏差 compares like-for-like days. ic_days = days in the month on/after cod.
+def chain_coverage_days(chain: pd.DataFrame, commission: dict | None = None
+                        ) -> dict[tuple[str, str], int]:
+    """(asset, month) -> number of days with >=1 non-null nominated_mw slot (申报 data),
+    counting only days on/after the asset's cod (commission: asset name -> date-like/None;
+    missing/unparseable cod = no cut). Day = calendar date of the chain slot ts."""
+    if chain is None or chain.empty or "nominated_mw" not in chain:
+        return {}
+    d = chain[chain["nominated_mw"].notna()]
+    if d.empty:
+        return {}
+    d = pd.DataFrame({"asset": d["asset"].values, "month": d["month"].values,
+                      "day": pd.to_datetime(d["ts"]).dt.normalize().values})
+    out = {}
+    for (asset, month), g in d.groupby(["asset", "month"]):
+        days = pd.DatetimeIndex(g["day"].unique())
+        cod = (commission or {}).get(asset)
+        try:
+            cod = None if cod is None or pd.isna(cod) else pd.Timestamp(cod).normalize()
+        except (ValueError, TypeError):
+            cod = None
+        if cod is not None:
+            days = days[days >= cod]
+        out[(asset, month)] = int(len(days))
+    return out
 
-    The factor is capped at 1 (never extrapolate the IC case beyond its cod-covered days).
-    Asset-months without a bench days_solved are left unscaled. Returns (leg, scaled keys)
-    where scaled keys are those with a factor < 1.
+
+def ic_scale_to_chain(leg: pd.DataFrame, chain_days: dict[tuple[str, str], int]
+                      ) -> tuple[pd.DataFrame, list[tuple[str, str]]]:
+    """Scale each IC asset-month (arb/cap/fee) by chain-coverage days / ic_days, where
+    chain-coverage days = days with 申报 data on/after cod (see chain_coverage_days) and
+    ic_days = days in the month on/after cod. Independent of the benchmark solve, so a
+    0-day benchmark no longer zeroes the IC leg.
+
+    The factor is capped at 1. Asset-months without chain coverage info are left
+    unscaled. Returns (leg, scaled keys) where scaled keys are those with factor < 1.
     """
-    if leg is None or leg.empty or bench is None or bench.empty or "days_solved" not in bench \
-            or "ic_days" not in leg:
+    if leg is None or leg.empty or not chain_days or "ic_days" not in leg:
         return leg, []
-    solved = bench.groupby(["asset", "month"])["days_solved"].sum(min_count=1)
     out = leg.copy()
     scaled = []
     for i, r in out.iterrows():
-        n = solved.get((r["asset"], r["month"]))
-        if n is None or pd.isna(n) or not r["ic_days"]:
+        n = chain_days.get((r["asset"], r["month"]))
+        if n is None or pd.isna(r["ic_days"]) or not r["ic_days"]:
             continue
         f = min(1.0, float(n) / float(r["ic_days"]))
         if f < 1.0:
@@ -327,6 +409,24 @@ def ic_scale_to_bench(leg: pd.DataFrame, bench: pd.DataFrame
                 out.at[i, c] = r[c] * f
             scaled.append((r["asset"], r["month"]))
     return out, scaled
+
+
+def bench_coverage_gaps(bench: pd.DataFrame, chain_days: dict[tuple[str, str], int],
+                        threshold: float = 0.9) -> list[tuple[str, str, int, int]]:
+    """Asset-months where bench days_solved < threshold x chain days with 申报 data.
+    Returns [(asset, month, solved, chain_days)] sorted; months without chain data
+    (0 days) or without days_solved are not flagged."""
+    if bench is None or bench.empty or "days_solved" not in bench or not chain_days:
+        return []
+    solved = bench.groupby(["asset", "month"])["days_solved"].sum(min_count=1)
+    gaps = []
+    for (asset, month), n in solved.items():
+        y = chain_days.get((asset, month))
+        if not y or pd.isna(n):
+            continue
+        if float(n) < threshold * y:
+            gaps.append((asset, month, int(n), int(y)))
+    return sorted(gaps)
 
 
 def ic_passthrough(leg: pd.DataFrame, missing, bench: pd.DataFrame) -> pd.DataFrame:

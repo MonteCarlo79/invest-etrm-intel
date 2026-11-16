@@ -357,12 +357,14 @@ def lp_solver(monkeypatch):
 def test_benchmark_leg_falls_back_to_filled_nodal(sqlite_engine, lp_solver):
     """When the cleared-price feed has no complete 96-slot day in the month,
     benchmark_leg falls back to md_mengxi_nodal_price_96_filled (the
-    station's own registry node) and flags note='节点填充电价'."""
+    station's own registry node) and flags note='节点填充价'."""
     from libs.asset_risk.waterfall import benchmark_leg
 
     with sqlite_engine.connect() as conn:
         conn.execute(text("INSERT INTO marketdata.rm_assets VALUES "
                           "(7, '裕昭沙子坝', 'bess', 'test', 500, 4.0, '2025-12-25')"))
+        conn.execute(text("CREATE TABLE marketdata.md_rt_nodal_price "
+                          "(datetime TEXT, node_name TEXT, node_price REAL)"))
         conn.execute(text("CREATE TABLE marketdata.md_mengxi_nodal_price_96_filled "
                           "(node_name TEXT, metric_time TEXT, time_order_96 INTEGER, "
                           "avg_node_price REAL)"))
@@ -382,7 +384,7 @@ def test_benchmark_leg_falls_back_to_filled_nodal(sqlite_engine, lp_solver):
                         350.0, "裕昭沙子坝储能电站", asset_name="裕昭沙子坝")
     assert res["days_solved"] == 1
     assert res["arb_cny"] > 0
-    assert res["note"] == "节点填充电价"
+    assert res["note"] == "节点填充价"
 
 
 def test_benchmark_leg_no_fallback_when_cleared_complete(sqlite_engine, lp_solver):
@@ -470,3 +472,27 @@ def test_restrict_to_keys_filters_asset_month_pairs():
     assert restrict_to_keys(df, []).empty
     empty = pd.DataFrame(columns=["asset", "month"])
     assert restrict_to_keys(empty, [("A", "2026-06")]).empty
+
+
+def test_merge_price_sources_fills_slotwise_in_priority_order():
+    from libs.asset_risk.waterfall import merge_price_sources
+    idx = pd.date_range("2026-09-01 00:15", periods=4, freq="15min")
+    cleared = pd.Series([1.0, float("nan"), float("nan"), float("nan")], index=idx)
+    rt = pd.Series([9.0, 2.0, float("nan")], index=idx[:3])
+    filled = pd.Series([8.0, 8.0, 3.0, 4.0], index=idx)
+    s, note = merge_price_sources(cleared.dropna(), rt.dropna(), filled)
+    assert list(s) == [1.0, 2.0, 3.0, 4.0]      # cleared > rt > filled, slot by slot
+    assert note == "出清价+节点RT价+节点填充价"
+    s, note = merge_price_sources(cleared.dropna(), rt.dropna(), pd.Series(dtype=float))
+    assert note == "出清价+节点RT价" and list(s) == [1.0, 2.0]
+    s, note = merge_price_sources(pd.Series(dtype=float), rt.dropna(), filled)
+    assert note == "节点RT价+节点填充价" and list(s) == [9.0, 2.0, 3.0, 4.0]
+    s, note = merge_price_sources(filled, rt, filled)       # cleared complete: no other source used
+    assert note == "" and list(s) == [8.0, 8.0, 3.0, 4.0]
+
+
+def test_legs_inputs_key_carries_price_source_version(monkeypatch):
+    from libs.asset_risk import legs_store
+    k = legs_store.legs_inputs_key(100.0, 2.0, "2024-06-30", 350.0)
+    monkeypatch.setattr(legs_store, "PRICE_SOURCE_VERSION", "px3")
+    assert legs_store.legs_inputs_key(100.0, 2.0, "2024-06-30", 350.0) != k
