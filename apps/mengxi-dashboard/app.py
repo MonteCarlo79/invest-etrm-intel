@@ -586,6 +586,9 @@ with tab_portfolio:
     with sub_pnl:
         from libs.decision_models.adapters.app.dispatch_pnl_page import render_dispatch_pnl_page
         render_dispatch_pnl_page(selected_asset, selected_date)
+        st.divider()
+        from libs.asset_risk.review.view import render_review_section
+        render_review_section(_get_sqlalchemy_engine())
 
     with sub_daily:
         from libs.decision_models.adapters.app.daily_ops_page import render_daily_ops_page
@@ -1572,7 +1575,9 @@ with tab_trader:
         "5. Attribute losses clearly: PF Unrestricted → PF Grid-Feasible → "
         "Forecast Optimal → Strategy → Nominated → Cleared Actual.\n"
         "6. Respond concisely with actionable insights for the trading team.\n"
-        "7. Asset codes: suyou / hangjinqi / siziwangqi / gushanliang."
+        "7. Asset codes: suyou / hangjinqi / siziwangqi / gushanliang.\n"
+        "8. Use get_review_metrics for monthly 复盘 reported figures (strategy/cleared/executed "
+        "revenue, cycles, spreads); revenue = spot + capcomp before fees, CNY."
     )
 
     def _build_trader_system() -> str:
@@ -1643,6 +1648,25 @@ with tab_trader:
                     "end_date":   {"type": "string", "description": "YYYY-MM-DD"},
                 },
                 "required": ["start_date", "end_date"],
+            },
+        },
+        {
+            "name": "get_review_metrics",
+            "description": (
+                "Get monthly 复盘 (review) reported metrics per asset: total_revenue_cny, "
+                "unit_capacity_revenue, daily_cycles, spot_spread, capcomp_unit_price, "
+                "sysop_fee_unit, and {strategy,cleared,executed}_{revenue_cny,charge_mwh,"
+                "discharge_mwh}. Revenue = spot + capcomp before fees, CNY. Read-only."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "asset": {"type": "string",
+                              "description": "Optional registry name or asset code"},
+                    "month_from": {"type": "string", "description": "YYYY-MM (optional)"},
+                    "month_to": {"type": "string", "description": "YYYY-MM (optional)"},
+                },
+                "required": [],
             },
         },
         {
@@ -1730,6 +1754,14 @@ with tab_trader:
                 return df.to_json(orient="records", default_handler=str)
             except Exception as _e:
                 return f"Error querying RT prices: {_e}"
+
+        elif name == "get_review_metrics":
+            import json as _json
+            from libs.asset_risk.review.agent import review_metrics_payload
+            return _json.dumps(
+                review_metrics_payload(engine, inp.get("asset"), inp.get("month_from"),
+                                       inp.get("month_to")),
+                ensure_ascii=False, default=str)
 
         elif name == "search_knowledge_base":
             try:

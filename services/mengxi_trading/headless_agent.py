@@ -99,6 +99,22 @@ _TOOLS = [
         },
     },
     {
+        "name": "get_review_metrics",
+        "description": (
+            "Monthly 复盘 reported metrics per asset (strategy/cleared/executed revenue, cycles, "
+            "spreads). Revenue = spot + capcomp before fees, CNY. Read-only; may be empty."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "asset": {"type": "string", "description": "Optional registry name or asset code"},
+                "month_from": {"type": "string", "description": "YYYY-MM (optional)"},
+                "month_to": {"type": "string", "description": "YYYY-MM (optional)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_strategy_comparison",
         "description": (
             "Compare multiple dispatch strategy P&Ls for an asset over a date range. "
@@ -160,7 +176,8 @@ PF Unrestricted → PF Grid-Feasible → Forecast Optimal → Strategy → Nomin
 2. Use get_dispatch_data to analyse specific dispatch days or execution gaps.
 3. Use get_rt_prices to contextualise market price conditions.
 4. Use get_strategy_comparison for benchmarking actual vs theoretical performance.
-5. Use search_knowledge_base for questions about trading rules, settlement, or market policy.
+5. Use get_review_metrics for monthly 复盘 reported figures (revenue = spot + capcomp before fees, CNY).
+5b. Use search_knowledge_base for questions about trading rules, settlement, or market policy.
 6. Respond concisely with actionable insights for the trading team.
 7. Respond in the same language as the question (Chinese or English).
 8. Quote all monetary values in CNY (元); clearly state the date range used.
@@ -235,6 +252,13 @@ def _dispatch(name: str, inputs: dict, engine) -> str:
                 engine, params=params,
             )
             return df.to_json(orient="records", default_handler=str)
+
+        if name == "get_review_metrics":
+            from libs.asset_risk.review.agent import review_metrics_payload
+            return json.dumps(
+                review_metrics_payload(engine, inputs.get("asset"), inputs.get("month_from"),
+                                       inputs.get("month_to")),
+                ensure_ascii=False, default=str)
 
         if name == "search_knowledge_base":
             from services.knowledge_pool.knowledge_docs import search_reference_docs
