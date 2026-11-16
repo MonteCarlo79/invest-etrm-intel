@@ -68,3 +68,41 @@ def test_missing_table_logs(caplog):
     with caplog.at_level("ERROR"):
         ag.review_metrics_payload(create_engine("sqlite://"), "suyou")
     assert any("load_review failed" in r.message for r in caplog.records)
+
+
+def test_gap_pct_nan_when_strategy_zero():
+    m = dt.date(2026, 9, 1)
+    df = pd.DataFrame([("suyou", m, "strategy_revenue_cny", 0.0, "CNY"),
+                       ("suyou", m, "cleared_revenue_cny", 90.0, "CNY"),
+                       ("suyou", m, "executed_revenue_cny", 81.0, "CNY")],
+                      columns=["asset_code", "month", "metric", "value", "unit"])
+    r = review_gap_table(df).iloc[0]
+    assert pd.isna(r["cleared gap %"]) and pd.isna(r["executed gap %"])
+    assert r["cleared−strategy"] == 90
+
+
+def test_view_module_has_no_streamlit():
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[2] / "libs" / "asset_risk" / "review" / "view.py"
+    assert "import streamlit" not in src.read_text()
+
+
+def test_mengxi_review_section_renders(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    _seed(tmp_path)
+    monkeypatch.setenv("RV_TMP", str(tmp_path))
+    script = '''
+import os, sys, pathlib, sqlalchemy
+from sqlalchemy import event
+sys.path.insert(0, str(pathlib.Path.cwd() / "apps" / "mengxi-dashboard"))
+from review_section import render_review_section
+t = os.environ["RV_TMP"]
+e = sqlalchemy.create_engine(f"sqlite:///{t}/t.db")
+@event.listens_for(e, "connect")
+def _a(conn, _):
+    conn.execute(f"ATTACH DATABASE '{t}/m.db' AS marketdata")
+render_review_section(e)
+'''
+    at = AppTest.from_string(script, default_timeout=30).run()
+    assert not at.exception, [x.message for x in at.exception]
+    assert any("No 复盘 data" in i.value for i in at.info)   # seed has only total_revenue_cny

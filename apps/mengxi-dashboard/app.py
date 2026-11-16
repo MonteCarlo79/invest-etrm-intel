@@ -587,7 +587,7 @@ with tab_portfolio:
         from libs.decision_models.adapters.app.dispatch_pnl_page import render_dispatch_pnl_page
         render_dispatch_pnl_page(selected_asset, selected_date)
         st.divider()
-        from libs.asset_risk.review.view import render_review_section
+        from review_section import render_review_section
         render_review_section(_get_sqlalchemy_engine())
 
     with sub_daily:
