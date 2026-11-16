@@ -1,16 +1,22 @@
 """Pure Trader-agent tool implementation for 复盘 review metrics (read-only, no streamlit)."""
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
+from libs.asset_risk.review.aliases import asset_code_for
 from libs.asset_risk.review.store import load_review
 from libs.trading_book.registry import STATIONS
 
-UNIT_NOTE = "revenue = spot + capcomp before fees, ¥"
+log = logging.getLogger(__name__)
+
+UNIT_NOTE = ("strategy/cleared/executed_revenue_cny = spot + capacity compensation before fees; total_revenue_cny = after 系统运行费/线损/调频分摊; ¥")
 
 
 def resolve_asset(asset: str | None) -> str | None:
-    """Registry asset_code or plant_name (exact, case-insensitive; then substring) -> asset_code."""
+    """Registry asset_code or plant_name (exact, case-insensitive; then unique substring; then the
+    station alias map, e.g. 苏右 / 巴盟 / 阿拉善) -> asset_code."""
     a = (asset or "").strip()
     if not a:
         return None
@@ -18,7 +24,9 @@ def resolve_asset(asset: str | None) -> str | None:
         if a.lower() == s.asset_code.lower() or a == s.plant_name:
             return s.asset_code
     hits = [s.asset_code for s in STATIONS if a in s.plant_name or s.plant_name in a]
-    return hits[0] if len(hits) == 1 else None
+    if len(hits) == 1:
+        return hits[0]
+    return asset_code_for(a)
 
 
 def _month(m):
@@ -38,6 +46,7 @@ def review_metrics_payload(engine, asset: str | None = None, month_from: str | N
     try:
         df = load_review(engine, asset_codes=codes)
     except Exception:
+        log.exception("load_review failed")
         out["note"] = "No 复盘 data yet (review table not available)."
         return out
     try:

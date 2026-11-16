@@ -27,7 +27,7 @@ def test_name_resolves_and_month_filter(tmp_path):
     e = _seed(tmp_path)
     p = ag.review_metrics_payload(e, "景蓝乌尔图", "2026-09", None)
     assert [(r["asset_code"], r["month"]) for r in p["rows"]] == [("suyou", "2026-09-01")]
-    assert "spot + capcomp" in p["unit_note"]
+    assert "spot + capacity compensation before fees" in p["unit_note"] and "total_revenue_cny = after" in p["unit_note"]
     assert len(ag.review_metrics_payload(e, "suyou")["rows"]) == 2
     assert len(ag.review_metrics_payload(e, None, "2026-08", "2026-08")["rows"]) == 1
 
@@ -51,3 +51,20 @@ def test_gap_table():
     r = review_gap_table(df).iloc[0]
     assert r["cleared−strategy"] == -10 and r["executed−cleared"] == -9
     assert r["cleared gap %"] == -10 and r["asset"].startswith("景蓝乌尔图")
+
+
+def test_resolve_asset_alias_fallback():
+    cases = {"苏右": "suyou", "巴盟": "bameng", "阿拉善": "alashan", "杭锦旗": "hangjinqi",
+             "四子王旗": "siziwangqi", "谷山梁": "gushanliang"}
+    for name, code in cases.items():
+        assert ag.resolve_asset(name) == code, name
+    # 阿拉善 is an ambiguous registry substring (阿拉善储能电站 / 阿拉善左旗风储电站)
+    from libs.trading_book.registry import STATIONS
+    assert sum("阿拉善" in s.plant_name for s in STATIONS) > 1
+    assert ag.resolve_asset("nope") is None
+
+
+def test_missing_table_logs(caplog):
+    with caplog.at_level("ERROR"):
+        ag.review_metrics_payload(create_engine("sqlite://"), "suyou")
+    assert any("load_review failed" in r.message for r in caplog.records)
