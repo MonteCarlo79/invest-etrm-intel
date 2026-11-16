@@ -36,6 +36,7 @@ from libs.asset_risk.waterfall import (
     guard_cleared_leg,
     ic_leg,
     ic_passthrough,
+    ic_scale_to_bench,
     stage_arbitrage,
     stage_capacity,
 )
@@ -47,6 +48,8 @@ from libs.asset_risk.diagnostics import (
     exec_gap_monthly,
 )
 from libs.asset_risk import ic_case
+from libs.asset_risk.review import store as review_store
+from libs.asset_risk.review.overlay import reviewed_keys, waterfall_recon
 from libs.asset_risk.chain import _attach_prices, _check_sign, _load_chain, _load_prices
 
 
@@ -137,6 +140,42 @@ def deviation_breakdown_figure(wf: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     return fig
+def _review_overlay(engine, fig, assets, sel_months, nom_map, nominated, cleared, actual):
+    """Add the 复盘 marker trace to fig; return (recon_df, included asset-months) or None.
+
+    Any failure (e.g. review table not migrated) degrades silently to no overlay.
+    """
+    try:
+        codes = [nom_map[n] for n in assets["name"] if nom_map.get(n)]
+        if not codes:
+            return None
+        rv = review_store.load_review(engine, asset_codes=codes,
+                                      months=[f"{m}-01" for m in sel_months])
+        if rv.empty:
+            return None
+        parts = []
+        for stage, leg in (("申报", nominated), ("出清", cleared), ("实际", actual)):
+            if leg is None or leg.empty:
+                continue
+            parts.append(leg[["asset", "month", "arb_cny", "cap_cny"]].assign(stage=stage))
+        if not parts:
+            return None
+        stg = pd.concat(parts, ignore_index=True)
+        stg["asset_code"] = stg["asset"].map(nom_map)
+        recon_df = waterfall_recon(stg.dropna(subset=["asset_code"]), rv)
+        if recon_df.empty:
+            return None
+        fig.add_trace(go.Scatter(
+            x=recon_df["stage"], y=recon_df["reviewed_cny"], mode="markers", name="复盘",
+            marker={"symbol": "diamond", "size": 13, "color": "#f39c12",
+                    "line": {"width": 1, "color": "#333"}}))
+        fig.update_layout(showlegend=True)
+        code_name = {v: k for k, v in nom_map.items()}
+        return recon_df, sorted((code_name.get(c, c), m) for c, m in reviewed_keys(rv))
+    except Exception:
+        return None
+
+
 @st.cache_resource(show_spinner=False)
 def _ensure_legs_table(_engine):
     ensure_table(_engine)
@@ -218,8 +257,12 @@ def render_ic_upload(engine):
         st.dataframe(prev, use_container_width=True, hide_index=True)
         st.caption("保存将按 asset_code 覆盖已存储的投决边界（价格/费用单位 ¥/MWh）。")
         if st.button("保存", key="wf_ic_save"):
-            ic_case.ensure_table(engine)
-            ic_case.save_ic(engine, ic_df)
+            try:
+                ic_case.ensure_table(engine)
+                ic_case.save_ic(engine, ic_df)
+            except Exception as e:  # noqa: BLE001 — DB failure: report, never crash the tab
+                st.error(f"保存投决边界失败 ({up.name}): {e}")
+                return
             st.success(f"已保存 {ic_df['asset_code'].nunique()} 个资产的投决边界。")
 
 
@@ -422,6 +465,9 @@ def render_waterfall(engine):
         else:
             if no_ic:
                 st.caption("无投决边界，按投资标准计入: " + "、".join(f"{a} {m}" for a, m in no_ic))
+            leg, scaled = ic_scale_to_bench(leg, bench)
+            if scaled:
+                st.caption("投决预期按投资标准已求解天数折算: " + "、".join(f"{a} {m}" for a, m in scaled))
             ic_leg_df = ic_passthrough(leg, no_ic, bench)
 
     wf = build_waterfall(bench, nominated, cleared, actual, ic=ic_leg_df)
@@ -443,7 +489,19 @@ def render_waterfall(engine):
     k4.metric("实际容量补偿", "—" if missing_bills else f"¥{_tot('实际', 'cap_cny'):,.0f}",
               help=_nobill_help if missing_bills else None)
 
-    st.plotly_chart(stage_waterfall_figure(wf), use_container_width=True)
+    fig_wf = stage_waterfall_figure(wf)
+    # No bills: 实际 is a zero placeholder — no 实际 recon row or marker (would read as −100%).
+    recon = _review_overlay(engine, fig_wf, assets, sel_months, nom_map, nominated, cleared,
+                            actual if actual_has_bills else None)
+    st.plotly_chart(fig_wf, use_container_width=True)
+    if recon is not None:
+        recon_df, included = recon
+        st.markdown("**复盘对照（申报/出清/实际：计算套利+容量补偿 vs 复盘收入，均不含费用）**")
+        st.dataframe(recon_df.style.format({"computed_cny": "¥{:,.0f}", "reviewed_cny": "¥{:,.0f}",
+                                            "diff_cny": "¥{:+,.0f}", "diff_pct": "{:+.1%}"}, na_rep="—"),
+                     use_container_width=True, hide_index=True)
+        st.caption("复盘口径=现货+容量补偿（费用前）。仅汇总有复盘数据的资产×月份："
+                   + "、".join(f"{a} {m}" for a, m in included))
     st.plotly_chart(deviation_breakdown_figure(wf), use_container_width=True)
 
     # --- 偏差归因 (loss breakdown by cause) ---

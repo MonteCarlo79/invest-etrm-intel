@@ -296,10 +296,37 @@ def ic_leg(ic: pd.DataFrame, keys, name_to_code: dict, commission: dict
             missing.append((name, month))
             continue
         rows.append({"asset": name, "month": month, "arb_cny": v["arbitrage_cny"],
-                     "cap_cny": v["capcomp_cny"], "fee_cny": -v["grid_fee_cny"],
-                     "dis_mwh": v["discharge_mwh"], "chg_mwh": v["charge_mwh"]})
-    cols = ["asset", "month", "arb_cny", "cap_cny", "fee_cny", "dis_mwh", "chg_mwh"]
+                     "cap_cny": v["capcomp_cny"] + v["capacity_price_cny"], "fee_cny": -v["grid_fee_cny"],
+                     "dis_mwh": v["discharge_mwh"], "chg_mwh": v["charge_mwh"], "ic_days": v["days"]})
+    cols = ["asset", "month", "arb_cny", "cap_cny", "fee_cny", "dis_mwh", "chg_mwh", "ic_days"]
     return pd.DataFrame(rows, columns=cols), missing
+
+
+def ic_scale_to_bench(leg: pd.DataFrame, bench: pd.DataFrame
+                      ) -> tuple[pd.DataFrame, list[tuple[str, str]]]:
+    """Scale each IC asset-month (arb/cap/fee) by bench days_solved / ic_days (ruling R6),
+    so 市场偏差 compares like-for-like days. ic_days = days in the month on/after cod.
+
+    The factor is capped at 1 (never extrapolate the IC case beyond its cod-covered days).
+    Asset-months without a bench days_solved are left unscaled. Returns (leg, scaled keys)
+    where scaled keys are those with a factor < 1.
+    """
+    if leg is None or leg.empty or bench is None or bench.empty or "days_solved" not in bench \
+            or "ic_days" not in leg:
+        return leg, []
+    solved = bench.groupby(["asset", "month"])["days_solved"].sum(min_count=1)
+    out = leg.copy()
+    scaled = []
+    for i, r in out.iterrows():
+        n = solved.get((r["asset"], r["month"]))
+        if n is None or pd.isna(n) or not r["ic_days"]:
+            continue
+        f = min(1.0, float(n) / float(r["ic_days"]))
+        if f < 1.0:
+            for c in ("arb_cny", "cap_cny", "fee_cny"):
+                out.at[i, c] = r[c] * f
+            scaled.append((r["asset"], r["month"]))
+    return out, scaled
 
 
 def ic_passthrough(leg: pd.DataFrame, missing, bench: pd.DataFrame) -> pd.DataFrame:

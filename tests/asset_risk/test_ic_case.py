@@ -60,6 +60,24 @@ def _format_b_sheet(ws, two_cols=False):
             ws.cell(r, 6, "储能产品技术")  # text in the 来源 column of the 四子王 layout (must be ignored)
 
 
+def _format_c_sheet(ws, trend1="平均预期：2027年 0.4，逐年线性递减至 0.3"):
+    for c, v in zip("CDFGHIJ", ["序号", "项目", "单位", "苏尼特右旗", "杭锦旗", "乌拉特中旗", "备注"]):
+        ws[f"{c}5"] = v
+    ws["D6"], ws["F6"] = "储能系统规模", "MW/MWh"
+    ws["D7"], ws["F7"], ws["J7"] = "容量补偿收入", "元/kWh", "补贴年限 10年"
+    ws["D9"], ws["D12"] = "日循环次数", "度电价差"
+    for r, per in ((9, "2025-2026"), (10, "2027-2034"), (11, "2035-2044"),
+                   (12, "2025-2026"), (13, "2027-2034"), (14, "2035-2044")):
+        ws.cell(r, 5, per)
+    for col, cyc, sp in (("G", 1.32, 0.415), ("H", 1.37, 0.388), ("I", 1.13, 0.414)):
+        ws[f"{col}6"], ws[f"{col}7"] = "100/400", 0.35
+        ws[f"{col}9"], ws[f"{col}10"], ws[f"{col}11"], ws[f"{col}12"] = cyc, 1.2, 1.2, sp
+    ws["G13"], ws["G14"] = trend1, "平均预期：2035年0.3，逐年线性递减至 0.2"
+    ws["D17"], ws["E17"] = "放电深度DOD", 0.9
+    ws["D18"], ws["E18"] = "RTE", 0.87
+    ws["D19"], ws["E19"] = "SOH(10年）", "99% - 81%"
+
+
 @pytest.fixture()
 def seed(tmp_path):
     wb = Workbook()
@@ -67,7 +85,7 @@ def seed(tmp_path):
     _format_a_sheet(wb.create_sheet("武川-IPMT 边界"), 234, (177.73, 275.77), (61.72, 246.24), (61.72, 246.24))
     _format_b_sheet(wb.create_sheet("四子王旗-测算边界汇总"))
     wb.create_sheet("锡盟-IPMT 边界")["B2"] = "项目基本信息"
-    wb.create_sheet("苏尼特-杭锦旗-乌拉特")
+    _format_c_sheet(wb.create_sheet("苏尼特-杭锦旗-乌拉特"))
     p = tmp_path / "ic.xlsx"
     wb.save(p)
     return p
@@ -101,9 +119,64 @@ def test_format_b_四子王旗(seed):
 
 def test_skips_have_notes(seed):
     df, notes = parse_ic_workbook(seed, "ic.xlsx")
-    assert set(df.asset_code) == {"wuchuan", "siziwangqi"}
+    assert set(df.asset_code) == {"wuchuan", "siziwangqi", "suyou", "wulate"}
     assert any("锡盟" in n for n in notes)
-    assert any("苏尼特" in n for n in notes)
+    assert "杭锦旗: covered by 预审会 case — not taken from this sheet" in notes
+    assert "hangjinqi" not in set(df.asset_code)
+    assert any("SOH years 11-20 extrapolated" in n for n in notes)
+
+
+def _row(df, code, y):
+    return df[(df.asset_code == code) & (df.op_year == y)].iloc[0]
+
+
+def test_format_c_suyou_wulate(seed):
+    df, _ = parse_ic_workbook(seed, "ic.xlsx")
+    r1 = _row(df, "suyou", 1)
+    assert math.isclose(r1.cycles_per_year, 1.32 * 365) and math.isclose(r1.discharge_price, 415)
+    assert r1.charge_price == 0 and r1.capacity_mw == 100 and r1.energy_mwh == 400
+    assert r1.capcomp_rate == 350 and r1.capcomp_years == 10 and r1.ic_cod == date(2025, 1, 1)
+    assert r1.case_label.startswith("经评边界值汇总") and r1.dod == 0.9 and r1.rte == 0.87
+    assert math.isclose(_row(df, "wulate", 1).discharge_price, 414)
+    assert math.isclose(_row(df, "wulate", 1).cycles_per_year, 1.13 * 365)
+    for y, sp in ((3, 400), (10, 300), (11, 300), (20, 200)):
+        assert math.isclose(_row(df, "suyou", y).discharge_price, sp), y
+    assert math.isclose(_row(df, "suyou", 2).discharge_price, 415)
+    assert math.isclose(_row(df, "suyou", 6).cycles_per_year, 1.2 * 365)
+    assert math.isclose(_row(df, "suyou", 10).soh, 0.81) and math.isclose(_row(df, "suyou", 20).soh, 0.61)
+    assert math.isclose(_row(df, "suyou", 1).soh, 0.99)
+
+
+def test_format_c_arbitrage_is_discharge_times_spread(seed):
+    ic, _ = parse_ic_workbook(seed, "ic.xlsx")
+    v = ic_month_value(ic, "suyou", date(2025, 3, 1), date(24, 12, 31))   # invalid cod -> ic_cod
+    assert v["op_year"] == 1 and math.isclose(v["arbitrage_cny"], v["discharge_mwh"] * 415)
+
+
+def test_format_c_unparseable_trend_fails_with_note(tmp_path):
+    wb = Workbook(); wb.remove(wb.active)
+    _format_c_sheet(wb.create_sheet("苏尼特-杭锦旗-乌拉特"), trend1="待定")
+    p = tmp_path / "c.xlsx"; wb.save(p)
+    df, notes = parse_ic_workbook(p, "c.xlsx")
+    assert df.empty and any("苏尼特" in n and "not parseable" in n for n in notes)
+
+
+def test_capacity_price_from_year_11(tmp_path):
+    wb = Workbook(); wb.remove(wb.active)
+    ws = wb.create_sheet("巴盟-IPMT")
+    _format_a_sheet(ws, 203, (100, 200), (100, 200), (100, 200), cap="1 / 2")
+    ws["B14"], ws["D14"] = "容量电价", 110
+    p = tmp_path / "b.xlsx"; wb.save(p)
+    ic, _ = parse_ic_workbook(p, "b.xlsx")
+    assert math.isclose(_row(ic, "bameng", 1).capacity_price_yuan_kw, 110)
+    cod = date(2020, 1, 1)
+    # 30-day months: op_year 10 = Jun 2029 (cod+9y); op_year 11 = Jun 2030
+    v10 = ic_month_value(ic, "bameng", date(2029, 6, 1), cod)
+    v11 = ic_month_value(ic, "bameng", date(2030, 6, 1), cod)
+    assert v10["op_year"] == 10 and v10["capacity_price_cny"] == 0 and v10["capcomp_cny"] > 0
+    assert v11["op_year"] == 11 and v11["capcomp_cny"] == 0
+    assert math.isclose(v11["capacity_price_cny"], 110 * 1000 * 1000 * 30 / 365)
+    assert math.isclose(v11["total_cny"], v11["arbitrage_cny"] + v11["capacity_price_cny"])
 
 
 def test_format_b_two_columns_uses_last(tmp_path):
@@ -182,7 +255,7 @@ def test_store_roundtrip_and_replace(seed, sqlite_engine):
     save_ic(sqlite_engine, ic)
     save_ic(sqlite_engine, ic[ic.asset_code == "wuchuan"].assign(case_label="v2"))   # replaces only wuchuan
     out = load_ic(sqlite_engine)
-    assert len(out) == 40
+    assert len(out) == 80
     assert set(out[out.asset_code == "wuchuan"].case_label) == {"v2"}
     s = out[out.asset_code == "siziwangqi"].iloc[0]
     assert s.ic_cod == date(2025, 10, 15)
@@ -207,9 +280,34 @@ def test_real_workbooks_asset_codes():
     b, nb = parse_ic_workbook(REAL_B, REAL_B.name)
     assert {"wuchuan", "alashan", "bameng"} <= set(a.asset_code)
     assert {"siziwangqi", "hangjinqi"} == set(b.asset_code)
-    assert not (set(a.asset_code) & {"suyou", "wuhai"})
+    assert {"suyou", "wulate"} <= set(a.asset_code) and "wuhai" not in set(a.asset_code)
+    assert "hangjinqi" not in set(a.asset_code)
+    assert a[(a.asset_code == "bameng") & (a.op_year == 11)].capacity_price_yuan_kw.iloc[0] == 110
     assert any("锡盟" in n for n in na)
     assert a[(a.asset_code == "bameng") & (a.op_year == 1)].cycles_per_year.iloc[0] == 203
     h = b[b.asset_code == "hangjinqi"].iloc[0]
     assert h.case_label == "杭锦旗-更新边界" and h.ic_cod == date(2025, 11, 1)
     assert math.isclose(h.grid_fee, 27.3)
+
+
+def test_save_ic_all_none_column_inserts_as_null(tmp_path):
+    # Seed incident 2026-11-16: Format B rows have capacity_price_yuan_kw all None.
+    import pandas as pd
+    import sqlalchemy
+    from sqlalchemy import event, text
+    from libs.asset_risk import ic_case
+    md = tmp_path / "md.db"
+    eng = sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'm.db'}")
+
+    @event.listens_for(eng, "connect")
+    def _a(conn, _):
+        conn.execute(f"ATTACH DATABASE '{md}' AS marketdata")
+    ic_case.ensure_table(eng)
+    row = {c: None for c in ic_case.IC_COLUMNS}
+    row.update(asset_code="siziwangqi", op_year=1, soh=0.946, cycles_per_year=365.0, charge_price=74.67,
+               discharge_price=429.64, dod=0.9, rte=0.86, capcomp_rate=350.0, capcomp_years=10,
+               grid_fee=27.3, capacity_mw=100.0, energy_mwh=400.0, case_label="四子王旗", source_file="b.xlsx")
+    ic_case.save_ic(eng, pd.DataFrame([row]))
+    with eng.connect() as c:
+        got = c.execute(text("SELECT capacity_price_yuan_kw, discharge_price FROM marketdata.rm_ic_assumptions")).fetchone()
+    assert got[0] is None and got[1] == 429.64

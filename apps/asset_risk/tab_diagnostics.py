@@ -103,6 +103,33 @@ def _hourly_exec_gap_profile(df: pd.DataFrame):
 # Render
 # ---------------------------------------------------------------------------
 
+def _render_review_compare(engine, fail, gap, nom_map):
+    """复盘对照: reviewed deviations vs computed bid-fail / exec-gap. Silent when no data."""
+    try:
+        from libs.asset_risk.review import store as review_store
+        from libs.asset_risk.review.overlay import diagnostics_compare
+        codes = [c for c in {nom_map.get(a) for a in set(fail["asset"]) | set(gap["asset"])} if c]
+        rv = review_store.load_review(engine, asset_codes=codes)
+        if rv.empty:
+            return
+        ren = {a: nom_map.get(a) for a in set(fail["asset"]) | set(gap["asset"])}
+        name_of = {v: k for k, v in nom_map.items()}
+        cmp_df = diagnostics_compare(fail.assign(asset=fail["asset"].map(ren)),
+                                     gap.assign(asset=gap["asset"].map(ren)), rv)
+        cmp_df = cmp_df[cmp_df["asset"].isin(codes)]
+        if cmp_df.empty:
+            return
+        cmp_df["asset"] = cmp_df["asset"].map(lambda c: name_of.get(c, c))
+    except Exception:
+        return
+    st.markdown("#### 复盘对照")
+    st.dataframe(cmp_df.style.format({c: "¥{:+,.0f}" for c in cmp_df.columns[2:]}, na_rep="—"),
+                 use_container_width=True, hide_index=True)
+    st.caption("口径：收入影响符号（负=损失）。复盘 策略→出清 = 出清−策略；出清→执行 = 执行−出清（均为现货+容量补偿，费用前）。"
+               "计算值：申报失败 = −(放电+充电申报失败¥)（日前出清作为出清的代理）；执行偏差 = 充电偏差¥ − 放电偏差¥。"
+               "未解释 = 复盘 − 计算。")
+
+
 def render_diagnostics(engine):
     """Render Dispatch Diagnostics tab."""
     st.subheader("Dispatch Diagnostics 调度执行诊断")
@@ -278,6 +305,9 @@ def render_diagnostics(engine):
         st.dataframe(_month_asset_matrix(fail, "capacity_loss_cny").style.format("¥{:,.0f}"),
                      use_container_width=True)
 
+    st.divider()
+
+    _render_review_compare(engine, fail, gap, nom_map)
     st.divider()
 
     # ================= Panel 3: restrictions & defects =================

@@ -151,3 +151,45 @@ def test_seed_dry_run_then_apply(tmp_path, capsys):
     assert set(df["asset_code"]) == {"wuchuan"} and len(df) == 20
     assert mod.run([str(f)], eng, apply=True) == 0                 # idempotent
     assert len(load_ic(eng)) == 20
+
+
+def test_ic_scaled_by_bench_days_solved_passthrough_untouched():
+    from libs.asset_risk.waterfall import ic_passthrough, ic_scale_to_bench
+    ic_all = _ic_rows("wuchuan", cod=date(2026, 7, 20))
+    keys = [("武川", "2026-09"), ("武川", "2026-07"), ("阿拉善", "2026-09")]
+    leg, missing = ic_leg(ic_all, keys, NAMES, COD)
+    raw = leg.set_index("month")
+    assert raw.loc["2026-09", "ic_days"] == 30 and raw.loc["2026-07", "ic_days"] == 12   # from cod 07-20
+    bench = pd.DataFrame([
+        {"asset": "武川", "month": "2026-09", "arb_cny": 1.0, "cap_cny": 0.0, "days_solved": 20},
+        {"asset": "武川", "month": "2026-07", "arb_cny": 1.0, "cap_cny": 0.0, "days_solved": 31},  # > ic_days
+        {"asset": "阿拉善", "month": "2026-09", "arb_cny": 500.0, "cap_cny": 7.0, "days_solved": 10}])
+    out, scaled = ic_scale_to_bench(leg, bench)
+    assert scaled == [("武川", "2026-09")]
+    s = out.set_index("month")
+    for c in ("arb_cny", "cap_cny", "fee_cny"):
+        assert s.loc["2026-09", c] == pytest.approx(raw.loc["2026-09", c] * 20 / 30)
+        assert s.loc["2026-07", c] == pytest.approx(raw.loc["2026-07", c])        # capped at 1
+    full = ic_passthrough(out, missing, bench)
+    pt = full[full["asset"] == "阿拉善"].iloc[0]
+    assert (pt["arb_cny"], pt["cap_cny"], pt["fee_cny"]) == (500, 7, 0)            # pass-through unscaled
+    # no days_solved column -> unchanged, nothing scaled
+    same, none = ic_scale_to_bench(leg, bench.drop(columns="days_solved"))
+    assert none == [] and same.equals(leg)
+
+
+def test_review_overlay_skips_actual_without_bills(monkeypatch):
+    import plotly.graph_objects as go
+    import apps.asset_risk.tab_waterfall as tw
+    rv = pd.DataFrame([("suyou", date(2026, 9, 1), m, 100.0, "CNY")
+                       for m in ("strategy_revenue_cny", "executed_revenue_cny")],
+                      columns=["asset_code", "month", "metric", "value", "unit"])
+    monkeypatch.setattr(tw.review_store, "load_review", lambda *a, **k: rv)
+    assets = pd.DataFrame({"name": ["苏右"]})
+    nom = _leg("苏右", "2026-09", 90)
+    act = _leg("苏右", "2026-09", 0.0)
+    fig = go.Figure()
+    recon_df, _ = tw._review_overlay(None, fig, assets, ["2026-09"], {"苏右": "suyou"}, nom, nom, None)
+    assert list(recon_df["stage"]) == ["申报"] and list(fig.data[0].x) == ["申报"]
+    recon_df, _ = tw._review_overlay(None, go.Figure(), assets, ["2026-09"], {"苏右": "suyou"}, nom, nom, act)
+    assert "实际" in set(recon_df["stage"])
