@@ -95,7 +95,7 @@ def test_format_a_武川(seed):
     df, notes = parse_ic_workbook(seed, "ic.xlsx")
     assert list(df.columns) == IC_COLUMNS
     w = df[df.asset_code == "wuchuan"]
-    assert len(w) == 20 and w.energy_mwh.iloc[0] == 2000 and w.capacity_mw.iloc[0] == 500
+    assert len(w) == 20 and w.energy_mwh.iloc[0] == 4000 and w.capacity_mw.iloc[0] == 1000  # owner override 0.5/2 -> 1/4 GW(h)
     y1 = w[w.op_year == 1].iloc[0]
     assert (y1.charge_price, y1.discharge_price, y1.cycles_per_year, y1.soh) == (177.73, 275.77, 234, 0.946)
     y7 = w[w.op_year == 7].iloc[0]                       # 后15年 row applies to years >= 6
@@ -202,8 +202,8 @@ def test_month_value_武川(seed):
     ic, _ = parse_ic_workbook(seed, "ic.xlsx")
     v = ic_month_value(ic, "wuchuan", date(2026, 9, 1), date(2026, 7, 20))
     cycles = 234 * 30 / 365
-    dis_c = 2000 * 0.9 * 0.946 * math.sqrt(0.85)
-    chg_c = 2000 * 0.9 * 0.946 / math.sqrt(0.85)
+    dis_c = 4000 * 0.9 * 0.946 * math.sqrt(0.85)
+    chg_c = 4000 * 0.9 * 0.946 / math.sqrt(0.85)
     assert v["op_year"] == 1
     assert math.isclose(v["discharge_mwh"], cycles * dis_c)
     assert math.isclose(v["charge_mwh"], cycles * chg_c)
@@ -311,3 +311,20 @@ def test_save_ic_all_none_column_inserts_as_null(tmp_path):
     with eng.connect() as c:
         got = c.execute(text("SELECT capacity_price_yuan_kw, discharge_price FROM marketdata.rm_ic_assumptions")).fetchone()
     assert got[0] is None and got[1] == 429.64
+
+
+def test_capacity_override_scales_three_assets():
+    # Owner decision 2026-11-16: 武川/阿拉善/巴盟 IC case at 1 GW / 4 GWh.
+    from pathlib import Path
+    from libs.asset_risk import ic_case
+    f = Path("/Users/chenzhuqi/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/reports/投决/"
+             "内蒙古储能项目经评边界值  20260729.xlsx")
+    if not f.exists():
+        import pytest
+        pytest.skip("real workbook not present")
+    df, notes = ic_case.parse_ic_workbook(str(f), f.name)
+    for code in ("wuchuan", "alashan", "bameng"):
+        sub = df[df.asset_code == code]
+        assert set(sub.capacity_mw) == {1000.0} and set(sub.energy_mwh) == {4000.0}
+        assert any(n.startswith(f"{code}: capacity scaled") for n in notes)
+    assert set(df[df.asset_code == "suyou"].energy_mwh) == {400.0}   # others untouched

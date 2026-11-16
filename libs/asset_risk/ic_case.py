@@ -308,6 +308,15 @@ def _scalar_c(ws, label, hdr):
     return ws.cell(r, 5).value if r else None
 
 
+# Owner decision 2026-11-16: the IPMT sheets size these three at 0.5 GW / 2 GWh, but the
+# assets are 1 GW / 4 GWh — the IC case is scaled to the built capacity (per-MWh terms unchanged).
+IC_CAPACITY_OVERRIDES: dict[str, tuple[float, float]] = {
+    "wuchuan": (1000.0, 4000.0),
+    "alashan": (1000.0, 4000.0),
+    "bameng": (1000.0, 4000.0),
+}
+
+
 def parse_ic_workbook(path_or_buffer, file_name: str) -> tuple[pd.DataFrame, list[str]]:
     """Rows per asset x op_year 1..20 plus notes (skipped sheets with reason)."""
     from openpyxl import load_workbook
@@ -345,6 +354,11 @@ def parse_ic_workbook(path_or_buffer, file_name: str) -> tuple[pd.DataFrame, lis
         seen[code] = t
         rows.extend(recs)
     df = pd.DataFrame(rows, columns=IC_COLUMNS)
+    for code, (mw, mwh) in IC_CAPACITY_OVERRIDES.items():
+        hit = df["asset_code"] == code
+        if hit.any() and not ((df.loc[hit, "capacity_mw"] == mw) & (df.loc[hit, "energy_mwh"] == mwh)).all():
+            df.loc[hit, ["capacity_mw", "energy_mwh"]] = [mw, mwh]
+            notes.append(f"{code}: capacity scaled to {mw:g} MW / {mwh:g} MWh (owner decision 2026-11-16)")
     return df, notes
 
 
