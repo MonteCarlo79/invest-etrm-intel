@@ -30,3 +30,18 @@ def test_short_flat_stretch_at_price_floor_is_kept():
     rt = list(np.linspace(100, 300, 20)) + [-50.0] * 12 + list(np.linspace(100, 300, 20))
     out = drop_constant_runs(_frame(rt))
     assert len(out) == 52 and (out["rt_price"] == -50.0).sum() == 12
+
+
+def test_upsert_skips_when_every_hour_is_guarded(monkeypatch):
+    # 2026-11-16 backfill: 新疆 2025 chunks were pure filler -> empty batch ->
+    # "A value is required for bind parameter 'province'".
+    import services.bess_map.db as db
+    monkeypatch.setattr(db, "_province_has_nonzero_price", lambda *a: True)
+
+    class Boom:
+        def begin(self):
+            raise AssertionError("must not touch the DB for an empty batch")
+    idx = pd.date_range("2025-03-01", periods=96, freq="h")
+    hourly = pd.DataFrame({"rt_price": 0.0396, "da_price": 0.0336}, index=idx)
+    hourly.index.name = "datetime"
+    db.upsert_hourly_prices(Boom(), "marketdata", "新疆", hourly, "新疆.xlsx")

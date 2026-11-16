@@ -326,6 +326,9 @@ def upsert_hourly_prices(engine, schema: str, province: str, hourly_prices_df, s
     df = drop_placeholder_zero_days(
         df, active_market=_province_has_nonzero_price(engine, schema, province))
     df = drop_constant_runs(df)
+    if df.empty:  # every hour guarded out (e.g. a chunk that is pure filler): nothing to write
+        print(f"[GUARD] {province}: no real price rows left after guards — upsert skipped")
+        return
     df["province"] = province
     df["source_file"] = source_file
 
