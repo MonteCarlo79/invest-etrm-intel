@@ -296,7 +296,7 @@ def ic_leg(ic: pd.DataFrame, keys, name_to_code: dict, commission: dict
             missing.append((name, month))
             continue
         rows.append({"asset": name, "month": month, "arb_cny": v["arbitrage_cny"],
-                     "cap_cny": v["capcomp_cny"], "fee_cny": -v["grid_fee_cny"],
+                     "cap_cny": v["capcomp_cny"] + v["capacity_price_cny"], "fee_cny": -v["grid_fee_cny"],
                      "dis_mwh": v["discharge_mwh"], "chg_mwh": v["charge_mwh"], "ic_days": v["days"]})
     cols = ["asset", "month", "arb_cny", "cap_cny", "fee_cny", "dis_mwh", "chg_mwh", "ic_days"]
     return pd.DataFrame(rows, columns=cols), missing

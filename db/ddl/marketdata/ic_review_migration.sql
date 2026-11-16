@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS marketdata.rm_ic_assumptions (
   grid_fee DOUBLE PRECISION,
   capacity_mw DOUBLE PRECISION,
   energy_mwh DOUBLE PRECISION,
+  capacity_price_yuan_kw DOUBLE PRECISION,
   ic_cod DATE,
   case_label TEXT,
   source_file TEXT,
