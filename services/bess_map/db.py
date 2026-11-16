@@ -281,6 +281,35 @@ def drop_placeholder_zero_days(df: pd.DataFrame, active_market: bool) -> pd.Data
     return out
 
 
+CONSTANT_RUN_HOURS = 48
+
+
+def drop_constant_runs(df: pd.DataFrame, min_run: int = CONSTANT_RUN_HOURS) -> pd.DataFrame:
+    """Null runs of >= min_run consecutive hours carrying the exact same price.
+
+    2026-11-16 audit: utils.to_hourly forward/back-fills unlimited gaps, so one
+    stray (often 元/kWh-scale) value was smeared over months — 蒙西 0.2603 for
+    2025-02..09 + 11, 山东 0.1559, 甘肃 0.3420 …, plus multi-day 0 runs for the
+    current month (浙江/福建/云南/湖南 2026-11). A real market price never stays
+    bit-identical for two full days. Nulled = missing, so the COALESCE upsert keeps
+    any stored value. Rows with both sides missing are dropped. Pure function."""
+    if df.empty:
+        return df
+    out = df.sort_values("datetime").copy()
+    for col in ("rt_price", "da_price"):
+        if col not in out.columns:
+            continue
+        vals = pd.to_numeric(out[col], errors="coerce")
+        run_id = (vals != vals.shift()).cumsum()
+        run_len = vals.groupby(run_id).transform("size")
+        bad = vals.notna() & (run_len >= min_run)
+        if bad.any():
+            print(f"[GUARD] nulled {int(bad.sum())} {col} hours in constant runs >= {min_run}h")
+        out[col] = vals.where(~bad)
+    sides = [c for c in ("rt_price", "da_price") if c in out.columns]
+    return out[out[sides].notna().any(axis=1)]
+
+
 def _province_has_nonzero_price(engine, schema: str, province: str) -> bool:
     """Has this province had any non-zero rt_price in the last 30 days?
     Distinguishes placeholder zeros (active market) from no-market zeros."""
@@ -296,6 +325,7 @@ def upsert_hourly_prices(engine, schema: str, province: str, hourly_prices_df, s
     df = hourly_prices_df.reset_index().rename(columns={"datetime": "datetime"})
     df = drop_placeholder_zero_days(
         df, active_market=_province_has_nonzero_price(engine, schema, province))
+    df = drop_constant_runs(df)
     df["province"] = province
     df["source_file"] = source_file
 
