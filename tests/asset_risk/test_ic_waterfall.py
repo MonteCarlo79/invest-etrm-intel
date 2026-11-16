@@ -176,3 +176,20 @@ def test_ic_scaled_by_bench_days_solved_passthrough_untouched():
     # no days_solved column -> unchanged, nothing scaled
     same, none = ic_scale_to_bench(leg, bench.drop(columns="days_solved"))
     assert none == [] and same.equals(leg)
+
+
+def test_review_overlay_skips_actual_without_bills(monkeypatch):
+    import plotly.graph_objects as go
+    import apps.asset_risk.tab_waterfall as tw
+    rv = pd.DataFrame([("suyou", date(2026, 9, 1), m, 100.0, "CNY")
+                       for m in ("strategy_revenue_cny", "executed_revenue_cny")],
+                      columns=["asset_code", "month", "metric", "value", "unit"])
+    monkeypatch.setattr(tw.review_store, "load_review", lambda *a, **k: rv)
+    assets = pd.DataFrame({"name": ["苏右"]})
+    nom = _leg("苏右", "2026-09", 90)
+    act = _leg("苏右", "2026-09", 0.0)
+    fig = go.Figure()
+    recon_df, _ = tw._review_overlay(None, fig, assets, ["2026-09"], {"苏右": "suyou"}, nom, nom, None)
+    assert list(recon_df["stage"]) == ["申报"] and list(fig.data[0].x) == ["申报"]
+    recon_df, _ = tw._review_overlay(None, go.Figure(), assets, ["2026-09"], {"苏右": "suyou"}, nom, nom, act)
+    assert "实际" in set(recon_df["stage"])

@@ -257,8 +257,12 @@ def render_ic_upload(engine):
         st.dataframe(prev, use_container_width=True, hide_index=True)
         st.caption("保存将按 asset_code 覆盖已存储的投决边界（价格/费用单位 ¥/MWh）。")
         if st.button("保存", key="wf_ic_save"):
-            ic_case.ensure_table(engine)
-            ic_case.save_ic(engine, ic_df)
+            try:
+                ic_case.ensure_table(engine)
+                ic_case.save_ic(engine, ic_df)
+            except Exception as e:  # noqa: BLE001 — DB failure: report, never crash the tab
+                st.error(f"保存投决边界失败 ({up.name}): {e}")
+                return
             st.success(f"已保存 {ic_df['asset_code'].nunique()} 个资产的投决边界。")
 
 
@@ -486,7 +490,9 @@ def render_waterfall(engine):
               help=_nobill_help if missing_bills else None)
 
     fig_wf = stage_waterfall_figure(wf)
-    recon = _review_overlay(engine, fig_wf, assets, sel_months, nom_map, nominated, cleared, actual)
+    # No bills: 实际 is a zero placeholder — no 实际 recon row or marker (would read as −100%).
+    recon = _review_overlay(engine, fig_wf, assets, sel_months, nom_map, nominated, cleared,
+                            actual if actual_has_bills else None)
     st.plotly_chart(fig_wf, use_container_width=True)
     if recon is not None:
         recon_df, included = recon
