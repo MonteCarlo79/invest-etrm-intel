@@ -292,6 +292,7 @@ def test_real_workbooks_asset_codes():
 
 def test_save_ic_all_none_column_inserts_as_null(tmp_path):
     # Seed incident 2026-11-16: Format B rows have capacity_price_yuan_kw all None.
+    import pandas as pd
     import sqlalchemy
     from sqlalchemy import event, text
     from libs.asset_risk import ic_case
