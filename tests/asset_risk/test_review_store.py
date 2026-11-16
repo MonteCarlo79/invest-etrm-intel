@@ -64,18 +64,22 @@ def test_load_filters(tmp_path):
     assert store.load_review(eng, asset_codes=[]).empty
 
 
-def test_reconcile_flags_and_missing():
-    rv = _df([("suyou", SEP, "executed_revenue_cny", 100.0, ""), ("suyou", SEP, "daily_cycles", 1.0, ""),
+def test_reconcile_like_for_like_pairs():
+    rv = _df([("suyou", SEP, "executed_revenue_cny", 100.0, ""), ("suyou", SEP, "total_revenue_cny", 90.0, ""),
+              ("suyou", SEP, "daily_cycles", 1.0, ""),
               ("wulate", SEP, "executed_revenue_cny", 100.0, "")])
-    st_ = pd.DataFrame({"asset_code": ["suyou"], "month": ["2026-09"], "value": [98.0]})
-    wf = pd.DataFrame({"asset_code": ["suyou"], "month": ["2026-09"], "value": [80.0]})
-    r = reconcile(rv, st_, wf).set_index("asset_code")
-    assert r.loc["suyou", "diff_settlement_cny"] == 2.0 and abs(r.loc["suyou", "diff_settlement_pct"] - 2 / 98) < 1e-9
-    assert r.loc["suyou", "diff_waterfall_pct"] == 0.25 and bool(r.loc["suyou", "flag"])
-    assert pd.isna(r.loc["wulate", "settlement_cny"]) and not bool(r.loc["wulate", "flag"])
-    ok = reconcile(rv.iloc[:1], st_, st_.assign(value=100.0))
-    assert not ok["flag"].any()
-    assert reconcile(rv.iloc[:0], st_, wf).empty
+    act = pd.DataFrame({"asset_code": ["suyou"], "month": ["2026-09"], "arb_cny": [70.0], "cap_cny": [28.0],
+                        "fee_cny": [-10.0], "other_cny": [0.0]})
+    r = reconcile(rv, act).set_index("asset_code")
+    s = r.loc["suyou"]
+    assert s.actual_arb_cap_cny == 98.0 and s.diff_exec_cny == 2.0 and abs(s.diff_exec_pct - 2 / 98) < 1e-9
+    assert s.actual_total_cny == 88.0 and abs(s.diff_total_pct - 2 / 88) < 1e-9
+    assert s.spot_only_cny == 70.0 and not bool(s.flag)            # spot-only never flagged
+    assert pd.isna(r.loc["wulate", "actual_arb_cap_cny"]) and not bool(r.loc["wulate", "flag"])
+    assert pd.isna(r.loc["wulate", "reviewed_total_cny"])
+    bad = reconcile(rv, act.assign(fee_cny=-30.0)).set_index("asset_code").loc["suyou"]   # total actual 68
+    assert bool(bad.flag_total) and not bool(bad.flag_exec) and bool(bad.flag)
+    assert reconcile(rv.iloc[:0], act).empty
 
 
 SCRIPT = '''

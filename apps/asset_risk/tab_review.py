@@ -28,26 +28,24 @@ def scan_dir() -> Path:
     return Path(env) if env else _REPO / SCAN_REL
 
 
-def _actuals_by_code(engine) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(settlement 现货收益, waterfall 实际 total) as (asset_code, month, value) frames."""
+def _actuals_by_code(engine) -> pd.DataFrame:
+    """Settlement-bill 实际 components as (asset_code, month, arb/cap/fee/other_cny)."""
+    from libs.asset_risk.review.recon import ACTUAL_COLUMNS
     with engine.connect() as conn:
         assets = pd.read_sql(text("SELECT id, name, asset_code FROM marketdata.rm_assets"), conn)
     assets = assets[assets["asset_code"].notna()]
-    empty = pd.DataFrame(columns=["asset_code", "month", "value"])
+    empty = pd.DataFrame(columns=ACTUAL_COLUMNS)
     if assets.empty:
-        return empty, empty
+        return empty
     try:
         act = _load_settlement_actuals(engine, assets["id"].astype(int).tolist(), None, None)
     except Exception as e:  # noqa: BLE001 — reconciliation is advisory
         st.caption(f"结算数据不可用: {e}")
-        return empty, empty
+        return empty
     if act.empty:
-        return empty, empty
+        return empty
     act = act.merge(assets[["name", "asset_code"]], left_on="asset", right_on="name")
-    settle = act.assign(value=act["arb_cny"])[["asset_code", "month", "value"]]
-    wf = act.assign(value=act[["arb_cny", "cap_cny", "fee_cny", "other_cny"]].sum(axis=1))[
-        ["asset_code", "month", "value"]]
-    return settle, wf
+    return act[ACTUAL_COLUMNS]
 
 
 def _parse_many(items: list[tuple[str, bytes]]) -> None:
@@ -61,6 +59,7 @@ def _parse_many(items: list[tuple[str, bytes]]) -> None:
 def render_review(engine) -> None:
     st.subheader("复盘 Review")
     store.ensure_table(engine)
+    st.caption("最新上传覆盖同月数据")
 
     with st.expander("复盘 deck 上传 (BESS pptx)", expanded=False):
         files = st.file_uploader("上传月度复盘 pptx", type=["pptx"], accept_multiple_files=True,
@@ -112,13 +111,13 @@ def render_review(engine) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("##### 对账 Reconciliation")
-    st.caption("复盘实际执行收益 vs 结算单现货收益(放电+充电) vs 瀑布「实际」(现货+容量补偿−费用+其他)。"
-               "无结算单显示 —；|差异| > 5% 标记。不触发 LP 计算。")
-    settle, wf = _actuals_by_code(engine)
-    rec = reconcile(sub, settle, wf)
+    st.caption("两组口径一致的对比：(1) 复盘实际执行收益(现货+容量补偿，费用前) vs 结算单 套利+容量补偿；"
+               "(2) 复盘月度总收益(扣系统运行费/线损/调频分摊) vs 瀑布「实际」总额(套利+容量补偿+费用+其他)。"
+               "无结算单显示 —；|差异| > 5% 标记。现货收益仅供参考，不标记。不触发 LP 计算。")
+    rec = reconcile(sub, _actuals_by_code(engine))
     if rec.empty:
-        st.info("所选资产无 executed_revenue_cny 复盘数据。")
+        st.info("所选资产无 executed/total 复盘数据。")
         return
-    show = rec.copy()
+    show = rec.drop(columns=["flag_exec", "flag_total"]).copy()
     show["flag"] = show["flag"].map({True: "FLAG >5%", False: ""})
     st.dataframe(show.fillna("—"), use_container_width=True, hide_index=True)
