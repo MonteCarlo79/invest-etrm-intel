@@ -288,3 +288,25 @@ def test_real_workbooks_asset_codes():
     h = b[b.asset_code == "hangjinqi"].iloc[0]
     assert h.case_label == "杭锦旗-更新边界" and h.ic_cod == date(2025, 11, 1)
     assert math.isclose(h.grid_fee, 27.3)
+
+
+def test_save_ic_all_none_column_inserts_as_null(tmp_path):
+    # Seed incident 2026-11-16: Format B rows have capacity_price_yuan_kw all None.
+    import sqlalchemy
+    from sqlalchemy import event, text
+    from libs.asset_risk import ic_case
+    md = tmp_path / "md.db"
+    eng = sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'm.db'}")
+
+    @event.listens_for(eng, "connect")
+    def _a(conn, _):
+        conn.execute(f"ATTACH DATABASE '{md}' AS marketdata")
+    ic_case.ensure_table(eng)
+    row = {c: None for c in ic_case.IC_COLUMNS}
+    row.update(asset_code="siziwangqi", op_year=1, soh=0.946, cycles_per_year=365.0, charge_price=74.67,
+               discharge_price=429.64, dod=0.9, rte=0.86, capcomp_rate=350.0, capcomp_years=10,
+               grid_fee=27.3, capacity_mw=100.0, energy_mwh=400.0, case_label="四子王旗", source_file="b.xlsx")
+    ic_case.save_ic(eng, pd.DataFrame([row]))
+    with eng.connect() as c:
+        got = c.execute(text("SELECT capacity_price_yuan_kw, discharge_price FROM marketdata.rm_ic_assumptions")).fetchone()
+    assert got[0] is None and got[1] == 429.64

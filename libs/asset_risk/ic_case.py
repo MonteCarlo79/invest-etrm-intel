@@ -410,8 +410,12 @@ def save_ic(engine, df: pd.DataFrame) -> None:
     with engine.begin() as conn:
         for code in out["asset_code"].unique():
             conn.execute(text("DELETE FROM marketdata.rm_ic_assumptions WHERE asset_code = :c"), {"c": code})
-        out.to_sql("rm_ic_assumptions", conn, schema="marketdata", if_exists="append", index=False,
-                   method="multi", chunksize=200)
+        # Explicit INSERT: an all-None column (e.g. capacity_price_yuan_kw for Format B) would be
+        # sent as varchar by to_sql and rejected by Postgres (2026-11-16 seed incident).
+        cols = ", ".join(IC_COLUMNS)
+        vals = ", ".join(f":{c}" for c in IC_COLUMNS)
+        conn.execute(text(f"INSERT INTO marketdata.rm_ic_assumptions ({cols}) VALUES ({vals})"),
+                     out.to_dict("records"))
 
 
 def load_ic(engine) -> pd.DataFrame:
