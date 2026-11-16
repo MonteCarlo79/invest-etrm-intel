@@ -11,6 +11,9 @@ from libs.asset_risk.settlement.analytics import (  # noqa: F401  (re-exported f
     _days_in_months, _load_settlement_items, _portfolio_matrix, book_matches_classes,
 )
 
+from auth.rbac import get_user
+from libs.asset_risk.prefs import load_pref, pref_key, save_pref
+
 _CATEGORY_CN = CATEGORY_CN
 
 
@@ -21,7 +24,8 @@ def render_pnl(engine):
     with engine.connect() as conn:
         books = pd.read_sql(text(
             "SELECT b.id, b.name, b.book_type, a.asset_type, a.province FROM marketdata.rm_books b "
-            "LEFT JOIN marketdata.rm_assets a ON a.id = b.asset_id ORDER BY b.name"
+            "LEFT JOIN marketdata.rm_assets a ON a.id = b.asset_id "
+            "WHERE b.book_type = 'asset' ORDER BY b.name"  # load books live in retail-risk
         ), conn)
 
     if books.empty:
@@ -34,8 +38,9 @@ def render_pnl(engine):
     with fcol1:
         sel_provinces = st.multiselect("Province", provinces, default=provinces, key="pnl_prov")
     with fcol2:
-        sel_classes = st.multiselect("Asset class", ASSET_CLASS_OPTIONS,
-                                     default=ASSET_CLASS_OPTIONS, key="pnl_class")
+        class_options = [c for c in ASSET_CLASS_OPTIONS if "load" not in c]
+        sel_classes = st.multiselect("Asset class", class_options,
+                                     default=class_options, key="pnl_class")
 
     all_prov_selected = len(sel_provinces) == len(provinces)
     mask = books.apply(
@@ -49,17 +54,25 @@ def render_pnl(engine):
         return
 
     # Multi-select over the filtered set: one = single view, many = portfolio.
-    # Key encodes the filter state so changing a filter resets to the full filtered set.
+    # Empty by default; the user's choice (book ids) is saved per user and restored
+    # in later sessions (user request 2026-11-16).
+    pkey = pref_key("asset_risk", "pnl_books", (get_user() or {}).get("email"))
+    saved_ids = {int(i) for i in load_pref(engine, pkey, [])}
     filter_key = f"pnl_books_{len(sel_provinces)}p_{len(sel_classes)}c"
     selected_names = st.multiselect(
         "Book (select one for single view, multiple for portfolio)",
-        filtered_books["name"].tolist(), default=filtered_books["name"].tolist(),
+        filtered_books["name"].tolist(),
+        default=filtered_books[filtered_books["id"].isin(saved_ids)]["name"].tolist(),
         key=filter_key,
     )
+    sel_ids = [int(i) for i in filtered_books[filtered_books["name"].isin(selected_names)]["id"]]
+    # Books hidden by the current filters keep their saved state.
+    new_saved = sorted((saved_ids - set(int(i) for i in filtered_books["id"])) | set(sel_ids))
+    if new_saved != sorted(saved_ids):
+        save_pref(engine, pkey, new_saved)
     if not selected_names:
-        st.info("Select one or more books to see P&L.")
+        st.info("Select one or more books to see P&L. Your selection is remembered for next time.")
         return
-    sel_ids = filtered_books[filtered_books["name"].isin(selected_names)]["id"].tolist()
 
     if len(sel_ids) > 1:
         _render_portfolio(engine, sel_ids)
