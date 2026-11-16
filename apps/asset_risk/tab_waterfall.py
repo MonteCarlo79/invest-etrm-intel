@@ -36,6 +36,7 @@ from libs.asset_risk.waterfall import (
     guard_cleared_leg,
     ic_leg,
     ic_passthrough,
+    ic_scale_to_bench,
     stage_arbitrage,
     stage_capacity,
 )
@@ -460,6 +461,9 @@ def render_waterfall(engine):
         else:
             if no_ic:
                 st.caption("无投决边界，按投资标准计入: " + "、".join(f"{a} {m}" for a, m in no_ic))
+            leg, scaled = ic_scale_to_bench(leg, bench)
+            if scaled:
+                st.caption("投决预期按投资标准已求解天数折算: " + "、".join(f"{a} {m}" for a, m in scaled))
             ic_leg_df = ic_passthrough(leg, no_ic, bench)
 
     wf = build_waterfall(bench, nominated, cleared, actual, ic=ic_leg_df)

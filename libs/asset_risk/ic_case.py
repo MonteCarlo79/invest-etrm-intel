@@ -278,7 +278,7 @@ def ic_month_value(ic: pd.DataFrame, asset_code: str, month: date, cod: date | N
     cap = cycles * dis_c * f("capcomp_rate") if op_year <= f("capcomp_years") else 0.0
     fee = cycles * chg_c * f("grid_fee")
     return dict(arbitrage_cny=arb, capcomp_cny=cap, grid_fee_cny=fee, total_cny=arb + cap - fee,
-                discharge_mwh=cycles * dis_c, charge_mwh=cycles * chg_c, op_year=op_year)
+                discharge_mwh=cycles * dis_c, charge_mwh=cycles * chg_c, op_year=op_year, days=days)
 
 
 # ---------------------------------------------------------------- store
