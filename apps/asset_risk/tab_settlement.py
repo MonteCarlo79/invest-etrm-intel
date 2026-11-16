@@ -21,7 +21,7 @@ def render_settlement(engine):
 
     with engine.connect() as conn:
         books = pd.read_sql(text(
-            "SELECT id, name FROM marketdata.rm_books ORDER BY name"
+            "SELECT id, name FROM marketdata.rm_books WHERE book_type = 'asset' ORDER BY name"
         ), conn)
 
     if books.empty:
