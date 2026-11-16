@@ -27,7 +27,7 @@ Per CST day D:
      did NOT deliver FOR DAY D for that node (NOT EXISTS on node+slot,
      anti-join windowed to D — fixed 2026-10-30)
 
-Usage: python scripts/mnp96_fill.py [START END]   (YYYY-MM-DD; default: yesterday)
+Usage: python scripts/mnp96_fill.py [START END]   (YYYY-MM-DD; default: the last 7 days ending yesterday)
 """
 import os
 import sys
@@ -35,6 +35,8 @@ import time
 from datetime import date, timedelta
 
 from sqlalchemy import create_engine, text
+
+LOOKBACK_DAYS = int(os.environ.get("MNP96_LOOKBACK_DAYS", "7"))
 
 FILL_SQL = """
 INSERT INTO marketdata.md_mengxi_nodal_price_96_filled
@@ -101,7 +103,11 @@ def main() -> int:
         start = date.fromisoformat(sys.argv[1])
         end = date.fromisoformat(sys.argv[2])
     else:
-        start = end = date.today() - timedelta(days=1)
+        # Rolling window (2026-11-16): exchange rows land ~1 day late and Fengxing ~2 days,
+        # so a yesterday-only run filled 0 rows or a partial day and never revisited it.
+        # Each day is DELETE+rebuilt, so re-filling the window is idempotent.
+        end = date.today() - timedelta(days=1)
+        start = end - timedelta(days=LOOKBACK_DAYS - 1)
 
     e = create_engine(os.environ["PGURL"])
     with e.begin() as conn:
