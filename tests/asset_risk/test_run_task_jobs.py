@@ -103,3 +103,28 @@ def test_seed_s3_injectable_client(tmp_path, capsys):
     with eng.connect() as c:
         assert c.execute(text("SELECT DISTINCT source_file FROM marketdata.rm_review_metrics")).scalar() \
             == "蒙西储能场站9月内部复盘.pptx"
+
+
+def test_script_imports_when_shipped_to_shallow_path(tmp_path):
+    # Re-review 2026-11-16: parents[2] raised IndexError for /tmp/run_task_jobs.py or /app/run_task_jobs.py.
+    import shutil, subprocess, sys
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[2]
+    dst = Path("/tmp/run_task_jobs_shallow_test.py")
+    shutil.copy(repo / "scripts/asset_risk/run_task_jobs.py", dst)
+    try:
+        r = subprocess.run([sys.executable, str(dst), "--help"], cwd=str(repo), capture_output=True, text=True,
+                           env={"PYTHONPATH": str(repo), "PATH": "/usr/bin:/bin"})
+        assert r.returncode == 0, r.stderr
+    finally:
+        dst.unlink(missing_ok=True)
+
+
+def test_s3_prefix_gets_trailing_slash():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "rtj", Path(__file__).resolve().parents[2] / "scripts/asset_risk/run_task_jobs.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    assert m._parse_s3("s3://b/ic") == ("b", "ic/")
+    assert m._parse_s3("s3://b/ic/") == ("b", "ic/")

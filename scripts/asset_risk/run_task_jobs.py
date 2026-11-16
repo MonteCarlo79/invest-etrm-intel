@@ -20,7 +20,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-for _p in ("/app", str(Path(__file__).resolve().parents[2])):
+_parents = Path(__file__).resolve().parents  # shipped to /tmp or /app has < 3 levels
+for _p in ("/app", *([str(_parents[2])] if len(_parents) > 2 else [])):
     if _p not in sys.path and Path(_p, "libs").is_dir():
         sys.path.insert(0, _p)
 
@@ -55,6 +56,8 @@ def _parse_s3(uri: str) -> tuple[str, str]:
     if not uri.startswith("s3://"):
         raise SystemExit(f"bad --s3-prefix {uri!r}; expected s3://bucket/prefix")
     bucket, _, prefix = uri[5:].partition("/")
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"  # "ic" must not match a sibling "ic2/"
     return bucket, prefix
 
 
