@@ -87,3 +87,20 @@ def test_traded_timestamp_month_lookup():
 def test_reference_curve_nan_manual_does_not_shadow():
     c = reference_curve(_row("manual", float("nan")), _row("traded", 2))
     assert len(c) == 1 and c.source.iloc[0] == "traded"
+
+
+def test_spot_seasonal_ignores_constant_filler_and_thin_months():
+    # 2026-11-16 audit: 蒙西 2025-11 was 0.2603 every hour; 2025-12 had only 48 real hours.
+    import numpy as np
+    nov = pd.DataFrame({"datetime": pd.date_range("2025-11-01", periods=720, freq="h"), "price": 0.2603})
+    dec_real = pd.DataFrame({"datetime": pd.date_range("2025-12-01", periods=48, freq="h"),
+                             "price": np.linspace(200, 700, 48)})
+    jan = pd.DataFrame({"datetime": pd.date_range("2026-01-01", periods=744, freq="h"),
+                        "price": np.linspace(100, 500, 744)})
+    hourly = pd.concat([nov, dec_real, jan], ignore_index=True)
+    out = spot_seasonal(hourly, "蒙西", [date(2026, 11, 1), date(2026, 12, 1), date(2027, 1, 1)])
+    months = set(out["delivery_month"])
+    assert date(2026, 11, 1) not in months      # filler month dropped entirely
+    assert date(2026, 12, 1) not in months      # 48 h < 240 h minimum
+    jan_base = out[(out.delivery_month == date(2027, 1, 1)) & (out.tou_block == "base")]
+    assert abs(float(jan_base.price_cny_mwh.iloc[0]) - 300.0) < 1e-6

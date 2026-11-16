@@ -77,9 +77,10 @@ def _seed(c):
     # past-month traded point (outside the horizon) must not be saved (R14)
     c.execute(text("INSERT INTO marketdata.rm_position_volumes (book_id, delivery_date, hour,"
                    " annual_price_cny_mwh, annual_volume_mwh) VALUES (21,'2026-10-03',18,999,10)"))
-    spot = [{"p": p, "t": datetime(2025, 12, 1) + timedelta(hours=h)}
-            for p in ("河北南网", "蒙西") for h in range(72)]
-    c.execute(text("INSERT INTO marketdata.spot_prices_hourly VALUES (:p,:t,400,NULL)"), spot)
+    # a full, hour-varying month: spot_seasonal ignores constant runs and months < 240 h
+    spot = [{"p": p, "t": datetime(2025, 12, 1) + timedelta(hours=h), "v": 388.5 + h % 24}
+            for p in ("河北南网", "蒙西") for h in range(744)]
+    c.execute(text("INSERT INTO marketdata.spot_prices_hourly VALUES (:p,:t,:v,NULL)"), spot)
     c.execute(text("INSERT INTO marketdata.rm_forward_curves (province, product, curve_date, delivery_date,"
                    " price_cny_kwh, source, tou_block) VALUES ('蒙西','reference','2026-11-01','2027-02-01',"
                    "0.5,'manual','base')"))
@@ -254,8 +255,9 @@ def test_skipped_book_province_still_gets_curve(engine):
     with engine.begin() as c:
         c.execute(text("INSERT INTO marketdata.rm_assets VALUES (5,'灵山','bess','guangxi',100,2,'lingshan')"))
         c.execute(text("INSERT INTO marketdata.rm_books VALUES (10,'lingshan','asset',5)"))
-        c.execute(text("INSERT INTO marketdata.spot_prices_hourly VALUES (:p,:t,300,NULL)"),
-                  [{"p": "广西", "t": datetime(2025, 12, 1) + timedelta(hours=h)} for h in range(72)])
+        c.execute(text("INSERT INTO marketdata.spot_prices_hourly VALUES (:p,:t,:v,NULL)"),
+                  [{"p": "广西", "t": datetime(2025, 12, 1) + timedelta(hours=h), "v": 288.5 + h % 24}
+                   for h in range(744)])
     out = rf.refresh(engine, AS_OF, horizon_months=12)
     assert out["books"][10] == "no dispatch chain"
     assert out["curves"]["广西"] > 0

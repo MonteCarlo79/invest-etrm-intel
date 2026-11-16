@@ -21,13 +21,31 @@ def _to_month(v) -> date:
     return date(ts.year, ts.month, 1)
 
 
+CONSTANT_RUN_HOURS = 48     # a real price never stays bit-identical for two full days
+MIN_MONTH_HOURS = 240       # >= 10 days of real hours for a month to enter spot_seasonal
+
+
+def _null_constant_runs(price: pd.Series, dt: pd.Series) -> pd.Series:
+    """NaN for runs of >= CONSTANT_RUN_HOURS identical consecutive hourly prices
+    (ingest filler smeared over gaps — 2026-11-16 spot_prices_hourly audit)."""
+    order = dt.sort_values().index
+    p = price.loc[order]
+    run_id = (p != p.shift()).cumsum()
+    bad = p.notna() & (p.groupby(run_id).transform("size") >= CONSTANT_RUN_HOURS)
+    return price.where(~bad.reindex(price.index))
+
+
 def spot_seasonal(hourly: pd.DataFrame, province: str, months: list[date],
                   lookback_years: int = 2) -> pd.DataFrame:
     """Mean hourly price per block over the same calendar month of the prior
     `lookback_years` years (strictly before the target year), history permitting."""
     dt = pd.to_datetime(hourly["datetime"])
+    price = _null_constant_runs(pd.to_numeric(hourly["price"], errors="coerce"), dt)
     df = pd.DataFrame({"year": dt.dt.year, "month": dt.dt.month,
-                       "hour": dt.dt.hour, "price": hourly["price"]}).dropna(subset=["price"])
+                       "hour": dt.dt.hour, "price": price}).dropna(subset=["price"])
+    # a calendar month counts only with >= MIN_MONTH_HOURS real hours (蒙西 2025-12 had 48)
+    n = df.groupby(["year", "month"])["price"].transform("size")
+    df = df[n >= MIN_MONTH_HOURS]
     rows = []
     for m in months:
         win = df[(df.month == m.month) & (df.year < m.year)
