@@ -118,6 +118,24 @@ def test_tab_smoke(tmp_path, monkeypatch):
     at = AppTest.from_string(SCRIPT, default_timeout=60).run()
     assert not at.exception, [e.message for e in at.exception]
     assert len(at.dataframe) >= 2
+    recon = at.dataframe[-1].value
+    assert list(recon.columns[:4]) == ["资产", "月份", "复盘实际执行收益(¥)", "结算套利+容量补偿(¥)"]
+    assert recon.iloc[0]["资产"] == "苏右"                          # code mapped to asset name
+    assert len(at.get("plotly_chart")) == 1                          # bar chart, not a line chart
+
+
+def test_revenue_chart_is_grouped_bars(monkeypatch):
+    import apps.asset_risk.tab_review as tr
+    figs = []
+    monkeypatch.setattr(tr.st, "plotly_chart", lambda fig, **k: figs.append(fig))
+    sub = _df([("suyou", SEP, "strategy_revenue_cny", 6517000.0, ""), ("suyou", SEP, "cleared_revenue_cny", 5987000.0, ""),
+               ("suyou", SEP, "executed_revenue_cny", 5402000.0, ""), ("suyou", SEP, "total_revenue_cny", 4667000.0, "")])
+    sub["month_s"] = sub["month"].astype(str).str[:7]
+    tr._revenue_chart(sub, {"suyou": "景蓝乌尔图"})
+    f = figs[0]
+    assert f.layout.barmode == "group" and f.layout.xaxis.type == "category"
+    assert [t.type for t in f.data] == ["bar", "bar", "bar", "scatter"]
+    assert abs(f.data[2].y[0] - 540.2) < 1e-9                        # 万元
 
 
 def test_parse_many_bad_file_does_not_stop_batch(monkeypatch):

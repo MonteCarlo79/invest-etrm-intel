@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 from sqlalchemy import text
 
@@ -66,6 +65,64 @@ def _ensure_review_table(_engine):
     return True
 
 
+RECON_CN = {
+    "asset_code": "资产",
+    "month": "月份",
+    "reviewed_executed_cny": "复盘实际执行收益(¥)",
+    "actual_arb_cap_cny": "结算套利+容量补偿(¥)",
+    "diff_exec_cny": "执行收益差异(¥)",
+    "diff_exec_pct": "执行收益差异%",
+    "reviewed_total_cny": "复盘月度总收益(¥)",
+    "actual_total_cny": "瀑布实际总额(¥)",
+    "diff_total_cny": "总收益差异(¥)",
+    "diff_total_pct": "总收益差异%",
+    "spot_only_cny": "结算现货收益·参考(¥)",
+    "flag": "标记",
+}
+_STAGES = [("strategy_revenue_cny", "策略申报收益", "#9ecae1"),
+           ("cleared_revenue_cny", "实时出清收益", "#4292c6"),
+           ("executed_revenue_cny", "实际执行收益", "#08519c")]
+
+
+def _asset_names(engine) -> dict:
+    try:
+        with engine.connect() as c:
+            rows = c.execute(text("SELECT asset_code, name FROM marketdata.rm_assets "
+                                  "WHERE asset_code IS NOT NULL")).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except Exception:  # noqa: BLE001 — labels only
+        return {}
+
+
+def _revenue_chart(sub: pd.DataFrame, names: dict) -> None:
+    """Grouped bars per month: 策略申报 → 实时出清 → 实际执行 (spot + capcomp, pre-fee, 万元),
+    with 月度总收益 (after fees) as markers. One chart per selected asset."""
+    import plotly.graph_objects as go
+    for code in sorted(sub["asset_code"].unique()):
+        a = sub[sub["asset_code"] == code]
+        months = sorted(a["month_s"].unique())
+        if not months or a[a["metric"].isin([m for m, _, _ in _STAGES])].empty:
+            continue
+        val = a.pivot_table(index="month_s", columns="metric", values="value", aggfunc="first").reindex(months)
+        fig = go.Figure()
+        for metric, label, color in _STAGES:
+            if metric in val:
+                y = val[metric] / 1e4
+                fig.add_bar(x=months, y=y, name=label, marker_color=color,
+                            text=[f"{v:,.0f}" if pd.notna(v) else "" for v in y], textposition="outside",
+                            hovertemplate="%{x} " + label + ": %{y:,.1f} 万元<extra></extra>")
+        if "total_revenue_cny" in val:
+            fig.add_scatter(x=months, y=val["total_revenue_cny"] / 1e4, name="月度总收益（扣费后）",
+                            mode="markers+lines", marker=dict(symbol="diamond", size=10, color="#e6550d"),
+                            line=dict(dash="dot", color="#e6550d"),
+                            hovertemplate="%{x} 月度总收益: %{y:,.1f} 万元<extra></extra>")
+        fig.update_layout(barmode="group", title=f"{names.get(code, code)} · 复盘收益（万元）",
+                          xaxis=dict(type="category", title="月份"),
+                          yaxis=dict(title="万元", tickformat=",.0f"),
+                          legend=dict(orientation="h", y=-0.2), height=420, margin=dict(t=60))
+        st.plotly_chart(fig, use_container_width=True)
+
+
 def render_review(engine) -> None:
     st.subheader("复盘 Review")
     _ensure_review_table(engine)
@@ -105,6 +162,7 @@ def render_review(engine) -> None:
     if not sel:
         st.info("Select one or more assets.")
         return
+    names = _asset_names(engine)
     sub = data[data["asset_code"].isin(sel)].copy()
     sub["month_s"] = sub["month"].astype(str).str[:7]
     for code in sel:
@@ -113,12 +171,7 @@ def render_review(engine) -> None:
                                                           values="value", aggfunc="first"))
         st.dataframe(piv, use_container_width=True)
 
-    ex = sub[sub["metric"] == "executed_revenue_cny"]
-    if not ex.empty:
-        fig = px.line(ex.sort_values("month_s"), x="month_s", y="value", color="asset_code", markers=True,
-                      labels={"month_s": "月份", "value": "实际执行收益 (¥)", "asset_code": "资产"},
-                      title="实际执行收益 executed_revenue_cny")
-        st.plotly_chart(fig, use_container_width=True)
+    _revenue_chart(sub, names)
 
     st.markdown("##### 对账 Reconciliation")
     st.caption("两组口径一致的对比：(1) 复盘实际执行收益(现货+容量补偿，费用前) vs 结算单 套利+容量补偿；"
@@ -129,5 +182,12 @@ def render_review(engine) -> None:
         st.info("所选资产无 executed/total 复盘数据。")
         return
     show = rec.drop(columns=["flag_exec", "flag_total"]).copy()
-    show["flag"] = show["flag"].map({True: "FLAG >5%", False: ""})
-    st.dataframe(show.fillna("—"), use_container_width=True, hide_index=True)
+    show["asset_code"] = show["asset_code"].map(lambda c: names.get(c, c))
+    show["flag"] = show["flag"].map({True: "差异>5%", False: ""})
+    show = show.rename(columns=RECON_CN)
+    show = show[[c for c in RECON_CN.values() if c in show.columns]]
+    money = [c for c in show.columns if c.endswith("(¥)")]
+    pct = [c for c in show.columns if c.endswith("%")]
+    st.dataframe(show.style.format("{:,.0f}", subset=money, na_rep="—")
+                           .format("{:+.2%}", subset=pct, na_rep="—"),
+                 use_container_width=True, hide_index=True)
