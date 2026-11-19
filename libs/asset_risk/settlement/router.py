@@ -114,6 +114,29 @@ def _sg(name):
     return f
 
 
+def _gansu_ocr(kind: str):
+    """(detect, parse) for scanned 国网甘肃 bills: OCR text + the deterministic 甘肃 parser.
+
+    Detect only succeeds when the parser's own tie-out passes (items sum to 结算金额 /
+    本期电费), so an OCR misread falls through to the vision route instead of storing
+    wrong numbers (民勤 2026-08: vision booked 调频 as system_operation and doubled 电能量电费)."""
+    from services.settlement_ingest import parser_gansu as pg
+    is_bill = pg.is_gansu_bill if kind == "discharge" else pg.is_gansu_charge_bill
+    parse = pg.parse_gansu_discharge_text if kind == "discharge" else pg.parse_gansu_charge_text
+
+    def items(bill):
+        if not bill.is_scanned:
+            return []
+        from libs.asset_risk.settlement.ocr import ocr_text
+        try:
+            t = ocr_text(bill.path)
+        except Exception:  # noqa: BLE001
+            return []
+        return parse(t) if t and is_bill(t) else []
+
+    return (lambda bill: bool(items(bill))), items
+
+
 def _gs(name):
     def f(text):
         from services.settlement_ingest import parser_gansu
@@ -260,6 +283,13 @@ _DISCHARGE_ROUTES: tuple[Route, ...] = (
         parse=_on_full(_js("parse_jiangsu_trade_statement")),   # multi-page; stamps repeat
     ),
     Route(
+        label="Scanned 国网甘肃 bill — OCR + deterministic 甘肃 parser (tied to 结算金额).",
+        kind="discharge",
+        detect=_gansu_ocr("discharge")[0],
+        parse=_gansu_ocr("discharge")[1],
+        needs_text_layer=False,
+    ),
+    Route(
         label="Detected scanned PDF — using AI Vision to extract data...",
         kind="discharge",
         detect=_always,
@@ -269,6 +299,13 @@ _DISCHARGE_ROUTES: tuple[Route, ...] = (
 )
 
 _CHARGE_ROUTES: tuple[Route, ...] = (
+    Route(
+        label="Scanned 国网甘肃 charge bill — OCR + deterministic 甘肃 parser (tied to 本期电费).",
+        kind="charge",
+        detect=_gansu_ocr("charge")[0],
+        parse=_gansu_ocr("charge")[1],
+        needs_text_layer=False,
+    ),
     Route(
         label="Scanned 电费计算明细 — vision extraction verified against printed totals.",
         kind="charge",
@@ -336,7 +373,9 @@ ROUTE_LABELS: tuple[str, ...] = (
     "山东省地方电厂市场化结算单 detected — parsed deterministically (no vision).",
     "国网甘肃 bill detected — parsed deterministically (no vision).",
     "江苏电力交易中心交易结算单 detected — parsed deterministically (no vision).",
+    "Scanned 国网甘肃 bill — OCR + deterministic 甘肃 parser (tied to 结算金额).",
     "Detected scanned PDF — using AI Vision to extract data...",
+    "Scanned 国网甘肃 charge bill — OCR + deterministic 甘肃 parser (tied to 本期电费).",
     "Scanned 电费计算明细 — vision extraction verified against printed totals.",
     "国网江苏电费核查联 detected — parsed deterministically (no vision).",
     "蒙西下网电费核查票 detected — parsed deterministically (no vision).",
