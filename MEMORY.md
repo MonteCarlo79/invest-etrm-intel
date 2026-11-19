@@ -662,3 +662,38 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Haiku only for text-only simple tasks; anything numeric-from-images or tool-using stays on Sonnet. Watch digest/extraction quality for a few days.
 - OneDrive main app keeps quitting → every dataless read fails; `open -a OneDrive` restores within ~30 s.
 **Next session:** start in ~/bess-platform-local (`git pull`); OneDrive tree `main` is at 72679b1d, behind GitHub — don't commit there. Check that Hermes Haiku outputs (news digest, email summary, extractions) look right and that today's 07:05 ranking report + nodal scrape ran without OneDrive errors. Then the tt_api consumer decision and the reconcile downloader revert (build via scripts/cloud_build.sh).
+
+## Session Summary, 2026-11-19
+**Worked on:** Market-maker go-live, the IC 投决预期 waterfall stage and 复盘 review store, a spot-price data repair chain, and settlement fixes for 滨州, 射阳 and 民勤 (2026-11-16 → 11-19, one long session).
+**Completed:**
+- Market-maker phase A+B LIVE (v4/td:4): rm_positions migration, refresh job, VaR/Greeks fixes (thin-province VaR, BESS Greeks with negative marks), portal card (portal v14/td:71), Hermes route.
+- Spot price filler repair: 74,688 smeared filler rows nulled (bak table); LingFeng 2025 months re-pulled; lingfeng-ingest v14/td:16 with constant-run ingest guard; capture re-run for 13 provinces; 1,545 stale capture rows removed (bak table).
+- mnp96 filled nodal table: nightly rule now rolls 7 days (gzip-embedded script); insert-only gap fill 2026-01-01→11-15 (+40.2M rows).
+- asset-risk v104→v112 (now td:114):
+  - load books removed from asset-risk; Realised P&L selection remembered per user (hermes_settings)
+  - 投决预期 IC stage + 市场偏差; IC upload; 复盘 Review tab + overlays
+  - benchmark slot-wise price merge (cleared → md_rt_nodal_price → filled) with coverage warning
+  - 复盘 chart/table formatting
+  - watermark filter; two_rules (两个细则) category
+  - deterministic 江苏 trade-statement + 国网江苏 核查联 parsers
+- retail-risk v9 (Settlement per load book); mengxi-dashboard v59/td:74 (复盘 view + Trader get_review_metrics); hermes td:209.
+- Settlements fixed:
+  - 滨州 2026-08/09 re-ingested (watermark had pushed them to vision); all 65 other 滨州 records verified against PDFs.
+  - 射阳 26 discharge statements (were double-counted) and 25 charge bills (were ≈¥0.05) re-ingested, 2024-08→2026-09.
+  - 民勤: 2 misfiled 景腾 records removed.
+  - Every replaced record is in a *_bak_20261119 table.
+**In progress:**
+- 民勤 2026-08 景肃 discharge bill missing: both copies supplied so far are the 景腾250MW风电 bill. 2026-10 下网 charge bill not yet issued.
+- Not ingested: 零碳46 wind 复盘 decks (Haiku extraction) and the two half-year BESS decks.
+- Skipped strategy-batch / market-impact days (from the price gaps) not re-run.
+**Decisions made:**
+- IC case: op-year 1 = commission_date; IC capcomp 0.35 元/kWh for 10 yrs; 巴盟 容量电价 110 ¥/kW from yr 11; 武川/阿拉善/巴盟 scaled to 1 GW/4 GWh; no-IC assets pass through at 投资标准; IC scaled by 申报 coverage days.
+- 复盘 deck revenue (策略/出清/执行) = spot + capcomp before fees; 月度总收益 = after fees. Upload lives in asset-risk; mengxi-dashboard is read-only.
+- 两个细则 is its own category (two_rules), applied across all 6 books.
+- 射阳: Jiangsu peak months (Dec/Jan/Jul/Aug) have ≈¥400 charge for ~30 GWh — real (main meter billed at 0), not a parse error.
+**Next session:**
+- Work in ~/bess-platform-local (`git pull`).
+- Company-name guard (reject bills whose 户名 ≠ book company) was proposed but NOT approved — ask again before building.
+- Ingest 景肃 2026-08 discharge (account 6269925012402) and 2026-10 charge when the owner provides them.
+- Watch tonight's mnp96 7-day fill and lingfeng v14 runs.
+- Deploys need an explicit "yes" each time; the classifier blocks deploys/pushes on vague approvals.
