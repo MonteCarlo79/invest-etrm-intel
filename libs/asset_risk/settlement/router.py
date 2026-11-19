@@ -71,8 +71,12 @@ def _not_watermark(obj) -> bool:
     if obj.get("object_type") != "char":
         return True
     c = obj.get("non_stroking_color")
-    if isinstance(c, (tuple, list)) and len(c) == 3 and max(c) - min(c) < 1e-3 and 0.6 < c[0] < 0.9:
-        return False
+    if isinstance(c, (tuple, list)) and len(c) == 3 and max(c) - min(c) < 1e-3:
+        if 0.6 < c[0] < 0.9:
+            return False
+        # 国网江苏 核查联 "syyj_<date> <time>" watermark: mid-grey 0.502, ~16.7 pt (bill text is 8-9 pt)
+        if 0.45 < c[0] <= 0.6 and obj.get("size", 0) >= 12:
+            return False
     return True
 
 
@@ -93,6 +97,13 @@ def _wb2(name):
     def f(text):
         from services.settlement_ingest import parser_wb2
         return getattr(parser_wb2, name)(text)
+    return f
+
+
+def _jsg(name):
+    def f(text):
+        from services.settlement_ingest import parser_jiangsu_grid
+        return getattr(parser_jiangsu_grid, name)(text)
     return f
 
 
@@ -266,6 +277,12 @@ _CHARGE_ROUTES: tuple[Route, ...] = (
         needs_text_layer=False,
     ),
     Route(
+        label="国网江苏电费核查联 detected — parsed deterministically (no vision).",
+        kind="charge",
+        detect=_on_full(_jsg("is_jiangsu_grid_check")),
+        parse=_on_full(_jsg("parse_jiangsu_grid_check")),
+    ),
+    Route(
         label="蒙西下网电费核查票 detected — parsed deterministically (no vision).",
         kind="charge",
         detect=_on_full(_wb2("is_wb2_charge_bill")),
@@ -321,6 +338,7 @@ ROUTE_LABELS: tuple[str, ...] = (
     "江苏电力交易中心交易结算单 detected — parsed deterministically (no vision).",
     "Detected scanned PDF — using AI Vision to extract data...",
     "Scanned 电费计算明细 — vision extraction verified against printed totals.",
+    "国网江苏电费核查联 detected — parsed deterministically (no vision).",
     "蒙西下网电费核查票 detected — parsed deterministically (no vision).",
     "广西电网电费通知单 detected — parsed deterministically (no vision).",
     "网上国网用电侧电费账单 detected — parsed deterministically (no vision).",
