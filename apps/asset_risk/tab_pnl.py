@@ -9,6 +9,7 @@ from sqlalchemy import text
 from libs.asset_risk.settlement.analytics import (  # noqa: F401  (re-exported for tests)
     ASSET_CLASS_OPTIONS, CATEGORY_CN, _REVENUE_CATS, _asset_month_metric, _asset_summary,
     _days_in_months, _load_settlement_items, _portfolio_matrix, book_matches_classes,
+    prefer_canonical_by,
 )
 
 from auth.rbac import get_user
@@ -156,7 +157,7 @@ def _render_portfolio(engine, book_ids: list[int] | None = None):
     """
     query = """
         SELECT a.name AS asset, a.capacity_mw, a.bess_duration_h, a.asset_type,
-               s.settlement_month, si.category, si.amount_cny, si.volume_mwh
+               s.settlement_month, si.category, si.amount_cny, si.volume_mwh, si.notes
         FROM marketdata.rm_settlement_items si
         JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
         JOIN marketdata.rm_books b ON b.id = s.book_id
@@ -174,6 +175,9 @@ def _render_portfolio(engine, book_ids: list[int] | None = None):
         st.info("No settlement data yet.")
         return
 
+    # 口径 A per asset: grid bills win over the 交易中心 统推 合计 (as the Settlement tab).
+    items["month"] = pd.to_datetime(items["settlement_month"]).dt.strftime("%Y-%m")
+    items = prefer_canonical_by(items, "asset")
     items["year"] = pd.to_datetime(items["settlement_month"]).dt.year
     years = sorted(items["year"].unique().tolist())
     sel_years = st.multiselect("Years", years, default=years, key="pnl_portfolio_years")

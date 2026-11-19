@@ -86,14 +86,21 @@ def _load_settlement_items(engine, book_id: int, date_range=None) -> pd.DataFram
         clause = " AND s.settlement_month >= :d_start AND s.settlement_month <= :d_end"
         params["d_start"], params["d_end"] = start, end
     with engine.connect() as conn:
-        return pd.read_sql(text(f"""
-            SELECT si.category, SUM(si.amount_cny) as total
+        rows = pd.read_sql(text(f"""
+            SELECT s.settlement_month, si.category, si.amount_cny, si.notes
             FROM marketdata.rm_settlement_items si
             JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
             WHERE s.book_id = :bid{clause}
-            GROUP BY si.category
-            ORDER BY total DESC
         """), conn, params=params)
+    if rows.empty:
+        return pd.DataFrame(columns=["category", "total"])
+    # Same 口径 A rule as the Settlement tab: a month's grid bill wins over the
+    # 交易中心 统推 合计 for that side (定远 2026: both stored → RTE ~168%).
+    rows["month"] = pd.to_datetime(rows["settlement_month"]).dt.strftime("%Y-%m")
+    rows, _ = prefer_canonical_settlements(rows)
+    return (rows.groupby("category", as_index=False)["amount_cny"].sum()
+                .rename(columns={"amount_cny": "total"})
+                .sort_values("total", ascending=False, ignore_index=True))
 
 
 def _asset_summary(items_df: pd.DataFrame) -> pd.DataFrame:
@@ -283,6 +290,16 @@ def _insert_year_subtotals(pivot, monthly, days_in_month, energy_per_cycle_mwh,
 # 统推净额, e.g. Sep +586,750 on 3,006,518).
 _EXCHANGE_SELL_NOTE = "放电结算: 交易中心售电侧合计"
 _EXCHANGE_BUY_NOTE = "充电结算: 交易中心购电侧合计"
+
+
+def prefer_canonical_by(items_df, key: str):
+    """prefer_canonical_settlements applied separately per `key` (asset / book) so one
+    asset's grid bill never drops another asset's exchange rows. Needs columns
+    key, month, category, notes."""
+    if items_df.empty:
+        return items_df.copy()
+    parts = [prefer_canonical_settlements(g)[0] for _, g in items_df.groupby(key, sort=False)]
+    return pd.concat(parts, ignore_index=True) if parts else items_df.iloc[:0].copy()
 
 
 def prefer_canonical_settlements(items_df):

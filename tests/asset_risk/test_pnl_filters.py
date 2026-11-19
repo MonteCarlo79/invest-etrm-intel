@@ -59,7 +59,7 @@ def sqlite_engine():
                           "(id INTEGER PRIMARY KEY, book_id INTEGER, settlement_month TEXT)"))
         conn.execute(text("CREATE TABLE marketdata.rm_settlement_items "
                           "(id INTEGER PRIMARY KEY, settlement_id INTEGER, category TEXT, "
-                          "amount_cny REAL, volume_mwh REAL)"))
+                          "amount_cny REAL, volume_mwh REAL, notes TEXT)"))
         for sid, month in [(1, "2026-01-01"), (2, "2026-02-01"), (3, "2026-03-01")]:
             conn.execute(text("INSERT INTO marketdata.rm_settlements (id, book_id, settlement_month) "
                               "VALUES (:sid, 7, :m)"), {"sid": sid, "m": month})

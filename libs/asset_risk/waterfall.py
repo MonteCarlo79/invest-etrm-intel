@@ -39,7 +39,7 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
     start, end = _month_token_bounds(start, end)
     sql = """
         SELECT a.id AS asset_id, a.name AS asset, s.settlement_month AS month,
-               si.category, si.amount_cny, si.volume_mwh
+               si.category, si.amount_cny, si.volume_mwh, si.notes
         FROM marketdata.rm_settlement_items si
         JOIN marketdata.rm_settlements s ON s.id = si.settlement_id
         JOIN marketdata.rm_books b ON b.id = s.book_id
@@ -60,6 +60,8 @@ def _load_settlement_actuals(engine, asset_ids: list[int],
         return pd.DataFrame(columns=["asset", "month", "arb_cny", "cap_cny", "fee_cny",
                                      "other_cny", "dis_mwh", "chg_mwh"])
     df["month"] = df["month"].astype(str).str[:7]
+    from libs.asset_risk.settlement.analytics import prefer_canonical_by
+    df = prefer_canonical_by(df, "asset")   # grid bill wins over 交易中心 统推 合计 (口径 A)
     rows = []
     for (asset, month), g in df.groupby(["asset", "month"]):
         amt = g.groupby("category")["amount_cny"].sum()
