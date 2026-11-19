@@ -91,3 +91,10 @@ def test_mismatched_total_returns_nothing():
     bad = _SYNTH.replace("0101010301 优先发电 0.000 100.000 391.000000 39100.00",
                          "0101010301 优先发电 0.000 100.000 391.000000 39000.00")
     assert parse_jiangsu_trade_statement(bad) == []
+
+
+def test_two_rules_codes_get_their_own_category():
+    from services.settlement_ingest.parser_jiangsu import _category
+    assert _category("020601", "-") == "two_rules"
+    assert _category("020602", "两个细则_辅助服务管理细则结算费用") == "two_rules"
+    assert _category("0103010101", "调频辅助服务分摊") == "frequency"

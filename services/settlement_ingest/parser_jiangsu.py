@@ -166,6 +166,8 @@ def jiangsu_total(text: str) -> float | None:
 # --- rows ------------------------------------------------------------------
 
 def _category(code: str, name: str) -> str:
+    if code.startswith("0206") or "两个细则" in name:   # owner 2026-11-19: 两个细则 ≠ 调频
+        return "two_rules"
     if "调频" in name:
         return "frequency"
     if "储能补偿" in name:
