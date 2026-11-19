@@ -34,7 +34,7 @@ _TOTAL_LINE = re.compile(r"^(合计|工商业电费)")
 _DISCHARGE_CAT = {
     "日前偏差电费": "discharge_energy",
     "实时偏差电费": "discharge_energy",
-    "两个细则费用": "frequency",
+    "两个细则费用": "two_rules",
     "调频服务补偿费用": "frequency",
     "调频服务分摊费用": "frequency",
     "调频辅助服务补偿": "frequency",
@@ -376,7 +376,7 @@ def parse_sdtc_settlement(text: str) -> dict[str, dict[str, Any]]:
 # 安徽 电费账单 fee labels → category (value lines live either on the label
 # line itself or on the following 山黄储能（发电侧）现货 line)
 _AH_FEE_CAT = {
-    "两个细则费用": "frequency",
+    "两个细则费用": "two_rules",
     "调平电量": "discharge_energy",
     "华东备用市场": "frequency",
     "华东调峰辅助服务": "frequency",

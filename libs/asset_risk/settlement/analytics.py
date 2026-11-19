@@ -17,6 +17,7 @@ CATEGORY_CN = {
     "basic_fee": "基本电费/力调",
     "govt_surcharges": "政府基金及附加",
     "frequency": "调频",
+    "two_rules": "两个细则",
     "penalty": "偏差费用",
     "subsidy": "补贴",
     "rebate": "返还",
@@ -307,7 +308,7 @@ def prefer_canonical_settlements(items_df):
 
 _MERCHANT_CATS = ("discharge_energy", "generation_revenue")
 _CONTRACT_CATS = ("capacity_compensation", "subsidy", "rebate", "other")
-_SERVICE_CATS = ("frequency",)
+_SERVICE_CATS = ("frequency", "two_rules")
 _COST_CATS = ("charge_energy", "transmission", "system_operation",
               "coal_capacity_charge", "basic_fee", "govt_surcharges", "penalty")
 

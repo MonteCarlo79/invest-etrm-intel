@@ -38,7 +38,7 @@ _FEE_ROWS = [
     ("系统运行费用", "frequency", +1),
     ("辅助服务交易", "frequency", +1),
     # 两个细则费用 = ancillary-services assessment (as printed, may be negative)
-    ("两个细则费用", "frequency", +1),
+    ("两个细则费用", "two_rules", +1),
     ("市场运营费用", "system_operation", +1),
     ("双轨制资金分摊", "system_operation", +1),
     ("偏差费用", "penalty", +1),

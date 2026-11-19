@@ -28,3 +28,16 @@ def test_watermarked_bill_routes_deterministically_and_ties(fn, total):
     assert abs(sum(i["amount_cny"] for i in items) - total) < 0.01
     keys = [(i["category"], i.get("notes"), i["amount_cny"]) for i in items]
     assert len(keys) == len(set(keys))            # no page-2 duplicates
+
+
+def test_two_rules_separate_from_frequency():
+    # Owner 2026-11-19: 两个细则 is its own category, not 调频.
+    fn = "B-2-上北海远凌2026年9月份电费账单.pdf"
+    f = D / fn
+    if not f.exists():
+        pytest.skip("invoice PDF not present")
+    bill = read_bill(str(f), fn)
+    items = route(bill, classify_pdf(fn), "upload").parse(bill)
+    two = [i for i in items if i["category"] == "two_rules"]
+    assert len(two) == 1 and abs(two[0]["amount_cny"] - 11343.89) < 0.01
+    assert not any(i["category"] == "frequency" and "两个细则" in (i.get("notes") or "") for i in items)
