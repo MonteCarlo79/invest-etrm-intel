@@ -110,6 +110,13 @@ def _gs(name):
     return f
 
 
+def _js(name):
+    def f(text):
+        from services.settlement_ingest import parser_jiangsu
+        return getattr(parser_jiangsu, name)(text)
+    return f
+
+
 def _on_full(fn):
     return lambda bill: fn(bill.full_text)
 
@@ -236,6 +243,12 @@ _DISCHARGE_ROUTES: tuple[Route, ...] = (
         parse=_on_full(_gs("parse_gansu_discharge_text")),
     ),
     Route(
+        label="江苏电力交易中心交易结算单 detected — parsed deterministically (no vision).",
+        kind="discharge",
+        detect=_on_full(_js("is_jiangsu_trade_statement")),
+        parse=_on_full(_js("parse_jiangsu_trade_statement")),   # multi-page; stamps repeat
+    ),
+    Route(
         label="Detected scanned PDF — using AI Vision to extract data...",
         kind="discharge",
         detect=_always,
@@ -305,6 +318,7 @@ ROUTE_LABELS: tuple[str, ...] = (
     "国网安徽发电侧电费账单 detected — parsed deterministically (no vision).",
     "山东省地方电厂市场化结算单 detected — parsed deterministically (no vision).",
     "国网甘肃 bill detected — parsed deterministically (no vision).",
+    "江苏电力交易中心交易结算单 detected — parsed deterministically (no vision).",
     "Detected scanned PDF — using AI Vision to extract data...",
     "Scanned 电费计算明细 — vision extraction verified against printed totals.",
     "蒙西下网电费核查票 detected — parsed deterministically (no vision).",
