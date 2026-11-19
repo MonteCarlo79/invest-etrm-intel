@@ -56,8 +56,24 @@ def read_bill(path: str, filename: str) -> BillText:
         is_scanned = len(p0.chars) == 0 and len(p0.images) > 0
         if is_scanned:
             return BillText(filename, path, True, "", "")
-        pages = [pg.extract_text() or "" for pg in pdf.pages]
+        pages = [pg.filter(_not_watermark).extract_text() or "" for pg in pdf.pages]
     return BillText(filename, path, False, "".join(t + "\n" for t in pages), pages[0])
+
+
+def _not_watermark(obj) -> bool:
+    """Drop light-grey watermark glyphs (r = g = b in 0.6-0.9).
+
+    网上国网 bills downloaded from 2026-10 carry a diagonal grey IP/timestamp watermark
+    (ArialMT, colour 0.749) whose glyphs interleave with the bill text — "上网电费" read as
+    "上 0 网 1 I 电…", so every deterministic detector missed and the bills fell to vision
+    (滨州 2026-08/09: page-2 duplicates, 实时偏差电费 booked as a penalty, 直接交易电费 as other).
+    Bill text is black or teal, never mid-grey."""
+    if obj.get("object_type") != "char":
+        return True
+    c = obj.get("non_stroking_color")
+    if isinstance(c, (tuple, list)) and len(c) == 3 and max(c) - min(c) < 1e-3 and 0.6 < c[0] < 0.9:
+        return False
+    return True
 
 
 def _always(_bill: BillText) -> bool:
