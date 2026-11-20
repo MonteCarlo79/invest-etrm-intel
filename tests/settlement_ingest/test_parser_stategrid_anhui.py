@@ -49,7 +49,7 @@ class TestAhDischarge:
 
     def test_fee_rows(self, items):
         assert _by_notes(items, "两个细则费用")[0]["amount_cny"] == pytest.approx(205585.75)
-        assert _by_notes(items, "两个细则费用")[0]["category"] == "frequency"
+        assert _by_notes(items, "两个细则费用")[0]["category"] == "two_rules"   # 两个细则 split from 调频 2026-11-19
         assert _by_notes(items, "其他费用")[0]["amount_cny"] == pytest.approx(958826.00)
         assert _by_notes(items, "其他费用")[0]["category"] == "other"
 
