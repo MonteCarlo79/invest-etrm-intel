@@ -58,7 +58,7 @@ class TestDischargeBill:
         assert row["amount_cny"] == pytest.approx(2122525.83)
 
     def test_component_categories(self, items):
-        assert _by_notes(items, "两个细则费用")[0]["category"] == "frequency"
+        assert _by_notes(items, "两个细则费用")[0]["category"] == "two_rules"
         assert _by_notes(items, "调频服务补偿费用")[0]["category"] == "frequency"
         assert _by_notes(items, "容量补偿费")[0]["category"] == "capacity_compensation"
         assert _by_notes(items, "跨月偏差退补费")[0]["category"] == "rebate"

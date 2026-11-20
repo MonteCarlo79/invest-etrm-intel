@@ -43,7 +43,7 @@ def map_settlement_category(label: str, side: str = "discharge") -> str:
         return "govt_surcharges"
     if "输配" in s or "输电" in s:
         return "transmission"
-    if "两个细则" in s:
+    if "两个细则" in s and not ("辅助" in s or "调频" in s):   # combined 两个细则及辅助服务 stays frequency
         return "two_rules"
     if "调频" in s or "辅助" in s:
         return "frequency"
