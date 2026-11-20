@@ -17,6 +17,8 @@ stays light. No streamlit, no apps.* imports.
 """
 from __future__ import annotations
 
+import re
+
 import copy
 import os
 from dataclasses import dataclass
@@ -214,6 +216,16 @@ _VOUCHER_ROUTES: tuple[Route, ...] = (
 
 _DISCHARGE_ROUTES: tuple[Route, ...] = (
     Route(
+        label=("甘肃中长期月结算结算单 — its 实时正/负电量 and 辅助服务 rows duplicate the grid "
+               "上网/下网 bills; skipped to avoid double-counting. No data written."),
+        kind="skip",
+        # filename or text: the statements are often scanned (no text layer) — 民勤 2026-01..05
+        detect=lambda bill: "中长期月结算" in bill.filename
+                            or "中长期月结算" in re.sub(r"\s+", "", bill.full_text or ""),
+        parse=lambda bill: [],
+        needs_text_layer=False,
+    ),
+    Route(
         label=("电网版上网结算单 — content overlaps the "
                "交易中心结算依据; skipped to avoid double-counting. No data written."),
         kind="skip",
@@ -362,6 +374,7 @@ ROUTES: tuple[Route, ...] = _VOUCHER_ROUTES + _DISCHARGE_ROUTES + _CHARGE_ROUTES
 
 ROUTE_LABELS: tuple[str, ...] = (
     "发电侧结算凭证 — no 上网结算单 for this month; using voucher as discharge source.",
+    "甘肃中长期月结算结算单 — its 实时正/负电量 and 辅助服务 rows duplicate the grid 上网/下网 bills; skipped to avoid double-counting. No data written.",
     "电网版上网结算单 — content overlaps the 交易中心结算依据; skipped to avoid double-counting. No data written.",
     "交易结算凭证 — its 电能电费 and every fee row duplicate the grid 上网结算单; skipped to avoid double-counting. No data written.",
     "蒙西上网电费结算单 (成分明细) detected — parsed deterministically (no vision).",
