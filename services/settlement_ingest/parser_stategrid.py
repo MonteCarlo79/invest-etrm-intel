@@ -504,30 +504,82 @@ def is_ah_sdtc(text: str) -> bool:
             and "购电侧" in text and "售电侧" in text and "新型经营主体" in text)
 
 
+_AH_NUM = r"-?\d[\d,]*\.\d+"
+
+
+def _ah_num(s: str) -> float:
+    return float(s.replace(",", ""))
+
+
+def _ah_total_candidates(text: str, pos: int) -> list[float]:
+    """Readings of the 合计 row starting at ``pos`` (just after "合计").
+
+    1. the first decimal number after 合计 (seal artefacts like "15:42:17", "13",
+       "2026" carry no decimal point and are skipped);
+    2. the digits of the rest of the 合计 line glued together — 2024 statements
+       interleave seal glyphs into the number ("yjs5h0 c 47809.54" = 5047809.54).
+    """
+    out = []
+    m = re.search(_AH_NUM, text[pos:pos + 120])
+    if m:
+        out.append(_ah_num(m.group(0)))
+    line = text[pos:].split("\n", 1)[0]
+    glued = re.sub(r"[^\d.\-]", "", line)
+    if re.fullmatch(_AH_NUM, glued) and _ah_num(glued) not in out:
+        out.append(_ah_num(glued))
+    return out
+
+
 def parse_ah_sdtc(text: str) -> dict[str, dict[str, Any]]:
     """Parse 安徽电力交易中心(统推)交易结算单 → {"售电侧": item, "购电侧": item}.
 
-    售电侧: volume from the 本月（售电侧）summary row; 结算电费 = the number
-    between the two summary rows (also the 大写金额 value — the doc's headline).
-    购电侧: detail-page 合计 (printed positive cost → stored negative).
+    The headline 结算电费 (between the 购电侧/售电侧 summary rows, = 大写金额) is
+    the NET 售电侧 − 购电侧, not the sell amount. Amounts come from the detail
+    pages instead: 购电侧 合计 (printed positive cost → stored negative) and
+    售电侧 合计 (gross sell). Volumes come from the summary rows.
+
+    Tie check: gross_sell − buy == headline (±0.01). If the 购电侧 合计 is
+    unreadable, buy = gross_sell − headline. Returns {} when the headline or the
+    售电侧 合计 is missing, or the tie fails — nothing beats wrong numbers.
     """
-    out: dict[str, dict[str, Any]] = {}
-    m_vol = re.search(r"本月（售电侧）\s+([\d,]+\.\d+)", text)
-    # the 结算电费 number sits between the 购电侧 row and the 售电侧 row
-    m_amt = re.search(r"本月（购电侧）[^\n]*\n([\d,]{4,}\.\d{2})\s*\n本月（售电侧）", text)
-    if m_vol and m_amt:
-        vol = float(m_vol.group(1).replace(",", ""))
-        amt = float(m_amt.group(1).replace(",", ""))
-        out["售电侧"] = {"category": "discharge_energy", "volume_mwh": vol,
-                         "price_cny_kwh": round(amt / vol / 1000.0, 6) if vol else None,
-                         "amount_cny": amt, "notes": "放电结算: 交易中心售电侧合计"}
-    m2 = re.search(r"本月（购电侧）\s+([\d,]+\.\d+)", text)
-    vol_b = float(m2.group(1).replace(",", "")) if m2 else None
-    m3 = re.search(r"^合计\s+([\d,]+\.\d+)\s*$", text, re.MULTILINE)
-    if m3:
-        amt_b = float(m3.group(1).replace(",", ""))
-        out["购电侧"] = {"category": "charge_energy", "volume_mwh": vol_b,
-                         "price_cny_kwh": round(amt_b / vol_b / 1000.0, 6) if vol_b else None,
-                         "amount_cny": -amt_b,  # printed positive cost → stored negative
-                         "notes": "充电结算: 交易中心购电侧合计"}
-    return out
+    # summary: 2025+ "本月（购电侧） V V 0 V / NET / 本月（售电侧） V …";
+    #          2024  "购电侧 V 0 0 / 本月 NET / 售电侧 V 0 0"
+    m_vs = (re.search(r"本月（售电侧）\s+([\d,]+(?:\.\d+)?)", text)
+            or re.search(r"^售电侧\s+([\d,]+(?:\.\d+)?)\s", text, re.MULTILINE))
+    m_vb = (re.search(r"本月（购电侧）\s+([\d,]+(?:\.\d+)?)", text)
+            or re.search(r"^购电侧\s+([\d,]+(?:\.\d+)?)\s", text, re.MULTILINE))
+    m_net = (re.search(r"本月（购电侧）[^\n]*\n(" + _AH_NUM + r")\s*\n本月（售电侧）", text)
+             or re.search(r"^本月\s+(" + _AH_NUM + r")\s*$", text, re.MULTILINE))
+    hdr = text.find("结算科目编码")
+    sell_hdr = text.find("售电侧", hdr) if hdr >= 0 else -1
+    if not m_net or sell_hdr < 0:
+        return {}
+    net = _ah_num(m_net.group(1))
+    # "合计" — seal fragments ("5:", "22", ":1") may split it across lines
+    tot = [m.end() for m in re.finditer(r"合(?:[ \t]*\n[^\n\u4e00-\u9fff]{0,6})*[ \t]*\n?计", text)]
+    buy_pos = [p for p in tot if hdr < p < sell_hdr]
+    sell_pos = [p for p in tot if p > sell_hdr]
+    if not sell_pos:
+        return {}
+    buy_c = _ah_total_candidates(text, buy_pos[0])[:1] if buy_pos else []
+    sell_c = _ah_total_candidates(text, sell_pos[0])
+    if buy_c:
+        hits = [s for s in sell_c if abs(s - buy_c[0] - net) <= 0.01]
+        if not hits:
+            return {}
+        sell, buy = hits[0], buy_c[0]
+    else:
+        sell = sell_c[0]
+        buy = round(sell - net, 2)
+
+    vol = _ah_num(m_vs.group(1)) if m_vs else None
+    vol_b = _ah_num(m_vb.group(1)) if m_vb else None
+    return {
+        "售电侧": {"category": "discharge_energy", "volume_mwh": vol,
+                  "price_cny_kwh": round(sell / vol / 1000.0, 6) if vol else None,
+                  "amount_cny": sell, "notes": "放电结算: 交易中心售电侧合计"},
+        "购电侧": {"category": "charge_energy", "volume_mwh": vol_b,
+                  "price_cny_kwh": round(buy / vol_b / 1000.0, 6) if vol_b else None,
+                  "amount_cny": -buy,  # printed positive cost → stored negative
+                  "notes": "充电结算: 交易中心购电侧合计"},
+    }

@@ -108,7 +108,7 @@ class TestAhDischarge202609Layout:
 
 
 class TestAhSdtc:
-    """安徽电力交易中心(统推) 2026-02: 售电侧 from summary, 购电侧 from detail 合计."""
+    """安徽电力交易中心(统推) 2026-02: 售电侧/购电侧 from detail 合计 rows, volumes from summary."""
 
     @pytest.fixture(scope="class")
     def parsed(self):
@@ -122,8 +122,9 @@ class TestAhSdtc:
         sell = parsed["售电侧"]
         assert sell["category"] == "discharge_energy"
         assert sell["volume_mwh"] == pytest.approx(10027.820)
-        assert sell["amount_cny"] == pytest.approx(3601657.94)
-        assert sell["price_cny_kwh"] == pytest.approx(3601657.94 / 10027.820 / 1000, rel=1e-5)
+        # gross 售电侧 合计 — NOT the 3,601,657.94 headline (= net 售电侧 − 购电侧)
+        assert sell["amount_cny"] == pytest.approx(4978181.88)
+        assert sell["price_cny_kwh"] == pytest.approx(4978181.88 / 10027.820 / 1000, rel=1e-5)
 
     def test_buy_side(self, parsed):
         buy = parsed["购电侧"]
