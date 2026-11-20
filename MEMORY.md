@@ -697,3 +697,23 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Ingest 景肃 2026-08 discharge (account 6269925012402) and 2026-10 charge when the owner provides them.
 - Watch tonight's mnp96 7-day fill and lingfeng v14 runs.
 - Deploys need an explicit "yes" each time; the classifier blocks deploys/pushes on vague approvals.
+
+## Session Summary, 2026-11-20
+**Worked on:** Follow-up settlement fixes after the 2026-11-19 summary: 民勤 August, the scanned-甘肃 OCR route, 定远 RTE double-counting, and 民勤 中长期 duplicates.
+**Completed:**
+- 民勤 2026-08 discharge (owner-uploaded scanned 景肃 bill): vision had doubled 电能量电费 and booked 调频 as 线损. Replaced with 3 bill-verified lines = 907,110.96 (backup rm_settlement_items_mq1199_bak_20261119).
+- asset-risk v113: scanned 国网甘肃 bills go to OCR (PyMuPDF + RapidOCR, opencv-headless) + the deterministic 甘肃 parser, accepted only when lines tie to 结算金额/本期电费; otherwise vision fallback.
+- asset-risk v114: Realised P&L (single + portfolio) and waterfall 实际 apply 口径 A dedup per asset (prefer_canonical_by). 定远 RTE was 166–169% from 统推 statement + grid 上网 bill counted together; now 82–85%. No data changed.
+- asset-risk v115 (td:117): skip route for 甘肃 中长期月结算结算单. 5 duplicate 民勤 records (2026-01..05, ≈¥1.34M overstated) deleted (backup *_mqzcq_bak_20261120).
+- 民勤 2026-02 RTE 42.1% confirmed genuine (220 MWh discharge vs 523 MWh charge; 调频 = 93% of revenue).
+**In progress:**
+- 民勤 2026-10 下网 charge bill not yet issued; October net and YTD RTE stay inflated until it is uploaded.
+- 零碳46 wind 复盘 decks and the half-year BESS decks are still not ingested.
+**Decisions made:**
+- 定远 口径: when both exist, the grid 上网/下网 bill wins over the 交易中心 统推 合计 (same rule as the Settlement tab). March statement vs grid discharge amounts differ (¥1.88M vs ¥3.25M for the same MWh) — owner may want to decide which document is authoritative.
+- 甘肃 中长期月结算结算单 is reference-only (never stored).
+**Next session:**
+- Work in ~/bess-platform-local.
+- asset-risk task memory is still 1 GB with the OCR stack; raise it if large scans OOM.
+- The company-name guard (reject bills from another 户名) remains unapproved — ask before building.
+- Ingest 民勤 2026-10 charge when provided.
