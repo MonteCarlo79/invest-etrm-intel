@@ -55,7 +55,11 @@ def read_bill(path: str, filename: str) -> BillText:
 
     with pdfplumber.open(path) as pdf:
         p0 = pdf.pages[0]
-        is_scanned = len(p0.chars) == 0 and len(p0.images) > 0
+        # CamScanner stamps "扫描全能王 创建" as real text on otherwise image-only
+        # pages (定远 2024-01 下网 bill) — that alone is not a text layer
+        is_scanned = len(p0.images) > 0 and (
+            len(p0.chars) == 0
+            or not re.sub(r"\s|扫描全能王|创建", "", p0.extract_text() or ""))
         if is_scanned:
             return BillText(filename, path, True, "", "")
         pages = [pg.filter(_not_watermark).extract_text() or "" for pg in pdf.pages]
@@ -135,6 +139,27 @@ def _gansu_ocr(kind: str):
         except Exception:  # noqa: BLE001
             return []
         return parse(t) if t and is_bill(t) else []
+
+    return (lambda bill: bool(items(bill))), items
+
+
+def _ah_grid_ocr():
+    """(detect, parse) for scanned/photographed 国网安徽 下网 电费明细账 / 电费计算明细.
+
+    Detect succeeds only when every 电费年月 block reconciles with its printed
+    电费合计 (parser_scan_charge identity), so an OCR misread falls through to the
+    vision+verify route (定远 2024 PNG/JPG bills, 2025-09 分次结算 scan)."""
+    from services.settlement_ingest import parser_ah_grid_ocr as pa
+
+    def items(bill):
+        if not bill.is_scanned:
+            return []
+        from libs.asset_risk.settlement.ocr import ocr_text
+        try:
+            t = ocr_text(bill.path)
+        except Exception:  # noqa: BLE001
+            return []
+        return pa.parse_ah_grid_charge_text(t) if t and pa.is_ah_grid_charge(t) else []
 
     return (lambda bill: bool(items(bill))), items
 
@@ -319,6 +344,13 @@ _CHARGE_ROUTES: tuple[Route, ...] = (
         needs_text_layer=False,
     ),
     Route(
+        label="Scanned 国网安徽 下网电费明细 — OCR + deterministic parser (tied to 电费合计).",
+        kind="charge",
+        detect=_ah_grid_ocr()[0],
+        parse=_ah_grid_ocr()[1],
+        needs_text_layer=False,
+    ),
+    Route(
         label="Scanned 电费计算明细 — vision extraction verified against printed totals.",
         kind="charge",
         detect=lambda bill: bill.is_scanned,
@@ -389,6 +421,7 @@ ROUTE_LABELS: tuple[str, ...] = (
     "Scanned 国网甘肃 bill — OCR + deterministic 甘肃 parser (tied to 结算金额).",
     "Detected scanned PDF — using AI Vision to extract data...",
     "Scanned 国网甘肃 charge bill — OCR + deterministic 甘肃 parser (tied to 本期电费).",
+    "Scanned 国网安徽 下网电费明细 — OCR + deterministic parser (tied to 电费合计).",
     "Scanned 电费计算明细 — vision extraction verified against printed totals.",
     "国网江苏电费核查联 detected — parsed deterministically (no vision).",
     "蒙西下网电费核查票 detected — parsed deterministically (no vision).",

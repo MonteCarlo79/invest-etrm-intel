@@ -39,7 +39,7 @@ def render_settlement(engine):
 
     overwrite = st.checkbox("Overwrite existing data for same book+month", value=True)
 
-    uploaded = st.file_uploader("Upload settlement file(s)", type=["xlsx", "xls", "csv", "pdf"],
+    uploaded = st.file_uploader("Upload settlement file(s)", type=["xlsx", "xls", "csv", "pdf", "png", "jpg", "jpeg"],
                                 accept_multiple_files=True, key=f"upload_{book_id}")
 
     if uploaded and st.button("Process File(s)"):
@@ -189,7 +189,9 @@ def _process_one_upload(f, book_id, month_mode, manual_month, overwrite, engine)
         return
 
     file_type = f.name.split(".")[-1].lower()
-    if file_type == "pdf":
+    from libs.asset_risk.settlement.ocr import IMAGE_EXTS
+    if file_type == "pdf" or file_type in IMAGE_EXTS:
+        # photographed bills (PNG/JPG) run the PDF ladder as a one-page scanned PDF
         _process_pdf(f, book_id, settlement_month, engine, fhash, overwrite=overwrite)
     else:
         _process_excel(f, book_id, settlement_month, engine, fhash, overwrite=overwrite)
@@ -210,6 +212,12 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
     from libs.asset_risk.settlement.router import ROUTES, read_bill, route
 
     pdf_bytes = uploaded.read()
+    ext = uploaded.name.rsplit(".", 1)[-1].lower()
+    stored_type = "pdf"
+    if ext != "pdf":
+        from libs.asset_risk.settlement.ocr import image_to_pdf
+        pdf_bytes = image_to_pdf(pdf_bytes, ext)
+        stored_type = "image"
 
     kind = classify_pdf(uploaded.name)
     if kind == "skip":
@@ -335,7 +343,7 @@ def _process_pdf(uploaded, book_id: int, settlement_month, engine, file_hash: st
             if n_sup:
                 st.info(f"Superseded {n_sup} voucher settlement(s) for {settlement_month} "
                         "— the 结算单 now carries the discharge data.")
-        insert_settlement(conn, book_id, settlement_month, uploaded.name, "pdf", file_hash, items)
+        insert_settlement(conn, book_id, settlement_month, uploaded.name, stored_type, file_hash, items)
 
     st.success(f"Processed {len(items)} settlement items from PDF.")
 

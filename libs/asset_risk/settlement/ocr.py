@@ -58,3 +58,19 @@ def _lines(result) -> str:
 def ocr_text(path: str, dpi: int = 200) -> str:
     st = os.stat(path)
     return _ocr_cached(path, st.st_mtime_ns, st.st_size, dpi)
+
+
+IMAGE_EXTS = frozenset({"png", "jpg", "jpeg"})
+
+
+def image_to_pdf(data: bytes, ext: str) -> bytes:
+    """Wrap a photographed/screenshotted bill (PNG/JPG) as a one-page PDF.
+
+    No text layer, so read_bill() classifies it as scanned and the existing ladder
+    (OCR deterministic routes → vision) handles it like any scanned PDF."""
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
+    img = fitz.open(stream=data, filetype=ext.lower().lstrip("."))
+    return img.convert_to_pdf()

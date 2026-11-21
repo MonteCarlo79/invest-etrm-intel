@@ -51,7 +51,7 @@ do not estimate, carry over, or merge values from elsewhere."""
 # rows summed by the printed identity, in order
 _IDENTITY_ROWS = ("market_energy_cny", "transmission_cny", "peak_surcharge_cny",
                   "line_loss_cny", "system_operation_cny", "govt_fund_cny",
-                  "power_factor_adj_cny")
+                  "power_factor_adj_cny", "other_fees_cny")
 
 _ITEM_MAP = [
     ("market_energy_cny", "charge_energy", "市场化交易电费"),
@@ -61,6 +61,8 @@ _ITEM_MAP = [
     ("system_operation_cny", "coal_capacity_charge", "系统运行费用"),
     ("govt_fund_cny", "govt_surcharges", "政府性基金及附加"),
     ("power_factor_adj_cny", "basic_fee", "力调电费"),
+    # 2024-era sheets add 现货市场平衡/其他费用及运营费用 (合计 row); vision never fills it
+    ("other_fees_cny", "market_redistribution", "其他费用及运营费用"),
 ]
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import tempfile
 from pathlib import Path
 
 from shared.agents.db import get_conn
@@ -41,6 +42,14 @@ def split_insertable(items: list[dict]) -> tuple[list[dict], list[dict]]:
     for it in items:
         (dropped if it.get("amount_cny") is None else valid).append(it)
     return valid, dropped
+
+
+def iter_bill_files(root_path: Path):
+    """PDFs plus photographed bills (PNG/JPG — 定远 2024 下网 bills), sorted; skips ~lock files."""
+    from libs.asset_risk.settlement.ocr import IMAGE_EXTS
+    exts = {"pdf"} | IMAGE_EXTS
+    return sorted(p for p in Path(root_path).rglob("*")
+                  if p.is_file() and p.suffix.lower().lstrip(".") in exts and not p.name.startswith("~"))
 
 
 def is_already_ingested(file_hash: str) -> bool:
@@ -233,10 +242,7 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
     root_folder_name = root_path.name
     root_is_asset_folder = resolve_folder_to_asset(root_folder_name) is not None
 
-    for pdf_path in sorted(root_path.rglob("*.pdf")):
-        if pdf_path.name.startswith("~"):
-            continue
-
+    for pdf_path in iter_bill_files(root_path):
         rel_path = str(pdf_path.relative_to(root_path))
         # Resolve asset from folder
         if root_is_asset_folder:
@@ -275,12 +281,21 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
             continue
 
         # Ingest
+        is_image = pdf_path.suffix.lower() != ".pdf"
+        tmp_pdf = None
         try:
             if pdf_type in ("charge", "discharge"):
                 # Parser choice = the router shared with the upload tab (one ladder:
                 # deterministic provincial layouts first — vision produced 1000x unit
                 # errors / double counts on 广西, 滨州, 民勤 bills)
-                bill = read_bill(str(pdf_path), pdf_path.name)
+                bill_path = str(pdf_path)
+                if is_image:   # photographed bill → one-page scanned PDF for the ladder
+                    from libs.asset_risk.settlement.ocr import image_to_pdf
+                    tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+                    tmp_pdf.write(image_to_pdf(pdf_path.read_bytes(), pdf_path.suffix))
+                    tmp_pdf.close()
+                    bill_path = tmp_pdf.name
+                bill = read_bill(bill_path, pdf_path.name)
                 r = route(bill, pdf_type, "scanner")
                 if r is None:
                     items = []
@@ -332,7 +347,8 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
                 continue
 
             # Write to DB
-            _write_settlement(asset_name, month_str, pdf_path.name, pdf_type, fhash, items)
+            _write_settlement(asset_name, month_str, pdf_path.name, pdf_type, fhash, items,
+                              stored_type="image" if is_image else "pdf")
             result = {"path": rel_path, "asset": asset_name, "month": month_str, "type": pdf_type,
                       "status": "ingested", "items": len(items)}
             if dropped:
@@ -342,6 +358,9 @@ def scan_and_ingest(root: str | None = None, dry_run: bool = False) -> list[dict
 
         except Exception as e:
             results.append({"path": rel_path, "asset": asset_name, "status": "error", "error": str(e)})
+        finally:
+            if tmp_pdf is not None:
+                os.unlink(tmp_pdf.name)
 
     return results
 
@@ -362,7 +381,8 @@ def _has_discharge_items(asset_name: str, month: str) -> bool:
             return cur.fetchone() is not None
 
 
-def _write_settlement(asset_name: str, month: str, filename: str, file_type: str, file_hash: str, items: list[dict]):
+def _write_settlement(asset_name: str, month: str, filename: str, file_type: str, file_hash: str, items: list[dict],
+                      stored_type: str = "pdf"):
     """Write settlement record + items to database."""
     import json
 
@@ -386,7 +406,7 @@ def _write_settlement(asset_name: str, month: str, filename: str, file_type: str
                     (book_id, settlement_month, file_name, file_type, status, raw_data)
                 VALUES (%s, %s, %s, %s, 'processed', %s)
                 RETURNING id
-            """, (book_id, month, filename, 'pdf', json.dumps({"file_hash": file_hash, "pdf_type": file_type})))
+            """, (book_id, month, filename, stored_type, json.dumps({"file_hash": file_hash, "pdf_type": file_type})))
             settlement_id = cur.fetchone()[0]
 
             # Insert items
