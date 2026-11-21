@@ -553,8 +553,9 @@ resource "aws_ecs_task_definition" "asset_risk" {
   family                   = "${var.name}-asset-risk"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "512"
-  memory                   = "1024"
+  # 1 vCPU / 4 GB since 2026-11-21 (td:120): RapidOCR on multi-page scans OOM'd 1 GB
+  cpu                      = "1024"
+  memory                   = "4096"
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task_role.arn
 
