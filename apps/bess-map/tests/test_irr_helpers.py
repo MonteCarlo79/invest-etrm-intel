@@ -224,6 +224,16 @@ def test_irr_defaults_fr_conversion():
     # expected: 10 × 0.30 × 8760 / 4 / 365 ≈ 18.0
     assert d["fr_day"] == pytest.approx(10.0 * 0.30 * 8760 / 4 / 365, rel=1e-4)
 
+def test_irr_defaults_fr_magnitude_is_per_mw_not_per_kw():
+    # DB check 2026-11-21: stored prices are 3.56–15 (per-MW scale). At 10, 30% util, 4h the
+    # annual FR income must be ~26 ¥/kW·yr (6,570 ¥/MWh_cap/yr), not 26,000 ¥/kW·yr.
+    fr = _make_fr_df("甘肃", 10.0)
+    d = _irr_defaults_for_province("甘肃", 4.0, pd.DataFrame(), pd.DataFrame(), fr,
+                                    fr_util_pct=0.30)
+    yuan_per_kw_yr = d["fr_day"] * 365 * 4.0 / 1000.0
+    assert 20 < yuan_per_kw_yr < 30
+
+
 def test_irr_defaults_missing_province_returns_zeros():
     d = _irr_defaults_for_province(
         "不存在省", 4.0, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()

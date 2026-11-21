@@ -204,7 +204,10 @@ def _irr_defaults_for_province(
         if not prov_fr.empty:
             row = prov_fr.iloc[0]
             fr_val = float(row["fr_price_yuan_kw_h"])
-            # ¥/kW·h × util_pct × 8760 h/yr / duration_h / 365 = ¥/MWh installed/day
+            # UNIT: despite the column name, province_fr_market.fr_price_yuan_kw_h holds
+            # per-MW prices (stored values 3.56 / 10 / 15 — 元/MW-scale; 10 ¥/kW·h would be
+            # 10,000 ¥/MWh). Per MW: price × util × 8760 h/yr = ¥/MW/yr; ÷ duration_h =
+            # ¥/MWh installed/yr; ÷ 365 = per day. So NO ×1000 here (unlike cap_comp ¥/kW).
             result["fr_day"] = fr_val * fr_util_pct * 8760.0 / duration_h / 365.0
             result["fr_src"] = (
                 f"最新 {str(row['effective_date'])[:7]} × {fr_util_pct*100:.0f}%"
