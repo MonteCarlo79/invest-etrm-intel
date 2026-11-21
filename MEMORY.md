@@ -717,3 +717,20 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - asset-risk task memory is still 1 GB with the OCR stack; raise it if large scans OOM.
 - The company-name guard (reject bills from another 户名) remains unapproved — ask before building.
 - Ingest 民勤 2026-10 charge when provided.
+
+## Session Summary, 2026-11-21
+**Worked on:** 定远 (book 17) settlement gaps → image-bill OCR ingest → asset-risk resize.
+**Completed:**
+- 定远 DATA: stale vision dup 745 (2025-09 statement mis-read as grid 实时 charge, RTE 183%) deleted; charge volumes set on 773/784/786 (2024-01/11/12); 2024-02/03/05 下网 bills (PNG/JPG, never ingested) added incl. 力调 + all fee lines, later re-ingested via the new parser as 1215-1217; 2025-09 下网 分次结算 scan ingested as 1218 (5,467.696 MWh, ¥826,132.27). Backups *_dygap_bak_20261121, *_dyreing_bak_20261121. RTE all gap months 74.8–84.8%.
+- rm_settlements.file_type CHECK widened to allow 'image' (2a9c068e; DDL file updated).
+- Image bills route through OCR (f7023f6d): PNG/JPG → one-page scanned PDF in scanner + upload tab; parser_ah_grid_ocr (国网安徽 电费明细账/电费计算明细, 分次结算 aware, cent-level tie else falls to vision); CamScanner "扫描全能王 创建" text alone = scanned; parser_scan_charge gains other_fees_cny.
+- asset-risk v117 deployed (td:119), then resized to 1 vCPU / 4 GB (td:120; terraform services-new.tf updated, no apply needed).
+**In progress:** none.
+**Decisions made:**
+- Image bills stored as file_type 'image' (user-approved schema change).
+- 力调 recorded as charge-side lines (basic_fee via parser mapping); 2024-03 力调 is a credit (+12,700.21).
+- 2025-09: grid 下网 bill is the charge source; statement 购电侧 dropped by 口径 A dedup.
+**Next session:**
+- Work in ~/bess-platform-local. RDS jobs: /tmp/mm_deploy/runtask.sh (recreate if /tmp cleaned); OCR-heavy jobs need runtask_big (cpu 2048 / mem 8192 override).
+- rm_retail.sql has the same pdf/excel/csv-only file_type CHECK (retail table) — untouched.
+- Company-name guard still unapproved — ask before building. Ingest 民勤 2026-10 charge when provided.
