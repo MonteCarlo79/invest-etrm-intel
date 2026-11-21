@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS marketdata.rm_settlements (
     book_id          INTEGER NOT NULL REFERENCES marketdata.rm_books(id),
     settlement_month DATE NOT NULL,
     file_name        TEXT NOT NULL,
-    file_type        TEXT NOT NULL CHECK (file_type IN ('excel','csv','pdf')),
+    file_type        TEXT NOT NULL CHECK (file_type IN ('excel','csv','pdf','image')),
     upload_date      TIMESTAMPTZ DEFAULT NOW(),
     status           TEXT DEFAULT 'pending' CHECK (status IN ('pending','processed','flagged')),
     total_amount_cny NUMERIC(16,2),
