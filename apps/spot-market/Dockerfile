@@ -2,8 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# starlette pinned: streamlit 1.58's gzip middleware 500s on /media (st.pyplot/st.image
+# charts) with starlette 1.4.0 and >=1.8 — verified 2026-11-21 (live image had 1.10.0).
 RUN pip install --no-cache-dir \
     "streamlit==1.58.0" \
+    "starlette==1.3.1" \
     "plotly==6.0.1" \
     "streamlit-echarts==0.7.0" \
     pandas \
