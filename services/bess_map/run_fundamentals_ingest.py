@@ -114,6 +114,15 @@ def _clean_province_from_stem(stem: str) -> str:
     return s
 
 
+def _resolve_known_province(cleaned_stem: str):
+    """Known province for a cleaned stem, or None. Shares run_all_provinces' list."""
+    try:
+        from services.bess_map.run_all_provinces import _resolve_province
+    except ImportError:          # executed as a script: sibling module on sys.path
+        from run_all_provinces import _resolve_province
+    return _resolve_province(cleaned_stem) if cleaned_stem else None
+
+
 # ---------------------------------------------------------------------------
 # Time parsing: HHMM integer → (hour, minute)
 # ---------------------------------------------------------------------------
@@ -363,9 +372,11 @@ def main() -> None:
 
     ok, failed = 0, 0
     for xlsx in xlsx_files:
-        province = _clean_province_from_stem(xlsx.stem)
+        province = _resolve_known_province(_clean_province_from_stem(xlsx.stem))
         if not province:
-            print(f"[SKIP] Could not extract province from filename: {xlsx.name}")
+            # Folder-scan guard (same rule as run_all_provinces): an un-renamed
+            # collector download (运行数据披露-江苏_….xlsx) must never become a province.
+            print(f"[GUARD] skipped non-province file: {xlsx.name}")
             continue
 
         print(f"[FILE] {xlsx.name}  →  province={province}")

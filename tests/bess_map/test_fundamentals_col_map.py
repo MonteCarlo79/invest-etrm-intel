@@ -64,3 +64,12 @@ def test_bracketed_renewable_total_headers_detected(tmp_path):
     assert cm["solar_mw"] == "新能源（光伏）-实时"
     assert cm["bidding_space_d1_mw"] == "竞价空间（MW）-电网D-1预测"
     assert not any("价格" in v for v in cm.values())
+
+
+def test_folder_scan_guard_rejects_section_name_files():
+    # 2026-11-22: an un-renamed 江苏 chunk was ingested as province 运行数据披露江苏
+    assert m._resolve_known_province(m._clean_province_from_stem("运行数据披露-江苏_2025-11-27_2025-12-27")) is None
+    assert m._resolve_known_province(m._clean_province_from_stem("运行数据披露-_2025-10-01")) is None
+    assert m._resolve_known_province(m._clean_province_from_stem("江苏")) == "江苏"
+    assert m._resolve_known_province(m._clean_province_from_stem("河北南网")) == "河北南网"
+    assert m._resolve_known_province("") is None
