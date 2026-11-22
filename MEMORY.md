@@ -802,3 +802,22 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Open: 江苏 lacks D-1 renewable for ~720 hours (source gap, not located); collector occasionally exports the wrong date range (one zero-row download); 联络线 tie-line columns not mapped to net_export (sign unknown); 蒙东 "Invalid Date" row in price ingest; drop the backup table when no longer needed; PGURL-only loaders, annual_theo model mix, 冀北/河北南网 shared polygon from the 11-21 assessment.
 
 **Addendum 2026-11-22 14:30 UTC:** the `ols_fundamentals_v1` capture re-run finished — exit 0, both durations, no errors in the log (task eb89189b…). 蒙东 has only 19 theoretical days for this model (short price history after the filler purge).
+
+## Session Summary, 2026-11-23
+**Worked on:** GB Market app repair. Three nightly ingests had been silently producing nothing or junk; fixed, deployed as v108, junk Timera KB rows cleaned.
+**Completed:**
+- Root-caused from prod scheduler logs: (1) Modo AI distillation 0 docs/night: `POST ask-modo/api/v1/chats/completion` now returns 405, while the job still logged "executed successfully"; (2) fuel mix 0 rows/night: NESO Historic Generation Mix publishes ~18 days in arrears but the job asked only for yesterday; (3) Timera scraper ingesting site-nav pages because the blog page lost its `<article>` tags.
+- Fixes with 13 new regression tests (19 pass, incl. REMIT): `_api_ask` → v2 two-step (POST `v2/chats/completion` → 202 {chat_id, run_id}; GET `v2/chats/<chat>/runs/<run>/stream` SSE) (1991736a); Timera keeps only `/blog/<slug>/` permalinks (287e22a6); `ingest_fuel_mix_catchup` from last stored day → NESO latest, plus naive-UTC timestamp parse (on a non-UTC host it dropped 16 of 48 SPs) (6849d4f5).
+- Deployed `bess-gb-market:v108` / td:31 (CodeBuild delta FROM v107 with a sha256 baseline gate on the 4 replaced files + starlette==1.3.1 pin; jq-swap from live td:30, 19 env vars identical). LATEST-IMAGES + CLAUDE.md updated (34066478, f3dfe16a).
+- Modo v2 verified live by run-task probe on td:31: 519-char real answer, 1 credit, no KB write.
+- KB cleanup (user-approved): 13 junk Timera nav-page docs deleted (ids 142–154, all inserted 2026-05-13) + 19 active insights from them deactivated. Backups: `intl_market.gb_knowledge_docs_bak_20261123_timera`, `intl_market.gb_expert_insights_bak_20261123_timera` (28 rows). The KB had ZERO real Timera blog articles before this; only 13 publication PDFs remain.
+**In progress:**
+- First production runs of the fixes on v108: fuel mix 03:00 SGT, Timera 03:30 SGT, Modo AI 20:00 SGT. Not yet observed.
+**Decisions made:**
+- Modo route discovery: when the API breaks, read Modo's public JS bundle (`modoenergy.com/sign-in` → `_next/static/chunks`, grep `ask-modo/api` / `startRunV2`). It carries the full route table; unauthenticated curl tells 405/404 vs 401 apart.
+- Fuel mix catch-up re-pulls the last stored day (it may have been partial) rather than starting the day after.
+- Junk KB docs hard-deleted (the table has no `active` column) after a backup; insights soft-deleted.
+**Next session:**
+- FIRST: check the v108 scheduler log (stream `gb-market/gb-market/fdef3fb629ae4953ae0212a907df21c1`): `Fuel mix catch-up: … → <NESO latest>` with rows > 0; Timera fetching only `/blog/…` articles (expect ~9 new docs, then KB digest insights at 03:45); `Modo AI distillation: N new docs` with N > 0 at 20:00 SGT.
+- Open, not touched: GB daily report disabled via `intl_market.platform_settings` `daily_report_enabled` (ask the user before re-enabling); `entso_e.py` NESO generation-mix KB narrative uses a 14-day lookback against the ~18-day lag, so it yields nothing; NESO publications scrape returns nothing (static fallback); zero-doc Modo runs should raise an alert (Hermes patrol) instead of logging success; dead code: 14:00 `_modo_keepalive_job` and Playwright admin buttons in app.py.
+- Drop the two `_bak_20261123_timera` tables once the cleanup is confirmed fine.
