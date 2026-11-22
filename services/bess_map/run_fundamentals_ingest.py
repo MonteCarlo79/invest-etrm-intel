@@ -73,6 +73,10 @@ _ALL_DB_COLS = [
 ]
 
 
+def _strip_brackets(header: str) -> str:
+    return re.sub(r"[（）()]", "", header)
+
+
 def _detect_fundamentals_cols(xlsx_path: Path) -> dict[str, str]:
     """
     Return {db_col_name: excel_col_name} for found fundamentals columns.
@@ -90,7 +94,9 @@ def _detect_fundamentals_cols(xlsx_path: Path) -> dict[str, str]:
             # Skip price columns
             if "价格" in c or "出清价" in c or ("价" in c and "出力" not in c and "负荷" not in c and "空间" not in c):
                 continue
-            if group_kw in c and sfx_key in c and c not in used_excel_cols:
+            # 2026-09 LingFeng layout brackets the qualifier: 新能源（总出力）-电网D-1预测.
+            # Match on the header with brackets stripped so 新能源总出力 still hits.
+            if group_kw in _strip_brackets(c) and sfx_key in c and c not in used_excel_cols:
                 mapping[db_col] = c
                 used_excel_cols.add(c)
                 break  # take first match per (group, suffix)
