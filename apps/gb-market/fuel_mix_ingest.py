@@ -87,6 +87,10 @@ def _datetime_to_settlement_period(dt_str: str) -> tuple[date, int] | None:
     """
     try:
         dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            # NESO timestamps are naive UTC; astimezone() on a naive datetime
+            # would read them as host-local time and shift periods off the day.
+            dt = dt.replace(tzinfo=timezone.utc)
         dt_utc = dt.astimezone(timezone.utc)
         # GB settlement is in UTC (not local time)
         settlement_date = dt_utc.date()
@@ -238,3 +242,43 @@ def ingest_fuel_mix_range(start_date: date, end_date: date, conn) -> int:
         if d <= end_date:
             time.sleep(_REQUEST_DELAY)
     return total
+
+
+def _neso_latest_date() -> date | None:
+    """Latest date published in the NESO generation-mix dataset (None on failure)."""
+    try:
+        resp = requests.get(
+            f"{NESO_CKAN_BASE}/datastore_search_sql",
+            params={"sql": f'SELECT MAX("DATETIME") AS latest FROM "{NESO_GEN_RESOURCE}"'},
+            headers={"User-Agent": "BESS-Platform/1.0", "Accept": "application/json"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        latest = resp.json()["result"]["records"][0]["latest"]
+        return datetime.fromisoformat(latest).date()
+    except Exception as exc:
+        logger.warning("NESO latest-date lookup failed: %s", exc)
+        return None
+
+
+def ingest_fuel_mix_catchup(conn, default_lookback_days: int = 30) -> int:
+    """Ingest everything NESO has published since the last stored day.
+
+    The dataset publishes weeks in arrears, so asking for "yesterday" always
+    returns nothing.  This pulls from the last stored settlement_date (re-pulled
+    — it may have been partial) through NESO's latest published date.
+    Returns total rows upserted.
+    """
+    _ensure_table(conn)
+    cur = conn.cursor()
+    cur.execute("SELECT MAX(settlement_date) FROM intl_market.gb_fuel_mix")
+    last_stored = cur.fetchone()[0]
+
+    latest = _neso_latest_date()
+    if latest is None:
+        return 0
+    start = last_stored or (latest - timedelta(days=default_lookback_days))
+    if start > latest:
+        return 0
+    logger.info("Fuel mix catch-up: %s → %s (NESO latest)", start, latest)
+    return ingest_fuel_mix_range(start, latest, conn)

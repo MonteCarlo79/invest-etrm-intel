@@ -106,9 +106,11 @@ def _daily_market_job():
         _fm_mod  = importlib.util.module_from_spec(_fm_spec)
         _fm_spec.loader.exec_module(_fm_mod)
         conn = _new_conn()
-        n = _fm_mod.ingest_fuel_mix(yesterday, conn)
+        # NESO publishes weeks in arrears — catch up from the last stored day
+        # instead of asking for yesterday (which is never available yet).
+        n = _fm_mod.ingest_fuel_mix_catchup(conn)
         conn.close()
-        logger.info("Fuel mix ingest: %d rows for %s", n, yesterday)
+        logger.info("Fuel mix ingest: %d rows", n)
     except Exception as exc:
         logger.warning("Fuel mix ingest failed: %s", exc)
 
