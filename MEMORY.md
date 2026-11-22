@@ -751,3 +751,15 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - bess-map `app.py:2474` base64-PNG workaround blames "ALB+Cognito proxying" — wrong, it was this starlette mismatch; can return to st.pyplot after bess-map's next build (optional).
 - Any Dockerfile that pins streamlit must pin starlette too (unpinned streamlit resolves a matching pair).
 - Still open: the spot-market review items in the 2026-11-10 summary (unit helper, Strategist path allowlist, get_interprov_flow silent 5000-row cap, agent tool gaps).
+
+## Session Summary addendum, 2026-11-22 (OneDrive sync + CLAUDE.md table)
+**Worked on:** unblocking `git pull` in the OneDrive tree and refreshing CLAUDE.md's service table.
+**Completed:**
+- OneDrive pull was blocked by 4 modified + 5 untracked files — all byte-identical to origin (MEMORY.md an older subset): edit copies left behind by the copy-to-local-clone commit flow. Backed up to ~/bess-platform-pull-backup-20261122, restored/removed, fast-forwarded 72679b1d → d3e08afb; nothing lost. The fetch's "forced update" only replaced the stale tracking ref to 3305fcc9 (the bad 11-13 commit, not in GitHub history).
+- CLAUDE.md service table now matches live ECS: spot-market v61/td:162 (7e229080); bess-map v86/td:125, market-maker v4/td:4, deal-structurer v32/td:36 (3ccea3b6).
+**In progress:** none.
+**Decisions made:**
+- Edit only in ~/bess-platform-local; sync the OneDrive tree by fast-forward: `git fetch ssh://git@ssh.github.com:443/MonteCarlo79/invest-etrm-intel.git main:refs/remotes/origin/main && git merge --ff-only origin/main` (github.com:22 times out from Claude's shell).
+**Next session:**
+- ~/bess-platform-pull-backup-20261122 holds only content already on GitHub — delete when convenient.
+- If a OneDrive pull is blocked again: `cmp` each listed file against ~/bess-platform-local first; identical/older subset → back up, `git checkout --` / remove, then `git merge --ff-only origin/main`.
