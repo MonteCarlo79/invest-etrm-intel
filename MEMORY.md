@@ -800,3 +800,5 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - FIRST: confirm the capture re-run exited 0 (ecs-lingfeng-ingest log stream ecs/lingfeng-ingest/eb89189b…) and that the 11-22 20:00 UTC nightly logged in 29/29 on the NAT route with renewable columns in the upsert counts.
 - Quant app v87 full rebuild still pending: image lacks the constant-run price guard in services/bess_map/db.py, carries v84-era nodal-PF files and a baked `services/bess_map/.env` (.dockerignore needs `**/.env`).
 - Open: 江苏 lacks D-1 renewable for ~720 hours (source gap, not located); collector occasionally exports the wrong date range (one zero-row download); 联络线 tie-line columns not mapped to net_export (sign unknown); 蒙东 "Invalid Date" row in price ingest; drop the backup table when no longer needed; PGURL-only loaders, annual_theo model mix, 冀北/河北南网 shared polygon from the 11-21 assessment.
+
+**Addendum 2026-11-22 14:30 UTC:** the `ols_fundamentals_v1` capture re-run finished — exit 0, both durations, no errors in the log (task eb89189b…). 蒙东 has only 19 theoretical days for this model (short price history after the filler purge).
