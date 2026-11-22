@@ -145,11 +145,11 @@ The `agent_memory` system is a bridging element that partially anticipates Stage
 | Service | Agent | ECR repo | ALB path | Local port | Current image |
 |---------|-------|----------|----------|------------|---------------|
 | Spot Market (Pillar 1) | Strategist | `bess-spot-markets` | `/spot-markets/*` | 8505 | v61 (td:162) |
-| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v76 (td:114) |
+| Quant Analyst (Pillar 2) | Quant | `bess-map` | `/bess-map/*` | 8503 | v86 (td:125) |
 | Mengxi Dashboard (Pillar 3) | Trader | `bess-mengxi-dashboard` | `/mengxi-dashboard/*` | 8511 | v59 (td:74) |
 | Portal | 5 Quick Ask personas | `bess-platform-portal` | `/portal/*` | 8500 | v14 (td:71) |
-| Market Maker (central risk book) | Risk Agent | `bess-market-maker` | `/market-maker/*` | 8530 | v3 (td:3). Positions/exposure/MtM/VaR/Greeks across asset + retail books. Terraform `infra/terraform/market_maker.tf` (td `ignore_changes=[container_definitions]` → image deploys jq-swap from current tdArn). Daily data: `python services/market_maker/refresh.py --apply` (manual/run-task in v1; no schedule yet). Local: `streamlit run apps/market_maker/app.py --server.port 8530` |
-| Deal Structurer (Pillar 5) | Deal Structurer | `bess-platform-deal-structurer` | `/deal-structurer/*` | 8522 | v20 (td:24). Image deploys bypass terraform (td has `ignore_changes=[container_definitions]`): jq-swap image → register-task-definition → update-service |
+| Market Maker (central risk book) | Risk Agent | `bess-market-maker` | `/market-maker/*` | 8530 | v4 (td:4). Positions/exposure/MtM/VaR/Greeks across asset + retail books. Terraform `infra/terraform/market_maker.tf` (td `ignore_changes=[container_definitions]` → image deploys jq-swap from current tdArn). Daily data: `python services/market_maker/refresh.py --apply` (manual/run-task in v1; no schedule yet). Local: `streamlit run apps/market_maker/app.py --server.port 8530` |
+| Deal Structurer (Pillar 5) | Deal Structurer | `bess-platform-deal-structurer` | `/deal-structurer/*` | 8522 | v32 (td:36). Image deploys bypass terraform (td has `ignore_changes=[container_definitions]`): jq-swap image → register-task-definition → update-service |
 | GB Market | Strategist + Quant | `bess-gb-market` | `/gb-market/*` | 8508 | v107 (td:30). Task-def family is `bess-gb-market` — `bess-platform-gb-market` is a DEAD family; never register against it. Live family not in terraform → deploys bypass terraform: jq-swap from the service's current tdArn |
 
 **Local run (GB Market):**
