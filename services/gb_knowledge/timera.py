@@ -19,6 +19,7 @@ import re
 import time
 from datetime import date, datetime
 from typing import Iterator
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -328,10 +329,12 @@ class TimeraConnector(BaseConnector):
         # Must belong to the same domain
         if href.startswith("http") and "timera-energy.com" not in href:
             return False
-        # Must not be the listing page itself
-        normalised = href.rstrip("/")
-        section_norm = section_url.rstrip("/")
-        if normalised == section_norm:
+        # Must be a permalink *under* the section (e.g. /blog/<slug>/) — the
+        # listing page carries site-nav links (our-team, careers, …) that are
+        # same-domain but not articles.
+        path = urlparse(self._absolute(href)).path.rstrip("/")
+        section_path = urlparse(section_url).path.rstrip("/")
+        if not path.startswith(section_path + "/"):
             return False
         # Exclude pagination links
         if re.search(r"/page/\d+", href):
