@@ -763,3 +763,40 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **Next session:**
 - ~/bess-platform-pull-backup-20261122 holds only content already on GitHub — delete when convenient.
 - If a OneDrive pull is blocked again: `cmp` each listed file against ~/bess-platform-local first; identical/older subset → back up, `git checkout --` / remove, then `git merge --ff-only origin/main`.
+
+## Session Summary, 2026-11-22 (startup BP / business design)
+**Worked on:** Planning Dipeng Chen's 2027 startup — a fund-backed, client-flow power-curve hedge fund (China) — from BP draft through business-logic design and a first Shandong two-sided netting backtest.
+**Completed:**
+- Design docs (all under OneDrive `bess-platform/business-proposal/`, **untracked, not committed**): `2026-11-21-startup-bp-design.md` (v1, superseded), `2026-11-22-business-design-v2.md` (approved; v2.1 = hedge fund with client flow), `2026-11-22-business-logic.md` (What/Why/How/Who gains + §3.5 backtest), `2026-11-22-competitor-research-and-interview-guide.md`, plans `2026-11-21-bp-drafting-plan.md` / `2026-11-22-bp-v2-plan.md`.
+- BP v2 external draft `bp-public-v2/` (11 chapters, deck outline, one-pager, sourced `facts.md` F-001..F-031, compliance scanner, ledger model `model/ledger_model.py` + 10 tests, `make_chapter9.py`). `bp-public/` is the OLD C-route draft, marked stale by STATUS.md.
+- `netting-backtest/` (netting.py + 7 tests, run_backtest.py, results.md): Shandong 2026-01..04 hourly netting ≈ 76% (aggregate upper bound), RE capture ≈ 0.80, load capture ≈ 1.10, shape gap ≈ 82 元/MWh.
+**In progress:**
+- BP v2 is NOT ready to send: placeholders remain (market size, domestic competitor table, co-founders B/C identity, lawyer/advisor, IP transfer wording); founder A still employed (leaves after 2027-04).
+- Backtest uses proxy data only (provincial aggregates; Excel exports from LingFeng — data licence unchecked). Needs single-plant + single-retailer curves, RT/DA prices, wind/solar split, summer.
+**Decisions made:**
+- Reversed C route (no risk-taking) → principal fund + management company; risk capital sized bottom-up (小≈0.8亿 / 中≈2.7亿 / 大≈6.3亿, assumptions); seed ¥1,500万 for ManCo kept separate from fund capital; first close ¥1亿, target ¥3亿 (assumptions).
+- Lease basis 165 元/kW·年 ×(4h/6h)=110 (user-specified, not a market lease price); client-side service fee 1 元/MWh kept (conflict disclosed); view/alpha strategy demoted to upside — base case Sharpe 0 → LP net return ≈ 6.3% (< 8% hurdle), 中 ManCo seed gap ≈ ¥1,775万 (> 1,500万).
+- Phase 1 validates only: internal netting ratio, customer give-up (~10 元/MWh), fundraising feasibility; value pitch = stable income. Legal/compliance deliberately deferred by user (licences = founders' job).
+- Internal Envision materials were read for brainstorming only; external BP must stay public-info-only.
+**Next session:** Get plant-level + retailer curves and RT prices for Shandong to firm up netting; lawyer opinion on founder-A employment/IP before any interviews or external sharing; start customer/LP interviews per guide; replace sharpe/spread assumptions with backtest/interview evidence; fill BP placeholders; verify 期货公司监督管理办法 (2026-09) original text and whether 165 元/kW·年 applies to 蒙西/山东. Commit only from ~/bess-platform-local (OneDrive tree is stale); business-proposal/ must be copied there before committing.
+
+## Session Summary, 2026-11-22 (Quant app follow-ups → LingFeng ingest repair)
+**Worked on:** The two priority repairs from the 2026-11-21 Quant app assessment (调频 default unit; renewable D-1 history), which turned into a LingFeng ingest fix, an ingest outage caused by my own restart, and a full fundamentals backfill.
+**Completed:**
+- 调频 IRR default confirmed correct: DB holds 3 priced rows (广西 3.56, 甘肃 10, 重庆 15) — per-MW scale; user ruled they are the 价格标准, not 里程 prices, so `fr × util × 8760 / D / 365` stands (comment + magnitude test, 49c9c860). Only the ¥/kW·h labels are wrong.
+- Renewable D-1 root causes (two): (1) lingfeng v12–v14 deltas never carried the fixed run_fundamentals_ingest.py; (2) the 2026-09+ export header is `新能源（总出力）-…` with full-width brackets, so keyword `新能源总出力` never matched (e001f5a3, bracket-stripped match, test with the real 山东 40-column header).
+- Incident: switching the service to td:17 on 11-21 restarted its task onto a public IP that cannot open TCP to lingfeng-saas → 11-21 20:00 UTC nightly failed 29/29 at login. Reachability is per-task-IP. Fixed by NAT-routing the service (private subnets subnet-08e93f99a9c0aa3a9 / subnet-0e8ae30466a9f72b5, assignPublicIp DISABLED, egress 47.130.245.102) — CLI change, terraform drift.
+- lingfeng-ingest deploys (all user-confirmed, CodeBuild delta builds): v15/td:17 → v16/td:18 (bracket fix + NAT) → **v17/td:19 LIVE** (fundamentals folder-scan guard e4c310dc).
+- Data runs (user-confirmed, NAT one-off tasks): recovery 11-19..21 full pipeline (29/29 logins); fundamentals-only backfill 2025-01-01→2026-11-18 (4h06m) — renewable_total_mw + renewable_d1_mw now ~16,560 rows for 27 markets (was 0 D-1 rows); D-2 for 16 provinces; 青海 realized only.
+- Cleanup: junk provinces 运行数据披露 (942) + 运行数据披露江苏 (720, duplicates) deleted from spot_fundamentals_hourly; backup `marketdata.spot_fundamentals_hourly_bak_20261122`.
+- All commits pushed (through b0afeec1 + this summary); LATEST-IMAGES and memory files updated.
+**In progress:**
+- `ols_fundamentals_v1` capture re-run (one-off task eb89189b7d444b1589f372b5bbf39147 on td:19, `--force --force-theoretical`, 27 provinces): 2h finished clean at ~14:20 UTC, 4h running, expected done ~14:50 UTC — before the 20:00 UTC nightly. First attempt died at import (one-off commands need `PYTHONPATH=/app`).
+**Decisions made:**
+- LingFeng service stays NAT-routed; never revert to public-IP subnets. One-off LingFeng tasks must use the same NAT network config.
+- Prod data runs and service changes each need their own explicit yes (the permission classifier blocks otherwise); read-only DB probes via bess-map td run-task are fine.
+- Quant app FR formula is final; relabel to per-MW unit only once the user confirms the unit string.
+**Next session:**
+- FIRST: confirm the capture re-run exited 0 (ecs-lingfeng-ingest log stream ecs/lingfeng-ingest/eb89189b…) and that the 11-22 20:00 UTC nightly logged in 29/29 on the NAT route with renewable columns in the upsert counts.
+- Quant app v87 full rebuild still pending: image lacks the constant-run price guard in services/bess_map/db.py, carries v84-era nodal-PF files and a baked `services/bess_map/.env` (.dockerignore needs `**/.env`).
+- Open: 江苏 lacks D-1 renewable for ~720 hours (source gap, not located); collector occasionally exports the wrong date range (one zero-row download); 联络线 tie-line columns not mapped to net_export (sign unknown); 蒙东 "Invalid Date" row in price ingest; drop the backup table when no longer needed; PGURL-only loaders, annual_theo model mix, 冀北/河北南网 shared polygon from the 11-21 assessment.
