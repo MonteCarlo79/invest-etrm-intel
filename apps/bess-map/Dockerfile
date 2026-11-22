@@ -3,6 +3,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "streamlit==1.58.0" \
+    "starlette==1.3.1" \
     "plotly==6.0.1" \
     pandas \
     "psycopg2-binary==2.9.10" \

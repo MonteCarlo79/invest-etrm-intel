@@ -7,6 +7,7 @@ ENV PIP_DEFAULT_TIMEOUT=120 \
 
 RUN pip install --no-cache-dir \
     "streamlit==1.58.0" \
+    "starlette==1.3.1" \
     "plotly==6.0.1" \
     pandas \
     numpy \
