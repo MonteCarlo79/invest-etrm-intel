@@ -106,6 +106,7 @@ _SETTLE_POLLS = 8            # poll count (×2 s each) with no change = done
 # ---------------------------------------------------------------------------
 _NEXTAUTH = "https://modoenergy.com/api/auth"
 _ASK_MODO = "https://admin.modo.energy/ask-modo/api/v1"
+_ASK_MODO_V2 = "https://admin.modo.energy/ask-modo/api/v2"
 _TOKEN_MAX_AGE = 480   # re-login when the token is this old (backend JWT lives 600 s)
 
 
@@ -135,29 +136,50 @@ def _api_access_token(http: requests.Session) -> str:
 
 
 def _api_ask(http: requests.Session, token: str, question: str) -> str | None:
-    """Ask one question via the ask-modo chat API; return the full answer text.
+    """Ask one question via the ask-modo v2 run API; return the full answer text.
 
-    SSE stream: `set_chat_id` / `tool_call` events are progress noise; the
-    answer arrives as `message_chunk` events whose `content` deltas concatenate.
+    Two steps (v1 `POST chats/completion` was retired — it now answers 405):
+      1. POST v2/chats/completion            → {chat_id, run_id}
+      2. GET  v2/chats/<chat>/runs/<run>/stream  (SSE)
+    In the stream, `set_chat_id` / `tool_call` / `thinking_message` frames are
+    progress noise; the answer arrives as `message_chunk` frames whose
+    `content` deltas concatenate.  An `error` frame raises.
     Raises _QuotaExceeded on HTTP 402 (credit quota exhausted).
     """
-    resp = http.post(
-        f"{_ASK_MODO}/chats/completion",
-        json={"message": question},
-        headers={"Authorization": f"Bearer {token}", "Accept": "text/event-stream"},
+    auth = {"Authorization": f"Bearer {token}"}
+    start = http.post(
+        f"{_ASK_MODO_V2}/chats/completion",
+        json={"message": question}, headers=auth, timeout=60,
+    )
+    if start.status_code == 402:
+        raise _QuotaExceeded("chats/completion HTTP 402 (credit quota exhausted)")
+    if start.status_code not in (200, 201, 202):
+        raise RuntimeError(f"chats/completion HTTP {start.status_code}")
+    run = start.json()
+    chat_id = run.get("chat_id") or run.get("chatId")
+    run_id = run.get("run_id") or run.get("runId")
+    if not chat_id or not run_id:
+        raise RuntimeError(f"chats/completion returned no chat_id/run_id (keys: {sorted(run)})")
+
+    resp = http.get(
+        f"{_ASK_MODO_V2}/chats/{chat_id}/runs/{run_id}/stream",
+        headers={**auth, "Accept": "text/event-stream"},
         timeout=180, stream=True,
     )
     if resp.status_code == 402:
-        raise _QuotaExceeded("chats/completion HTTP 402 (credit quota exhausted)")
+        raise _QuotaExceeded("run stream HTTP 402 (credit quota exhausted)")
     if resp.status_code != 200:
-        raise RuntimeError(f"chats/completion HTTP {resp.status_code}")
+        raise RuntimeError(f"run stream HTTP {resp.status_code}")
     parts: list[str] = []
     event = ""
     for raw in resp.iter_lines(decode_unicode=True):
         if not raw:
+            event = ""          # blank line ends the SSE frame
             continue
         if raw.startswith("event:"):
             event = raw[6:].strip()
+        elif raw.startswith("data:") and event == "error":
+            raise RuntimeError(f"run stream error: {raw[5:].strip()[:200]}")
         elif raw.startswith("data:") and event == "message_chunk":
             try:
                 parts.append(json.loads(raw[5:].strip()).get("content", ""))
