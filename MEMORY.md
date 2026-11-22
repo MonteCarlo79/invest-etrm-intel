@@ -734,3 +734,20 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Work in ~/bess-platform-local. RDS jobs: /tmp/mm_deploy/runtask.sh (recreate if /tmp cleaned); OCR-heavy jobs need runtask_big (cpu 2048 / mem 8192 override).
 - rm_retail.sql has the same pdf/excel/csv-only file_type CHECK (retail table) — untouched.
 - Company-name guard still unapproved — ask before building. Ingest 民勤 2026-10 charge when provided.
+
+## Session Summary, 2026-11-22
+**Worked on:** spot-market Geo Map charts (st.pyplot) broken in prod → traced to a Streamlit/Starlette version mismatch; fixed spot-market and pinned the rest of the fleet.
+**Completed:**
+- Root cause, evidenced end-to-end: ALB access logs show every `/spot-markets/media/*.png` (+ `/favicon.png`) = 500 from the target; container raises `Expected ASGI message 'http.response.start', but got 'http.response.body'` in streamlit 1.58.0's starlette_gzip_middleware; run-task probe: live image had starlette 1.10.0 (Dockerfile pinned streamlit only). Local repro (TestClient, streamlit 1.58.0): starlette 1.3.1 / 1.5–1.7 → 200; 1.4.0 and 1.8.0–1.10.0 → 500. Only image/* responses fail (JSON/PDF/CSV 200 — why health checks and downloads looked fine).
+- spot-market v61/td:162 LIVE: CodeBuild delta FROM v60 + `pip install starlette==1.3.1`; in-image smoke media_png_status 200; jq-swap from td:161; user confirmed charts render. Dockerfile pin b82d8102, manifest d673db48.
+- Fleet probe (run-task on each live td, 17 Streamlit services): bess-map (1.58/1.9.0) and deal-structurer (1.58/1.10.0) also 500 on image media, but only the favicon is visible (bess-map renders base64 PNGs; deal-structurer serves PDFs only). au/caiso/ercot/pjm (1.2.1), gb (1.6.0), ph/po (1.60/1.3.1) and streamlit ≥1.65 apps → 200. inner-mongolia/model-catalogue/options-cockpit/portal predate the Starlette server — unaffected.
+- `starlette==1.3.1` pinned in the 7 other `streamlit==1.58.0` Dockerfiles (67d0bc50); nothing built or deployed.
+**In progress:** none.
+**Decisions made:**
+- Pin starlette 1.3.1 (last good before the 1.4.0 break; same as local venv) instead of upgrading Streamlit — one-line change, no regression surface across 17 tabs.
+- No dedicated deploys for bess-map / deal-structurer (favicon-only impact); the pin lands on their next build.
+**Next session:**
+- Commits were made in ~/bess-platform-local — `git pull` the OneDrive tree before editing there.
+- bess-map `app.py:2474` base64-PNG workaround blames "ALB+Cognito proxying" — wrong, it was this starlette mismatch; can return to st.pyplot after bess-map's next build (optional).
+- Any Dockerfile that pins streamlit must pin starlette too (unpinned streamlit resolves a matching pair).
+- Still open: the spot-market review items in the 2026-11-10 summary (unit helper, Strategist path allowlist, get_interprov_flow silent 5000-row cap, agent tool gaps).
