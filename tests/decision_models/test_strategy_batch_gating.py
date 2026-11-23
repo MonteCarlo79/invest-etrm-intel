@@ -72,10 +72,22 @@ def test_catch_up_walks_window_oldest_first_and_survives_failures(monkeypatch):
             raise RuntimeError("LP blew up")
         return 4
 
+    import services.monitoring.ladder_rungs as rungs
     import services.monitoring.run_daily_attribution as attr
     monkeypatch.setattr(b, "run_for_date", fake_batch)
     monkeypatch.setattr(attr, "run_for_date", lambda d: seen.append(("a", d)) or 4)
-    out = b.catch_up(D, lookback_days=3)
-    assert [d for k, d in seen if k == "b"] == [date(2026, 11, 16), date(2026, 11, 17), D]
-    assert [d for k, d in seen if k == "a"] == [date(2026, 11, 16), date(2026, 11, 17), D]
-    assert out == {"batch": 8, "attribution": 12, "days": 3}
+
+    def fake_rungs(asset_code, d):
+        seen.append(("r", d, asset_code))
+        if asset_code == "hangjinqi":
+            raise RuntimeError("rung blew up")          # must not stop the sweep
+        return {"forecast": True, "strategy": asset_code == "suyou", "skipped": None}
+
+    monkeypatch.setattr(rungs, "write_ladder_rungs", fake_rungs)
+    out = b.catch_up(D, lookback_days=3, asset_codes=["suyou", "hangjinqi", "wulate"])
+    assert [x[1] for x in seen if x[0] == "b"] == [date(2026, 11, 16), date(2026, 11, 17), D]
+    assert [x[1] for x in seen if x[0] == "a"] == [date(2026, 11, 16), date(2026, 11, 17), D]
+    # rungs run for every asset on every day, between batch and attribution
+    assert [x for x in seen if x[1] == D] == [
+        ("b", D), ("r", D, "suyou"), ("r", D, "hangjinqi"), ("r", D, "wulate"), ("a", D)]
+    assert out == {"batch": 8, "rungs": 9, "attribution": 12, "days": 3}

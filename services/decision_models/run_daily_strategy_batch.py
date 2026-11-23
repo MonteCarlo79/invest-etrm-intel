@@ -294,8 +294,9 @@ def catch_up(end_date: date, lookback_days: int,
     Days already complete are skipped by _already_computed, so the steady
     state costs one new day per run; attribution re-upserts are cheap.
     """
+    from services.monitoring.ladder_rungs import write_ladder_rungs
     from services.monitoring.run_daily_attribution import run_for_date as _attrib
-    out = {"batch": 0, "attribution": 0, "days": 0}
+    out = {"batch": 0, "rungs": 0, "attribution": 0, "days": 0}
     for i in range(lookback_days - 1, -1, -1):
         d = end_date - timedelta(days=i)
         out["days"] += 1
@@ -303,6 +304,15 @@ def catch_up(end_date: date, lookback_days: int,
             out["batch"] += run_for_date(d, asset_codes=asset_codes)
         except Exception as exc:
             logger.error("catch_up batch FAIL %s — %s", d, exc, exc_info=True)
+        # Forecast-optimal + strategy rungs (book forecast / nodal-agent curve
+        # valued at actual prices). Stored rungs are skipped inside.
+        for asset_code in (asset_codes or _IM_ASSETS):
+            try:
+                r = write_ladder_rungs(asset_code, d)
+                out["rungs"] += int(r["forecast"]) + int(r["strategy"])
+            except Exception as exc:
+                logger.error("catch_up rungs FAIL %s %s — %s", asset_code, d, exc,
+                             exc_info=True)
         try:
             out["attribution"] += _attrib(d)
         except Exception as exc:
