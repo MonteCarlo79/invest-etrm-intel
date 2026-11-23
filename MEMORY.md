@@ -840,3 +840,29 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Drop four backup tables when satisfied: `gb_knowledge_docs_bak_20261123_timera`, `gb_expert_insights_bak_20261123_timera`, `gb_knowledge_docs_bak_20261123_timera_body`, `gb_expert_insights_bak_20261123_timera_body` (schema intl_market).
 - Still open (not touched): `entso_e.py` NESO generation-mix KB narrative (14-day lookback vs ~18-day lag), NESO publications scrape fallback, zero-doc Modo run should alert via Hermes patrol, dead 14:00 keepalive job + Playwright admin buttons in app.py, shared digest module re-digests empty docs nightly.
 - Timera is flaky from the Mac (timeouts); probe it via ECS run-task.
+
+## Session Summary, 2026-11-23 (PH + PO market apps: outage repair, price data, port to main)
+**Worked on:** PH app "improve and repair" — turned into restoring PH and PO from a 3-month outage, fixing their data pipelines, and porting both apps to main.
+**Completed:**
+- Root cause of the outage (2026-08-19 → 11-23, ~53k / ~47k failed task launches): Portal "Stop Web" put PH/PO into scheduler mode, but their images ship no `scheduler_service.py` (exit 2). `shared/service_control.py` now marks PH/PO `has_scheduler: False` (3dc9e02d, tests added).
+- PH: v19 / td:34. PO: v17 / td:32. Both restored, healthy, behind Cognito.
+- Cognito added to the `/ph-market`, `/po-market`, `/au-market` ALB rules (targeted terraform apply, 3 changed, ad722566) — they were publicly reachable.
+- Daily jobs decoupled from the web UI: `services/ph_knowledge/run_jobs.py` and `services/po_knowledge/run_jobs.py`, run by new task families `bess-platform-ph-market-jobs:4` / `bess-platform-po-market-jobs:2` (image `:latest`) from EventBridge `bess-ph-scheduler-daily` / `bess-po-scheduler-daily` (both had pointed at reaped v15 images).
+- WESM price parser: stored "hourly" price was one 5-minute sample; now the mean of the 12 interval-ending rows (midnight row is stamped as a bare date). Backfilled 2026-08-25 → 11-22.
+- PH price type: `LWAP_orig` is the pre-correction run and overstates Mindanao/Visayas (23.11 / 18.57 vs final 11.92 / 11.84 PHP/kWh over 62 common days; Luzon 6.44 vs 6.50). `LWAP_final` was never stored; it is now, and the app defaults to it.
+- KB digest / insight extraction in PH and PO images called the Anthropic API directly with a dead key (401, swallowed). Now via `make_client` (Bedrock); digest raises if every call fails (branch lineage only).
+- PO day-ahead history backfilled from 158 to 532 of 532 days (energy-charts.info 429s on bulk pulls → weekly chunks with pauses).
+- PH/PO source ported to main (a1d9a403); `services/po_knowledge/config.py` corrected from Portugal (MIBEL) to Poland.
+**In progress:**
+- First scheduled runs of both daily jobs (02:45 SGT 2026-11-24) not yet observed; manual runs of both passed.
+**Decisions made:**
+- Daily-job task defs track `:latest`, not a numbered tag (ECR keep-5 reaps pinned tags) — every PH/PO build must push `:latest` as well.
+- Live images stay on the `feat/ph-po-market-apps` lineage and are deployed by CodeBuild delta; a full build from main is untested (unpinned `streamlit>=1.32`; main's digest marks docs by URL, the branch by id).
+- Left untouched: scheduler-only mode for the other intl markets (ALB health check would likely kill a scheduler-only task — untested), main's shared `intl_market_common`, AU service (desired 0).
+**Next session:**
+- FIRST: confirm the 02:45 SGT runs — log stream prefix `ph-market/` and `po-market/`, look for `[ph-jobs] ... all steps ok` / `[po-jobs] ... all steps ok`.
+- Any PH return figures for Visayas/Mindanao produced before today used original prices — re-run on `LWAP_final`.
+- Data limits that cannot be fixed from IEMOP (serves ~90 days original, ~62 final): rows before 2026-08-25 are old single-sample values with no final; holes 2026-05-26..30 and 2026-08-19..24.
+- Do a tested full build of PH/PO from main (pin streamlit + starlette==1.3.1), then retire the feature branch and the `~/bess-ph-worktree` worktree.
+- Portal and Hermes still carry the old "Stop Web" behaviour and the Portugal persona until their next image builds — do not press "Stop Web" on PH/PO before then.
+- PO capacity-market scrape timed out against tge.pl and the job still reported success; local venv lacks `requests_mock` and a working LP solver (3 test files fail for that reason).
