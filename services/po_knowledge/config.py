@@ -1,59 +1,53 @@
-"""Portugal / Iberia (MIBEL) power market configuration."""
+"""Poland power market configuration — MarketConfig instance for investment advisory."""
 from services.intl_market_common.market_config import MarketConfig
 
+_STANDARD_QUESTIONS = [
+    "What are the most significant recent developments in the Polish power market affecting BESS investment?",
+    "How are FCR and aFRR auction prices trending in Poland and what does this mean for BESS revenue stacks?",
+    "What is the current outlook for BESS in Poland's capacity market (Rynek Mocy) — T-4/T-1 auction eligibility and pricing?",
+    "What major policy changes from URE or government have been announced affecting RE and storage developers in Poland?",
+    "How is Poland's renewable energy build-out progressing — solar, onshore wind, offshore wind pipelines?",
+    "What are the key risks for BESS investment in Poland — regulatory, market, and grid connectivity?",
+    "Which new BESS or flexible energy storage projects have been announced or are under development in Poland?",
+    "How competitive is the Polish BESS market compared to DACH and Nordic peers in terms of FCR/aFRR revenue depth?",
+]
+
+_FOUNDATIONAL_QUESTIONS = [
+    "Explain the full Polish balancing market structure — how does the Rynek Bilansujący (RB) work, how are bids submitted to PSE, and how are BESS assets settled?",
+    "How does FCR (Primary Control Reserve) work in Poland under the ENTSO-E framework — bid requirements, activation, pricing, and BESS participation rules?",
+    "Explain aFRR (Secondary Reserve) procurement in Poland — symmetrical vs asymmetrical products, weekly/monthly auctions, activation energy settlement.",
+    "What are the full legal and regulatory requirements for a foreign developer to build and operate a BESS project in Poland? (Grid connection, environmental, URE licensing, land use.)",
+    "How does the Polish capacity market (Rynek Mocy) work — T-4 and T-1 auctions, BESS eligibility, duration requirements, obligation periods, and derating factors?",
+    "What are the transmission constraints and congestion patterns in Poland? How do N/S price zone differences and cross-border interconnection affect storage dispatch strategy?",
+]
+
+_RESEARCH_QUESTIONS = [
+    "Based on Aurora Energy Research forecasts (Q1/Q2 2026), what are the Polish power price projections through 2030-2040, and what does this mean for BESS energy arbitrage revenue?",
+    "What does Aurora's Monthly Flexible Energy Market Summary say about FCR and aFRR price trends in Poland for early 2026?",
+    "What is the optimal duration for a Polish BESS project — 1h, 2h, or 4h — given FCR/aFRR requirements and energy arbitrage spreads?",
+    "How does the Baltic offshore wind build-out (2030-2040) affect Polish power prices and BESS revenue prospects?",
+    "What are the key lessons from early Polish BESS projects — grid connection timelines, capacity market performance, FCR revenue realisation?",
+    "How does Polish BESS investment compare to German and UK markets in terms of risk-adjusted returns and regulatory maturity?",
+]
+
 MARKET_CONFIG = MarketConfig(
-    name="Portugal (MIBEL)",
+    name="Poland",
     code="po",
     table_prefix="po_",
-    port=8512,
+    port=8511,
     app_slug="po-market",
     app_key="po_market",
-    currency_sym="€",
-    currency_code="EUR",
-    timezone="Europe/Lisbon",
-    flag_emoji="🇵🇹",
-    flag_url="https://flagcdn.com/w40/pt.png",
-    intervals_per_day=24,
-    system_operator="REN",
-    wholesale_label="MIBEL Spot (OMIE)",
-    ancillary_label="Primary / Secondary / Tertiary Reserve",
-    modo_api_prefix="/po/modo",
-    standard_questions=[
-        "What are the most significant recent developments in Portugal's renewable energy "
-        "and storage market?",
-        "How are MIBEL spot prices trending — is Portugal at a premium or discount to Spain?",
-        "What is the current outlook for BESS investment in Portugal — regulatory support, "
-        "revenue streams, and market maturity?",
-        "What major policy changes from DGEG or ERSE have been announced recently?",
-        "How are Portugal's electricity demand and renewable penetration trending?",
-        "What are the key risks for utility-scale solar and wind projects in Portugal now?",
-        "Which new battery storage or hybrid RE projects have been announced in Portugal?",
-        "How does Portugal compare to Spain for BESS investment attractiveness?",
-    ],
-    foundational_questions=[
-        "Explain the MIBEL wholesale electricity market — day-ahead (OMIE), intraday, "
-        "and balancing market structure; how prices are formed; and how Portuguese generators "
-        "and storage assets earn revenue.",
-        "What ancillary services does REN procure — primary frequency response, secondary "
-        "reserve (aFRR), tertiary reserve (mFRR), and interruptibility — and how can BESS "
-        "assets participate and stack revenues?",
-        "What are the regulatory requirements and licensing steps for a utility-scale BESS "
-        "or hybrid RE+storage project in Portugal?",
-        "How does Portugal's capacity mechanism work — are there capacity payments or "
-        "strategic reserves that BESS can access?",
-        "What is the current state of Portugal's grid infrastructure and what are the key "
-        "transmission constraints affecting RE development, particularly in the Alentejo and "
-        "Algarve regions?",
-        "How does project finance for utility-scale RE projects work in Portugal — typical "
-        "structures, key lenders (EIB, commercial banks), leverage, and bankability requirements?",
-    ],
-    research_questions=[
-        "What do independent consultants (Aurora, Montel, ENTSO-E) forecast for MIBEL "
-        "spot prices and BESS revenues in Portugal over the next 5 years?",
-        "What are the key findings from recent BESS market reports for the Iberian Peninsula?",
-        "How has Portugal's RE auction (SERUP) programme evolved — pricing, technologies, "
-        "volumes, and lessons for future auctions?",
-        "What is the state of Portugal-Spain interconnection capacity and what are the "
-        "long-term plans — implications for price convergence and merchant BESS?",
-    ],
+    currency_sym="zł",
+    currency_code="PLN",
+    timezone="Europe/Warsaw",
+    flag_emoji="🇵🇱",
+    flag_url="https://flagcdn.com/w40/pl.png",
+    intervals_per_day=96,       # 15-min intervals (ENTSO-E)
+    system_operator="PSE",
+    wholesale_label="TGE Day-Ahead / Balancing Market (RB)",
+    ancillary_label="FCR / aFRR / mFRR",
+    modo_api_prefix="/po/modo",  # not used
+    standard_questions=_STANDARD_QUESTIONS,
+    foundational_questions=_FOUNDATIONAL_QUESTIONS,
+    research_questions=_RESEARCH_QUESTIONS,
 )
