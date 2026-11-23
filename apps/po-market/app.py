@@ -51,6 +51,7 @@ _GB_CFG = _MarketConfig(
     system_operator="National Grid ESO",
     wholesale_label="EPEX Spot / N2EX day-ahead",
     ancillary_label="BM / FFR / DCR / Capacity Market",
+    modo_api_prefix="/gb/modo",  # not used — required by MarketConfig
 )
 from services.po_knowledge.ingest import run_knowledge_ingest
 from services.po_knowledge.entso_scraper import (
@@ -1091,7 +1092,7 @@ def _consult_gb_advisor(question: str) -> str:
     gb_insights: list = []
     gb_kb_context = ""
     try:
-        gb_insights = get_insights(question, prefix="gb_", limit=5)
+        gb_insights = get_insights(question, "gb_", limit=5)
     except Exception as exc:
         logger.debug("GB insights fetch failed: %s", exc)
     try:
