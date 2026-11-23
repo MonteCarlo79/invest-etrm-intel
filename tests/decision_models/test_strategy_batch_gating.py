@@ -31,10 +31,18 @@ def test_has_prices_requires_complete_day(monkeypatch, slots, expected):
     assert "LIMIT 1" not in calls[0]
 
 
-def test_already_computed_false_without_lp(monkeypatch):
+def test_already_computed_false_without_pf(monkeypatch):
     monkeypatch.setattr(bess_context, "load_precomputed_scenario_pnl",
-                        lambda a, s, e: (_scen(["perfect_foresight_hourly"]), []))
+                        lambda a, s, e: (_scen(["nominated_dispatch"]), []))
     assert b._already_computed("suyou", D) is False
+
+
+def test_forecast_scenario_is_not_required(monkeypatch):
+    # forecast_ols_rt_time_v1 never solves in this path; requiring it re-ran
+    # the LP for every day on every run.
+    monkeypatch.setattr(bess_context, "load_precomputed_scenario_pnl", lambda a, s, e: (
+        _scen(["perfect_foresight_hourly", "nominated_dispatch"]), []))
+    assert b._already_computed("suyou", D) is True
 
 
 def test_already_computed_true_with_nominated(monkeypatch):

@@ -38,6 +38,11 @@ _IDENTITY_TOLERANCE = 1.0
 _SCENARIO_COL_MAP: Dict[str, str] = {
     "perfect_foresight_unrestricted": "pf_unrestricted_pnl",
     "perfect_foresight_grid_feasible": "pf_grid_feasible_pnl",
+    # The LP batch (run_daily_strategy_batch) names its perfect-foresight
+    # scenario perfect_foresight_hourly: solved on actual nodal prices under
+    # the operator's limits (rating, 1.5 cycles/day) — the feasible benchmark.
+    # Without this entry the ladder had no PF rung at all (2026-11-23).
+    "perfect_foresight_hourly": "pf_grid_feasible_pnl",
     "tt_forecast_optimal": "tt_forecast_optimal_pnl",
     "tt_strategy": "tt_strategy_pnl",
     "nominated_dispatch": "nominated_pnl",
@@ -145,11 +150,18 @@ def _load_scenario_pnl(engine, trade_date: date) -> Dict[str, Dict[str, Optional
     """
     from sqlalchemy import text
 
+    # total_pnl is the column every current writer fills (LP batch + ops P&L);
+    # total_revenue_yuan is the pre-2026-04 legacy column and has been NULL
+    # since. Reading only the legacy column left every attribution row with
+    # all-NULL P&L (162 days x 4 stations, found 2026-11-23).
+    # An explicit grid-feasible row wins over the LP batch's PF when both exist.
     sql = text("""
-        SELECT asset_code, scenario_name, total_revenue_yuan
+        SELECT asset_code, scenario_name,
+               COALESCE(total_pnl, total_revenue_yuan) AS pnl
         FROM reports.bess_asset_daily_scenario_pnl
         WHERE trade_date = :td
-          AND scenario_available = TRUE
+          AND COALESCE(scenario_available, TRUE) = TRUE
+        ORDER BY (scenario_name = 'perfect_foresight_grid_feasible'), scenario_name
     """)
     result: Dict[str, Dict[str, Optional[float]]] = {}
     with engine.begin() as conn:
@@ -227,7 +239,9 @@ def run_for_date(trade_date: date, engine=None) -> int:
         }
         for scenario_name, pnl_value in pnl_by_scenario.items():
             field_name = _SCENARIO_COL_MAP.get(scenario_name)
-            if field_name:
+            # A NULL scenario must never blank a rung another scenario filled
+            # (legacy grid-feasible rows carry NULL P&L).
+            if field_name and pnl_value is not None:
                 model_input[field_name] = pnl_value
 
         result = run("dispatch_pnl_attribution", model_input)

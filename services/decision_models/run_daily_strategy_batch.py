@@ -167,7 +167,7 @@ def _has_prices(asset_code: str, trade_date: date) -> bool:
 
 def _already_computed(asset_code: str, trade_date: date) -> bool:
     """
-    Return True if both LP scenarios are already in
+    Return True if the perfect-foresight LP scenario is already in
     reports.bess_asset_daily_scenario_pnl for this asset/date — and the
     nominated/actual leg is not waiting on a recompute.
 
@@ -184,7 +184,10 @@ def _already_computed(asset_code: str, trade_date: date) -> bool:
         df, _ = load_precomputed_scenario_pnl(asset_code, trade_date, trade_date)
         if df.empty:
             return False
-        lp_names = {"perfect_foresight_hourly", "forecast_ols_rt_time_v1"}
+        # Only the PF scenario is required. forecast_ols_rt_time_v1 has never
+        # solved in this path ("no forecast output for target dates"), so
+        # requiring it made every day look uncomputed and re-ran the LP daily.
+        lp_names = {"perfect_foresight_hourly"}
         present = set(
             df.loc[df["scenario_available"] == True, "scenario_name"].tolist()
         )
