@@ -162,6 +162,27 @@ def _monthly_target(station_dir: Path, filename: str, month: int, src: Path) -> 
     return station_dir / filename
 
 
+def _versioned(src: Path, cls: Classification) -> tuple[str, Classification]:
+    """(target filename, classification) for one cached file.
+
+    武川's operator re-sends ONE accumulating workbook under a name with no
+    month or date (…电力交易调度计划表.xls). Classified 'other', only the first
+    copy ever seen was kept (`if not dest.exists()`), freezing its data at
+    2026-10-13 while the cache held versions through 11-18. Such a file is
+    stamped with its last day sheet — the 调度计划表MM.DD convention bameng's
+    files already use — and then follows monthly retention (fullest version
+    per month in root)."""
+    if cls.kind != "other" or cls.station is None or "调度计划表" not in src.name:
+        return src.name, cls
+    day = monthly_max_day(src)
+    if day <= 0:
+        return src.name, cls
+    month = int(day)
+    dd = round((day - month) * 100)
+    return (f"{src.stem}{month:02d}.{dd:02d}{src.suffix}",
+            Classification(cls.station, "monthly", month))
+
+
 def replace_monthly(dry_run: bool = False) -> dict:
     """Re-place every monthly-classified file in the cache by completeness.
     Independent of the checkpoint: converges to the fullest version per
@@ -206,29 +227,29 @@ def collect(since: float | None = None, dry_run: bool = False) -> dict:
             stats["skipped"] += 1
             continue
         newest = max(newest, mt)
-        cls = classify(f.name)
+        name, cls = _versioned(f, classify(f.name))
         folder = cls.station or "_unclassified"
         if cls.station is None:
             stats["unclassified"] += 1
             logger.warning("unclassified file: %s", f.name)
         station_dir = NOMINATION_ROOT / folder
         if dry_run:
-            logger.info("DRY %s → %s [%s]", f.name, station_dir, cls.kind)
+            logger.info("DRY %s → %s [%s]", name, station_dir, cls.kind)
             continue
         station_dir.mkdir(parents=True, exist_ok=True)
         if cls.kind == "monthly":
-            dest = _monthly_target(station_dir, f.name, cls.month or 0, f)
+            dest = _monthly_target(station_dir, name, cls.month or 0, f)
             stats["demoted"] += 0  # demotions logged inside _monthly_target
         elif cls.kind == "daily":
             dest = station_dir / "client-reports"
             dest.mkdir(exist_ok=True)
-            dest = dest / f.name
+            dest = dest / name
         elif cls.kind == "summary":
             dest = station_dir / "archived"
             dest.mkdir(exist_ok=True)
-            dest = dest / f.name
+            dest = dest / name
         else:
-            dest = station_dir / f.name
+            dest = station_dir / name
         if not dest.exists():
             shutil.copy2(f, dest)
             stats["copied"] += 1
