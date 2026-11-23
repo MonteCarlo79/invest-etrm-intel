@@ -1937,7 +1937,7 @@ with tab_mgmt:
     # ── WESM Price Data ───────────────────────────────────────────────────────
     st.subheader("WESM Spot Price Data")
     st.caption(
-        "5-minute interval LWAP prices for Luzon, Visayas, and Mindanao scraped from IEMOP. "
+        "Hourly LWAP (mean of the 5-minute intervals) for Luzon, Visayas, and Mindanao scraped from IEMOP. "
         "Original LWAP (1-day lag) + Final LWAP (10-day settlement lag). "
         "Scheduler runs at **07:15 MNL** daily."
     )
@@ -1988,7 +1988,7 @@ with tab_mgmt:
                     st.error(f"WESM price scrape failed: {exc}")
     with wesm_btn_c2:
         backfill_days = st.number_input(
-            "Backfill days", min_value=1, max_value=100, value=7, key="ph_wesm_backfill_days"
+            "Backfill days", min_value=1, max_value=400, value=7, key="ph_wesm_backfill_days"
         )
         if st.button("Backfill Price History", key="ph_wesm_backfill"):
             with st.spinner(f"Backfilling {backfill_days} days…"):

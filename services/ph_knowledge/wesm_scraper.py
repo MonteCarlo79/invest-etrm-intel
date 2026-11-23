@@ -202,60 +202,65 @@ class WESMPriceScraper:
     # ── CSV parser ────────────────────────────────────────────────────────────
 
     def _parse_lwap_csv(self, csv_text: str, trading_date: date, price_type: str = "LWAP") -> list[dict]:
-        """Parse a final_lwap_YYYYMMDD.csv file into price records."""
+        """Parse one daily LWAP CSV into 24 hourly-mean records per region.
+
+        The file holds 288 five-minute rows per region, stamped at interval END
+        (00:05 … next-day 00:00), so an interval belongs to the hour of
+        (stamp − 5 min). Each hour's price is the simple mean of its intervals.
+        """
         import io
         import pandas as pd
-        from datetime import datetime as _dt
 
         try:
-            df = pd.read_csv(io.StringIO(csv_text))
+            df = pd.read_csv(io.StringIO(csv_text), index_col=False)
         except Exception:
             return []
 
-        if df.empty or "LWAP" not in df.columns or "REGION_NAME" not in df.columns:
+        if df.empty or not {"LWAP", "REGION_NAME", "TIME_INTERVAL"} <= set(df.columns):
             return []
 
-        records = []
-        for _, row in df.iterrows():
-            region_code = str(row.get("REGION_NAME", "")).strip()
-            region = self._REGION_MAP.get(region_code)
-            if region is None:
-                continue  # skip SYSTEM and unrecognised codes
+        df["region"] = df["REGION_NAME"].astype(str).str.strip().map(self._REGION_MAP)
+        df["lwap"] = pd.to_numeric(df["LWAP"], errors="coerce")
+        ts = pd.to_datetime(
+            df["TIME_INTERVAL"].astype(str).str.strip(),
+            format="%m/%d/%Y %I:%M:%S %p", errors="coerce",
+        )
+        df["hour"] = (ts - pd.Timedelta(minutes=5)).dt.hour
+        df = df.dropna(subset=["region", "lwap", "hour"])  # drops SYSTEM + unparseable rows
+        if df.empty:
+            return []
 
-            try:
-                lwap_mwh = float(row["LWAP"])
-                price_kwh = round(lwap_mwh / 1000.0, 4)  # PHP/MWh → PHP/kWh
-
-                # Parse 5-min interval timestamp
-                interval_str = str(row.get("TIME_INTERVAL", "")).strip()
-                hour, interval_no = 0, 0
-                try:
-                    dt = _dt.strptime(interval_str, "%m/%d/%Y %I:%M:%S %p")
-                    hour = dt.hour
-                    interval_no = dt.hour * 12 + dt.minute // 5
-                except Exception:
-                    pass
-
-                records.append({
-                    "trading_date": trading_date,
-                    "hour":         hour,
-                    "interval_no":  interval_no,
-                    "region":       region,
-                    "node":         region_code,
-                    "price_php_kwh": price_kwh,
-                    "price_type":   price_type,
-                })
-            except Exception:
-                continue
-
-        return records
+        code_of = {v: k for k, v in self._REGION_MAP.items()}
+        hourly = df.groupby(["region", "hour"])["lwap"].mean()
+        return [
+            {
+                "trading_date":  trading_date,
+                "hour":          int(hour),
+                "interval_no":   int(hour) * 12,
+                "region":        region,
+                "node":          code_of[region],
+                "price_php_kwh": round(float(lwap_mwh) / 1000.0, 4),  # PHP/MWh → PHP/kWh
+                "price_type":    price_type,
+            }
+            for (region, hour), lwap_mwh in hourly.items()
+        ]
 
     # ── DB storage ────────────────────────────────────────────────────────────
 
-    def store_prices(self, conn, records: list[dict]) -> int:
-        """Insert price records; skip duplicates. Returns count of new rows."""
+    def store_prices(self, conn, records: list[dict], overwrite: bool = False) -> int:
+        """Insert price records. Returns count of rows written.
+
+        Default skips rows already stored. overwrite=True replaces a stored price
+        that differs (used to restate history, e.g. after a parser correction).
+        """
         if not records:
             return 0
+        on_conflict = (
+            "DO UPDATE SET price_php_kwh = EXCLUDED.price_php_kwh, "
+            "interval_no = EXCLUDED.interval_no, node = EXCLUDED.node, fetched_at = NOW() "
+            "WHERE intl_market.ph_wesm_prices.price_php_kwh IS DISTINCT FROM EXCLUDED.price_php_kwh"
+            if overwrite else "DO NOTHING"
+        )
         n = 0
         with conn.cursor() as cur:
             for r in records:
@@ -263,7 +268,7 @@ class WESMPriceScraper:
                     "INSERT INTO intl_market.ph_wesm_prices "
                     "(trading_date, hour, interval_no, region, node, price_php_kwh, price_type) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (trading_date, hour, region, price_type) DO NOTHING",
+                    "ON CONFLICT (trading_date, hour, region, price_type) " + on_conflict,
                     (
                         r["trading_date"], r["hour"], r.get("interval_no", r["hour"]),
                         r["region"], r.get("node", r["region"]),
@@ -713,8 +718,10 @@ def run_wesm_doc_backfill(
 # Top-level convenience function (called by scheduler + manual trigger)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_wesm_price_scrape(conn, days_back: int = 1) -> dict[str, int]:
+def run_wesm_price_scrape(conn, days_back: int = 1, overwrite: bool = False) -> dict[str, int]:
     """Scrape WESM LWAP prices for the last *days_back* days.
+
+    overwrite=True restates stored prices that differ from the source.
 
     Fetches the minimum number of IEMOP ZIP pages to cover the requested range,
     then stores all records found.  Returns {date_str: rows_inserted}.
@@ -743,7 +750,7 @@ def run_wesm_price_scrape(conn, days_back: int = 1) -> dict[str, int]:
         if date_str < str(since):
             continue  # outside requested window
         try:
-            n = scraper.store_prices(conn, records)
+            n = scraper.store_prices(conn, records, overwrite=overwrite)
             results[date_str] = n
         except Exception as exc:
             logger.error("[wesm_price] store failed for %s: %s", date_str, exc)
