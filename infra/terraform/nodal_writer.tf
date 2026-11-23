@@ -4,7 +4,7 @@
 # One-shot Fargate task on an EventBridge cron (16:00 CST = 08:00 UTC, before
 # the 17:00 D+1 nomination cutoff). Runs services/nodal_agents/daily_job.py:
 #   run_day(tomorrow) + register_strategies(yesterday).
-# Image tracks the mengxi-dashboard app image so app deploys carry the writer.
+# Image is the mengxi-dashboard repo's :latest, so app deploys carry the writer.
 ############################################
 
 resource "aws_ecs_task_definition" "nodal_writer" {
@@ -22,7 +22,11 @@ resource "aws_ecs_task_definition" "nodal_writer" {
   container_definitions = jsonencode([
     {
       name    = "nodal-writer"
-      image   = var.image_mengxi_dashboard
+      # Always the repo's :latest tag (pushed on every dashboard deploy), never
+      # the numbered tag: dashboard deploys bypass terraform, so a pinned tag
+      # goes stale and the ECR keep-5 lifecycle then deletes it under the
+      # writer (v35 2026-11-01, v48 2026-11-06; v55 was next in line).
+      image   = replace(var.image_mengxi_dashboard, "/:[^:/]+$/", ":latest")
       command = ["python", "-m", "services.nodal_agents.daily_job"]
       environment = [
         {
