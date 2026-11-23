@@ -207,13 +207,17 @@ def actual_price_series(day: date, price_records: List[dict]) -> List[Optional[f
 
 
 def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
-                       force: bool = False) -> dict:
+                       force: bool = False, refresh_grid_pf: bool = False) -> dict:
     """Compute and upsert the forecast + strategy rungs for one station-day.
 
     Returns {"grid_pf": bool, "forecast": bool, "strategy": bool,
     "skipped": reason|None}.
-    Rungs already stored are left alone unless force. Needs a complete day of
-    actual prices; never raises on missing inputs.
+    Rungs already stored are left alone unless force. refresh_grid_pf re-solves
+    the zone-constrained PF even when stored: a day's zone colours can arrive
+    (or be repainted) in a later workbook version — the newest day sheet is
+    often still unpainted when first received — so the daily catch-up refreshes
+    it across its window. Needs a complete day of actual prices; never raises
+    on missing inputs.
     """
     from libs.decision_models.resources.bess_context import (
         load_actual_prices_15min,
@@ -239,7 +243,8 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
     with engine.connect() as conn:
         have = {r[0]: r[1] for r in conn.execute(
             _EXISTING_SQL, {"ac": asset_code, "td": trade_date})}
-    want_pf = force or have.get(SCENARIO_GRID_PF) != SOURCE_GRID_PF
+    want_pf = (force or refresh_grid_pf
+               or have.get(SCENARIO_GRID_PF) != SOURCE_GRID_PF)
     want_fc = force or have.get(SCENARIO_FORECAST) != SOURCE_FORECAST
     want_st = force or SCENARIO_STRATEGY not in have
     if not (want_pf or want_fc or want_st):
