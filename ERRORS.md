@@ -638,3 +638,15 @@ Also: `sh -c` command overrides with sed/$(...) got mangled in JSON escaping —
 **Fix:** spot-market v61/td:162 (starlette==1.3.1); pin added to all 8 streamlit-1.58 Dockerfiles (b82d8102, 67d0bc50).
 **Rule:** for a broken image/media symptom, read the ALB access-log status for `/<app>/media/` first (target_status 5xx = container bug, not the proxy). Pin starlette wherever streamlit is pinned.
 **Also (fleet probe launch took 3 tries):** zsh does not word-split unquoted `$VAR` — `git add $F` / `describe-tasks --tasks $ARNS` with several values fail as one argument (use arrays, `"${F[@]}"`); `read A B <<<"$(jq …)"` with two output lines reads only line 1 (network config came through empty); a jq expression with `'` quote escapes inside a single-quoted shell string produced `b64decode(++)` — build the command string in bash and pass it via `jq --arg`.
+
+## 2026-11-23 — Attribution silently dead Nov 7→22 while its rule "succeeded" daily
+**Symptom:** reports.bess_asset_daily_attribution last row 2026-11-06; EventBridge Invocations=1, FailedInvocations=0 every day; run log `BATCH <d> 0 / ATTR <d> 0`.
+**Root cause:** rule processed only D-1 at 17:45 CST, but md_mengxi_nodal_price_96_filled completes ~2 days late (and fills a day progressively) → `SKIP … no prices` every run; no retry of older days. Two latent traps behind it: `_has_prices` was `LIMIT 1` (a partial day would be solved and then frozen by `_already_computed`), and a day solved before its WeCom nominations arrived never got nominated/cleared rungs.
+**Fix:** 129d2cd5 — `catch_up()` rolling window (rule script infra/eventbridge/attribution_daily.py, 10 days), complete-day check (>= 92 slots), `_already_computed` false when LP present + nominated missing + ops rows now exist. Backfilled Nov 7→18 (4 stations) by one-off run-task on td:74.
+**Rule:** a daily job that depends on late-arriving inputs must sweep a window, not a single day; "rule fired" is not "rows written" — check the row count the job prints. Same class as mnp96_fill (47b0bd03).
+
+## 2026-11-23 — Trader agent get_dispatch_data returned nothing since 2026-04-21
+Tool still read marketdata.ops_bess_dispatch_15min (dead). Now served by libs/trading_book/agent_tools.dispatch_day_payload through AssetBook (562a3070). When a source table is retired, grep every consumer incl. agent tool SQL inside app.py.
+
+## 2026-11-23 — 武川 nominations frozen at 10-13: month-less accumulating file
+`220kV旭纯哈乐…电力交易调度计划表.xls` carries no month/date → classified 'other' → `if not dest.exists()` kept only the first copy. Fix d5794f32: stamp by last day sheet (调度计划表MM.DD) → monthly retention. Also: registry price nodes for 阿拉善 pointed at a station name absent from the price table (阿拉腾敖包站; real: 景敖乌珠日储能电站 own node + 阿拉腾站) — probe the table for node names, don't infer them.
