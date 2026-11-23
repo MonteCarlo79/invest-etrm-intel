@@ -10,7 +10,7 @@ items stay "to review" until moved by hand. Files it cannot read are listed too.
 
 Config (personal, not in repo): `<root>/_workings_config.json`
     {"scan_dirs": ["UK Properties", "UK insurance"],
-     "properties": {"Kinsale": {"owner": "Dipeng", "label": "4 Kinsale Close"}, ...},
+     "properties": {"HouseA": {"owner": "Owner1", "label": "1 Example Road"}, ...},
      "workbooks": {"2025-26": "Analysis 2026-11/SA_2025-26_workings.xlsx"},
      "default_workbook": "SA_{ty}_workings.xlsx", "earliest_tax_year": "2025-26"}
 
@@ -90,7 +90,7 @@ _ESTIMATE = re.compile(r"(^|[^a-z])(est\d|estimate|quotation|quote)", re.I)
 
 
 def is_estimate(name: str, doc_type: str = "") -> bool:
-    """Quotes/estimates are not costs (Kingfisher folder held many EST*.pdf)."""
+    """Quotes/estimates are not costs (a property folder held many EST*.pdf)."""
     return doc_type == "estimate" or bool(_ESTIMATE.search(name))
 
 
