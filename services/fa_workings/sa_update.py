@@ -205,7 +205,7 @@ def _first_date(v) -> Optional[date]:
 
 def listed_items(wb, owner: str) -> list[tuple[str, float, Optional[date], str]]:
     """(sheet tax year, amount, date paid, 'sheet!row') from the owner's curated
-    sheets, e.g. 'Dipeng 2025-26' (columns: item, date paid, amount)."""
+    sheets, e.g. 'Owner1 2025-26' (columns: item, date paid, amount)."""
     out = []
     for ws in wb.worksheets:
         m = re.match(re.escape(owner) + r"\s+(\d{4}-\d{2})$", ws.title)

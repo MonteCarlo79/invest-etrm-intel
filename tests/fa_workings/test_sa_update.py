@@ -22,8 +22,8 @@ def test_amount_must_be_printed():
 
 def test_property_and_workbook_routing():
     root = Path("/x/FA")
-    props = {"Kinsale": {"owner": "D"}, "Aplin": {"owner": "Q"}}
-    assert property_for(root / "UK Properties/Kinsale/bills/INV 1.pdf", root, props) == ("Kinsale", "D")
+    props = {"HouseA": {"owner": "D"}, "HouseC": {"owner": "Q"}}
+    assert property_for(root / "UK Properties/HouseA/bills/INV 1.pdf", root, props) == ("HouseA", "D")
     assert property_for(root / "UK insurance/policy.pdf", root, props) == ("", "")
     cfg = {"workbooks": {"2025-26": "A/SA_2025-26.xlsx"}, "default_workbook": "SA_{ty}.xlsx",
            "earliest_tax_year": "2025-26"}
@@ -54,10 +54,10 @@ def test_clean_items_fixes_seen_model_errors():
 
 def test_hints_assign_property_outside_property_folders():
     root = Path("/x/FA")
-    props = {"Kinsale": {"owner": "D"}, "Kingfisher": {"owner": "Q"}}
-    hints = {"POL-K1": "Kinsale", "POL-Q9": "Kingfisher"}
-    assert property_for(root / "UK insurance/POL-K1-schedule.pdf", root, props, "", hints) == ("Kinsale", "D")
-    assert property_for(root / "UK insurance/x.pdf", root, props, "Policy POL-Q9 renewal", hints) == ("Kingfisher", "Q")
+    props = {"HouseA": {"owner": "D"}, "HouseB": {"owner": "Q"}}
+    hints = {"POL-K1": "HouseA", "POL-Q9": "HouseB"}
+    assert property_for(root / "UK insurance/POL-K1-schedule.pdf", root, props, "", hints) == ("HouseA", "D")
+    assert property_for(root / "UK insurance/x.pdf", root, props, "Policy POL-Q9 renewal", hints) == ("HouseB", "Q")
     assert property_for(root / "UK insurance/x.pdf", root, props, "nothing", hints) == ("", "")
 
 
