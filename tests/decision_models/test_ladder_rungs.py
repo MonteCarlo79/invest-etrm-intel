@@ -114,3 +114,88 @@ def test_actual_price_series_aligns_and_handles_tz():
             {"time": pd.Timestamp("2026-11-17 16:15:00", tz="UTC"), "price": 12.0}]
     s = lr.actual_price_series(D, recs)
     assert s[0] == 11.0 and s[1] == 12.0 and s[2] is None and len(s) == 96
+
+
+def test_zone_signature_free_vs_restricted():
+    assert lr.zone_signature([]) == "free" and lr.zone_signature(None) == "free"
+    assert lr.zone_signature(["green"] * 96) == "free"
+    a = lr.zone_signature(["red"] * 4 + ["green"] * 92)
+    b = lr.zone_signature(["red"] * 5 + ["green"] * 91)
+    assert a != "free" and a != b and len(a) == 10
+    assert a == lr.zone_signature(["red"] * 4 + ["green"] * 92)      # stable
+
+
+class _FakeEngine:
+    """connect()/begin() returning a conn whose execute() is scripted."""
+    def __init__(self, existing, batch_pf):
+        self.existing, self.batch_pf, self.upserts = existing, batch_pf, []
+
+    def _conn(self):
+        eng = self
+
+        class C:
+            def __enter__(s): return s
+            def __exit__(s, *x): return False
+
+            def execute(s, sql, params=None):
+                q = str(sql)
+                class R:
+                    def __init__(r, rows): r.rows = rows
+                    def __iter__(r): return iter(r.rows)
+                    def fetchone(r): return r.rows[0] if r.rows else None
+                if "INSERT INTO" in q:
+                    eng.upserts.append(params); return R([])
+                if "scenario_name = 'perfect_foresight_hourly'" in q:
+                    return R([eng.batch_pf] if eng.batch_pf else [])
+                return R(list(eng.existing.items()))
+        return C()
+    connect = begin = _conn
+
+
+def _patch_inputs(monkeypatch, zones):
+    import libs.decision_models.resources.bess_context as bc
+    import services.mengxi_nodal.dispatch_zones as dz
+    import services.mengxi_nodal.zone_forecast as zf
+    import services.mengxi_nodal.book_forecast as bf
+    from libs.trading_book import asset_book
+    from libs.trading_book.models import ForecastSet
+    monkeypatch.setattr(bc, "load_actual_prices_15min", lambda a, s, e: (
+        pd.DataFrame(_prices(lambda i: 100.0)), []))
+    monkeypatch.setattr(bc, "load_asset_metadata", lambda a, m: (dict(META), []))
+    monkeypatch.setattr(dz, "get_zones", lambda e, a, d: (zones, False))
+    monkeypatch.setattr(zf, "forecast_zones", lambda e, a, d: (["green"] * 96, [0.0] * 96))
+    monkeypatch.setattr(bf, "get_forecast", lambda e, st, d: ForecastSet(d, [float("nan")] * 96, None, None))
+    monkeypatch.setattr(asset_book.AssetBook, "strategies", lambda self, d: [])
+    monkeypatch.setattr(lr, "forecast_rung", lambda *a, **k: None)   # no forecast that day
+
+
+def test_free_day_copies_batch_pf_without_solving(monkeypatch):
+    _patch_inputs(monkeypatch, ["green"] * 96)
+    monkeypatch.setattr(lr, "lp_rung", lambda *a, **k: pytest.fail("no LP on a free day"))
+    eng = _FakeEngine({}, (1000.0, 2000.0, 3000.0, 6.0, 9.0, 1.5))
+    out = lr.write_ladder_rungs("suyou", D, engine=eng)
+    assert out["grid_pf"] is True and len(eng.upserts) == 1
+    u = eng.upserts[0]
+    assert u["scenario_name"] == lr.SCENARIO_GRID_PF and u["total"] == 3000.0
+    assert u["source_system"] == "lp_actual_zones:free"
+
+
+def test_restricted_day_solves_once_then_only_when_zones_change(monkeypatch):
+    zones = ["red"] * 8 + ["green"] * 88
+    _patch_inputs(monkeypatch, zones)
+    calls = []
+    monkeypatch.setattr(lr, "lp_rung", lambda day, lp, px, meta, z=None: calls.append(z) or {
+        "market": 1.0, "compensation": 2.0, "total": 3.0, "discharge_mwh": 1.0,
+        "charge_mwh": 1.0, "cycles": 0.1})
+    sig = lr.zone_signature(zones)
+    eng = _FakeEngine({}, (1.0, 1.0, 9.0, 1.0, 1.0, 1.0))
+    lr.write_ladder_rungs("suyou", D, engine=eng)
+    assert calls == [zones] and eng.upserts[0]["source_system"] == f"lp_actual_zones:{sig}"
+    # stored under the same zone pattern -> no re-solve
+    eng2 = _FakeEngine({lr.SCENARIO_GRID_PF: f"lp_actual_zones:{sig}"}, None)
+    lr.write_ladder_rungs("suyou", D, engine=eng2)
+    assert len(calls) == 1
+    # colours repainted since -> re-solved
+    eng3 = _FakeEngine({lr.SCENARIO_GRID_PF: "lp_actual_zones:free"}, None)
+    lr.write_ladder_rungs("suyou", D, engine=eng3)
+    assert len(calls) == 2 and len(eng3.upserts) == 1

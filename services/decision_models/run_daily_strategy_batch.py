@@ -308,7 +308,7 @@ def catch_up(end_date: date, lookback_days: int,
         # valued at actual prices). Stored rungs are skipped inside.
         for asset_code in (asset_codes or _IM_ASSETS):
             try:
-                r = write_ladder_rungs(asset_code, d, refresh_grid_pf=True)
+                r = write_ladder_rungs(asset_code, d)
                 out["rungs"] += (int(r.get("grid_pf", False)) + int(r["forecast"])
                                  + int(r["strategy"]))
             except Exception as exc:

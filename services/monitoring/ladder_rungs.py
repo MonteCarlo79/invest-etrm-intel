@@ -66,6 +66,8 @@ SCENARIO_STRATEGY = "tt_strategy"
 # source_system of zone-constrained rungs. Rows stored under an older source
 # (the 2026-11-23 unconstrained forecast rung, 'book_forecast_d1') are
 # recomputed once.
+# Stored as "lp_actual_zones:<zone signature>": the rung is re-solved only when
+# the day's zone pattern changes (late or repainted workbook colours).
 SOURCE_GRID_PF = "lp_actual_zones"
 SOURCE_FORECAST = "book_forecast_d1_zones"
 SOURCE_STRATEGY = "nodal_agent"
@@ -146,6 +148,38 @@ def strategy_rung(day: date, curve_mw: Optional[List[float]], price_records: Lis
                        meta["power_mw"] * meta["duration_h"])
 
 
+def zone_signature(zones: Optional[List[str]]) -> str:
+    """'free' when no slot is restricted (or no zone data), else a short hash
+    of the 96 labels."""
+    if not zones or all(z == "green" for z in zones):
+        return "free"
+    import hashlib
+    return hashlib.md5("".join(z[:1] for z in zones).encode()).hexdigest()[:10]
+
+
+_BATCH_PF_SQL = text("""
+    SELECT market_revenue, compensation_revenue, total_pnl, discharge_mwh,
+           charge_mwh, avg_daily_cycles
+    FROM reports.bess_asset_daily_scenario_pnl
+    WHERE asset_code = :ac AND trade_date = :td AND total_pnl IS NOT NULL
+      AND scenario_name = 'perfect_foresight_hourly'
+""")
+
+
+def unrestricted_pf_values(engine, asset_code: str, trade_date: date) -> Optional[dict]:
+    """The batch's stored unrestricted PF as rung values. With no restricted
+    slot the grid-feasible PF IS this LP — copying it avoids a second solve
+    (hard days hit the solver's 120 s limit) and keeps the two rungs exactly
+    equal, so grid_restriction_loss is exactly 0."""
+    with engine.connect() as conn:
+        r = conn.execute(_BATCH_PF_SQL, {"ac": asset_code, "td": trade_date}).fetchone()
+    if r is None:
+        return None
+    f = lambda v: None if v is None else float(v)
+    return {"market": f(r[0]), "compensation": f(r[1]), "total": f(r[2]),
+            "discharge_mwh": f(r[3]), "charge_mwh": f(r[4]), "cycles": f(r[5])}
+
+
 def zone_masks(zones: Optional[List[str]]) -> tuple:
     """96 red/yellow/green labels -> (no_charge_slots, no_discharge_slots),
     1-based; ([], no labels) -> (None, None) = unrestricted."""
@@ -207,17 +241,17 @@ def actual_price_series(day: date, price_records: List[dict]) -> List[Optional[f
 
 
 def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
-                       force: bool = False, refresh_grid_pf: bool = False) -> dict:
+                       force: bool = False) -> dict:
     """Compute and upsert the forecast + strategy rungs for one station-day.
 
     Returns {"grid_pf": bool, "forecast": bool, "strategy": bool,
     "skipped": reason|None}.
-    Rungs already stored are left alone unless force. refresh_grid_pf re-solves
-    the zone-constrained PF even when stored: a day's zone colours can arrive
-    (or be repainted) in a later workbook version — the newest day sheet is
-    often still unpainted when first received — so the daily catch-up refreshes
-    it across its window. Needs a complete day of actual prices; never raises
-    on missing inputs.
+    Rungs already stored are left alone unless force — except the
+    zone-constrained PF, which is redone whenever the day's zone pattern
+    differs from the one it was solved under: colours can arrive or be
+    repainted in a later workbook version (the newest day sheet is often
+    still unpainted when first received). Needs a complete day of actual
+    prices; never raises on missing inputs.
     """
     from libs.decision_models.resources.bess_context import (
         load_actual_prices_15min,
@@ -243,8 +277,15 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
     with engine.connect() as conn:
         have = {r[0]: r[1] for r in conn.execute(
             _EXISTING_SQL, {"ac": asset_code, "td": trade_date})}
-    want_pf = (force or refresh_grid_pf
-               or have.get(SCENARIO_GRID_PF) != SOURCE_GRID_PF)
+    from services.mengxi_nodal.dispatch_zones import get_zones
+    from services.mengxi_nodal.zone_forecast import forecast_zones
+
+    # The day's actual windows (latest earlier day when its file has not
+    # arrived; none at all -> unrestricted).
+    zones, _stale = get_zones(engine, asset_code, trade_date)
+    sig = zone_signature(zones)
+    grid_source = f"{SOURCE_GRID_PF}:{sig}"
+    want_pf = force or have.get(SCENARIO_GRID_PF) != grid_source
     want_fc = force or have.get(SCENARIO_FORECAST) != SOURCE_FORECAST
     want_st = force or SCENARIO_STRATEGY not in have
     if not (want_pf or want_fc or want_st):
@@ -258,9 +299,6 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
     price_records = prices_df.to_dict("records")
     meta, _ = load_asset_metadata(asset_code, trade_date)
 
-    from services.mengxi_nodal.dispatch_zones import get_zones
-    from services.mengxi_nodal.zone_forecast import forecast_zones
-
     rows = []
     if want_st:
         strategies = AssetBook(engine, station).strategies(trade_date)
@@ -269,18 +307,20 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
         if vals:
             rows.append((SCENARIO_STRATEGY, SOURCE_STRATEGY, vals))
     if want_pf:
-        # The day's actual windows (latest earlier day when its file has not
-        # arrived; none at all -> unrestricted, equal to the batch PF).
-        zones, _stale = get_zones(engine, asset_code, trade_date)
-        try:
-            vals = lp_rung(trade_date, actual_price_series(trade_date, price_records),
-                           price_records, meta, zones)
-        except Exception as exc:
-            logger.warning("ladder_rungs: %s %s grid-feasible LP failed — %s",
-                           asset_code, trade_date, exc)
-            vals = None
+        if sig == "free":
+            # No restricted slot: the grid-feasible PF is the batch's PF.
+            vals = unrestricted_pf_values(engine, asset_code, trade_date)
+        else:
+            try:
+                vals = lp_rung(trade_date,
+                               actual_price_series(trade_date, price_records),
+                               price_records, meta, zones)
+            except Exception as exc:
+                logger.warning("ladder_rungs: %s %s grid-feasible LP failed — %s",
+                               asset_code, trade_date, exc)
+                vals = None
         if vals:
-            rows.append((SCENARIO_GRID_PF, SOURCE_GRID_PF, vals))
+            rows.append((SCENARIO_GRID_PF, grid_source, vals))
     if want_fc:
         fs = book_forecast.get_forecast(engine, station, trade_date)
         # What was knowable D-1: the zone forecast (history strictly before

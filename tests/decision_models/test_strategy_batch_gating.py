@@ -77,8 +77,7 @@ def test_catch_up_walks_window_oldest_first_and_survives_failures(monkeypatch):
     monkeypatch.setattr(b, "run_for_date", fake_batch)
     monkeypatch.setattr(attr, "run_for_date", lambda d: seen.append(("a", d)) or 4)
 
-    def fake_rungs(asset_code, d, refresh_grid_pf=False):
-        assert refresh_grid_pf is True      # late zone colours: refresh in window
+    def fake_rungs(asset_code, d):
         seen.append(("r", d, asset_code))
         if asset_code == "hangjinqi":
             raise RuntimeError("rung blew up")          # must not stop the sweep
