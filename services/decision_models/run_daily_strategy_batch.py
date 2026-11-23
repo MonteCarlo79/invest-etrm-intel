@@ -93,10 +93,18 @@ def _ensure_dispatch_table() -> None:
         logger.warning("Could not ensure dispatch table: %s", exc)
 
 
+# A day counts as priced only when (nearly) all 96 slots are in. The filled
+# table lands ~2 days late and fills a day progressively (2026-11-21 sat at
+# 32 slots for a day): a LIMIT-1 check would solve the LP on a partial day
+# and _already_computed would then freeze that wrong result forever.
+_MIN_PRICE_SLOTS = 92
+
+
 def _has_prices(asset_code: str, trade_date: date) -> bool:
-    """True when prices exist for this asset/date — filled nodal table first
-    (complete days from 2026-10), then raw md_rt_nodal_price (history back to
-    2025-05), then canon.nodal_rt_price_15min (died 2026-09-24)."""
+    """True when a complete price day (>= _MIN_PRICE_SLOTS slots) exists for
+    this asset/date — filled nodal table first (complete days from 2026-10),
+    then raw md_rt_nodal_price (history back to 2025-05), then
+    canon.nodal_rt_price_15min (died 2026-09-24)."""
     try:
         from libs.decision_models.resources.bess_context import _run_query_safe
         import pandas as pd
@@ -116,19 +124,19 @@ def _has_prices(asset_code: str, trade_date: date) -> bool:
             for table, tscol in (("md_mengxi_nodal_price_96_filled", "metric_time"),
                                  ("md_rt_nodal_price", "datetime")):
                 sql = f"""
-                    SELECT 1
+                    SELECT COUNT(DISTINCT {tscol}) AS n
                     FROM marketdata.{table}
                     WHERE node_name = %(node)s
                       AND {tscol} >= %(start_ts)s
                       AND {tscol} < %(end_ts)s
-                    LIMIT 1
                 """
                 df, err = _run_query_safe(sql, {
                     "node": node,
                     "start_ts": f"{trade_date} 00:00:00",
                     "end_ts": f"{end_d} 00:00:00",
                 })
-                if err is None and not df.empty:
+                if (err is None and not df.empty
+                        and int(df["n"].iloc[0] or 0) >= _MIN_PRICE_SLOTS):
                     return True
         sql = """
             SELECT 1
@@ -152,10 +160,17 @@ def _has_prices(asset_code: str, trade_date: date) -> bool:
 def _already_computed(asset_code: str, trade_date: date) -> bool:
     """
     Return True if both LP scenarios are already in
-    reports.bess_asset_daily_scenario_pnl for this asset/date.
+    reports.bess_asset_daily_scenario_pnl for this asset/date — and the
+    nominated/actual leg is not waiting on a recompute.
+
+    Nominations and actuals come from the WeCom workbooks and can land days
+    after prices. A day solved before they arrived has LP scenarios but no
+    nominated_dispatch row; once ops rows exist for it, report "not computed"
+    so the day is redone once and the ladder gets its nominated/cleared rungs.
     """
     try:
         from libs.decision_models.resources.bess_context import (
+            load_ops_dispatch_15min,
             load_precomputed_scenario_pnl,
         )
         df, _ = load_precomputed_scenario_pnl(asset_code, trade_date, trade_date)
@@ -165,7 +180,12 @@ def _already_computed(asset_code: str, trade_date: date) -> bool:
         present = set(
             df.loc[df["scenario_available"] == True, "scenario_name"].tolist()
         )
-        return lp_names.issubset(present)
+        if not lp_names.issubset(present):
+            return False
+        if "nominated_dispatch" in present:
+            return True
+        ops_df, _ = load_ops_dispatch_15min(asset_code, trade_date, trade_date)
+        return ops_df.empty
     except Exception:
         return False
 
@@ -250,6 +270,33 @@ def run_for_date(
             logger.error("FAIL %s %s — %s", asset_code, trade_date, exc, exc_info=True)
 
     return written
+
+
+def catch_up(end_date: date, lookback_days: int,
+             asset_codes: Optional[List[str]] = None) -> dict:
+    """Batch + attribution for every day in [end_date - lookback_days + 1,
+    end_date], oldest first. This is what the daily rule runs.
+
+    A yesterday-only run never works: prices complete ~2 days late and
+    nominations later still, so each day must be retried until its inputs
+    land (attribution wrote nothing from 2026-11-07 to 11-22 this way).
+    Days already complete are skipped by _already_computed, so the steady
+    state costs one new day per run; attribution re-upserts are cheap.
+    """
+    from services.monitoring.run_daily_attribution import run_for_date as _attrib
+    out = {"batch": 0, "attribution": 0, "days": 0}
+    for i in range(lookback_days - 1, -1, -1):
+        d = end_date - timedelta(days=i)
+        out["days"] += 1
+        try:
+            out["batch"] += run_for_date(d, asset_codes=asset_codes)
+        except Exception as exc:
+            logger.error("catch_up batch FAIL %s — %s", d, exc, exc_info=True)
+        try:
+            out["attribution"] += _attrib(d)
+        except Exception as exc:
+            logger.error("catch_up attribution FAIL %s — %s", d, exc, exc_info=True)
+    return out
 
 
 def main() -> None:
