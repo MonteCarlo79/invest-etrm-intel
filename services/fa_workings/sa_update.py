@@ -44,7 +44,7 @@ BOX = {"rent": 20, "service_charge": 24, "ground_rent": 24, "insurance": 24,
        "repair": 25, "agent_fee": 27, "other_cost": 29}
 
 PROMPT = """You extract money items from one UK residential-letting document. Reply with JSON only:
-{"doc_type": "landlord_statement|invoice|service_charge_demand|ground_rent_demand|receipt|insurance_schedule|info",
+{"doc_type": "landlord_statement|invoice|estimate|service_charge_demand|ground_rent_demand|receipt|insurance_schedule|info",
  "items": [{"date": "YYYY-MM-DD", "description": "...", "amount": 123.45,
             "category": "rent|agent_fee|repair|service_charge|ground_rent|insurance|other_cost",
             "direction": "income|cost"}]}
@@ -52,6 +52,7 @@ Rules:
 - Use only numbers printed in the document. Never compute, guess or round. Amount is a positive number in GBP.
 - Landlord/rental statement: one item per rent received (income) and one per deduction (agent fee, repair, etc.). Skip opening/closing balances, subtotals and the net amount paid to the landlord.
 - Invoice or demand: one item for the total payable (category by what it is for); date = invoice/demand date.
+- Estimates and quotations are not costs: doc_type "estimate", items [].
 - Budgets, letters, notices, reminders, certificates, policy wording, terms and conditions: doc_type "info", items [].
 - Dates as YYYY-MM-DD. If no date for an item, use the document date.
 
@@ -85,6 +86,20 @@ _RECAT = [(re.compile(r"commission|letting fee|management fee|renewal fee|tenanc
           (re.compile(r"insurance", re.I), "insurance"),
           (re.compile(r"ground rent", re.I), "ground_rent"),
           (re.compile(r"service charge", re.I), "service_charge")]
+_ESTIMATE = re.compile(r"(^|[^a-z])(est\d|estimate|quotation|quote)", re.I)
+
+
+def is_estimate(name: str, doc_type: str = "") -> bool:
+    """Quotes/estimates are not costs (Kingfisher folder held many EST*.pdf)."""
+    return doc_type == "estimate" or bool(_ESTIMATE.search(name))
+
+
+def dup_key(r: "Row") -> Optional[tuple]:
+    if r.amount is None or not r.item_date:
+        return None
+    return (r.prop, r.category, round(r.amount, 2), r.item_date)
+
+
 _ONE_TOTAL = {"invoice", "service_charge_demand", "ground_rent_demand", "receipt"}
 
 
@@ -177,18 +192,42 @@ def extract(name: str, text: str) -> dict:
 
 # ── workbook ────────────────────────────────────────────────────────────────
 
-def listed_amounts(wb, owner: str) -> dict[float, str]:
-    """Amounts already in the owner's curated sheet → 'sheet!row'."""
-    out = {}
+def _first_date(v) -> Optional[date]:
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    m = re.match(r"(\d{4})-(\d{2})(?:-(\d{2}))?", str(v or ""))
+    if not m:
+        return None
+    return date(int(m[1]), int(m[2]), int(m[3] or 15))
+
+
+def listed_items(wb, owner: str) -> list[tuple[str, float, Optional[date], str]]:
+    """(sheet tax year, amount, date paid, 'sheet!row') from the owner's curated
+    sheets, e.g. 'Dipeng 2025-26' (columns: item, date paid, amount)."""
+    out = []
     for ws in wb.worksheets:
-        if ws.title.startswith(owner) and ws.title != SHEET:
-            for row in ws.iter_rows(min_row=2):
-                v = row[2].value if len(row) > 2 else None
-                try:
-                    out.setdefault(round(float(v), 2), f"{ws.title}!{row[0].row}")
-                except (TypeError, ValueError):
-                    pass
+        m = re.match(re.escape(owner) + r"\s+(\d{4}-\d{2})$", ws.title)
+        if not m:
+            continue
+        for row in ws.iter_rows(min_row=2):
+            try:
+                amt = round(float(row[2].value), 2)
+            except (TypeError, ValueError, IndexError):
+                continue
+            out.append((m[1], amt, _first_date(row[1].value), f"{ws.title}!{row[0].row}"))
     return out
+
+
+def already_listed(listed, ty: str, amount: Optional[float], d: Optional[date], days: int = 60) -> str:
+    """Same tax year, same amount, paid within ±days (or no usable date) → ref."""
+    if amount is None:
+        return ""
+    for lty, amt, ld, ref in listed:
+        if lty == ty and abs(amt - amount) < 0.005 and (ld is None or d is None or abs((ld - d).days) <= days):
+            return ref
+    return ""
 
 
 @dataclass
@@ -227,14 +266,29 @@ def write_rows(cfg: dict, rows: list[Row], dry_run: bool) -> list[str]:
             wb = openpyxl.Workbook()
             wb.active.title = SHEET
         ws = wb[SHEET] if SHEET in wb.sheetnames else wb.create_sheet(SHEET)
-        if ws.max_row == 1 and ws.cell(1, 1).value is None:
-            ws.append(HEADER)
-            for c in ws[1]:
-                c.font = Font(bold=True)
-        known = {o: listed_amounts(wb, o) for o in {r.owner for r in rs if r.owner}}
+        if ws.max_row <= 1 and ws["A1"].value is None:      # fresh sheet: header in row 1
+            for j, h in enumerate(HEADER, 1):
+                ws.cell(1, j, h).font = Font(bold=True)
+        known = {o: listed_items(wb, o) for o in {r.owner for r in rs if r.owner}}
+        hdr = [c.value for c in ws[1]]
+        seen_keys: dict[tuple, int] = {}
+        if "Source file" in hdr:                      # rows already on the sheet
+            ci = {h: hdr.index(h) for h in ("Property", "Category", "Amount £", "Date")}
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                try:
+                    k = (row[ci["Property"]], row[ci["Category"]], round(float(row[ci["Amount £"]]), 2), str(row[ci["Date"]])[:10])
+                except (TypeError, ValueError):
+                    continue
+                seen_keys.setdefault(k, 0)
         today = date.today().isoformat()
         for r in rs:
-            dup = known.get(r.owner, {}).get(round(r.amount, 2)) if r.amount is not None else None
+            d = date.fromisoformat(r.item_date) if r.item_date else None
+            dup = already_listed(known.get(r.owner, []), r.ty, r.amount, d)
+            k = dup_key(r)
+            if k and k in seen_keys:
+                r.status = "duplicate of an earlier row – ignore"
+            elif k:
+                seen_keys[k] = ws.max_row + 1
             ws.append([today, r.ty, r.owner, r.prop, r.item_date, r.category, r.direction, r.amount,
                        BOX.get(r.category, "") if r.amount is not None else "", r.description,
                        r.verified, dup or "", r.source, r.status])
@@ -308,7 +362,7 @@ def main() -> None:
         if not prop:
             prop, owner = property_for(p, ROOT, cfg.get("properties", {}), text, cfg.get("hints"))
         items = clean_items(str(res.get("doc_type") or ""), res.get("items") or [], text)
-        if res.get("doc_type") == "info" or not items:
+        if res.get("doc_type") in ("info", "estimate") or not items or is_estimate(p.name, str(res.get("doc_type") or "")):
             stats["info"] += 1
             newly_done[rel] = key
             print(f"[{i}/{len(todo)}] info  {rel}", flush=True)
