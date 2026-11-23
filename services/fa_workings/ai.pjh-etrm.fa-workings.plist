@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.pjh-etrm.fa-workings</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.venvs/bess-platform/bin/python</string>
+    <string>-W</string><string>ignore</string>
+    <string>-m</string><string>services.fa_workings.sa_update</string>
+  </array>
+  <key>WorkingDirectory</key><string>$HOME/bess-platform-local</string>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>30</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/fa_workings.log</string>
+  <key>StandardErrorPath</key><string>/tmp/fa_workings.err</string>
+</dict>
+</plist>
