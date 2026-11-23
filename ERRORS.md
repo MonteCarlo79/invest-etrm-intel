@@ -650,3 +650,10 @@ Tool still read marketdata.ops_bess_dispatch_15min (dead). Now served by libs/tr
 
 ## 2026-11-23 — 武川 nominations frozen at 10-13: month-less accumulating file
 `220kV旭纯哈乐…电力交易调度计划表.xls` carries no month/date → classified 'other' → `if not dest.exists()` kept only the first copy. Fix d5794f32: stamp by last day sheet (调度计划表MM.DD) → monthly retention. Also: registry price nodes for 阿拉善 pointed at a station name absent from the price table (阿拉腾敖包站; real: 景敖乌珠日储能电站 own node + 阿拉腾站) — probe the table for node names, don't infer them.
+
+## 2026-11-23 — Attribution ladder was all-NULL for its whole history (found during deploy)
+**Symptom:** every row of reports.bess_asset_daily_attribution had NULL in all P&L and loss columns (162 days × 4 stations). Book-tab waterfall/backtest and the Trader's get_asset_pnl showed nothing real. The 2026-11-09 "revival" and my own freshness check + morning backfill all counted ROWS / latest dates, never values.
+**Root cause:** run_daily_attribution read `total_revenue_yuan` (legacy, NULL since 2026-04) while the LP batch and ops P&L write `total_pnl`; and its scenario map expected legacy names (perfect_foresight_grid_feasible, tt_*) while the batch writes perfect_foresight_hourly. forecast_ols_rt_time_v1 never solves ("no forecast output for target dates"), so `_already_computed` (which required it) was never true.
+**Fix:** cf6c5791 — COALESCE(total_pnl, total_revenue_yuan), perfect_foresight_hourly → pf_grid_feasible_pnl, NULL scenarios never overwrite a filled rung, forecast scenario not required. History recomputed (1,052 rows).
+**Still empty by design:** tt_forecast_optimal_pnl, tt_strategy_pnl, pf_unrestricted_pnl — no scenario feeds them; waterfall's starting rung (Σ tt_strategy_pnl) is therefore 0.
+**Rule:** verify a repair by reading VALUES (a non-null count or a sample row), not row counts or max dates. Freshness ≠ correctness.
