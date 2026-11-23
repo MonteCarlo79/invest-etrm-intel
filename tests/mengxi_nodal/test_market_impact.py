@@ -479,3 +479,27 @@ def test_15min_wrapper_passes_impact(lp_solver):
         impact_lambda=1e4)
     assert np.allclose(disp["discharge_mw"], 0)
     assert float(profit.sum()) == pytest.approx(0.0)
+
+
+def test_dispatch_sql_sums_exact_account_names(sqlite_engine):
+    """武川 trades under two exchange accounts that differ from its registry
+    plant_name: the dispatch read must match cleared_names exactly and sum
+    per slot (the old LIKE '%plant_name%' returned nothing for it)."""
+    from sqlalchemy import bindparam
+    from libs.trading_book.registry import get_station
+    names = list(get_station("wuchuan").cleared_names)
+    assert len(names) == 2 and "武川储能电站" not in names
+    with sqlite_engine.begin() as conn:
+        for name, mw in ((names[0], 100.0), (names[1], 140.0),
+                         ("旭纯哈乐储能电站三", 999.0)):   # near-miss: excluded
+            conn.execute(text(
+                "INSERT INTO marketdata.md_id_cleared_energy "
+                "(plant_name, datetime, cleared_energy_mwh, cleared_price) "
+                "VALUES (:n, '2026-11-01 00:00:00', :mw, 0)"),
+                {"n": name, "mw": mw})
+    df = pd.read_sql(
+        text(_DISPATCH_SQL).bindparams(bindparam("names", expanding=True)),
+        sqlite_engine, params={"names": names, "s": "2026-11-01 00:00:00",
+                               "e": "2026-11-02 00:00:00"})
+    assert len(df) == 1 and float(df["actual_dispatch_mw"].iloc[0]) == 240.0
+    assert "LIKE" not in _DISPATCH_SQL

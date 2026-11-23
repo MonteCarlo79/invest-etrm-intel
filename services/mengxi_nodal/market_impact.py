@@ -58,6 +58,7 @@ from datetime import date, datetime
 import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam
 
 from libs.trading_book.registry import get_station
 from services.mengxi_nodal.book_forecast import _candidate_nodes, _history_window
@@ -159,12 +160,18 @@ _PRICE_SQL = """
 # sheet + settlement bills): the exchange's per-plant 中标电量 is the interval
 # AVERAGE POWER in MW — cleared_energy_mwh is MW despite the name; negative =
 # charging. Use it as MW directly (no ×4). True interval energy = value × 0.25.
+# Exact exchange-account names (StationRef.cleared_names), summed per slot:
+# a station can trade under an account name that differs from its registry
+# plant_name (武川 = 旭纯哈乐储能电站 + 旭纯哈乐储能电站二) — the old
+# LIKE '%plant_name%' found nothing for it, and scanned the 36M-row table.
 _DISPATCH_SQL = """
-    SELECT datetime AS interval_start, cleared_energy_mwh AS actual_dispatch_mw
+    SELECT datetime AS interval_start,
+           SUM(cleared_energy_mwh) AS actual_dispatch_mw
     FROM marketdata.md_id_cleared_energy
-    WHERE plant_name LIKE :pn
+    WHERE plant_name IN :names
       AND datetime >= :s
       AND datetime < :e
+    GROUP BY datetime
     ORDER BY datetime
 """
 
@@ -400,11 +407,12 @@ def estimate_lambda(engine, asset_code: str, lookback_days: int = _LOOKBACK_DAYS
         return skip(f"{asset_code}: node {node} has no filled-table prices "
                     f"in window [{s}, {e})")
 
-    disp_df = pd.read_sql(text(_DISPATCH_SQL), engine,
-                          params={"pn": f"%{station.plant_name}%", "s": s, "e": e})
+    disp_df = pd.read_sql(
+        text(_DISPATCH_SQL).bindparams(bindparam("names", expanding=True)),
+        engine, params={"names": list(station.cleared_names), "s": s, "e": e})
     if disp_df.empty:
         return skip(f"{asset_code}: no cleared-dispatch rows for "
-                    f"{station.plant_name} in window [{s}, {e})")
+                    f"{'/'.join(station.cleared_names)} in window [{s}, {e})")
 
     _ensure_nomination_table(engine)
     nom_df = get_nominations(engine, asset_code,
