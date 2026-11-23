@@ -72,8 +72,11 @@ SERVICES: dict[str, dict[str, Any]] = {
         "svc": "bess-platform-ph-market-svc",
         "family": "bess-platform-ph-market",
         "container": "ph-market",
-        "has_scheduler": True,
-        "scheduler_cmd": _INTL_SCHEDULER + ["--code", "ph", "--app-dir", "apps/ph-market"],
+        # No standalone scheduler: the image does not ship scheduler_service.py and
+        # the jobs run inside the Streamlit process. Scheduler mode crash-looped
+        # the service (exit 2) from 2026-08-11, so "Stop Web" is a plain stop.
+        "has_scheduler": False,
+        "scheduler_cmd": [],
         "web_url": "/ph-market/",
         "label": "PH Market",
     },
@@ -81,8 +84,11 @@ SERVICES: dict[str, dict[str, Any]] = {
         "svc": "bess-platform-po-market-svc",
         "family": "bess-platform-po-market",
         "container": "po-market",
-        "has_scheduler": True,
-        "scheduler_cmd": _INTL_SCHEDULER + ["--code", "po", "--app-dir", "apps/po-market"],
+        # No standalone scheduler: the image does not ship scheduler_service.py and
+        # the jobs run inside the Streamlit process. Scheduler mode crash-looped
+        # the service (exit 2) from 2026-08-11, so "Stop Web" is a plain stop.
+        "has_scheduler": False,
+        "scheduler_cmd": [],
         "web_url": "/po-market/",
         "label": "PO Market",
     },
