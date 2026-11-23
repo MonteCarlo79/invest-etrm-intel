@@ -15,17 +15,9 @@ import argparse
 import logging
 import os
 import sys
-from datetime import date
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [ph-jobs] %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("ph-jobs")
-
-_WEEKLY_DOC_SOURCES = [
-    "wesm_market_watch", "wesm_assessment", "wesm_retail_assessment",
-    "wesm_overriding_constraints", "iemop_knowledge_center",
-    "wesm_bess_study", "iemop_market_data",
-]
-
 
 def _prices(days_back: int, overwrite: bool) -> None:
     import psycopg2
@@ -51,9 +43,8 @@ def _prices(days_back: int, overwrite: bool) -> None:
 def _kb_ingest() -> None:
     from services.ph_knowledge.ingest import run_knowledge_ingest
 
+    # Runs every registered connector, including the WESM / IEMOP publication crawl.
     logger.info("kb ingest: %s", run_knowledge_ingest(verbose=False))
-    if date.today().weekday() == 0:  # Monday: WESM / IEMOP publication crawl
-        logger.info("kb weekly docs: %s", run_knowledge_ingest(only=_WEEKLY_DOC_SOURCES, verbose=False))
 
 
 def _digest() -> None:
