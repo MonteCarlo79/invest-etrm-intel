@@ -141,9 +141,10 @@ STATIONS: list[StationRef] = [
         capacity_mw=1000,
         substation="武川500kV变电站",
         conn_kv=220,
-        price_nodes=[                  # per knowledge/mengxi/bess_node_registry.md
-            "内蒙.武川站/220kV.1M–4M",
-            "内蒙.武川站/500kV.1M–2M",
+        price_nodes=[                  # own nodes first (present in the filled
+            "内蒙.旭纯哈乐储能电站/220kV.1M–2M",   # price table, probed 2026-11-23);
+            "内蒙.武川站/220kV.1M–4M",       # parents per knowledge/mengxi/
+            "内蒙.武川站/500kV.1M–2M",       # bess_node_registry.md
         ],
         # Exchange trades the site as two accounts, 500MW/2GWh each (one site;
         # a single account was not allowed). Observed MW < nameplate: export
@@ -158,9 +159,12 @@ STATIONS: list[StationRef] = [
         capacity_mw=1000,
         substation="阿拉腾敖包500kV变电站",
         conn_kv=220,
-        price_nodes=[                  # candidates — station had not appeared
-            "内蒙.阿拉腾敖包站/220kV.1M–4M",   # in the price table as of 2026-09
-        ],
+        price_nodes=[                  # own node under the exchange account
+            "内蒙.景敖乌珠日储能电站/220kV.1M",  # name (in the price table, probed
+            "内蒙.阿拉腾站/220kV.1M–4M",      # 2026-11-23). Parent is listed as
+        ],                             # 阿拉腾站 there — the old 阿拉腾敖包站
+                                       # candidate never existed, so the book
+                                       # had no forecast and no λ.
         md_plant_names=("景敖乌珠日储能电站",),  # exchange account name (1GW/4GWh) — Dipeng 2026-11-11
         data_path="full",
         subsidy_cny_per_mwh=280,       # post-2026 unlisted default (COD 2026-07)

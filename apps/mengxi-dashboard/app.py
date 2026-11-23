@@ -1559,11 +1559,21 @@ with tab_trader:
         _load_trader_memories.clear()
 
     # ── system prompt ─────────────────────────────────────────────────────────
+    # Station list comes from the trading-book registry (single source), not
+    # a hard-coded four: bameng/wulate/wuchuan/alashan were invisible to the agent.
+    from libs.trading_book.registry import get_stations as _tb_stations
+    _TRADER_STATIONS = _tb_stations(asset_type="bess", data_path="full")
+    _TRADER_CODES = " / ".join(s.asset_code for s in _TRADER_STATIONS)
     _TRADER_BASE_SYSTEM = (
+        "Your knowledge comes exclusively from the data tools below — never from general "
+        "training data or external information. Do not state any price level, P&L figure, "
+        "dispatch value, trend, or market event unless it was returned by a tool call in "
+        "this conversation. If a tool returns no rows, say the data is missing — do not "
+        "estimate.\n\n"
         "You are the Trader — a BESS operations analyst specialising in Inner Mongolia "
         "(Mengxi) dispatch performance, P&L attribution, and market trading analysis. "
-        "Your scope: 4 operating BESS assets — SuYou (景蓝乌尔图), HangJinQi (悦杭独贵), "
-        "SiZiWangQi (景通四益堂储), GuShanLiang (裕昭沙子坝). "
+        "Your scope: the operating BESS books — "
+        + ", ".join(f"{s.asset_code} ({s.plant_name})" for s in _TRADER_STATIONS) + ". "
         "You help the operations and trading team understand daily P&L drivers, "
         "execution gaps, dispatch quality, and RT price dynamics.\n\n"
         "Rules:\n"
@@ -1575,7 +1585,9 @@ with tab_trader:
         "5. Attribute losses clearly: PF Unrestricted → PF Grid-Feasible → "
         "Forecast Optimal → Strategy → Nominated → Cleared Actual.\n"
         "6. Respond concisely with actionable insights for the trading team.\n"
-        "7. Asset codes: suyou / hangjinqi / siziwangqi / gushanliang.\n"
+        "7. Asset codes: " + _TRADER_CODES + ". Power is MW, positive = discharge, "
+        "negative = charge; get_dispatch_data's cleared_mw is the exchange-cleared MW "
+        "(not MWh — interval energy = MW × 0.25).\n"
         "8. Use get_review_metrics for monthly 复盘 reported figures (strategy/cleared/executed "
         "revenue, cycles, spreads); strategy/cleared/executed_revenue_cny = spot + capacity compensation before fees; total_revenue_cny = after 系统运行费/线损/调频分摊; ¥."
     )
@@ -1608,7 +1620,7 @@ with tab_trader:
                 "properties": {
                     "asset_code": {
                         "type": "string",
-                        "description": "suyou / hangjinqi / siziwangqi / gushanliang. Omit for all assets.",
+                        "description": _TRADER_CODES + ". Omit for all assets.",
                     },
                     "start_date": {"type": "string", "description": "YYYY-MM-DD"},
                     "end_date":   {"type": "string", "description": "YYYY-MM-DD"},
@@ -1619,17 +1631,17 @@ with tab_trader:
         {
             "name": "get_dispatch_data",
             "description": (
-                "Get 15-min dispatch data for a BESS asset on a specific date. "
-                "Returns: interval_start, nominated_dispatch_mw (申报曲线, MW), "
-                "actual_dispatch_mw (实际充放曲线, MW), nodal_price_excel (CNY/MWh). "
-                "Positive = discharge, negative = charge. "
-                "Use to analyse execution gaps, nomination vs actual, and intraday dispatch patterns."
+                "Get the 15-min dispatch chain for a BESS asset on a specific date. "
+                "Returns rows: time, nominated_mw (交易员申报计划), actual_mw (实际执行功率), "
+                "cleared_mw (交易中心出清, MW), cleared_price_cny_mwh; plus coverage_slots "
+                "per layer (out of 96). Positive = discharge, negative = charge; a null "
+                "layer means that data has not arrived. "
+                "Use to analyse execution gaps, nomination vs cleared vs actual, and intraday dispatch patterns."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "asset_code": {"type": "string",
-                                  "description": "suyou / hangjinqi / siziwangqi / gushanliang"},
+                    "asset_code": {"type": "string", "description": _TRADER_CODES},
                     "date":       {"type": "string", "description": "YYYY-MM-DD"},
                 },
                 "required": ["asset_code", "date"],
@@ -1705,8 +1717,9 @@ with tab_trader:
             where_clauses = ["trade_date >= :start", "trade_date <= :end"]
             params: dict = {"start": inp["start_date"], "end": inp["end_date"]}
             if inp.get("asset_code"):
+                from libs.trading_book.agent_tools import attribution_code as _attr_code
                 where_clauses.append("asset_code = :asset")
-                params["asset"] = inp["asset_code"]
+                params["asset"] = _attr_code(inp["asset_code"])  # bameng is stored as 'hetao'
             where_sql = " AND ".join(where_clauses)
             try:
                 df = pd.read_sql(
@@ -1727,19 +1740,15 @@ with tab_trader:
                 return f"Error querying P&L: {_e}"
 
         elif name == "get_dispatch_data":
+            # Through the book (WeCom nominations/actuals + exchange cleared):
+            # ops_bess_dispatch_15min died 2026-04-21 and returned nothing since.
             try:
-                df = pd.read_sql(
-                    _sql_text("""
-                        SELECT interval_start, asset_code,
-                               nominated_dispatch_mw, actual_dispatch_mw,
-                               nodal_price_excel
-                        FROM marketdata.ops_bess_dispatch_15min
-                        WHERE asset_code = :asset AND data_date = :dt
-                        ORDER BY interval_start
-                    """),
-                    engine, params={"asset": inp["asset_code"], "dt": inp["date"]},
-                )
-                return df.to_json(orient="records", default_handler=str)
+                import json as _json
+                from libs.trading_book.agent_tools import dispatch_day_payload
+                return _json.dumps(
+                    dispatch_day_payload(engine, inp["asset_code"],
+                                         date.fromisoformat(inp["date"])),
+                    ensure_ascii=False, default=str)
             except Exception as _e:
                 return f"Error querying dispatch data: {_e}"
 

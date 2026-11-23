@@ -61,7 +61,12 @@ def test_new_bess_entries():
     assert al.cleared_names == ("景敖乌珠日储能电站",)
     # stations without exchange aliases keep plant_name as the lookup key
     assert get_station("suyou").cleared_names == ("景蓝乌尔图储能电站",)
-    assert any("阿拉腾敖包" in n for n in al.price_nodes)
+    # own nodes first, under the exchange account names (in the price table)
+    assert wc.price_nodes[0].startswith("内蒙.旭纯哈乐储能电站/")
+    assert al.price_nodes[0] == "内蒙.景敖乌珠日储能电站/220kV.1M"
+    # parent is 阿拉腾站 in the price table; 阿拉腾敖包站 never existed there
+    assert any("阿拉腾站" in n for n in al.price_nodes)
+    assert not any("阿拉腾敖包" in n for n in al.price_nodes)
 
 def test_wind_entries():
     l = get_station("lingt46")
