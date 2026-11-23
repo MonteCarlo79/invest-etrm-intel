@@ -1080,6 +1080,22 @@ def create_app() -> FastAPI:
             },
         )
 
+    # Financial Advisor attachment ingest: 10:15 Beijing (02:15 UTC). Saves
+    # property/tax/bank mail attachments to OneDrive Home/Financial Advisor/
+    # per OneDrive-hosted _ingest_rules.json. Never modifies mail.
+    _fa_pg = os.environ.get("PGURL") or os.environ.get("HERMES_DB_URL", "")
+    if outlook and _fa_pg:
+        from services.hermes.fa_ingest import scheduled_job as _fa_ingest_job
+        from services.hermes.onedrive_client import get_shared_onedrive_client as _fa_od
+        _fa_onedrive = _fa_od(_fa_pg)
+        if _fa_onedrive:
+            scheduler.add_job(
+                _fa_ingest_job, "cron", hour=2, minute=15,
+                kwargs={"outlook": outlook, "onedrive": _fa_onedrive, "pg_url": _fa_pg,
+                        "feishu": feishu,
+                        "open_id": os.environ.get("FEISHU_OWNER_OPEN_ID", "")},
+            )
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
