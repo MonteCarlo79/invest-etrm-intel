@@ -83,7 +83,7 @@ def amount_in_text(amount: float, text: str) -> bool:
 _DROP = re.compile(r"payment to (the )?landlord|paid to (the )?landlord|amount (paid|due) to landlord|"
                    r"opening balance|closing balance|brought forward|carried forward|sub-?total", re.I)
 _RECAT = [(re.compile(r"commission|letting fee|management fee|renewal fee|tenancy renewal|admin fee", re.I), "agent_fee"),
-          (re.compile(r"insurance", re.I), "insurance"),
+          (re.compile(r"insurance|rent protection|rent guarantee", re.I), "insurance"),
           (re.compile(r"ground rent", re.I), "ground_rent"),
           (re.compile(r"service charge", re.I), "service_charge")]
 _ESTIMATE = re.compile(r"(^|[^a-z])(est\d|estimate|quotation|quote)", re.I)
