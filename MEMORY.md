@@ -821,3 +821,22 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - FIRST: check the v108 scheduler log (stream `gb-market/gb-market/fdef3fb629ae4953ae0212a907df21c1`): `Fuel mix catch-up: … → <NESO latest>` with rows > 0; Timera fetching only `/blog/…` articles (expect ~9 new docs, then KB digest insights at 03:45); `Modo AI distillation: N new docs` with N > 0 at 20:00 SGT.
 - Open, not touched: GB daily report disabled via `intl_market.platform_settings` `daily_report_enabled` (ask the user before re-enabling); `entso_e.py` NESO generation-mix KB narrative uses a 14-day lookback against the ~18-day lag, so it yields nothing; NESO publications scrape returns nothing (static fallback); zero-doc Modo runs should raise an alert (Hermes patrol) instead of logging success; dead code: 14:00 `_modo_keepalive_job` and Playwright admin buttons in app.py.
 - Drop the two `_bak_20261123_timera` tables once the cleanup is confirmed fine.
+
+## Session Summary, 2026-11-23 (addendum: v108 verification → v110)
+**Worked on:** Verified the v108 overnight runs, then fixed and deployed the two defects they exposed in the KB digest and the Timera scraper.
+**Completed:**
+- v108 overnight (SGT 03:00–03:45) confirmed: fuel-mix catch-up 48 rows (was 0), Timera fetched exactly the 9 `/blog/` articles, KB digest 32 new insights, REMIT 158 messages. Daily report left OFF (user: switched off intentionally).
+- Root cause of a lost Timera insight set: the KB digest treated any API/parse failure as "no insights" and stamped the doc with a permanent `_processed_no_insights` placeholder. Fixed (c1d719cc, deployed v109/td:32): failures return None and are retried; genuine empty stays []; lenient JSON parse. 8 new tests; the failing-path tests fail on the old code.
+- Recovered the GB-margins article by hand (deleted its placeholder row, re-digested: 6 insights). My first hypothesis (3,500-char truncation) was wrong; measured before fixing.
+- Second root cause: on Timera's current layout `div.entry-content` is the "Related client case studies" widget; the article is `article div.text-content` blocks, so 4 docs stored widget text (ttf-retreats 868→4,386; ccus 552→5,639; gas-price-uncertainty 816→929; why-did-germany 621→1,299, whose 4 insights were drawn from the widget). Scraper fixed (7f749401, deployed v110/td:33); the 4 docs corrected and re-digested (20 insights). Docs are insert-once (`ON CONFLICT DO NOTHING`), so a scraper fix never repairs stored rows: update explicitly.
+- Corrected my own earlier claim: `intl_market_common/expert_memory_base.py` never stamps placeholders (retries empties nightly: wasteful, not lossy); left untouched.
+**In progress:**
+- Modo AI first scheduled run on fixed code: 20:00 SGT 2026-11-23, not yet observed (v2 flow was verified live by probe).
+**Decisions made:**
+- Deploy cadence: each deploy needed its own explicit yes; v109 and v110 were one-file CodeBuild deltas with a sha256 baseline gate on the replaced file.
+- Four docs (not the three offered) were corrected because why-did-germany had the identical defect; disclosed before and after.
+**Next session:**
+- FIRST: Modo run at 20:00 SGT (`Modo AI distillation: N new docs`, N>0, quota permitting) and 03:30 SGT Timera run (new posts must store real bodies, not "Related client case studies").
+- Drop four backup tables when satisfied: `gb_knowledge_docs_bak_20261123_timera`, `gb_expert_insights_bak_20261123_timera`, `gb_knowledge_docs_bak_20261123_timera_body`, `gb_expert_insights_bak_20261123_timera_body` (schema intl_market).
+- Still open (not touched): `entso_e.py` NESO generation-mix KB narrative (14-day lookback vs ~18-day lag), NESO publications scrape fallback, zero-doc Modo run should alert via Hermes patrol, dead 14:00 keepalive job + Playwright admin buttons in app.py, shared digest module re-digests empty docs nightly.
+- Timera is flaky from the Mac (timeouts); probe it via ECS run-task.
