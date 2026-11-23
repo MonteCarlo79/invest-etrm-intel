@@ -48,9 +48,25 @@ def test_zone_masks_force_charge_only_and_discharge_only():
     c = out["curve"]
     assert c[0:24].min() >= -1e-6      # never charges in a no-charge zone
     assert c[48:72].max() <= 1e-6      # never discharges in a no-discharge zone
-    assert c[48:72].min() < 0.0        # negative price pays to charge → it charges
+    # Hard constraints (2026-11-24), real prices: it charges in the free
+    # low-price window and discharges after the restriction lifts. (The old
+    # price-0 mask made it "charge" at 500 inside the yellow window.)
+    assert c[24:48].min() < 0.0 and c[72:96].max() > 0.0
+    assert c[48:72].min() >= -1e-6
     assert out["assumptions"]["zone_no_charge_intervals"] == 24
     assert out["assumptions"]["zone_no_discharge_intervals"] == 24
+
+
+def test_no_discharge_window_holds_when_paid_to_charge():
+    """Reviewer probe 2026-09-22: negative-price charge window, a few positive
+    intervals, yellow on slots 52..95. The price-0 mask let 100 MW discharge
+    inside the forbidden window; a hard constraint cannot."""
+    asset = dict(plant_name="谷山梁", capacity_mw=100.0, duration_h=2.0, rte_pct=85.0)
+    curve = np.array([-50.0] * 48 + [300.0] * 4 + [100.0] * 44)
+    zones = np.zeros(96, dtype=int)
+    zones[52:96] = agent.ZONE_NO_DISCHARGE
+    out = agent.optimize_asset(asset, curve, np.zeros(96), cap_mw=None, zones=zones)
+    assert out["curve"][52:96].max() <= 1e-6
 
 
 def test_optimize_uncapped_uses_full_capacity():

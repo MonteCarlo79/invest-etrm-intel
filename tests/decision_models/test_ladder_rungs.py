@@ -79,3 +79,38 @@ def test_forecast_rung_none_when_forecast_incomplete_or_unsolved(monkeypatch):
     assert lr.forecast_rung(D, None, px, META) is None
     assert lr.forecast_rung(D, [float("nan")] * 96, px, META) is None
     assert lr.forecast_rung(D, [100.0] * 96, px, META) is None      # LP unsolved
+
+
+# ---- TSO traffic-light windows (2026-11-24) ---------------------------------
+
+def test_zone_masks_red_no_charge_yellow_no_discharge():
+    zones = ["green"] * 96
+    zones[0] = "red"; zones[40] = "yellow"; zones[41] = "yellow"
+    assert lr.zone_masks(zones) == ({1}, {41, 42})        # 1-based slots
+    assert lr.zone_masks([]) == (None, None)              # no data: unrestricted
+    assert lr.zone_masks(["green"] * 96) == (None, None)
+
+
+def test_lp_rung_passes_zone_constraints_to_the_lp(monkeypatch):
+    seen = {}
+
+    def fake_pf(ctx):
+        seen.update(nc=ctx["no_charge_slots"], nd=ctx["no_discharge_slots"])
+        return {"pnl": {"n_days_solved": 1}, "dispatch_hourly": [
+            {"datetime": lr.slot_time(D, i).replace(" ", "T"), "dispatch_grid_mw": 0.0}
+            for i in range(96)]}
+
+    import libs.decision_models.workflows.strategy_comparison as sc
+    monkeypatch.setattr(sc, "run_perfect_foresight_dispatch", fake_pf)
+    zones = ["red"] * 4 + ["green"] * 88 + ["yellow"] * 4
+    assert lr.lp_rung(D, [100.0] * 96, _prices(lambda i: 100.0), META, zones) is not None
+    assert seen == {"nc": {1, 2, 3, 4}, "nd": {93, 94, 95, 96}}
+    lr.lp_rung(D, [100.0] * 96, _prices(lambda i: 100.0), META, None)
+    assert seen == {"nc": None, "nd": None}
+
+
+def test_actual_price_series_aligns_and_handles_tz():
+    recs = [{"time": pd.Timestamp("2026-11-18 00:00:00"), "price": 11.0},
+            {"time": pd.Timestamp("2026-11-17 16:15:00", tz="UTC"), "price": 12.0}]
+    s = lr.actual_price_series(D, recs)
+    assert s[0] == 11.0 and s[1] == 12.0 and s[2] is None and len(s) == 96

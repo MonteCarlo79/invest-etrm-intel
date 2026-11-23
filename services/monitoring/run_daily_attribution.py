@@ -39,10 +39,12 @@ _SCENARIO_COL_MAP: Dict[str, str] = {
     "perfect_foresight_unrestricted": "pf_unrestricted_pnl",
     "perfect_foresight_grid_feasible": "pf_grid_feasible_pnl",
     # The LP batch (run_daily_strategy_batch) names its perfect-foresight
-    # scenario perfect_foresight_hourly: solved on actual nodal prices under
-    # the operator's limits (rating, 1.5 cycles/day) — the feasible benchmark.
-    # Without this entry the ladder had no PF rung at all (2026-11-23).
-    "perfect_foresight_hourly": "pf_grid_feasible_pnl",
+    # scenario perfect_foresight_hourly: actual nodal prices under the rating,
+    # cycle cap and ramp limit but NO traffic-light windows — the unrestricted
+    # rung. The zone-constrained PF (perfect_foresight_grid_feasible, written
+    # by services.monitoring.ladder_rungs since 2026-11-24) is the
+    # grid-feasible rung; their difference is grid_restriction_loss.
+    "perfect_foresight_hourly": "pf_unrestricted_pnl",
     "tt_forecast_optimal": "tt_forecast_optimal_pnl",
     "tt_strategy": "tt_strategy_pnl",
     "nominated_dispatch": "nominated_pnl",

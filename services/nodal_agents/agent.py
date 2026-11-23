@@ -13,28 +13,17 @@ guarantees discharge <= cap - others at EVERY interval (conservative when
 others varies within the day; coordination across same-substation agents
 happens via the recursion loop, which re-solves against updated others).
 
-Zone masks (integer codes, one per 15-min interval): restricted intervals
-have their price replaced — the spec's "-inf (charge) / +inf (discharge)"
-mechanism, with one correction found in testing:
-    ZONE_NO_DISCHARGE (=1): price -> 0.0   (no-discharge interval)
-    ZONE_NO_CHARGE    (=2): price -> +BIG  (discharge-only interval)
-A literal -BIG price does NOT forbid discharge: with round-trip efficiency
-< 1 the LP churns (charge 1/eta MWh at -BIG, discharge 1 MWh at -BIG, net
-gain from the efficiency gap) and max-power alternating garbage results at
-ANY big-M (verified 1e3..1e6). Price 0 instead makes discharge strictly
-dominated whenever any later positive-price opportunity exists and gives no
-churn incentive. +BIG is churn-proof (recharging costs BIG/eta > BIG earned)
-so the discharge-only side keeps the spec's big finite stand-in (1e6; PuLP/
-CBC cannot take true infinities, and 1e6 dominates any realistic spread).
-
-CAVEAT (reviewer probe, 2026-09-22): the price-0 no-discharge mask is
-violable when the battery is PAID to charge (negative prices) and
-positive-price room is too small to empty SOC — disposal at 0 becomes
-the profit-enabling valve (probe: −50 charge window, 4 positive
-intervals, mask on 52:96 → 100 MW discharge inside the forbidden
-window, solver Optimal). Per-interval discharge upper bounds in the
-engine are a PREREQUISITE for wiring zone learning. Zones are
-all-green in v1 — no production impact today.
+Zone restrictions (integer codes, one per 15-min interval) — the TSO's
+traffic-light windows, the same convention asset-risk reads from the
+operator's cell colours (charge_only / discharge_only):
+    ZONE_NO_DISCHARGE (=1): 蒙西 yellow — charge-only window
+    ZONE_NO_CHARGE    (=2): 蒙西 red    — discharge-only window
+Enforced as HARD LP constraints (the engine's no_charge_slots /
+no_discharge_slots, as in services/bess_map/nodal_pf_daily) since 2026-11-24.
+The earlier price-mask stand-in (price 0 / +1e6 in restricted intervals) was
+violable when the battery is paid to charge (reviewer probe 2026-09-22) and
+distorted expected_profit; it was never exercised because zones were
+all-green until the zone forecast was wired into the writer.
 """
 from __future__ import annotations
 
@@ -46,8 +35,6 @@ from services.bess_map.optimisation_engine import compute_dispatch_from_15min_pr
 ZONE_GREEN = 0
 ZONE_NO_DISCHARGE = 1   # no-discharge window: price masked to 0
 ZONE_NO_CHARGE = 2      # discharge-only window: price masked to +BIG
-_ZONE_BIG = 1e6
-_ZONE_BLOCK_DIS = 0.0
 _SYNTH_DAY = "2000-01-01"  # index placeholder; the LP only needs 96 intervals
 
 
@@ -94,17 +81,19 @@ def optimize_asset(asset: dict, curve: np.ndarray, others: np.ndarray,
         headroom_min = float(headroom.min())
         power_eff = float(np.clip(min(capacity, headroom_min), 0.0, capacity))
 
-    masked = prices.copy()
-    masked[zones == ZONE_NO_DISCHARGE] = _ZONE_BLOCK_DIS
-    masked[zones == ZONE_NO_CHARGE] = _ZONE_BIG
+    # 1-based slot numbers, the engine's convention (zones_to_masks).
+    no_charge = {int(i) + 1 for i in np.flatnonzero(zones == ZONE_NO_CHARGE)}
+    no_discharge = {int(i) + 1 for i in np.flatnonzero(zones == ZONE_NO_DISCHARGE)}
 
     if power_eff <= 0.0:
         dispatch = np.zeros(96, dtype=float)
         profit, status = 0.0, "SkippedZeroHeadroom"
     else:
-        s = pd.Series(masked, index=pd.date_range(_SYNTH_DAY, periods=96, freq="15min"))
+        s = pd.Series(prices, index=pd.date_range(_SYNTH_DAY, periods=96, freq="15min"))
         dispatch_df, profit_s = compute_dispatch_from_15min_prices(
-            s, power_mw=power_eff, duration_h=duration_h, roundtrip_eff=rte)
+            s, power_mw=power_eff, duration_h=duration_h, roundtrip_eff=rte,
+            no_charge_slots=no_charge or None,
+            no_discharge_slots=no_discharge or None)
         if dispatch_df.empty:
             dispatch = np.zeros(96, dtype=float)
             profit, status = 0.0, "NoSolution"

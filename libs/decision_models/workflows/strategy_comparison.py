@@ -354,6 +354,11 @@ def run_perfect_foresight_dispatch(
                 max_cycles_per_day=max_cycles,
                 window_days=int(window_days),
                 ramp_rate_pct_per_min=3.3,  # 蒙西 operator ramp limit (Mengxi ops only)
+                # TSO traffic-light windows as hard constraints when the caller
+                # supplies them (1-based slots; services.monitoring.ladder_rungs).
+                # Absent keys = unrestricted, the batch's perfect_foresight_hourly.
+                no_charge_slots=context.get("no_charge_slots") or None,
+                no_discharge_slots=context.get("no_discharge_slots") or None,
             )
         except Exception as exc:
             return _empty_result(f"perfect_foresight: 15-min LP failed — {exc}", caveats)

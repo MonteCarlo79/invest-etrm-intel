@@ -1,8 +1,21 @@
-"""Strategy + forecast rungs of the attribution ladder (2026-11-23).
+"""Grid-feasible, forecast and strategy rungs of the attribution ladder.
 
 The ladder is
-    PF grid-feasible -> forecast-optimal -> strategy -> nominated -> cleared actual
-but nothing produced the two middle rungs: reports.bess_asset_daily_attribution
+    PF unrestricted -> PF grid-feasible -> forecast-optimal -> strategy
+    -> nominated -> cleared actual
+
+TSO traffic-light windows (2026-11-24): red slots forbid charging, yellow
+slots forbid discharging — the convention asset-risk reads from the
+operator's cell colours (discharge_only / charge_only). They are HARD LP
+constraints here, as in services/bess_map/nodal_pf_daily:
+  perfect_foresight_grid_feasible  PF LP on actual prices under the day's
+                       ACTUAL zones (marketdata.bess_dispatch_zones). The
+                       batch's unrestricted PF minus this = what the TSO
+                       restrictions cost (grid_restriction_loss).
+  tt_forecast_optimal  solved under the zone FORECAST for the day (what was
+                       knowable D-1), like the nodal writer's strategies.
+
+Originally (2026-11-23) nothing produced the two middle rungs: reports.bess_asset_daily_attribution
 .tt_forecast_optimal_pnl / tt_strategy_pnl were NULL for every day, so the
 Book-tab waterfall started from 0 and forecast error, strategy selection and
 nomination loss could not be separated. This module fills them from what the
@@ -47,15 +60,23 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
+SCENARIO_GRID_PF = "perfect_foresight_grid_feasible"
 SCENARIO_FORECAST = "tt_forecast_optimal"
 SCENARIO_STRATEGY = "tt_strategy"
+# source_system of zone-constrained rungs. Rows stored under an older source
+# (the 2026-11-23 unconstrained forecast rung, 'book_forecast_d1') are
+# recomputed once.
+SOURCE_GRID_PF = "lp_actual_zones"
+SOURCE_FORECAST = "book_forecast_d1_zones"
+SOURCE_STRATEGY = "nodal_agent"
 _RATING_TOLERANCE = 1.05   # curve may exceed nameplate by rounding only
 _MIN_SLOTS = 92            # same completeness bar as the batch's price check
 
 _EXISTING_SQL = text("""
-    SELECT scenario_name FROM reports.bess_asset_daily_scenario_pnl
+    SELECT scenario_name, source_system FROM reports.bess_asset_daily_scenario_pnl
     WHERE asset_code = :ac AND trade_date = :td AND total_pnl IS NOT NULL
-      AND scenario_name IN ('tt_forecast_optimal', 'tt_strategy')
+      AND scenario_name IN ('perfect_foresight_grid_feasible',
+                            'tt_forecast_optimal', 'tt_strategy')
 """)
 
 _UPSERT_SQL = text("""
@@ -125,20 +146,37 @@ def strategy_rung(day: date, curve_mw: Optional[List[float]], price_records: Lis
                        meta["power_mw"] * meta["duration_h"])
 
 
-def forecast_rung(day: date, forecast_prices: Optional[List[float]],
-                  price_records: List[dict], meta: dict) -> Optional[dict]:
-    """tt_forecast_optimal row values: PF LP on the D-1 forecast, valued at
-    actual prices. None when the forecast is incomplete or the LP fails."""
-    if not forecast_prices or sum(1 for p in forecast_prices if _finite(p)) < _MIN_SLOTS:
+def zone_masks(zones: Optional[List[str]]) -> tuple:
+    """96 red/yellow/green labels -> (no_charge_slots, no_discharge_slots),
+    1-based; ([], no labels) -> (None, None) = unrestricted."""
+    if not zones:
+        return None, None
+    from services.mengxi_nodal.dispatch_zones import zones_to_masks
+    nc, nd = zones_to_masks(zones)
+    return (nc or None), (nd or None)
+
+
+def lp_rung(day: date, lp_prices: Optional[List[float]], price_records: List[dict],
+            meta: dict, zones: Optional[List[str]] = None) -> Optional[dict]:
+    """Solve the perfect-foresight LP on lp_prices under the zone restrictions,
+    then value the dispatch at ACTUAL prices (price_records).
+
+    lp_prices = the D-1 forecast  -> tt_forecast_optimal
+    lp_prices = the actual prices -> perfect_foresight_grid_feasible
+    None when lp_prices is incomplete or the LP does not solve.
+    """
+    if not lp_prices or sum(1 for p in lp_prices if _finite(p)) < _MIN_SLOTS:
         return None
     from libs.decision_models.workflows.strategy_comparison import (
         run_perfect_foresight_dispatch,
     )
-    fc_records = [{"time": slot_time(day, i), "price": float(p)}
-                  for i, p in enumerate(forecast_prices) if _finite(p)]
+    no_charge, no_discharge = zone_masks(zones)
+    lp_records = [{"time": slot_time(day, i), "price": float(p)}
+                  for i, p in enumerate(lp_prices) if _finite(p)]
     ctx = {"asset_code": meta.get("asset_code"), "date_from": str(day),
            "date_to": str(day), "asset_metadata": meta,
-           "actual_prices_15min": fc_records, "actual_prices_hourly": []}
+           "actual_prices_15min": lp_records, "actual_prices_hourly": [],
+           "no_charge_slots": no_charge, "no_discharge_slots": no_discharge}
     res = run_perfect_foresight_dispatch(ctx)
     if not res.get("pnl", {}).get("n_days_solved", 0):
         return None
@@ -149,11 +187,31 @@ def forecast_rung(day: date, forecast_prices: Optional[List[float]],
                        meta["power_mw"] * meta["duration_h"])
 
 
+def forecast_rung(day: date, forecast_prices: Optional[List[float]],
+                  price_records: List[dict], meta: dict,
+                  zones: Optional[List[str]] = None) -> Optional[dict]:
+    """tt_forecast_optimal row values (see lp_rung)."""
+    return lp_rung(day, forecast_prices, price_records, meta, zones)
+
+
+def actual_price_series(day: date, price_records: List[dict]) -> List[Optional[float]]:
+    """Actual price records -> 96-slot list aligned to slot_time."""
+    import pandas as pd
+    by = {}
+    for r in price_records:
+        t = pd.Timestamp(r.get("time") or r.get("datetime"))
+        if t.tzinfo is not None:
+            t = t.tz_convert("Asia/Shanghai").tz_localize(None)
+        by[str(t)] = r.get("price")
+    return [by.get(slot_time(day, i)) for i in range(96)]
+
+
 def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
                        force: bool = False) -> dict:
     """Compute and upsert the forecast + strategy rungs for one station-day.
 
-    Returns {"forecast": bool, "strategy": bool, "skipped": reason|None}.
+    Returns {"grid_pf": bool, "forecast": bool, "strategy": bool,
+    "skipped": reason|None}.
     Rungs already stored are left alone unless force. Needs a complete day of
     actual prices; never raises on missing inputs.
     """
@@ -165,7 +223,7 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
     from libs.trading_book.registry import get_station
     from services.mengxi_nodal import book_forecast
 
-    out = {"forecast": False, "strategy": False, "skipped": None}
+    out = {"grid_pf": False, "forecast": False, "strategy": False, "skipped": None}
     if engine is None:
         from services.common.db_utils import get_engine
         engine = get_engine()
@@ -179,11 +237,12 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
         return out
 
     with engine.connect() as conn:
-        have = {r[0] for r in conn.execute(_EXISTING_SQL,
-                                           {"ac": asset_code, "td": trade_date})}
-    want_fc = force or SCENARIO_FORECAST not in have
+        have = {r[0]: r[1] for r in conn.execute(
+            _EXISTING_SQL, {"ac": asset_code, "td": trade_date})}
+    want_pf = force or have.get(SCENARIO_GRID_PF) != SOURCE_GRID_PF
+    want_fc = force or have.get(SCENARIO_FORECAST) != SOURCE_FORECAST
     want_st = force or SCENARIO_STRATEGY not in have
-    if not (want_fc or want_st):
+    if not (want_pf or want_fc or want_st):
         out["skipped"] = "already stored"
         return out
 
@@ -194,23 +253,45 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
     price_records = prices_df.to_dict("records")
     meta, _ = load_asset_metadata(asset_code, trade_date)
 
+    from services.mengxi_nodal.dispatch_zones import get_zones
+    from services.mengxi_nodal.zone_forecast import forecast_zones
+
     rows = []
     if want_st:
         strategies = AssetBook(engine, station).strategies(trade_date)
         curve = next((s.series for s in strategies if s.primary), None)
         vals = strategy_rung(trade_date, curve, price_records, meta)
         if vals:
-            rows.append((SCENARIO_STRATEGY, "nodal_agent", vals))
+            rows.append((SCENARIO_STRATEGY, SOURCE_STRATEGY, vals))
+    if want_pf:
+        # The day's actual windows (latest earlier day when its file has not
+        # arrived; none at all -> unrestricted, equal to the batch PF).
+        zones, _stale = get_zones(engine, asset_code, trade_date)
+        try:
+            vals = lp_rung(trade_date, actual_price_series(trade_date, price_records),
+                           price_records, meta, zones)
+        except Exception as exc:
+            logger.warning("ladder_rungs: %s %s grid-feasible LP failed — %s",
+                           asset_code, trade_date, exc)
+            vals = None
+        if vals:
+            rows.append((SCENARIO_GRID_PF, SOURCE_GRID_PF, vals))
     if want_fc:
         fs = book_forecast.get_forecast(engine, station, trade_date)
+        # What was knowable D-1: the zone forecast (history strictly before
+        # the day), never the day's actual windows.
+        fc_zones, fc_probs = forecast_zones(engine, asset_code, trade_date)
+        if not any(p > 0 for p in fc_probs):
+            fc_zones = None
         try:
-            vals = forecast_rung(trade_date, fs.nodal_price_fc, price_records, meta)
+            vals = forecast_rung(trade_date, fs.nodal_price_fc, price_records, meta,
+                                 fc_zones)
         except Exception as exc:
             logger.warning("ladder_rungs: %s %s forecast LP failed — %s",
                            asset_code, trade_date, exc)
             vals = None
         if vals:
-            rows.append((SCENARIO_FORECAST, "book_forecast_d1", vals))
+            rows.append((SCENARIO_FORECAST, SOURCE_FORECAST, vals))
 
     if rows:
         with engine.begin() as conn:
@@ -218,6 +299,7 @@ def write_ladder_rungs(asset_code: str, trade_date: date, engine=None,
                 conn.execute(_UPSERT_SQL, {
                     "trade_date": trade_date, "asset_code": asset_code,
                     "scenario_name": name, "source_system": source, **v})
+    out["grid_pf"] = any(n == SCENARIO_GRID_PF for n, _, _ in rows)
     out["forecast"] = any(n == SCENARIO_FORECAST for n, _, _ in rows)
     out["strategy"] = any(n == SCENARIO_STRATEGY for n, _, _ in rows)
     return out

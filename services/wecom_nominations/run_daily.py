@@ -48,7 +48,9 @@ FOLDERS = {"谷山梁": "gushanliang", "苏右": "suyou", "杭锦旗": "hangjinq
            "武川": "wuchuan", "阿拉善": "alashan"}
 # Nominated/actual MW only (2026-11-11): their workbooks are multi-unit
 # (summed by nomination_curves) and their cell colouring has not been
-# validated as zone data — no zone votes, and no fleet-consensus rows either.
+# validated as zone data — they cast no zone votes. Since 2026-11-24 they DO
+# receive the fleet-consensus rows (the operator issues one fleet schedule per
+# day), so their strategies and ladder rungs obey the same windows as the rest.
 NO_ZONE_PARSE = {"wuchuan", "alashan"}
 # Stations whose own files carry no usable zone colouring (bameng's red
 # marks 出清偏差, wulate's sheets are unpainted): their file rows are NOT
@@ -269,7 +271,8 @@ def main() -> None:
                 act_rows.extend(parse_actual_curves(f, code))
             except Exception as ex:
                 logger.warning("actual parse failed %s: %s", f.name, ex)
-    zone_rows = voter_rows + consensus_zone_rows(voter_rows, NO_ZONE_FILES)
+    zone_rows = voter_rows + consensus_zone_rows(
+        voter_rows, sorted(NO_ZONE_FILES | NO_ZONE_PARSE))
     logger.info("parsed %d zone rows (%d fleet-consensus), %d nomination "
                 "rows, %d actual rows; shipping",
                 len(zone_rows), len(zone_rows) - len(voter_rows),

@@ -309,7 +309,8 @@ def catch_up(end_date: date, lookback_days: int,
         for asset_code in (asset_codes or _IM_ASSETS):
             try:
                 r = write_ladder_rungs(asset_code, d)
-                out["rungs"] += int(r["forecast"]) + int(r["strategy"])
+                out["rungs"] += (int(r.get("grid_pf", False)) + int(r["forecast"])
+                                 + int(r["strategy"]))
             except Exception as exc:
                 logger.error("catch_up rungs FAIL %s %s — %s", asset_code, d, exc,
                              exc_info=True)

@@ -19,10 +19,18 @@ run_day(conn, target_date):
      "zones_map": {plant: (96,) int}}
 Writes (the upsert) always go through conn.
 
+Traffic-light zones (since 2026-11-24): every strategy obeys the TSO's
+red (no charge) / yellow (no discharge) windows as hard LP constraints. The
+D+1 windows come from the zone forecast (services.mengxi_nodal.zone_forecast,
+recency day-type mode over marketdata.bess_dispatch_zones): an owned station
+uses its own forecast; every other plant uses the fleet-consensus forecast
+(the operator assigns uniform fleet windows). Zone loading failing degrades
+to all-green with a loud ZONES_ERR line — a strategy must still be written
+before the 17:00 cutoff.
+
 v1 limitations (documented, not wired): zone_hist DB loading (non-registry
 BESS fleet separation needs storage-name heuristics — Task 2's extract runs
-per-registry only), traffic-light zone learning from asset-risk history
-(zones default green), substation cap = max n1_firm_mva per substation until
+per-registry only), substation cap = max n1_firm_mva per substation until
 the reviewed node map lands.
 """
 from __future__ import annotations
@@ -58,6 +66,74 @@ _STRATEGY_UPSERT = """INSERT INTO marketdata.nodal_strategy_daily
         iterations = EXCLUDED.iterations,
         convergence_delta_mwh = EXCLUDED.convergence_delta_mwh,
         created_at = NOW()"""
+
+
+# Station whose zone rows are the fleet consensus (its own files carry no
+# usable colouring) — the proxy for plants we do not own.
+_FLEET_ZONE_ASSET = "bameng"
+
+
+def zone_codes(labels) -> np.ndarray:
+    """96 red/yellow/green labels -> agent zone codes."""
+    from services.nodal_agents.agent import (
+        ZONE_GREEN, ZONE_NO_CHARGE, ZONE_NO_DISCHARGE)
+    m = {"red": ZONE_NO_CHARGE, "yellow": ZONE_NO_DISCHARGE}
+    return np.array([m.get(z, ZONE_GREEN) for z in labels], dtype=int)
+
+
+def build_zones_map(assets: list[dict], forecast_fn) -> tuple[dict, dict]:
+    """plant_name -> (96,) zone codes for every asset, plus a summary.
+
+    forecast_fn(asset_code) -> (labels[96], probs[96]) is the D+1 zone
+    forecast. Owned stations (trading-book registry, matched on exchange
+    account names) use their own forecast; a station with no zone history
+    (all probs 0) and every non-owned plant use the fleet forecast.
+    """
+    from libs.trading_book.registry import get_stations
+    owned = {name: s.asset_code
+             for s in get_stations(asset_type="bess", data_path="full")
+             for name in s.cleared_names}
+    cache: dict[str, tuple] = {}
+
+    def fc(code):
+        if code not in cache:
+            labels, probs = forecast_fn(code)
+            cache[code] = (zone_codes(labels), any(p > 0 for p in probs))
+        return cache[code]
+
+    fleet, _ = fc(_FLEET_ZONE_ASSET)
+    out, n_own = {}, 0
+    for a in assets:
+        code = owned.get(a["plant_name"])
+        z, has_hist = fc(code) if code else (fleet, False)
+        if code and has_hist:
+            n_own += 1
+        else:
+            z = fleet
+        out[a["plant_name"]] = z
+    from services.nodal_agents.agent import ZONE_NO_CHARGE, ZONE_NO_DISCHARGE
+    summary = {"own": n_own, "fleet": len(assets) - n_own,
+               "fleet_red_slots": int((fleet == ZONE_NO_CHARGE).sum()),
+               "fleet_yellow_slots": int((fleet == ZONE_NO_DISCHARGE).sum())}
+    return out, summary
+
+
+def _load_zones_map(assets: list[dict], target_date: date) -> dict:
+    """D+1 zone codes per plant from the zone forecast; {} (all green) with a
+    loud line when it cannot be loaded."""
+    try:
+        import os
+        from sqlalchemy import create_engine
+        from services.mengxi_nodal.zone_forecast import forecast_zones
+        engine = create_engine(os.environ.get("PGURL") or os.environ["DB_DSN"])
+        zones_map, summary = build_zones_map(
+            assets, lambda code: forecast_zones(engine, code, target_date))
+        print(f"ZONES {target_date} {summary}", flush=True)
+        return zones_map
+    except Exception as exc:
+        print(f"ZONES_ERR {type(exc).__name__}: {str(exc)[:200]} — strategies "
+              f"run UNRESTRICTED (all green)", flush=True)
+        return {}
 
 
 # ---------------------------------------------------------------- DB loaders
@@ -196,7 +272,7 @@ def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
                "shapes": _load_shapes(conn, target_date, nodes=shape_nodes),
                "caps": _load_caps(conn),
                "zone_hist": {},
-               "zones_map": {}}
+               "zones_map": _load_zones_map(assets, target_date)}
     grid_price_hat = float(src["grid_price_hat"])
     shapes = src.get("shapes") or {}
     caps = src.get("caps") or {}
