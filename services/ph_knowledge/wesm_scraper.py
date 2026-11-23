@@ -104,8 +104,8 @@ class WESMPriceScraper:
     ) -> dict[str, list[dict]]:
         """Fetch up to *max_pages* pages from both LWAP sources; return {date_str: [records]}.
 
-        Original LWAP (1-day lag) is tried first; Final LWAP (10-day lag) fills
-        any remaining gaps.  Stops early per-source when dates go before *since*.
+        Records of both sources are returned for a date (price_type tells them
+        apart).  Stops early per-source when dates go before *since*.
         """
         import io
         import zipfile
@@ -161,10 +161,11 @@ class WESMPriceScraper:
 
                 time.sleep(0.5)
 
-            # Merge: don't overwrite dates already fetched from a higher-priority source
+            # Keep both price types per date: original is the timely pre-correction
+            # run, final is the settlement-grade price (they differ materially in
+            # Visayas / Mindanao).
             for date_str, records in source_data.items():
-                if date_str not in all_data:
-                    all_data[date_str] = records
+                all_data.setdefault(date_str, []).extend(records)
 
             logger.info("[wesm_price:%s] fetched %d dates", price_type, len(source_data))
 
@@ -221,10 +222,10 @@ class WESMPriceScraper:
 
         df["region"] = df["REGION_NAME"].astype(str).str.strip().map(self._REGION_MAP)
         df["lwap"] = pd.to_numeric(df["LWAP"], errors="coerce")
-        ts = pd.to_datetime(
-            df["TIME_INTERVAL"].astype(str).str.strip(),
-            format="%m/%d/%Y %I:%M:%S %p", errors="coerce",
-        )
+        stamp = df["TIME_INTERVAL"].astype(str).str.strip()
+        ts = pd.to_datetime(stamp, format="%m/%d/%Y %I:%M:%S %p", errors="coerce")
+        # The interval ending at midnight is written as a bare date ("11/23/2026").
+        ts = ts.fillna(pd.to_datetime(stamp, format="%m/%d/%Y", errors="coerce"))
         df["hour"] = (ts - pd.Timedelta(minutes=5)).dt.hour
         df = df.dropna(subset=["region", "lwap", "hour"])  # drops SYSTEM + unparseable rows
         if df.empty:

@@ -79,3 +79,37 @@ def test_store_overwrite_updates_only_changed_prices():
     WESMPriceScraper().store_prices(conn, REC, overwrite=True)
     sql = cur.execute.call_args[0][0]
     assert "DO UPDATE" in sql and "IS DISTINCT FROM" in sql
+
+
+def test_date_only_midnight_stamp_counts_in_hour_23():
+    # IEMOP writes the interval ending at midnight as a bare date ("11/23/2026").
+    text = _csv(lambda i, r: 12000.0 if i == 288 else 0.0).replace(
+        "11/23/2026 12:00:00 AM", "11/23/2026")
+    assert "11/23/2026," in text and "12:00:00 AM" not in text
+    recs = WESMPriceScraper()._parse_lwap_csv(text, D, "LWAP_orig")
+    luz = {r["hour"]: r["price_php_kwh"] for r in recs if r["region"] == "Luzon"}
+    assert luz[23] == 1.0  # 12 intervals in the mean, not 11
+
+
+def test_both_original_and_final_are_kept_for_the_same_date():
+    import io
+    import zipfile
+
+    def _zip(prefix, price):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr(f"{prefix}20261122.csv", _csv(lambda i, r: price))
+        return buf.getvalue()
+
+    def _get(url, timeout=0):
+        resp = MagicMock()
+        resp.content = _zip("original_lwap_", 50000.0) if "original" in url else _zip("final_lwap_", 10000.0)
+        return resp
+
+    session = MagicMock()
+    session.get.side_effect = _get
+    data = WESMPriceScraper().fetch_pages(session, max_pages=1)
+    by_type = {}
+    for r in data["2026-11-22"]:
+        by_type.setdefault(r["price_type"], set()).add(r["price_php_kwh"])
+    assert by_type == {"LWAP_orig": {50.0}, "LWAP_final": {10.0}}

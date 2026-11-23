@@ -1344,7 +1344,11 @@ BESS investment case in the Philippines is strengthened by the combination of GE
         pnl_dur    = st.selectbox("Duration (h)", [1, 2, 4, 6], index=1, key="pnl_dur")
     with pnl_c3:
         pnl_rte    = st.slider("Round-trip eff (%)", 70, 98, 85, key="pnl_rte") / 100.0
-        pnl_ptype  = st.selectbox("Price type", ["LWAP_orig", "LWAP_final"], key="pnl_ptype")
+        pnl_ptype  = st.selectbox(
+            "Price type", ["LWAP_final", "LWAP_orig"], key="pnl_ptype",
+            help="LWAP_final = settlement price (published ~4 weeks late). "
+                 "LWAP_orig = next-day pre-correction run; it overstates Visayas and "
+                 "Mindanao (uncapped constraint pricing) and should not be used for returns.")
     with pnl_c4:
         pnl_as_rate = st.number_input(
             "Ancillary rate (PHP/MW/h)", 0.0, 5000.0, 1000.0, 100.0, key="pnl_as_rate"
@@ -1537,7 +1541,11 @@ with tab_irr:
         md_dur   = st.selectbox("Duration (h)", [1, 2, 4, 6], index=1, key="md_dur")
     with md_c2:
         md_rte   = st.slider("Round-trip eff (%)", 70, 98, 85, key="md_rte") / 100.0
-        md_ptype = st.selectbox("Price type", ["LWAP_orig", "LWAP_final"], key="md_ptype")
+        md_ptype = st.selectbox(
+            "Price type", ["LWAP_final", "LWAP_orig"], key="md_ptype",
+            help="LWAP_final = settlement price (published ~4 weeks late). "
+                 "LWAP_orig = next-day pre-correction run; it overstates Visayas and "
+                 "Mindanao (uncapped constraint pricing) and should not be used for returns.")
         md_capex = st.number_input(
             "CAPEX (USD/kW)", 100.0, 2000.0,
             float(_TECH_PRESETS["bess_2h"]["capex_usd_kwh"] * 2), 50.0, key="md_capex",
