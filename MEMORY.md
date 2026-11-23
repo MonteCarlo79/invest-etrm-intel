@@ -866,3 +866,12 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - Do a tested full build of PH/PO from main (pin streamlit + starlette==1.3.1), then retire the feature branch and the `~/bess-ph-worktree` worktree.
 - Portal and Hermes still carry the old "Stop Web" behaviour and the Portugal persona until their next image builds — do not press "Stop Web" on PH/PO before then.
 - PO capacity-market scrape timed out against tge.pl and the job still reported success; local venv lacks `requests_mock` and a working LP solver (3 test files fail for that reason).
+
+## Session Summary, 2026-11-23 → 2026-11-24 (personal document pipeline)
+**Worked on:** a personal mail-attachment → OneDrive filing job in Hermes, plus a Mac-side extractor that turns new documents into review rows. Details (folders, rules, figures) are deliberately kept out of this repo — see the local auto-memory note `project_fa_attachment_ingest.md`.
+**Completed:**
+- `services/hermes/fa_ingest.py` + daily 02:15 UTC job → hermes v20261123 / td:210 (CodeBuild; live app.py baseline sha-verified). Routing rules are read at runtime from a OneDrive config file, so no personal identifiers are in git. Backfill done; dedupe table `fa_ingest_files`; watermark in hermes_settings. Never modifies mail; no LLM.
+- `services/fa_workings/sa_update.py` + launchd `ai.pjh-etrm.fa-workings` (11:30 local): local-Ollama extraction (documents never leave the Mac), amount-in-text guard, deterministic clean-ups, writes only a review sheet; first full run done and repaired in place.
+**In progress:** OneDrive folder pin pending (some files still dataless); a few reconciliation gaps for manual review.
+**Decisions made:** personal identifiers live only in OneDrive config files, never in the repo; Mac extraction uses the local model for privacy.
+**Next session:** check the first scheduled runs (Hermes Feishu summary at 10:15 CST; `/tmp/fa_workings.log` after 11:30). Other sessions shipped mengxi-dashboard v62/v64 and PH/PO apps in parallel — re-read LATEST-IMAGES.md before any deploy.
