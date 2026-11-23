@@ -209,21 +209,32 @@ If no durable insights can be extracted, return {"insights": []}.
 """
 
 
-def _parse_insights_json(raw: str) -> list[dict]:
-    """Parse JSON from Claude response, handling markdown code fences."""
+def _parse_insights_json(raw: str) -> list[dict] | None:
+    """Parse the insights list from a Claude response.
+
+    Returns [] when the model genuinely found nothing, and None when the
+    response could not be parsed — callers must not treat None as "no insights".
+    Tolerates a markdown code fence and trailing commentary after the JSON.
+    """
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```", 2)[1]
         if raw.startswith("json"):
             raw = raw[4:]
     try:
-        return json.loads(raw).get("insights", [])
+        obj, _ = json.JSONDecoder().raw_decode(raw.strip())
+        insights = obj.get("insights", [])
+        return insights if isinstance(insights, list) else None
     except Exception:
-        return []
+        return None
 
 
-def _extract_insights_from_doc(client, doc: dict) -> list[dict]:
-    """Call Claude haiku on one KB doc; return list of insight dicts."""
+def _extract_insights_from_doc(client, doc: dict) -> list[dict] | None:
+    """Call Claude haiku on one KB doc; return list of insight dicts.
+
+    [] = the model found nothing durable; None = the call or parse FAILED
+    (transient API error, unparseable output) and the doc should be retried.
+    """
     prompt = (
         f"Source: {doc.get('source', '')} / {doc.get('doc_type', '')}\n"
         f"Title: {doc.get('title', 'Untitled')}\n"
@@ -239,8 +250,8 @@ def _extract_insights_from_doc(client, doc: dict) -> list[dict]:
         )
         return _parse_insights_json(resp.content[0].text)
     except Exception as exc:
-        logger.debug("Insight extraction failed for doc %s: %s", doc.get("url"), exc)
-        return []
+        logger.warning("[kb_digest] extraction failed for %s: %s", doc.get("url"), exc)
+        return None
 
 
 def _store_doc_insights(conn, insights: list[dict], source_doc_url: str) -> int:
@@ -316,6 +327,12 @@ def digest_kb_docs(api_key: str, limit: int = 50) -> int:
         today = date.today().isoformat()
         for doc in docs:
             insights = _extract_insights_from_doc(client, doc)
+            if insights is None:
+                # Failure, not "nothing to extract": leave the doc undigested so
+                # the next run retries it (a placeholder here is permanent).
+                logger.warning("[kb_digest] %s — extraction failed, will retry next run",
+                               doc.get("url", "")[:60])
+                continue
             if insights:
                 n = _store_doc_insights(conn, insights, source_doc_url=doc["url"])
                 total += n
