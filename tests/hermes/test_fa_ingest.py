@@ -70,3 +70,13 @@ def test_get_retries_transient_graph_errors(monkeypatch):
     monkeypatch.setattr(requests, "get", fake_get)
     monkeypatch.setattr("time.sleep", lambda s: None)
     assert fa_ingest._get("u", lambda: {}).status_code == 200
+
+
+def test_ignore_list_wins_and_invoice_words():
+    rules = {"ignore": ["spam.co"], "watch": ["house b"],
+             "rules": [{"name": "agent", "any": ["agent ltd", "house b"], "dest": "B/rent", "invoice_dest": "B/bills",
+                        "invoice_words": ["invoice", "inv ", "estimate"]}]}
+    assert route_message(rules, "x@spam.co", "House B bill", "", [], D).dest is None
+    assert route_message(rules, "Agent Ltd", "Works", "", ["INV 1340.pdf"], D).dest == "B/bills"
+    assert route_message(rules, "Agent Ltd", "Works", "", ["estimate_3719.pdf"], D).dest == "B/bills"
+    assert route_message(rules, "Agent Ltd", "Rental Statement", "", ["Statement.pdf"], D).dest == "B/rent"

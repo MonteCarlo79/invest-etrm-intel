@@ -10,10 +10,12 @@ and account numbers): `<root>/_ingest_rules.json`. Shape:
 
     {"root": "Home/Financial Advisor", "since": "2024-04-01",
      "extensions": ["pdf", "csv", "xls", "xlsx"], "unsorted": "_inbox_unsorted",
+     "ignore": ["somesender.com", ...],           # never saved, checked first
      "watch": ["life residential", ...],          # in-scope trigger words
      "rules": [                                   # first match wins
        {"name": "OWP rent", "any": [...], "all": [...], "dest": "UK Properties/OWP/Rental Payment",
-        "invoice_dest": "...",                    # optional: if "invoice" in subject/filename
+        "invoice_dest": "...",                    # optional: if an invoice word is in subject/filename
+        "invoice_words": ["invoice", "inv "],     # optional, default ["invoice"]
         "subfolders": {"keyword": "subfolder"}},  # optional: dest/<subfolder> on keyword hit
        {"name": "HMRC", "any": [...], "dest": "UK tax/{tax_year}"}  # {tax_year} = 2025-2026 (6 Apr boundary)
      ]}
@@ -86,13 +88,15 @@ def route_message(rules: dict, sender: str, subject: str, preview: str,
     rules['unsorted']; out of scope → Route(None)."""
     text = " ".join([sender, subject, preview, *att_names]).lower()
     subj_files = " ".join([subject, *att_names]).lower()
+    if _has(text, rules.get("ignore", [])):
+        return Route(None, "ignored")
     for r in rules.get("rules", []):
         if r.get("any") and not _has(text, r["any"]):
             continue
         if r.get("all") and not all(w.lower() in text for w in r["all"]):
             continue
         dest = r["dest"]
-        if r.get("invoice_dest") and "invoice" in subj_files:
+        if r.get("invoice_dest") and _has(subj_files, r.get("invoice_words", ["invoice"])):
             dest = r["invoice_dest"]
         for kw, sub in (r.get("subfolders") or {}).items():
             if kw.lower() in text:
