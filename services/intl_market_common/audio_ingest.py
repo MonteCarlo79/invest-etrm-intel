@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import logging
 from datetime import date
+from shared.anthropic_client import make_client
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +112,7 @@ def contextualize_transcript(
 
     Returns (polished_transcript_with_key_points, suggested_title).
     """
-    import anthropic
-    client = anthropic.Anthropic(api_key=anthropic_api_key)
+    client = make_client(anthropic_api_key)
 
     # Pick the right domain term hint
     domain_hint = ""

@@ -11,6 +11,7 @@ import logging
 import os
 
 import psycopg2
+from shared.anthropic_client import make_client
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,7 @@ def retrieve_for_agent(
     # ── Step 1: HyDE expansion ────────────────────────────────────────────────
     search_query = query
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        client = make_client(api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,

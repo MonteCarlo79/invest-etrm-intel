@@ -14,6 +14,7 @@ import os
 import re
 
 import psycopg2
+from shared.anthropic_client import make_client
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,8 @@ def extract_insights(
 
     Returns the number of new insights inserted.
     """
-    import anthropic
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = make_client(api_key)
     prompt = (
         f"You are extracting expert market insights from a conversation about {market_name}.\n\n"
         f"User asked: {user_input[:500]}\n\n"
@@ -175,7 +175,6 @@ def digest_kb_docs(
 
     Returns the number of new insights inserted across all processed docs.
     """
-    import anthropic
 
     conn = _conn()
     try:
@@ -200,8 +199,9 @@ def digest_kb_docs(
         conn.close()
         return 0
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = make_client(api_key)
     total = 0
+    llm_failures = 0
 
     for doc_id, title, content in docs:
         prompt = (
@@ -221,6 +221,7 @@ def digest_kb_docs(
             insights = _parse_json_list(resp.content[0].text.strip())
         except Exception as exc:
             logger.warning("[digest_kb_docs] Claude failed on doc %s: %s", doc_id, exc)
+            llm_failures += 1
             continue
 
         try:
@@ -245,4 +246,6 @@ def digest_kb_docs(
             logger.warning("[digest_kb_docs] DB insert failed for doc %s: %s", doc_id, exc)
 
     conn.close()
+    if llm_failures == len(docs):
+        raise RuntimeError(f"digest_kb_docs: LLM call failed for all {len(docs)} docs")
     return total
