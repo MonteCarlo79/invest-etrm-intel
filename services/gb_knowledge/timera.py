@@ -441,6 +441,15 @@ class TimeraConnector(BaseConnector):
         return _date_from_url(url)
 
     def _extract_body(self, soup: BeautifulSoup) -> str:
+        # Current Timera layout: the article is a series of <div class="text-content">
+        # blocks inside <article>.  `div.entry-content` on those pages is only the
+        # "Related client case studies" widget (it was being stored as the body).
+        blocks = soup.select("article div.text-content")
+        if blocks:
+            text = "\n\n".join(t for t in (_clean_text(b) for b in blocks) if t)
+            if len(text) > 100:
+                return text
+
         for tag, attrs in BODY_SELECTORS:
             el = soup.find(tag, attrs or True) if attrs else soup.find(tag)
             if el:
