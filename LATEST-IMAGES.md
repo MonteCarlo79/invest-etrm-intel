@@ -41,6 +41,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 | lingfeng-ingest | `lingfeng-ingest` | **v17** (a5b77b35c70e) | **19** | 2026-11-22 | this session: FROM v16 + fundamentals folder-scan guard (e4c310dc); NAT-ROUTED (private subnets, assignPublicIp DISABLED, egress 47.130.245.102) |
 | professor-topic-card | `bess-professor-topic-card` | **v4** | **4** | 2026-10-11 | this session: 「」/《》 inner-quote constraint fixes unparseable LLM JSON; one-shot Fargate task (no service), EventBridge Mondays 08:50 Beijing |
 | retail-risk | `bess-retail-risk` | **v9** (3064bbb356fa) | **9** | 2026-11-16 | this session: Settlement tab per load book (rm_settlements) replaces empty per-customer upload; coverage tool excludes physical rows; delta FROM v8 |
+| ph-market | `bess-ph-market` | **v16** (052dd80ef7d2) | **31** | 2026-11-23 | this session: no new image — td:31 = td:30 minus the scheduler command override (service crash-looped exit 2 since 2026-08-11: Portal "Stop Web" put it in scheduler mode, v16 has no scheduler_service.py). Source lives only on `feat/ph-po-market-apps`. po-market still crash-looping on its td:30 (same cause, not touched) |
 
 ## Deploy history (append-only, newest at bottom)
 
@@ -75,6 +76,7 @@ def is ground truth**; if the manifest disagrees, trust AWS and fix the row.
 - 2026-11-10 — `bess-platform-retail-risk:5` ← `bess-retail-risk:v5` (e9be40399a5e); retail-risk P2 (3ec3013b). Full build failed (mirrors.aliyun.com read timeout via VPN egress) → delta FROM v4 + `python-pptx` from PyPI. In-container import + driver-load (OperationalError) checks pre-push; jq-swap from live td:4 (4 env identical); rollout COMPLETED; read-only run-task SQL probe on td:5 ran all new recon/attribution SQL clean (this session).
 - 2026-11-10 — `bess-platform-retail-risk:6` ← `bess-retail-risk:v6` (2754d8ee50a6); 安徽 trades read 我的滚搓结果 not market-wide 滚搓市场成交结果 (P1 39x overstatement, 3f79e8ea). Delta FROM v5, jq-swap from td:5, rollout COMPLETED 1/1 zero-failed, ALB 302 (Cognito) (this session).
 - 2026-11-10 — `bess-platform-retail-risk:7` ← `bess-retail-risk:v7` (6835b53397a4); recon partial_trades status (trade vol >10% off invoice 中长期 vol) + trader alpha no longer requires RT prices (ff7825da). Delta FROM v6, jq-swap from live td:6, rollout COMPLETED 1/1. P2 backfill ran on td:6 (run-task 2 vCPU/8 GB, exit 0); verification run-task on td:7 clean (this session).
+- 2026-11-23 — `bess-platform-ph-market:31` ← `bess-ph-market:v16` (unchanged image); command override removed, cloned from live td:30 (4 env identical). Restores web after ~53k failed launches since 2026-08-11 (scheduler mode on an image without scheduler_service.py; registry fixed 3dc9e02d). Rollout COMPLETED 1/1, target healthy, ALB 200 — note 200 not 302: the /ph-market, /po-market, /au-market listener rules have no Cognito action (this session).
 
 ## Known parallel-session coordination points
 
