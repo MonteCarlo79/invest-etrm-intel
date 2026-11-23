@@ -59,7 +59,9 @@ def test_map_helpers(sqlite_engine):
 
 def test_attribution_alias_from_registry():
     from libs.trading_book.waterfall import _ATTR_CODE_ALIAS
-    assert _ATTR_CODE_ALIAS == {"bameng": "hetao"}
+    # bameng's 'hetao' alias retired 2026-11-23: attribution rows are written
+    # under registry codes for every station.
+    assert _ATTR_CODE_ALIAS == {}
 
 
 def _probe():

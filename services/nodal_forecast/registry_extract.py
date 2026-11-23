@@ -1,7 +1,11 @@
 # services/nodal_forecast/registry_extract.py
 """Extract the BESS asset registry draft from md_* dispatch data.
-Capacity ≈ max |cleared_energy_mwh| × 4 (15-min → MW); duration ≈ longest
-run of same-sign intervals ÷ 4. Zone guessed from plant-name prefix."""
+Capacity ≈ max |cleared_energy_mwh| — that column stores interval average MW
+despite its name (unit contract verified 2026-11-05), so NO ×4: the old ×4
+seeded every plant four times too large (hangjinqi/siziwangqi 400 for 100 MW
+stations). Duration ≈ longest run of same-sign intervals ÷ 4. Zone guessed
+from plant-name prefix. Owned stations take their ratings from the
+trading-book registry instead of the estimate (owned_ratings)."""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -18,7 +22,7 @@ def extract_bess_plants(rows: list[dict]) -> list[dict]:
             by_plant[r["plant_name"]].append(r)
     out = []
     for plant, rs in sorted(by_plant.items()):
-        cap = max(abs(r["cleared_energy_mwh"]) for r in rs) * 4
+        cap = max(abs(r["cleared_energy_mwh"]) for r in rs)
         series = sorted(rs, key=lambda r: (r["data_date"], r["datetime"]))
         best = cur = 0
         prev_sign = 0
@@ -60,6 +64,31 @@ ON CONFLICT (plant_name) DO UPDATE SET
     zone = EXCLUDED.zone,
     updated_at = NOW()"""
 
+def owned_ratings() -> dict[str, tuple[float, float]]:
+    """exchange account name -> (capacity_mw, duration_h) for owned stations,
+    from the trading-book registry. A station trading as several accounts
+    (武川: two) splits its capacity evenly across them."""
+    from libs.trading_book.registry import get_stations
+    out: dict[str, tuple[float, float]] = {}
+    for s in get_stations(asset_type="bess"):
+        if not (s.capacity_mw and s.duration_h):
+            continue
+        for name in s.cleared_names:
+            out[name] = (float(s.capacity_mw) / len(s.cleared_names),
+                         float(s.duration_h))
+    return out
+
+
+def apply_owned_ratings(plants: list[dict]) -> list[dict]:
+    """Replace the dispatch-derived estimates with confirmed ratings for owned
+    stations, so a registry refresh can never overwrite them with an estimate
+    (observed peaks understate export-limited sites)."""
+    owned = owned_ratings()
+    return [{**p, "capacity_mw_est": owned[p["plant_name"]][0],
+             "duration_h_est": owned[p["plant_name"]][1]}
+            if p["plant_name"] in owned else p for p in plants]
+
+
 def update_asset_registry(conn, plants: list[dict], source: str = "md_extract") -> dict:
     """Refresh the asset registry from a new extraction (user requirement 2026-09-22:
     the registry is living data). Upsert new/changed plants; soft-retire
@@ -67,6 +96,7 @@ def update_asset_registry(conn, plants: list[dict], source: str = "md_extract") 
     history in nodal_strategy_daily must survive. node/substation/capacity caps
     from the reviewed registry are NOT touched by the refresh."""
     cur = conn.cursor()
+    plants = apply_owned_ratings(plants)
     if plants:
         cur.executemany(_ASSET_UPSERT, plants)
     cur.execute("SELECT plant_name FROM marketdata.nodal_asset_registry WHERE active")

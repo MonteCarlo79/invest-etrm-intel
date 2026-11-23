@@ -54,7 +54,7 @@ def test_keys_follow_reader_conventions(monkeypatch):
     # exact name, never LIKE: the wildcard scan timed out on 36M rows (v54)
     assert by_table["marketdata.md_id_cleared_energy"] == ["景怡查干哈达储能电站"]
     assert all("LIKE :k" not in sql for sql, _ in calls)
-    assert by_table["reports.bess_asset_daily_attribution"] == "hetao"
+    assert by_table["reports.bess_asset_daily_attribution"] == "bameng"  # alias retired 2026-11-23
     assert by_table["reports.book_settled_daily"] == "bameng"
     assert by_table["marketdata.nodal_strategy_daily"] == ["景怡查干哈达储能电站"]
 

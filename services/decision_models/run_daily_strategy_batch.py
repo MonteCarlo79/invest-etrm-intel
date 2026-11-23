@@ -64,8 +64,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Inner Mongolia 4-asset set
-_IM_ASSETS: List[str] = ["suyou", "hangjinqi", "siziwangqi", "gushanliang"]
+# Every full-path 蒙西 BESS book in the trading-book registry (was a
+# hard-coded 4: bameng/wulate/wuchuan/alashan never got attribution). Codes
+# are registry codes end to end — prices, nominations, compensation and the
+# scenario/attribution rows all key on them.
+def _registry_assets() -> List[str]:
+    from libs.trading_book.registry import get_stations
+    return [s.asset_code for s in get_stations(asset_type="bess", data_path="full")]
+
+
+_IM_ASSETS: List[str] = _registry_assets()
 
 
 def _ensure_dispatch_table() -> None:
@@ -309,7 +317,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--asset", type=str, default=None,
-        help=f"Asset code to run (default: all 4 IM assets: {_IM_ASSETS})",
+        help=f"Asset code to run (default: all full-path IM assets: {_IM_ASSETS})",
     )
     parser.add_argument(
         "--lookback", type=int,

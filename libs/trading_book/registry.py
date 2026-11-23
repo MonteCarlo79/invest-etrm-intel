@@ -44,6 +44,12 @@ class StationRef:
                                        # accounts are summed. Empty → plant_name.
     attribution_code: str | None = None  # reports.bess_asset_daily_attribution code
                                        # when it differs from asset_code
+    duration_h: float | None = None    # storage duration at capacity_mw. With
+                                       # capacity_mw this is THE rating source for
+                                       # owned stations: the attribution LP
+                                       # (bess_context.ASSET_PHYSICAL_PARAMS) and
+                                       # the nodal writer's registry both read it.
+                                       # Ratings confirmed by Dipeng 2026-11-23.
 
     @property
     def cleared_names(self) -> tuple[str, ...]:
@@ -55,6 +61,7 @@ STATIONS: list[StationRef] = [
         asset_code="suyou",
         plant_name="景蓝乌尔图储能电站",
         capacity_mw=100,
+        duration_h=4.0,
         substation="苏尼特500kV变电站",
         conn_kv=220,
         price_nodes=[
@@ -67,7 +74,8 @@ STATIONS: list[StationRef] = [
     StationRef(
         asset_code="hangjinqi",
         plant_name="悦杭独贵储能电站",
-        capacity_mw=None,
+        capacity_mw=100,
+        duration_h=4.0,
         substation="谷山梁500kV变电站",
         conn_kv=220,
         price_nodes=[
@@ -79,7 +87,8 @@ STATIONS: list[StationRef] = [
     StationRef(
         asset_code="siziwangqi",
         plant_name="景通四益堂储能电站",
-        capacity_mw=None,
+        capacity_mw=100,
+        duration_h=4.0,
         substation="杜尔伯特220kV变电站",
         conn_kv=110,
         price_nodes=[                  # (无自有节点) — parents only
@@ -91,6 +100,7 @@ STATIONS: list[StationRef] = [
         asset_code="gushanliang",
         plant_name="裕昭沙子坝储能电站",
         capacity_mw=500,
+        duration_h=4.0,
         substation="谷山梁500kV变电站",
         conn_kv=220,
         price_nodes=[
@@ -101,9 +111,9 @@ STATIONS: list[StationRef] = [
     ),
     StationRef(
         asset_code="bameng",
-        attribution_code="hetao",
         plant_name="景怡查干哈达储能电站",
-        capacity_mw=None,
+        capacity_mw=1000,
+        duration_h=4.0,
         substation="河套500kV变电站",
         conn_kv=220,
         price_nodes=[
@@ -116,6 +126,7 @@ STATIONS: list[StationRef] = [
         asset_code="wulate",
         plant_name="远景乌拉特储能电站",
         capacity_mw=100,
+        duration_h=4.0,
         substation="德岭山500kV变电站",
         conn_kv=220,
         price_nodes=[
@@ -139,6 +150,7 @@ STATIONS: list[StationRef] = [
         asset_code="wuchuan",
         plant_name="武川储能电站",
         capacity_mw=1000,
+        duration_h=4.0,
         substation="武川500kV变电站",
         conn_kv=220,
         price_nodes=[                  # own nodes first (present in the filled
@@ -157,6 +169,7 @@ STATIONS: list[StationRef] = [
         asset_code="alashan",
         plant_name="阿拉善储能电站",
         capacity_mw=1000,
+        duration_h=4.0,
         substation="阿拉腾敖包500kV变电站",
         conn_kv=220,
         price_nodes=[                  # own node under the exchange account

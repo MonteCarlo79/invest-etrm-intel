@@ -24,8 +24,9 @@ def station_codes(data_path: str = "full") -> list[str]:
 
 
 def attribution_code(asset_code: str) -> str:
-    """Registry code -> reports.bess_asset_daily_attribution code
-    (bameng is stored as 'hetao'); unknown codes pass through."""
+    """Registry code -> reports.bess_asset_daily_attribution code (identity
+    unless a station sets StationRef.attribution_code); unknown codes pass
+    through."""
     try:
         s = get_station(asset_code)
     except KeyError:

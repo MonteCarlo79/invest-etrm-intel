@@ -76,17 +76,29 @@ def test_sql_targets_daily_attribution():
     assert "realisation_gap_vs_pf_grid" in _ATTRIBUTION_SQL
 
 
-def test_attribution_code_alias():
-    # 景怡查干哈达储能电站: registry 'bameng' == attribution-stack 'hetao'.
-    assert _attribution_code("bameng") == "hetao"
-    for code in ("suyou", "hangjinqi", "siziwangqi", "gushanliang", "wulate"):
+_ALIAS = "libs.trading_book.waterfall._ATTR_CODE_ALIAS"
+
+
+def test_registry_has_no_attribution_alias():
+    # 2026-11-23: bameng's legacy 'hetao' alias retired — the batch now writes
+    # attribution under registry codes for every station.
+    for code in ("bameng", "suyou", "hangjinqi", "siziwangqi", "gushanliang",
+                 "wulate", "wuchuan", "alashan"):
         assert _attribution_code(code) == code
+
+
+def test_attribution_code_alias(monkeypatch):
+    # The alias mechanism (StationRef.attribution_code) still works.
+    monkeypatch.setattr(_ALIAS, {"bameng": "hetao"})
+    assert _attribution_code("bameng") == "hetao"
+    assert _attribution_code("suyou") == "suyou"
     params = _attribution_params(_StubBook("bameng", []),
                                  date(2026, 10, 1), date(2026, 10, 31))
     assert params == {"ac": "hetao", "s": "2026-10-01", "e": "2026-10-31"}
 
 
 def test_build_waterfall_passes_alias_to_sql(monkeypatch):
+    monkeypatch.setattr(_ALIAS, {"bameng": "hetao"})
     captured = {}
 
     def fake_read_sql(sql, engine, params=None):
@@ -101,6 +113,7 @@ def test_build_waterfall_passes_alias_to_sql(monkeypatch):
 
 
 def test_zero_attribution_with_settled_warns(monkeypatch, capsys):
+    monkeypatch.setattr(_ALIAS, {"bameng": "hetao"})
     monkeypatch.setattr("libs.trading_book.waterfall.pd.read_sql",
                         lambda *a, **k: _agg_df(n_rows=0))
     book = _StubBook("bameng", [(date(2026, 10, 5), 100.0, "bill")])

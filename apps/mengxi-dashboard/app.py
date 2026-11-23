@@ -1719,7 +1719,7 @@ with tab_trader:
             if inp.get("asset_code"):
                 from libs.trading_book.agent_tools import attribution_code as _attr_code
                 where_clauses.append("asset_code = :asset")
-                params["asset"] = _attr_code(inp["asset_code"])  # bameng is stored as 'hetao'
+                params["asset"] = _attr_code(inp["asset_code"])
             where_sql = " AND ".join(where_clauses)
             try:
                 df = pd.read_sql(

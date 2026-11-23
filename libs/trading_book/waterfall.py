@@ -66,9 +66,10 @@ _ATTRIBUTION_SQL = """
       AND trade_date <= CAST(:e AS date)
 """
 
-# See module docstring: registry 'bameng' == attribution-stack 'hetao'; aliases
-# live on StationRef.attribution_code. wuhai matches the attribution stack
-# directly; wuchuan/alashan/lingt46 have no attribution presence (zero-row guard).
+# Aliases live on StationRef.attribution_code. None today: bameng's legacy
+# 'hetao' alias was retired 2026-11-23, when the attribution batch started
+# covering every full-path station under its registry code (there were never
+# any 'hetao' rows in the attribution table).
 _ATTR_CODE_ALIAS: dict[str, str] = {
     s.asset_code: s.attribution_code for s in get_stations() if s.attribution_code}
 

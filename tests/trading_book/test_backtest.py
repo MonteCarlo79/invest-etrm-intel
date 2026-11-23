@@ -69,8 +69,10 @@ def test_chart_columns_are_brief_rungs_in_order():
 # ----------------------------------------------------------------- reader
 
 def test_get_backtest_applies_attribution_alias(monkeypatch):
-    """bameng (registry) -> hetao (attribution stack), same mapping the
-    waterfall uses; date bounds go out as naive ISO literals."""
+    """An attribution alias (same mapping the waterfall uses) is applied;
+    date bounds go out as naive ISO literals."""
+    monkeypatch.setattr("libs.trading_book.waterfall._ATTR_CODE_ALIAS",
+                        {"bameng": "hetao"})
     captured = {}
 
     def fake_read_sql(sql, engine, params=None):

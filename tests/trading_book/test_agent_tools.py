@@ -49,7 +49,7 @@ def test_unknown_and_non_full_codes_return_error_with_valid_list():
 
 
 def test_attribution_code_alias():
-    assert t.attribution_code("bameng") == "hetao"
+    assert t.attribution_code("bameng") == "bameng"   # 'hetao' alias retired
     assert t.attribution_code("suyou") == "suyou"
     assert t.attribution_code("mystery") == "mystery"
 

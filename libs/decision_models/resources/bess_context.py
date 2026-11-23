@@ -74,6 +74,23 @@ ASSET_PHYSICAL_PARAMS: dict = {
     "siziwangqi":  {"power_mw": 100.0, "duration_h": 4.0, "roundtrip_eff": 0.85, "max_cycles_per_day": 1.5},
     "gushanliang": {"power_mw": 500.0, "duration_h": 4.0, "roundtrip_eff": 0.85, "max_cycles_per_day": 1.5},
 }
+# Owned 蒙西 stations: ratings come from the trading-book registry (single
+# source, confirmed 2026-11-23) and override the legacy literals above —
+# wulate was 2h here (real: 100MW/400MWh) and bameng/wuchuan/alashan were
+# missing, so they fell to the 100MW/2h default.
+def _registry_physical_params() -> dict:
+    try:
+        from libs.trading_book.registry import get_stations
+    except Exception:  # registry not in this image — keep the literals
+        return {}
+    return {s.asset_code: {"power_mw": float(s.capacity_mw),
+                           "duration_h": float(s.duration_h),
+                           "roundtrip_eff": 0.85, "max_cycles_per_day": 1.5}
+            for s in get_stations(asset_type="bess")
+            if s.capacity_mw and s.duration_h}
+
+
+ASSET_PHYSICAL_PARAMS.update(_registry_physical_params())
 # TODO: When core.asset_master is available, remove ASSET_PHYSICAL_PARAMS
 # and use load_asset_physical_params() below.
 
