@@ -657,3 +657,12 @@ Tool still read marketdata.ops_bess_dispatch_15min (dead). Now served by libs/tr
 **Fix:** cf6c5791 — COALESCE(total_pnl, total_revenue_yuan), perfect_foresight_hourly → pf_grid_feasible_pnl, NULL scenarios never overwrite a filled rung, forecast scenario not required. History recomputed (1,052 rows).
 **Still empty by design:** tt_forecast_optimal_pnl, tt_strategy_pnl, pf_unrestricted_pnl — no scenario feeds them; waterfall's starting rung (Σ tt_strategy_pnl) is therefore 0.
 **Rule:** verify a repair by reading VALUES (a non-null count or a sample row), not row counts or max dates. Freshness ≠ correctness.
+
+## 2026-11-24 — Scheduler rules launching the Streamlit app itself: 40 immortal tasks, ~$1,200/month
+
+**Symptom:** Fargate billed 30–40 vCPU against 10.5 vCPU of real services, climbing ~2 vCPU/day (October ECS bill $1,800 of a $3,228 total).
+**Cause 1:** EventBridge rules `bess-{pjm,ercot,caiso,au}-scheduler-daily` (cron 18:45 UTC, not in terraform) target the app task definition `bess-platform-<mkt>-market` with **no command override**. The container's default CMD is `streamlit run`, which never exits — each rule added one immortal 0.5-vCPU task per day (10 of each were running).
+**Cause 2:** `bess-platform-nodal-pf-daily` now takes 40–55 **hours per trading day** at 0.5 vCPU (log: `(196983s)`), and each run covers 5 days, so daily runs pile up (8 concurrent). Slowness coincides with the zone-masked / impact-adjusted LP (tasks 12–13) shipping in mengxi-dashboard v59 (td:74).
+**Fix (phase 0):** 4 market rules DISABLED and their 40 tasks stopped; 5 of 8 nodal-pf duplicates stopped (3 kept covering 12–23 Nov). Running compute 34.5 → 12 vCPU.
+**Still open:** (a) give the 4 market rules a real job command (scheduler entrypoint) before re-enabling; (b) nodal-pf performance — rule left ENABLED, so it will pile up again at +0.5 vCPU/day until fixed.
+**Rule:** a scheduled ECS target must override `command` with something that exits; after creating any rule, check `aws ecs list-tasks --family <fam>` the next day for a task count > expected. Monthly: compare Cost Explorer `APS1-Fargate-vCPU-Hours` ÷ 24 against the sum of service vCPU.
