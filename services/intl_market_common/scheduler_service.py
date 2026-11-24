@@ -199,16 +199,46 @@ def start_scheduler(code: str, api_key: str, app_dir: pathlib.Path, logger):
     return scheduler
 
 
+def run_once(code: str, api_key: str, app_dir: pathlib.Path, logger, max_seconds: int = 3 * 3600) -> None:
+    """Run every daily job once, in schedule order, then return.
+
+    For one-shot ECS tasks (EventBridge bess-<code>-scheduler-daily) while the
+    web service is scaled to zero. Until 2026-11-24 those rules launched the
+    container's default CMD (scheduler loop + Streamlit), which never exits:
+    one immortal task per market per day (40 found, ~$700/month). The alarm is
+    a backstop so a hung job cannot recreate that.
+    """
+    import signal
+
+    def _timeout(_sig, _frm):
+        logger.error("[ONCE] %s exceeded %ds — exiting", code.upper(), max_seconds)
+        os._exit(2)
+
+    if hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, _timeout)
+        signal.alarm(max_seconds)
+    for job in _make_jobs(code, api_key, app_dir, logger):   # each job logs and swallows its own errors
+        logger.info("[ONCE] %s: %s", code.upper(), job.__name__)
+        job()
+    logger.info("[ONCE] %s: all jobs done", code.upper())
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--code", required=True, help="Market code, e.g. au, ercot, pjm, caiso")
     parser.add_argument("--app-dir", required=True, help="Path to the app directory, e.g. apps/au-market")
+    parser.add_argument("--once", action="store_true",
+                        help="run each daily job once and exit (one-shot ECS task)")
     args = parser.parse_args()
 
     code = args.code
     app_dir = pathlib.Path(args.app_dir)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     logger = _build_logger(code)
+
+    if args.once:
+        run_once(code, api_key, app_dir, logger)
+        return
 
     logger.info("[SCHEDULER] %s standalone scheduler service starting", code.upper())
     time.sleep(8)  # Brief wait for DB readiness

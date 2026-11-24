@@ -710,6 +710,9 @@ def _enrich_context_with_forecast_dispatch(
             roundtrip_eff=meta["roundtrip_eff"],
             compensation_yuan_per_mwh=meta["compensation_yuan_per_mwh"],
             window_days=1,
+            # Subsidy with no cycle/ramp limit: the MILP runs to its 120 s limit
+            # per asset-day (measured 2026-11-24); DP-fixed modes + LP is 0.4 s.
+            fast_modes=True,
         )
 
         if dispatch_df.empty:
