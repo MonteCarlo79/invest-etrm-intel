@@ -58,3 +58,21 @@ def test_null_scenario_never_blanks_a_filled_rung(monkeypatch):
     a.run_for_date(D, engine=_Engine(rows))
     assert written[0]["pf_grid_feasible_pnl"] == 290000.0
     assert written[0]["pf_unrestricted_pnl"] is None
+
+
+def test_unrestricted_pf_never_below_grid_feasible(monkeypatch):
+    """A time-limited unrestricted solve can come in under the zone-constrained
+    one; the zone-compliant dispatch is feasible unrestricted, so it bounds it."""
+    rows = [("suyou", "perfect_foresight_hourly", 200000.0),          # sub-optimal
+            ("suyou", "perfect_foresight_grid_feasible", 230000.0),
+            ("hangjinqi", "perfect_foresight_hourly", 300000.0),      # normal day
+            ("hangjinqi", "perfect_foresight_grid_feasible", 250000.0)]
+    written = []
+    monkeypatch.setattr(a, "_upsert_attribution", lambda e, r: written.extend(r))
+    monkeypatch.setattr(a, "_verify_post_write_identity", lambda *x: None)
+    a.run_for_date(D, engine=_Engine(rows))
+    by = {r["asset_code"]: r for r in written}
+    assert by["suyou"]["pf_unrestricted_pnl"] == 230000.0
+    assert by["suyou"]["grid_restriction_loss"] == 0.0
+    assert by["hangjinqi"]["pf_unrestricted_pnl"] == 300000.0
+    assert by["hangjinqi"]["grid_restriction_loss"] == 50000.0

@@ -246,6 +246,19 @@ def run_for_date(trade_date: date, engine=None) -> int:
             if field_name and pnl_value is not None:
                 model_input[field_name] = pnl_value
 
+        # Feasibility bound: every zone-compliant dispatch is also feasible
+        # without zones, so the unrestricted PF can never be below the
+        # grid-feasible PF. It was on 59 station-days (2026-11-24) because the
+        # unrestricted MILP stopped at its 120 s limit with a sub-optimal
+        # answer; the grid-feasible value is then the better lower bound.
+        _unres = model_input.get("pf_unrestricted_pnl")
+        _grid = model_input.get("pf_grid_feasible_pnl")
+        if _unres is not None and _grid is not None and _grid > _unres:
+            logger.info("pf_unrestricted %.0f < pf_grid_feasible %.0f for %s %s "
+                        "(time-limited solve) — unrestricted raised to the bound",
+                        _unres, _grid, asset_code, trade_date)
+            model_input["pf_unrestricted_pnl"] = _grid
+
         result = run("dispatch_pnl_attribution", model_input)
 
         # B4: pre-write identity check (in-process, no DB round-trip)
