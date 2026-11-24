@@ -39,6 +39,67 @@ class DispatchResult:
 # Core LP engine — arbitrary horizon
 # ---------------------------------------------------------------------------
 
+def dp_dispatch_modes(
+    prices: np.ndarray,
+    power_mw: float,
+    e_cap: float,
+    eta_c: float,
+    eta_d: float,
+    dt: float,
+    compensation_yuan_per_mwh: float = 0.0,
+    no_charge_slots: Optional[set] = None,
+    no_discharge_slots: Optional[set] = None,
+    impact_lambda: float = 0.0,
+    grid: int = 400,
+) -> np.ndarray:
+    """Per-slot mode (+1 discharge, -1 charge, 0 idle) from an exact dynamic
+    programme over a state-of-charge grid.
+
+    Why: with a discharge subsidy the MILP's LP relaxation charges and
+    discharges in the same slot (a money pump whenever (p+s)·η > p), so CBC
+    must branch on ~all binaries — 50-120 s per 96-slot day vs 0.05 s without
+    subsidy (2026-11-24: nodal-pf-daily took 40-55 h per trading day). The DP
+    picks the charge/discharge pattern in ~0.2 s; the caller then solves the
+    continuous LP with that pattern fixed, which restores exact power levels
+    (the DP alone lands ~0.3% low because full-power steps miss the grid).
+
+    Slots are 0-based here. Ignores throughput/cycle/ramp limits — callers
+    must fall back to the MILP when those are set.
+    """
+    prices = np.asarray(prices, dtype=float)
+    T = len(prices)
+    g = np.linspace(0.0, e_cap, grid + 1)
+    d = g[None, :] - g[:, None]                       # d[i, j] = soc_j - soc_i
+    c_mw = np.where(d > 0, d / (eta_c * dt), 0.0)
+    d_mw = np.where(d < 0, -d * eta_d / dt, 0.0)
+    feas = (c_mw <= power_mw + 1e-9) & (d_mw <= power_mw + 1e-9)
+    is_c, is_d = d > 0, d < 0
+    nc = no_charge_slots or set()
+    nd = no_discharge_slots or set()
+    lam = float(impact_lambda or 0.0)
+    V = np.zeros(grid + 1)
+    nxt = np.zeros((T, grid + 1), dtype=np.int32)
+    for t in range(T - 1, -1, -1):
+        p = prices[t]
+        r = ((p - lam * d_mw + compensation_yuan_per_mwh) * d_mw
+             - (p + lam * c_mw) * c_mw) * dt
+        ok = feas
+        if t in nc:
+            ok = ok & ~is_c
+        if t in nd:
+            ok = ok & ~is_d
+        q = np.where(ok, r + V[None, :], -np.inf)
+        nxt[t] = q.argmax(axis=1)
+        V = q[np.arange(grid + 1), nxt[t]]
+    modes = np.zeros(T, dtype=np.int8)
+    i = 0                                             # soc[0] == 0
+    for t in range(T):
+        j = int(nxt[t, i])
+        modes[t] = -1 if j > i else (1 if j < i else 0)
+        i = j
+    return modes
+
+
 def optimise_window(
     prices: np.ndarray,
     power_mw: float,
@@ -54,6 +115,7 @@ def optimise_window(
     no_discharge_slots: Optional[set] = None,
     impact_lambda: Optional[float] = None,
     impact_blocks: int = 8,
+    fast_modes: bool = False,
 ) -> DispatchResult:
     """
     Solve the BESS arbitrage LP for an arbitrary number of intervals T.
@@ -155,9 +217,25 @@ def optimise_window(
         ch = pulp.LpVariable.dicts("ch", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
         dis = pulp.LpVariable.dicts("dis", range(T), lowBound=0, upBound=power_mw, cat="Continuous")
 
-    # Binary variable prevents simultaneous charge and discharge
-    y = pulp.LpVariable.dicts("y", range(T), lowBound=0, upBound=1, cat="Binary")
+    # Simultaneous charge and discharge is prevented either by binaries (MILP)
+    # or, with fast_modes, by fixing each slot's mode from dp_dispatch_modes and
+    # solving a pure LP. fast_modes is opt-in and only valid without
+    # throughput/cycle/ramp limits (the DP does not model them).
+    use_fast = bool(fast_modes) and max_throughput_mwh is None \
+        and max_cycles_per_day is None and ramp_rate_pct_per_min is None
     M = power_mw
+    if use_fast:
+        modes = dp_dispatch_modes(
+            prices, float(power_mw), e_cap, eta_c, eta_d, dt,
+            compensation_yuan_per_mwh=float(compensation_yuan_per_mwh),
+            no_charge_slots={t for t in (no_charge_slots or ()) if 0 <= t < T},
+            no_discharge_slots={t for t in (no_discharge_slots or ()) if 0 <= t < T},
+            impact_lambda=lam)
+        no_charge_slots = set(no_charge_slots or ()) | {t for t in range(T) if modes[t] != -1}
+        no_discharge_slots = set(no_discharge_slots or ()) | {t for t in range(T) if modes[t] != 1}
+        y = None
+    else:
+        y = pulp.LpVariable.dicts("y", range(T), lowBound=0, upBound=1, cat="Binary")
 
     # Dispatch-restriction hard constraints (蒙西 nomination zones): bound the
     # variable to zero rather than adding LP rows — tighter and free at solve time.
@@ -185,8 +263,9 @@ def optimise_window(
     for t in range(T):
         # SOC update: power [MW] × dt [h] = energy [MWh]
         prob += soc[t + 1] == soc[t] + ch[t] * eta_c * dt - dis[t] * (1.0 / eta_d) * dt
-        prob += ch[t] <= M * y[t]
-        prob += dis[t] <= M * (1 - y[t])
+        if y is not None:
+            prob += ch[t] <= M * y[t]
+            prob += dis[t] <= M * (1 - y[t])
 
     # Degradation constraints — scale per-day limits by window size
     # n_days_window = total hours covered / 24 = T * dt / 24
@@ -311,6 +390,7 @@ def compute_dispatch_from_hourly_prices(
     no_charge_slots: Optional[set] = None,
     no_discharge_slots: Optional[set] = None,
     impact_lambda: Optional[float] = None,
+    fast_modes: bool = False,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over every complete day in ``hourly_prices``,
@@ -426,6 +506,7 @@ def compute_dispatch_from_hourly_prices(
             no_charge_slots=w_nc,
             no_discharge_slots=w_nd,
             impact_lambda=impact_lambda,
+            fast_modes=fast_modes,
         )
 
         for i, d in enumerate(window_dates):
@@ -466,6 +547,7 @@ def compute_dispatch_from_15min_prices(
     no_charge_slots: Optional[set] = None,
     no_discharge_slots: Optional[set] = None,
     impact_lambda: Optional[float] = None,
+    fast_modes: bool = False,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Run the BESS arbitrage LP over 15-min price intervals (96 per day).
@@ -510,4 +592,5 @@ def compute_dispatch_from_15min_prices(
         no_charge_slots=no_charge_slots,
         no_discharge_slots=no_discharge_slots,
         impact_lambda=impact_lambda,
+        fast_modes=fast_modes,
     )

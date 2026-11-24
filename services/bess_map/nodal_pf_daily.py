@@ -229,6 +229,9 @@ def run_day(engine, province: str, day: date, dry_run: bool = False) -> tuple[in
                 no_charge_slots=zm[0] if zm else None,
                 no_discharge_slots=zm[1] if zm else None,
                 impact_lambda=impact_map.get(node),
+                # DP-fixed modes + LP: the subsidy turns the MILP into a
+                # 50-120 s solve per node (40-55 h per day); this is ~0.3 s.
+                fast_modes=True,
             )
             rows.append({
                 "data_date": day, "province": province, "node_name": node,
