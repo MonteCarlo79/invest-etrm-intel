@@ -494,5 +494,34 @@ def test_merge_price_sources_fills_slotwise_in_priority_order():
 def test_legs_inputs_key_carries_price_source_version(monkeypatch):
     from libs.asset_risk import legs_store
     k = legs_store.legs_inputs_key(100.0, 2.0, "2024-06-30", 350.0)
-    monkeypatch.setattr(legs_store, "PRICE_SOURCE_VERSION", "px3")
+    monkeypatch.setattr(legs_store, "PRICE_SOURCE_VERSION", "px-next")
     assert legs_store.legs_inputs_key(100.0, 2.0, "2024-06-30", 350.0) != k
+
+
+def test_benchmark_leg_puts_subsidy_in_the_lp_objective(monkeypatch):
+    """Owner decision 2026-11-24: the investment-standard LP optimises WITH the
+    capacity subsidy (leaving it out understated the benchmark by 0.8-5% per
+    asset-month), keeps the 1.5-cycle cap that makes that solve tractable, and
+    still reports arbitrage market-only with the subsidy as dis_mwh x rate."""
+    import services.bess_map.optimisation_engine as eng
+    from libs.asset_risk import waterfall as wf
+
+    # md rows are stamped one slot before the chain slot (MD_ROW_TO_SLOT); these 96 rows
+    # map onto the 96 slots of 2026-10-01.
+    slots = pd.date_range("2026-10-01 00:00", periods=96, freq="15min")
+    monkeypatch.setattr(wf, "_load_prices", lambda *a, **k: pd.DataFrame(
+        {"datetime": slots - wf.MD_ROW_TO_SLOT, "cleared_price": 300.0}))
+    seen = {}
+
+    def fake(series, **kw):
+        seen.update(kw)
+        days = sorted(set(series.index.date))
+        disp = pd.DataFrame({"discharge_mw": [100.0] * 4, "charge_mw": [120.0] * 4})
+        return disp, pd.Series([1000.0] * len(days), index=days)
+
+    monkeypatch.setattr(eng, "compute_dispatch_from_15min_prices", fake)
+    r = wf.benchmark_leg(None, 1, "2026-10", 100.0, 4.0, "2025-12-01", 350.0, "X储能电站")
+    assert seen["compensation_yuan_per_mwh"] == 350.0
+    assert seen["max_cycles_per_day"] == 1.5 and seen["ramp_rate_pct_per_min"] == 3.3
+    assert r["dis_mwh"] == 100.0 and r["cap_cny"] == 100.0 * 350.0     # subsidy still reported separately
+    assert r["arb_cny"] == 1000.0 * r["days_solved"]                   # market-only arbitrage

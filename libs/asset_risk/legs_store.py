@@ -51,7 +51,7 @@ def _is_persistable(leg: str, result: dict) -> bool:
 
 # Bump when the price series feeding the legs changes, so stored legs are recomputed.
 # px2: slot-wise merge cleared > node RT (md_rt_nodal_price) > filled (2026-11-16).
-PRICE_SOURCE_VERSION = "px2"
+PRICE_SOURCE_VERSION = "px3"   # px3 2026-11-24: benchmark LP includes the capacity subsidy in its objective
 
 
 def legs_inputs_key(capacity_mw, duration_h, commission_iso, capcomp_rate) -> str:

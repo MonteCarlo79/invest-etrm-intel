@@ -294,10 +294,15 @@ def benchmark_leg(engine, asset_id: int, month: str, capacity_mw: float,
             roundtrip_eff=params["roundtrip_eff"], window_days=1,
             ramp_rate_pct_per_min=3.3, max_cycles_per_day=1.5,
             # 蒙西 operator rules: ramp 3.3%/min + max 1.5 cycles/day per asset (user 2026-09).
-            # capacity subsidy NOT internalised in the objective: it makes the MILP
-            # ~25-500x slower (every discharge marginally profitable explodes the binary
-            # search) while changing discharge volume by only ~0.2% (measured 2026-06,
-            # 悦杭独贵: 903.1 vs 904.6 MWh). Subsidy is added outside as dis_mwh x rate.
+            compensation_yuan_per_mwh=capcomp_rate,
+            # Capacity subsidy IS in the objective (owner decision 2026-11-24): a perfect
+            # operator cycles for compensation even when the spread alone would not pay.
+            # Leaving it out understated the benchmark by 0.8-5.0% per asset-month
+            # (measured 2026-11-24 in ECS: 景蓝乌尔图 / 悦杭独贵, Jun + Oct 2026; the
+            # earlier "~0.2%" note did not hold). With the 1.5-cycle cap the MILP stays
+            # tractable (3-38 s per asset-month); WITHOUT a cycle cap a subsidised solve
+            # runs to the 120 s limit per day - keep the cap. profit_s stays market-only,
+            # so arb_cny / cap_cny below are unchanged in meaning.
         )
 
     price_note = ""
