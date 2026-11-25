@@ -875,3 +875,29 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **In progress:** OneDrive folder pin pending (some files still dataless); a few reconciliation gaps for manual review.
 **Decisions made:** personal identifiers live only in OneDrive config files, never in the repo; Mac extraction uses the local model for privacy.
 **Next session:** check the first scheduled runs (Hermes Feishu summary at 10:15 CST; `/tmp/fa_workings.log` after 11:30). Other sessions shipped mengxi-dashboard v62/v64 and PH/PO apps in parallel — re-read LATEST-IMAGES.md before any deploy.
+
+## Session Summary, 2026-11-23 → 2026-11-25 (Trader app repair: attribution ladder, TSO zones, writer)
+**Worked on:** Repair and improvement of the Trader app (mengxi-dashboard): attribution pipeline, the Trader agent's tools, station coverage and ratings, TSO traffic-light restrictions, and the nodal writer's strategy LP. Detail in the auto-memory file `mengxi-trading-book.md` and ERRORS.md (2026-11-23 entries).
+**Completed:**
+- **Attribution was dead and had never held values.** Rule ran D-1 only while prices land ~2 days late (nothing written 11-07→11-22); deeper, run_daily_attribution read the legacy `total_revenue_yuan` column and legacy scenario names, so every ladder row was all-NULL. Fixed: `catch_up()` 10-day window (rule script `infra/eventbridge/attribution_daily.py`), complete-day price check, redo when nominations arrive, `total_pnl` + scenario mapping. History recomputed.
+- **Six-rung ladder** for 8 full stations: PF unrestricted → PF grid-feasible (actual TSO zones) → forecast-optimal (book D-1 forecast, forecast zones) → strategy (nodal-agent curve) → nominated → actual. New `services/monitoring/ladder_rungs.py`; grid-feasible rung re-solved only when a day's zone signature changes; feasibility bound unrestricted ≥ grid-feasible.
+- **TSO red/yellow windows as hard LP constraints** in the nodal writer (D+1 zone forecast; own forecast for owned stations, fleet consensus otherwise) and in the rung LPs; 武川/阿拉善 get fleet-consensus zone rows.
+- **Nodal writer**: owned stations (9 accounts) solve with compensation in the objective + 1.5 cycles/day + 3.3 %/min ramp, 15 s cap per solve; dry run 121 s for 26 plants. Writer image on `:latest` (td:8); terraform `nodal_writer.tf` derives `:latest`.
+- **Ratings** (user-confirmed) on `StationRef.capacity_mw/duration_h`, feeding ASSET_PHYSICAL_PARAMS and the writer registry: suyou/hangjinqi/siziwangqi/wulate 100 MW/4 h, gushanliang 500/4, bameng/武川/阿拉善 1000/4. Registry estimator's ×4 bug removed; non-owned capacities ÷4 in DB (38 rows). 'hetao' alias retired.
+- **Trader agent**: `get_dispatch_data` now reads through the book (`libs/trading_book/agent_tools.py`; the ops table it read died 2026-04-21); grounding rule + registry station list.
+- Registry price nodes fixed for 武川/阿拉善; λ reads exact exchange account names; WeCom collector handles 武川's month-less accumulating workbook.
+- History LP backfill for bameng/wulate (04-20→) and 武川/阿拉善 (09-21→): 508 station-days.
+- Deploys: mengxi-dashboard v60…v70 (several intermediate), now **v70 / td:85**, `latest` = v70. Tag collision on v65 with the cost session (they deployed theirs as td:79; my fix shipped as v66).
+**In progress:**
+- Identity-check fix (e731b6bb: Σ5 losses vs realisation_gap_vs_pf, not _vs_pf_grid) is pushed but in no image — attribution log prints false `POST_WRITE_IDENTITY_FAIL` until the next mengxi-dashboard build carries `run_daily_attribution.py`.
+- terraform state not reconciled for the nodal writer `:latest` image (needs a targeted apply by the user).
+**Decisions made:**
+- Verify repairs by VALUES (non-null counts, sample rows), never row counts or max dates — the 11-09 "revival" and the first 11-23 backfill both passed on counts while every value was NULL.
+- Batch PF (no zones) = unrestricted rung; zone-constrained PF = grid-feasible rung; their difference is the TSO restriction cost (12–26 % of unrestricted PF per month, May→Nov).
+- Compensation stays inside the LP objective for these LPs (moving it outside changed discharge 20–40 %). fast_modes cannot serve LPs with a cycle cap or ramp limit.
+- Owned stations only on the operator-rule LP; competitors stay spread-only. Time limit, not optimality gap, is the solver control (gap stops never converge; 15 s loses <0.2 % objective).
+- Shared service with other sessions: check `aws ecr describe-images` for a tag immediately before building; build on the live digest; validate in the `bess-platform-mengxi-dashboard-probe` family (does not move family-latest).
+**Next session:**
+- FIRST: 2026-11-26 16:00 CST writer log — expect `ZONES …`, `OPERATOR_RULES 9 owned accounts of 26 plants`, `RUN_DAY … plants 26`, run time near 2 min. Then ~11-28: strategy rung for 11-27 vs nominated.
+- Carry `run_daily_attribution.py` (identity check) in the next mengxi-dashboard image.
+- Open: 阿拉善 nominations capture 34 % of grid-feasible PF and siziwangqi 67 % (Nov 1–22) — worth a look; owned strategies still fragment into many small blocks on a near-flat forecast curve (17/26 plants have no node shape) → feed the book's D+1 forecast into the writer (roadmap P1); 20 plants flagged inactive in the writer registry despite recent clearing; bameng capped at the 河套 750 MW substation figure vs 1,000 MW rating; cleared feed has day holes; WeCom files only arrive when the 储能场站日报群 chat is opened on the Mac; λ reads cleared energy without the book's +15 min row→slot shift.
