@@ -76,3 +76,17 @@ def test_unrestricted_pf_never_below_grid_feasible(monkeypatch):
     assert by["suyou"]["grid_restriction_loss"] == 0.0
     assert by["hangjinqi"]["pf_unrestricted_pnl"] == 300000.0
     assert by["hangjinqi"]["grid_restriction_loss"] == 50000.0
+
+
+def test_identity_check_uses_gap_vs_unrestricted_pf():
+    """Five losses telescope from unrestricted PF to actual: a full, consistent
+    ladder must pass; the old comparison vs the grid-feasible gap flagged it."""
+    full = {"grid_restriction_loss": 63.0, "forecast_error_loss": 49.0,
+            "strategy_error_loss": 53.0, "nomination_loss": -114.0,
+            "execution_clearing_loss": 46.0,
+            "realisation_gap_vs_pf": 97.0, "realisation_gap_vs_pf_grid": 34.0}
+    assert a._check_attribution_identity(full, D, "suyou") is None
+    broken = {**full, "nomination_loss": -100.0}
+    assert "Identity check failed" in a._check_attribution_identity(broken, D, "suyou")
+    partial = {**full, "strategy_error_loss": None}
+    assert a._check_attribution_identity(partial, D, "suyou") is None

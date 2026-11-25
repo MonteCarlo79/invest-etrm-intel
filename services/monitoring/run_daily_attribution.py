@@ -58,8 +58,14 @@ def _check_attribution_identity(
     asset_code: str,
 ) -> Optional[str]:
     """
-    B4: Verify that the sum of the five loss buckets equals realisation_gap_vs_pf_grid
+    B4: Verify that the sum of the five loss buckets equals realisation_gap_vs_pf
     (within _IDENTITY_TOLERANCE Yuan).
+
+    The five losses telescope from pf_unrestricted down to cleared_actual, so
+    their sum is the gap vs the UNRESTRICTED PF. The check used to compare
+    against realisation_gap_vs_pf_grid, which is short by exactly
+    grid_restriction_loss — invisible while the ladder was never complete,
+    a false alarm on every full row once it was (2026-11-25).
 
     Returns None when the check passes or when any required field is absent
     (partial ladder — skip rather than false-alarm).
@@ -75,7 +81,7 @@ def _check_attribution_identity(
         "execution_clearing_loss",
     ]
     losses = [result.get(f) for f in loss_fields]
-    gap = result.get("realisation_gap_vs_pf_grid")
+    gap = result.get("realisation_gap_vs_pf")
 
     if any(v is None for v in losses) or gap is None:
         return None  # partial ladder — identity check not applicable
@@ -85,7 +91,7 @@ def _check_attribution_identity(
     if discrepancy > _IDENTITY_TOLERANCE:
         return (
             f"Identity check failed for {asset_code} on {trade_date}: "
-            f"sum(losses)={total_losses:.2f}, realisation_gap_vs_pf_grid={gap:.2f}, "
+            f"sum(losses)={total_losses:.2f}, realisation_gap_vs_pf={gap:.2f}, "
             f"discrepancy={discrepancy:.2f} > tolerance={_IDENTITY_TOLERANCE}"
         )
     return None
@@ -98,7 +104,7 @@ def _verify_post_write_identity(engine, trade_date: date, expected_count: int) -
 
     Checks: |grid_restriction_loss + forecast_error_loss + strategy_error_loss
                + nomination_loss + execution_clearing_loss
-               - realisation_gap_vs_pf_grid| > _IDENTITY_TOLERANCE
+               - realisation_gap_vs_pf| > _IDENTITY_TOLERANCE
     """
     from sqlalchemy import text
 
@@ -110,11 +116,11 @@ def _verify_post_write_identity(engine, trade_date: date, expected_count: int) -
                  + COALESCE(strategy_error_loss, 0)
                  + COALESCE(nomination_loss, 0)
                  + COALESCE(execution_clearing_loss, 0)
-                 - COALESCE(realisation_gap_vs_pf_grid, 0)
+                 - COALESCE(realisation_gap_vs_pf, 0)
                ) AS discrepancy
         FROM reports.bess_asset_daily_attribution
         WHERE trade_date = :td
-          AND realisation_gap_vs_pf_grid IS NOT NULL
+          AND realisation_gap_vs_pf IS NOT NULL
           AND grid_restriction_loss IS NOT NULL
           AND forecast_error_loss IS NOT NULL
           AND strategy_error_loss IS NOT NULL

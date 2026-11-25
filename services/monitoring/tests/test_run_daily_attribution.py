@@ -35,7 +35,7 @@ def _result(
         "strategy_error_loss": strategy,
         "nomination_loss": nomination,
         "execution_clearing_loss": execution,
-        "realisation_gap_vs_pf_grid": gap if gap is not None else total,
+        "realisation_gap_vs_pf": gap if gap is not None else total,
     }
 
 
@@ -85,7 +85,7 @@ class TestCheckAttributionIdentity:
             "strategy_error_loss": 50.0,
             "nomination_loss": 30.0,
             "execution_clearing_loss": 20.0,
-            "realisation_gap_vs_pf_grid": 200.0,
+            "realisation_gap_vs_pf": 200.0,
         }
         assert _check_attribution_identity(result, _DATE, _ASSET) is None
 
@@ -96,7 +96,7 @@ class TestCheckAttributionIdentity:
             "strategy_error_loss": 50.0,
             "nomination_loss": 30.0,
             "execution_clearing_loss": 20.0,
-            "realisation_gap_vs_pf_grid": None,
+            "realisation_gap_vs_pf": None,
         }
         assert _check_attribution_identity(result, _DATE, _ASSET) is None
 
