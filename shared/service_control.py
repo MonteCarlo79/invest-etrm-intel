@@ -164,10 +164,83 @@ SERVICES: dict[str, dict[str, Any]] = {
         "web_url": "/retail-risk/",
         "label": "Retail Risk",
     },
+    "market-maker": {
+        "svc": "bess-platform-market-maker-svc",
+        "family": "bess-platform-market-maker",
+        "container": "market-maker",
+        "has_scheduler": False,
+        "scheduler_cmd": [],
+        "web_url": "/market-maker/",
+        "label": "Market Maker",
+    },
+    "crystal-ball": {
+        "svc": "bess-platform-crystal-ball-svc",
+        "family": "bess-platform-crystal-ball",
+        "container": "crystal-ball",
+        "has_scheduler": False,
+        "scheduler_cmd": [],
+        "web_url": "/crystal-ball/",
+        "label": "Crystal Ball",
+    },
+    "crystal-ball-client": {
+        "svc": "bess-platform-crystal-ball-client-svc",
+        "family": "bess-platform-crystal-ball-client",
+        "container": "crystal-ball-client",
+        "has_scheduler": False,
+        "scheduler_cmd": [],
+        "web_url": "/crystal-ball-client/",
+        "label": "Crystal Ball Client",
+    },
+    "deeptutor": {
+        "svc": "bess-platform-deeptutor-svc",
+        "family": "bess-platform-deeptutor",
+        "container": "deeptutor",
+        "has_scheduler": False,
+        "scheduler_cmd": [],
+        "web_url": "https://tutor.pjh-etrm.ai/",
+        "label": "DeepTutor",
+    },
 }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+# Services kept at zero and started on demand (phase 1 cost plan, 2026-11-25:
+# none opened in 14 days of ALB logs, none runs background work in its web
+# container). The nightly auto-stop turns these off again if left running.
+# NOT here on purpose: the apps in daily use, crystal-ball (owner needs web
+# access), market-maker / retail-risk (owner keeps them up), and gb (its
+# container still hosts the GB data scheduler and the Modo session file).
+ON_DEMAND: tuple[str, ...] = (
+    "deal-structurer", "im", "ph", "po", "au", "ercot", "caiso", "pjm",
+    "options", "crystal-ball-client", "deeptutor",
+)
+
+
+def auto_stop_on_demand(ecs_client, cluster: str) -> list[str]:
+    """Scale every running ON_DEMAND service to zero; return the labels stopped."""
+    stopped: list[str] = []
+    names = [SERVICES[m]["svc"] for m in ON_DEMAND]
+    desired: dict[str, int] = {}
+    for i in range(0, len(names), 10):
+        resp = ecs_client.describe_services(cluster=cluster, services=names[i:i + 10])
+        for svc in resp["services"]:
+            desired[svc["serviceName"]] = svc["desiredCount"]
+    for m in ON_DEMAND:
+        cfg = SERVICES[m]
+        if desired.get(cfg["svc"], 0) > 0:
+            ecs_client.update_service(cluster=cluster, service=cfg["svc"], desiredCount=0)
+            stopped.append(cfg["label"])
+    return stopped
+
+
+def _service_task_def(ecs_client, cluster: str, cfg: dict) -> dict:
+    """Task definition the SERVICE currently points at. Never the family's latest
+    revision: another session (or a run-once job) may have registered a newer
+    one that this service must not be moved onto."""
+    svc = ecs_client.describe_services(cluster=cluster, services=[cfg["svc"]])["services"][0]
+    return ecs_client.describe_task_definition(taskDefinition=svc["taskDefinition"])["taskDefinition"]
+
 
 def _get_latest_task_def(ecs_client, family: str) -> dict:
     """Fetch the latest active task definition for *family*."""
@@ -263,7 +336,13 @@ def set_service_mode(market: str, mode: str, ecs_client, cluster: str) -> dict:
     else:
         raise ValueError(f"Unknown mode '{mode}'. Use 'web', 'scheduler', or 'stop'.")
 
-    td = _get_latest_task_def(ecs_client, cfg["family"])
+    td = _service_task_def(ecs_client, cluster, cfg)
+    current_cmd = next((c.get("command") or [] for c in td["containerDefinitions"]
+                        if c["name"] == cfg["container"]), [])
+    if mode == "web" and not current_cmd:
+        # Already a web revision: just start it. No new task definition.
+        ecs_client.update_service(cluster=cluster, service=cfg["svc"], desiredCount=1)
+        return {"market": market, "label": cfg["label"], "mode": "web", "web_url": cfg["web_url"]}
     new_arn = _register_task_def_with_command(ecs_client, td, cfg["container"], command)
     logger.info("Registered new task def %s for %s mode=%s", new_arn, market, mode)
 

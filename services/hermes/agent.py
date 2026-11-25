@@ -216,10 +216,10 @@ MARKET_AGENT — ask a specialist market agent a data question
   reply: you will generate after seeing results
   note: use when user asks about specific market data, BESS revenues, prices, assets, economics
 
-SERVICE_CONTROL — start or stop a market app's Streamlit web UI on AWS
-  params: {"market": "gb|au|ercot|caiso|pjm|ph|po|bess-map|im|mengxi|options|all", "mode": "web|stop|status"}
+SERVICE_CONTROL — start or stop an app's web UI on AWS
+  params: {"market": "gb|au|ercot|caiso|pjm|ph|po|bess-map|im|mengxi|options|spot|deal-structurer|asset-risk|retail-risk|market-maker|crystal-ball|crystal-ball-client|deeptutor|all", "mode": "web|stop|status"}
   reply: you will generate after seeing results
-  note: "start/open/launch [market]" → mode=web; "stop/close/turn off [market]" → mode=stop; "app status / which apps are running" → market=all, mode=status
+  note: "start/open/launch/启动/打开 [app]" → mode=web; "stop/close/turn off/关闭/停止 [app]" → mode=stop; "app status / which apps are running / 应用状态" → market=all, mode=status. Never use market=all with mode=web or mode=stop unless the user explicitly says "all". On-demand apps (deal-structurer, im, ph, po, au, ercot, caiso, pjm, options, crystal-ball-client, deeptutor) are normally off and are switched off again automatically at 02:00 Beijing time.
 
 GENERATE_CHART — query market data and render it as a chart image sent directly to the user
   params: {"market": "spot|bess-map|gb|au|ercot|caiso|pjm|ph|po",

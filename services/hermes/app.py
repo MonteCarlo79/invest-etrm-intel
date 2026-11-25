@@ -1096,6 +1096,26 @@ def create_app() -> FastAPI:
                         "open_id": os.environ.get("FEISHU_OWNER_OPEN_ID", "")},
             )
 
+    # Nightly auto-stop of on-demand web apps: 02:00 Beijing (18:00 UTC). Phase 1
+    # cost plan (2026-11-25): these stay at zero and are started via SERVICE_CONTROL
+    # or scripts/svc.sh; this switches off whatever was left running.
+    def _auto_stop_on_demand_job():
+        try:
+            import boto3
+            from shared.service_control import auto_stop_on_demand
+            stopped = auto_stop_on_demand(
+                boto3.client("ecs", region_name="ap-southeast-1"),
+                os.environ.get("ECS_CLUSTER", "bess-platform-cluster"))
+            logger.info("auto-stop on-demand: %s", stopped or "nothing running")
+            _oid = os.environ.get("FEISHU_OWNER_OPEN_ID", "")
+            if stopped and feishu and _oid:
+                feishu.send_text(_oid, "🌙 已自动关闭按需应用：" + "、".join(stopped)
+                                 + "\n需要时对我说“启动 <应用名>”即可。")
+        except Exception as exc:
+            logger.error("auto-stop on-demand failed: %s", exc)
+
+    scheduler.add_job(_auto_stop_on_demand_job, "cron", hour=18, minute=0)
+
     # Email digest: 9:00 AM Beijing (01:00 UTC) — only if Outlook is configured
     if outlook:
         scheduler.add_job(
