@@ -539,7 +539,8 @@ def _start_scheduler(code: str, name: str, prefix: str, api_key: str, app_file: 
     scheduler.add_job(_kb_digest_job,      "cron", hour=3,  minute=45, id=f"{code}_kb_digest",       misfire_grace_time=3600)
     scheduler.add_job(_modo_ai_job,        "cron", hour=4,  minute=0,  id=f"{code}_modo_ai",         misfire_grace_time=3600)
     scheduler.add_job(_daily_report_job,   "cron", hour=6,  minute=0,  id=f"{code}_daily_report",    misfire_grace_time=3600)
-    scheduler.start()
+    # local replica mode: jobs are listed but never fire (ingest belongs on AWS)
+    scheduler.start(paused=bool(os.environ.get("LOCAL_REPLICA")))
     with _scheduler_lock:
         _scheduler_instances[code] = scheduler
     print(f"[SCHEDULER] {code} scheduler started", flush=True)

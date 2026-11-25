@@ -310,7 +310,8 @@ def _start_scheduler():
                   id="po_as_prices",  misfire_grace_time=3600)
     sched.add_job(_cap_market_job, "cron", day=1, hour=5, minute=10,
                   id="po_cap_market", misfire_grace_time=3600)
-    sched.start()
+    # local replica mode: jobs are listed but never fire (ingest belongs on AWS)
+    sched.start(paused=bool(os.environ.get("LOCAL_REPLICA")))
     return sched
 
 

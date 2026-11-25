@@ -63,7 +63,17 @@ up() {
   for n in "$@"; do
     spec=$(lookup "$n"); [ -n "$spec" ] || { echo "unknown app: $n"; continue; }
     if alive "$n"; then echo "$n already running on http://localhost:${spec#*|}"; continue; fi
-    ( cd "$REPO" && nohup "$VENV/bin/streamlit" run "${spec%|*}" --server.port "${spec#*|}" \
+    pp="$PYTHONPATH"; wd="$REPO"
+    if [ "$n" = inner-mongolia ]; then
+      # its image ships its own shared/ (no __init__), which the repo-root shared/ package
+      # would shadow — mirror the image layout: only auth/ and that shared/ on the path
+      mkdir -p "$RUN/im-root"
+      ln -sfn "$REPO/apps/bess-inner-mongolia/shared" "$RUN/im-root/shared"
+      ln -sfn "$REPO/auth" "$RUN/im-root/auth"
+      pp="$RUN/im-root"; wd="$RUN/im-root"   # cwd is on sys.path too
+    fi
+    # ';' not '&&' before nohup: '&' would background the whole AND-list and $! would be a wrapper subshell
+    ( cd "$wd" || exit 1; PYTHONPATH="$pp" nohup "$VENV/bin/streamlit" run "$REPO/${spec%|*}" --server.port "${spec#*|}" \
         --server.headless true --browser.gatherUsageStats false >"$LOGS/$n.log" 2>&1 </dev/null & echo $! >"$RUN/$n.pid" )
     echo "$n → http://localhost:${spec#*|}   (log: $LOGS/$n.log)"
   done
@@ -71,7 +81,12 @@ up() {
 
 down() {
   for n in "$@"; do
-    if alive "$n"; then kill "$(cat "$RUN/$n.pid")" && echo "stopped $n"; fi
+    if alive "$n"; then
+      pid=$(cat "$RUN/$n.pid"); kill "$pid"
+      for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+      kill -9 "$pid" 2>/dev/null || true   # Streamlit can sit on SIGTERM while a browser tab is attached
+      echo "stopped $n"
+    fi
     rm -f "$RUN/$n.pid"
   done
 }

@@ -236,7 +236,8 @@ def _start_scheduler():
     sched.add_job(_wesm_price_job,  "cron", hour=7,  minute=15, id="ph_wesm_price",  misfire_grace_time=3600)
     sched.add_job(_wesm_docs_job,   "cron", day_of_week="mon", hour=4, minute=5,
                   id="ph_wesm_docs", misfire_grace_time=7200)
-    sched.start()
+    # local replica mode: jobs are listed but never fire (ingest belongs on AWS)
+    sched.start(paused=bool(os.environ.get("LOCAL_REPLICA")))
     return sched
 
 
