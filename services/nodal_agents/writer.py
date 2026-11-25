@@ -118,6 +118,20 @@ def build_zones_map(assets: list[dict], forecast_fn) -> tuple[dict, dict]:
     return out, summary
 
 
+def owned_operator_params() -> dict[str, dict]:
+    """exchange account name -> agent keys that switch an OWNED station onto
+    the operator-rule LP (compensation in the objective, cycle cap, ramp):
+    {"operator_rules": True, "compensation_yuan_per_mwh": <registry subsidy>}.
+    Plants we do not own get nothing and stay on the spread-only LP."""
+    from libs.trading_book.registry import get_stations
+    out: dict[str, dict] = {}
+    for s in get_stations(asset_type="bess", data_path="full"):
+        for name in s.cleared_names:
+            out[name] = {"operator_rules": True,
+                         "compensation_yuan_per_mwh": float(s.subsidy_cny_per_mwh or 0.0)}
+    return out
+
+
 def _load_zones_map(assets: list[dict], target_date: date) -> dict:
     """D+1 zone codes per plant from the zone forecast; {} (all green) with a
     loud line when it cannot be loaded."""
@@ -310,9 +324,14 @@ def run_day(conn, target_date: date, model_version: str = MODEL_VERSION,
         return {a["plant_name"]: level * asset_shapes[a["plant_name"]]
                 for a in assets}
 
+    owned_params = owned_operator_params() if data is None else {}
+    if owned_params:
+        print(f"OPERATOR_RULES {sum(1 for a in assets if a['plant_name'] in owned_params)} "
+              f"owned accounts of {len(assets)} plants", flush=True)
     enriched = []
     for a in assets:
         enriched.append({**a,
+                         **owned_params.get(a["plant_name"], {}),
                          "cap_mw": caps.get(a.get("substation")),
                          "zones": zones_map.get(a["plant_name"],
                                                 np.zeros(96, dtype=int)),

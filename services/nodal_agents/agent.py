@@ -30,7 +30,27 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from services.bess_map.optimisation_engine import compute_dispatch_from_15min_prices
+import os
+
+from services.bess_map.optimisation_engine import (
+    compute_dispatch_from_15min_prices,
+    optimise_window,
+)
+
+# 蒙西 operator rules for an asset flagged operator_rules=True (owned stations,
+# user decision 2026-11-25): the discharge compensation is in the objective,
+# with the 1.5 cycles/day cap and the 3.3 %/min ramp limit — the constraint
+# set of the PF benchmark and asset-risk's investment-standard leg. Without
+# them the LP chased price spread only and under-discharged: valued at actual
+# prices over 2026-11-12..20, the six original stations' strategies were worth
+# 4-9x more with the rules on.
+# That MILP rarely proves optimality (every solve ran to the engine's 120 s
+# limit), so each solve is capped: 9 accounts x 3 iterations must finish well
+# inside the 16:00 -> 17:00 nomination window. Plants we do not own stay on
+# the sub-second spread-only LP — they only shape the fleet price feedback.
+OPERATOR_MAX_CYCLES_PER_DAY = 1.5
+OPERATOR_RAMP_PCT_PER_MIN = 3.3
+OPERATOR_SOLVE_LIMIT_S = float(os.getenv("NODAL_AGENT_SOLVE_LIMIT_S", "15"))
 
 ZONE_GREEN = 0
 ZONE_NO_DISCHARGE = 1   # no-discharge window: price masked to 0
@@ -85,9 +105,31 @@ def optimize_asset(asset: dict, curve: np.ndarray, others: np.ndarray,
     no_charge = {int(i) + 1 for i in np.flatnonzero(zones == ZONE_NO_CHARGE)}
     no_discharge = {int(i) + 1 for i in np.flatnonzero(zones == ZONE_NO_DISCHARGE)}
 
+    operator_rules = bool(asset.get("operator_rules"))
+    compensation = float(asset.get("compensation_yuan_per_mwh") or 0.0)
+
     if power_eff <= 0.0:
         dispatch = np.zeros(96, dtype=float)
         profit, status = 0.0, "SkippedZeroHeadroom"
+    elif operator_rules:
+        res = optimise_window(
+            prices, power_mw=power_eff, duration_h=duration_h, roundtrip_eff=rte,
+            max_cycles_per_day=OPERATOR_MAX_CYCLES_PER_DAY,
+            compensation_yuan_per_mwh=compensation, dt=0.25,
+            ramp_rate_pct_per_min=OPERATOR_RAMP_PCT_PER_MIN,
+            solver_time_limit_s=OPERATOR_SOLVE_LIMIT_S,
+            # the engine core takes 0-based window indices
+            no_charge_slots={i - 1 for i in no_charge} or None,
+            no_discharge_slots={i - 1 for i in no_discharge} or None)
+        dispatch = np.asarray(res.discharge_mw, dtype=float) - np.asarray(res.charge_mw, dtype=float)
+        status = str(res.status)
+        if not np.isfinite(dispatch).all():
+            # time limit hit before any feasible point: stand down, loudly
+            dispatch = np.zeros(96, dtype=float)
+            status = f"NoIncumbent({status})"
+        # market cash flow + discharge compensation on the forecast curve
+        profit = float((prices * dispatch).sum() * 0.25
+                       + np.clip(dispatch, 0.0, None).sum() * 0.25 * compensation)
     else:
         s = pd.Series(prices, index=pd.date_range(_SYNTH_DAY, periods=96, freq="15min"))
         dispatch_df, profit_s = compute_dispatch_from_15min_prices(
@@ -114,6 +156,8 @@ def optimize_asset(asset: dict, curve: np.ndarray, others: np.ndarray,
         "cap_mw": None if cap_mw is None else float(cap_mw),
         "power_mw_eff": power_eff,
         "substation_headroom_min_mw": headroom_min,
+        "operator_rules": operator_rules,
+        "compensation_yuan_per_mwh": compensation if operator_rules else None,
         "zone_no_discharge_intervals": int((zones == ZONE_NO_DISCHARGE).sum()),
         "zone_no_charge_intervals": int((zones == ZONE_NO_CHARGE).sum()),
         "price_mean": float(prices.mean()),
