@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Run the platform dashboards on this Mac against the local replica.
+#
+#   scripts/local_apps.sh up [name ...]   start apps (default: the core set) and open the portal
+#   scripts/local_apps.sh down [name ...] stop apps (default: all running)
+#   scripts/local_apps.sh list            what is running, and every app name
+#
+# Database = local replica (scripts/replica.sh). Anything written locally
+# (agent memory, uploads) is lost at the next replica restore. Online, the
+# agents call Bedrock from the Mac as usual; offline they fail, the data views do not.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+R="${REPLICA_HOME:-$HOME/local-replica}"
+VENV="${BESS_VENV:-$HOME/.venvs/bess-platform}"
+ENV_FILE="${BESS_ENV_FILE:-$HOME/Library/CloudStorage/OneDrive-Personal/ETRM/bess-platform/config/.env}"
+RUN="$R/run"; LOGS="$R/logs"
+mkdir -p "$RUN" "$LOGS"
+
+# name|entry point|port  (ports match apps/portal _DEV_PORTS and the Dockerfiles)
+APPS="portal|apps/portal/app.py|8500
+bess-map|apps/bess-map/app.py|8503
+spot-market|apps/spot-market/app.py|8505
+mengxi-dashboard|apps/mengxi-dashboard/app.py|8511
+asset-risk|apps/asset_risk/app.py|8512
+retail-risk|apps/retail_risk/app.py|8513
+market-maker|apps/market_maker/app.py|8530
+deal-structurer|apps/deal_structurer/app.py|8522
+gb-market|apps/gb-market/app.py|8508
+au-market|apps/au-market/app.py|8509
+ph-market|apps/ph-market/app.py|8510
+po-market|apps/po-market/app.py|8514
+options-cockpit|apps/options-cockpit/app.py|8507
+inner-mongolia|apps/bess-inner-mongolia/im/app.py|8504"
+CORE="portal spot-market bess-map mengxi-dashboard asset-risk"
+
+lookup() { echo "$APPS" | awk -F'|' -v n="$1" '$1==n{print $2"|"$3}'; }
+alive()  { [ -f "$RUN/$1.pid" ] && kill -0 "$(cat "$RUN/$1.pid")" 2>/dev/null; }
+
+load_env() {
+  if [ -f "$ENV_FILE" ]; then
+    # read line by line: macOS bash 3.2 cannot source a process substitution
+    while IFS= read -r line; do
+      case "$line" in [A-Za-z_]*=*) k="${line%%=*}"; v="${line#*=}"; v="${v%\"}"; v="${v#\"}"; export "$k=$v" ;; esac
+    done <"$ENV_FILE"
+  else
+    echo "[warn] $ENV_FILE not found — API keys unset, agents will not answer"
+  fi
+  "$REPO/scripts/replica.sh" start >/dev/null
+  export PGHOST=localhost PGPORT=5433 PGDATABASE=marketdata PGUSER=postgres PGPASSWORD=local PGSSLMODE=disable
+  export PGURL="postgresql://postgres@localhost:5433/marketdata"
+  export DB_DSN="$PGURL" DATABASE_URL="$PGURL" DB_URL="$PGURL"
+  export DB_HOST=localhost DB_PORT=5433 DB_NAME=marketdata DB_USER=postgres DB_PASSWORD=local
+  export AUTH_MODE=dev DEV_USER_ROLE=Admin LOCAL_REPLICA=1
+  # portal links -> local ports (its built-in dev map misses several apps)
+  APP_URL_MAP="$(echo "$APPS" | awk -F'|' '{printf "%s=http://localhost:%s,", $1, $3}')spot-markets=http://localhost:8505"
+  export APP_URL_MAP
+  export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+}
+
+up() {
+  load_env
+  for n in "$@"; do
+    spec=$(lookup "$n"); [ -n "$spec" ] || { echo "unknown app: $n"; continue; }
+    if alive "$n"; then echo "$n already running on http://localhost:${spec#*|}"; continue; fi
+    ( cd "$REPO" && nohup "$VENV/bin/streamlit" run "${spec%|*}" --server.port "${spec#*|}" \
+        --server.headless true --browser.gatherUsageStats false >"$LOGS/$n.log" 2>&1 </dev/null & echo $! >"$RUN/$n.pid" )
+    echo "$n → http://localhost:${spec#*|}   (log: $LOGS/$n.log)"
+  done
+}
+
+down() {
+  for n in "$@"; do
+    if alive "$n"; then kill "$(cat "$RUN/$n.pid")" && echo "stopped $n"; fi
+    rm -f "$RUN/$n.pid"
+  done
+}
+
+running() { for f in "$RUN"/*.pid; do [ -e "$f" ] || continue; n=$(basename "$f" .pid); alive "$n" && echo "$n"; done; }
+
+cmd="${1:-list}"; shift || true
+case "$cmd" in
+  up)   # shellcheck disable=SC2086
+        up ${@:-$CORE}; sleep 3; [ -n "${NO_OPEN:-}" ] || open "http://localhost:8500" 2>/dev/null || true ;;
+  down) # shellcheck disable=SC2046
+        down ${@:-$(running)} ;;
+  list) echo "running:"; for n in $(running); do echo "  $n  http://localhost:$(lookup "$n" | cut -d'|' -f2)"; done
+        echo "available: $(echo "$APPS" | cut -d'|' -f1 | tr '\n' ' ')"
+        "$REPO/scripts/replica.sh" status ;;
+  *)    echo "usage: $0 up [name ...] | down [name ...] | list"; exit 2 ;;
+esac

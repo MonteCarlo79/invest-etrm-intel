@@ -471,6 +471,15 @@ streamlit run apps/mengxi-dashboard/app.py --server.port 8511
 
 Portal Open App links auto-resolve to localhost ports when `AUTH_MODE=dev` — no `APP_URL_MAP` needed.
 
+**Local replica + launcher (Mac, 2026-11-25 — preferred local mode; the Mac cannot reach RDS):**
+```bash
+scripts/replica.sh sync        # dump in AWS (one-off task on the asset-risk image) -> S3 -> restore into ~/local-replica (Postgres 18, port 5433)
+scripts/replica.sh status      # snapshot stamp + size
+scripts/local_apps.sh up       # portal, spot-market, bess-map, mengxi-dashboard, asset-risk against the replica
+scripts/local_apps.sh up gb-market market-maker   # any other app by name; `list` shows all; `down` stops
+```
+Nightly sync: launchd `ai.pjh-etrm.local-replica` 05:30 (`bash scripts/setup_replica_launchd.sh`). Replica = every table in full except recent windows of the six big ones and KB chunks without embeddings (`services/local_replica/dump.py::BIG`; override with `REPLICA_WINDOWS='table=days,...'`). Local writes are lost at the next restore — ingest and memory writes belong on AWS.
+
 ---
 
 ## Infrastructure — AWS is the Operating Environment
