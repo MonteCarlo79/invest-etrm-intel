@@ -227,10 +227,28 @@ def _extract_pages_txt(file_bytes: bytes) -> list[tuple[int, str]]:
 
 
 def _extract_pages_docx(file_bytes: bytes) -> list[tuple[int, str]]:
-    """Return paragraphs from a DOCX file, grouped into pages of 50 paragraphs."""
+    """Return paragraphs and table rows from a DOCX file in document order,
+    grouped into pages of 50 blocks. Table rows become tab-separated lines."""
     from docx import Document
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
     doc = Document(io.BytesIO(file_bytes))
-    paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    paras = []
+    for el in doc.element.body.iterchildren():
+        if el.tag.endswith("}p"):
+            t = Paragraph(el, doc).text.strip()
+            if t:
+                paras.append(t)
+        elif el.tag.endswith("}tbl"):
+            for row in Table(el, doc).rows:
+                cells, prev = [], None
+                for c in row.cells:  # merged cells repeat — keep one copy
+                    if c._tc is not prev:
+                        cells.append(" ".join(c.text.split()))
+                    prev = c._tc
+                line = "\t".join(cells).strip()
+                if line:
+                    paras.append(line)
     page_size = 50
     pages = []
     for i in range(0, max(len(paras), 1), page_size):
@@ -246,6 +264,9 @@ def _extract_pages_xlsx(file_bytes: bytes) -> list[tuple[int, str]]:
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     pages = []
     for sheet_no, ws in enumerate(wb.worksheets, start=1):
+        # some exporters (e.g. Feishu) write a wrong <dimension>; read-only mode
+        # trusts it and stops after row 1 unless the dimensions are reset
+        ws.reset_dimensions()
         rows = []
         for row in ws.iter_rows(values_only=True):
             cells = [str(c) if c is not None else "" for c in row]
