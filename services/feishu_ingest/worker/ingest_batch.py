@@ -6,7 +6,16 @@ man = json.loads(s3.get_object(Bucket=B, Key=P + "_manifest.json")["Body"].read(
 s3.download_file(B, P + "_one.py", "/tmp/one.py")
 ok = fail = 0
 for key, path in man.items():
-    r = subprocess.run([sys.executable, "/tmp/one.py", B, key, path], capture_output=True, text=True, timeout=1800)
+    try:
+        s3.head_object(Bucket=B, Key=key)
+    except Exception:
+        continue  # already ingested (deleted after success) in an earlier run of this batch
+    try:
+        r = subprocess.run([sys.executable, "/tmp/one.py", B, key, path], capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        fail += 1
+        print("FAILED " + json.dumps({"key": key, "err": "timeout after 1800 s"}, ensure_ascii=False), flush=True)
+        continue
     line = next((l for l in r.stdout.splitlines() if l.startswith("RESULT ")), None)
     if line:
         ok += 1; print(line, flush=True); s3.delete_object(Bucket=B, Key=key)
