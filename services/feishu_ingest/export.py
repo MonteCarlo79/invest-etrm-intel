@@ -80,6 +80,9 @@ def export_one(ctx, url: str, subdir: str = "") -> str:
     pg = ctx.new_page()
     try:
         pg.goto(url, timeout=90000)
+        pg.wait_for_timeout(1500)
+        if "accounts." in pg.url or "/login" in pg.url:
+            return f"FAIL SESSION_EXPIRED {url.split('/')[2]}: redirected to login"
         pg.wait_for_selector("[data-e2e=suite-more-btn]", timeout=60000)
         pg.wait_for_timeout(int(__import__("os").environ.get("FEISHU_SETTLE_MS", "3000")))
         title = _ZW.sub("", pg.title()).rsplit(" - ", 1)[0].strip()
@@ -151,11 +154,16 @@ def main() -> int:
             for attempt in range(4):
                 _wait_online()
                 r = export_one(ctx, it["url"], it["path"])
+                if "SESSION_EXPIRED" in r:
+                    break
                 if not any(e in r for e in ("ERR_INTERNET_DISCONNECTED", "ERR_NETWORK_CHANGED",
                                             "ERR_FAILED", "Timeout")):
                     break
                 print(f"  retry {attempt + 1} after: {r[:120]}", flush=True)
             results.append(r)
+            if "SESSION_EXPIRED" in r:
+                print(f"ABORT: Feishu session expired on {r.split()[2]} - re-run login (login_tenant.py for cross-tenant shares), then resume", flush=True)
+                break
             print(r, flush=True)
             with open(H / "logs/export_results.jsonl", "a") as fh:
                 fh.write(json.dumps({**it, "result": r}, ensure_ascii=False) + "\n")
