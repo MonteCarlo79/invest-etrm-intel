@@ -56,6 +56,26 @@ def _wait_online(max_min: int = 60) -> None:
             time.sleep(10)
 
 
+_checked = {"n": 0}
+
+
+def _session_ok(ctx) -> bool:
+    """Every 25 items, confirm the drive home still loads signed-in (not the QR login page)."""
+    _checked["n"] += 1
+    if _checked["n"] % 25 != 1:
+        return True
+    pg = ctx.new_page()
+    try:
+        _wait_online()
+        pg.goto(json.load(open(H / "config.json"))["home"], timeout=90000)
+        pg.wait_for_timeout(6000)
+        return "/drive/" in pg.url and pg.locator("text=/Log In With QR Code|扫码登录/").count() == 0
+    except Exception:  # noqa: BLE001
+        return True  # network trouble is handled per item; don't abort on it
+    finally:
+        pg.close()
+
+
 def export_one(ctx, url: str, subdir: str = "") -> str:
     pg = ctx.new_page()
     try:
@@ -125,6 +145,9 @@ def main() -> int:
         ctx = br.new_context(storage_state=str(H / "state.json"), accept_downloads=True,
                              viewport={"width": 1400, "height": 1000})
         for it in items:
+            if not _session_ok(ctx):
+                print("ABORT: Feishu session expired - re-run login.py, then resume", flush=True)
+                break
             for attempt in range(4):
                 _wait_online()
                 r = export_one(ctx, it["url"], it["path"])

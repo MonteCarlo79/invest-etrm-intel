@@ -35,12 +35,17 @@ def rows(pg, url):
         return []  # empty folder (or no access)
     pg.wait_for_timeout(2500)
     seen, stable = {}, 0
-    while stable < 3:  # scroll until no new rows appear
+    while stable < 4:  # scroll until no new rows appear
         for name, href in pg.eval_on_selector_all(
                 "a.file-item-link", "els => els.map(e => [e.innerText, e.href])"):
             seen.setdefault(href.split("?")[0], _ZW.sub("", name.split("\n")[0]).strip())
         n = len(seen)
-        pg.mouse.wheel(0, 4000)
+        # the list scrolls inside its own virtualised container, not the page
+        pg.evaluate("""() => { let n = [...document.querySelectorAll('a.file-item-link')].pop();
+            while (n) { const s = getComputedStyle(n);
+                if ((s.overflowY == 'auto' || s.overflowY == 'scroll') && n.scrollHeight > n.clientHeight) {
+                    n.scrollTop = n.scrollTop + n.clientHeight; break; }
+                n = n.parentElement; } }""")
         pg.wait_for_timeout(1500)
         after = len({h.split("?")[0] for h in pg.eval_on_selector_all(
             "a.file-item-link", "els => els.map(e => e.href)")} | set(seen))
