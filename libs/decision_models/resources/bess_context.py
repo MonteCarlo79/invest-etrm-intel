@@ -704,6 +704,7 @@ def load_ops_dispatch_15min(
     notes : list of data quality / warning strings
     """
     notes: List[str] = []
+    from_wecom = False
     new_sql = """
         SELECT
             COALESCE(n.data_date, a.data_date) AS data_date,
@@ -759,6 +760,7 @@ def load_ops_dispatch_15min(
                 "interval_start", "nominated_dispatch_mw", "actual_dispatch_mw", "nodal_price_excel",
             ]), notes
     else:
+        from_wecom = True
         df["interval_start"] = (pd.to_datetime(df["data_date"])
                                 + pd.to_timedelta((df["slot"].astype(int) - 1) * 15,
                                                   unit="min"))
@@ -770,6 +772,20 @@ def load_ops_dispatch_15min(
     df["nominated_dispatch_mw"] = pd.to_numeric(df["nominated_dispatch_mw"], errors="coerce")
     df["actual_dispatch_mw"] = pd.to_numeric(df["actual_dispatch_mw"], errors="coerce")
     df["nodal_price_excel"] = pd.to_numeric(df["nodal_price_excel"], errors="coerce")
+    if from_wecom:
+        # SIGN CONTRACT. This function returns the ops-file sign (negative =
+        # discharge) for BOTH sources, because _enrich_context_with_ops_dispatch
+        # negates once to reach the LP convention (positive = discharge). The
+        # WeCom tables already carry positive = discharge (their SOC column
+        # proves it: it rises while power is negative, and a battery opening at
+        # SoC 0 cannot discharge), so they are inverted here. Without this every
+        # nominated_dispatch / cleared_actual scenario written from the WeCom
+        # tables since 2026-11-07 (and the Apr–Sep backfill) had discharge and
+        # charge swapped and its market revenue negated: e.g. gushanliang
+        # 2026-11-24 nominated stored market +572,880 / discharge 2,999 MWh vs
+        # the table's own −572,880 / 2,814 MWh (found 2026-11-28).
+        df["nominated_dispatch_mw"] = -df["nominated_dispatch_mw"]
+        df["actual_dispatch_mw"] = -df["actual_dispatch_mw"]
 
     n_nom_null = df["nominated_dispatch_mw"].isna().sum()
     n_act_null = df["actual_dispatch_mw"].isna().sum()
