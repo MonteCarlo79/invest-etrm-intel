@@ -44,3 +44,18 @@ as `_run.py`; then run-task on the spot-markets task definition (2 vCPU / 8 GB o
 with `python /tmp/run.py tmp/<batch>/`. Each file ingests in its own child process (an
 OOM loses one file, not the batch); embedding and synthesis run synchronously; the S3
 copy is deleted after success.
+
+## Weekly re-sync (launchd `ai.pjh-etrm.feishu-weekly`, Sundays 01:30)
+
+`bash services/feishu_ingest/setup_weekly_launchd.sh` registers it (`remove` to unregister); log:
+`~/feishu-ingest/logs/weekly_sync.log`; manual run: `python services/feishu_ingest/weekly_sync.py [--dry-run]`.
+
+1. Session check on both tenants (Envision + the Tradingthink cross-tenant share). Expired -> Mac
+   notification, stop; re-run `login.py` / `login_tenant.py <tradingthink file url>`.
+2. Re-list 内部-各省专题研究, both 外部 folders and 官方-各省披露文件 (with modified times; 4–5 h for 官方).
+   A folder that comes back empty but had files last time = failed page load -> re-list once, else stop
+   without changing state.
+3. Select URLs never seen before (`logs/known_urls.json`) plus documents modified after their last export.
+   官方 keeps the subset rule (政策/规则 folders + quarterly/half-year/annual reports, this and last year).
+4. Export (3 workers above 60 items), stage, ingest. The pre-step replaces an edited document's previous KB
+   entry (same file name + `feishu:<path>`); failed files are re-run once.

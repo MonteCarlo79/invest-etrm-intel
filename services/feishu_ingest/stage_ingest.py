@@ -34,6 +34,23 @@ def aws(*args: str, retries: int = 20) -> str:
     raise RuntimeError(f"aws {' '.join(args[:3])} failed: {r.stderr[-300:]}")
 
 
+def launch(prefix: str) -> str:
+    """Run the staged batch (pre-step + ingest) as a one-off ECS task; returns the task id.
+    Safe to call again on the same prefix: only files still in S3 are processed."""
+    td = aws("ecs", "describe-services", "--cluster", CLUSTER, "--services", "bess-platform-spot-markets-svc",
+             "--query", "services[0].taskDefinition", "--output", "text")
+    cmd = (f"cd /app 2>/dev/null; python -c \"import boto3;c=boto3.client('s3');"
+           f"c.download_file('{BUCKET}','{prefix}_run.py','/tmp/run.py');"
+           f"c.download_file('{BUCKET}','{prefix}_prestep.py','/tmp/pre.py')\" "
+           f"&& PYTHONPATH=$PWD python /tmp/pre.py {prefix} && PYTHONPATH=$PWD python /tmp/run.py {prefix}")
+    ov = json.dumps({"cpu": "2048", "memory": "8192",
+                     "containerOverrides": [{"name": "spot-markets", "command": ["sh", "-c", cmd]}]})
+    arn = aws("ecs", "run-task", "--cluster", CLUSTER, "--task-definition", td, "--launch-type", "FARGATE",
+              "--network-configuration", NET, "--overrides", ov, "--query", "tasks[0].taskArn", "--output", "text",
+              retries=3)
+    return arn.rsplit("/", 1)[1]
+
+
 def main() -> int:
     batch = sys.argv[1]
     min_n = int(sys.argv[sys.argv.index("--min") + 1]) if "--min" in sys.argv else 1
@@ -47,7 +64,9 @@ def main() -> int:
             if not r["result"].startswith("OK "):
                 continue
             rel = r["result"][3:].rsplit(" (", 1)[0]
-            full = next((str(p) for p in sorted((H / "downloads").glob(f"*/{rel}")) if p.exists()), None)
+            # newest export wins: a re-exported (edited) document lands in a newer dated folder
+            full = next((str(p) for p in sorted((H / "downloads").glob(f"*/{rel}"), reverse=True)
+                         if p.exists()), None)
             if full and full not in staged:
                 pending[full] = r["path"]
     print(f"pending {len(pending)}")
@@ -64,19 +83,12 @@ def main() -> int:
     aws("s3", "cp", "--only-show-errors", str(mf), f"s3://{BUCKET}/{prefix}_manifest.json")
     aws("s3", "cp", "--only-show-errors", str(HERE / "worker/ingest_one.py"), f"s3://{BUCKET}/{prefix}_one.py")
     aws("s3", "cp", "--only-show-errors", str(HERE / "worker/ingest_batch.py"), f"s3://{BUCKET}/{prefix}_run.py")
-    td = aws("ecs", "describe-services", "--cluster", CLUSTER, "--services", "bess-platform-spot-markets-svc",
-             "--query", "services[0].taskDefinition", "--output", "text")
-    cmd = (f"cd /app 2>/dev/null; python -c \"import boto3;boto3.client('s3').download_file("
-           f"'{BUCKET}','{prefix}_run.py','/tmp/run.py')\" && PYTHONPATH=$PWD python /tmp/run.py {prefix}")
-    ov = json.dumps({"cpu": "2048", "memory": "8192",
-                     "containerOverrides": [{"name": "spot-markets", "command": ["sh", "-c", cmd]}]})
-    arn = aws("ecs", "run-task", "--cluster", CLUSTER, "--task-definition", td, "--launch-type", "FARGATE",
-              "--network-configuration", NET, "--overrides", ov, "--query", "tasks[0].taskArn", "--output", "text",
-              retries=3)
+    aws("s3", "cp", "--only-show-errors", str(HERE / "worker/prestep.py"), f"s3://{BUCKET}/{prefix}_prestep.py")
+    task = launch(prefix)
     state["staged"] = sorted(staged | set(pending))
-    state.setdefault("batches", []).append({"batch": batch, "files": len(pending), "task": arn.rsplit("/", 1)[1]})
+    state.setdefault("batches", []).append({"batch": batch, "files": len(pending), "task": task})
     json.dump(state, open(state_f, "w"), ensure_ascii=False, indent=1)
-    print(f"TASK {arn.rsplit('/', 1)[1]} files={len(pending)}")
+    print(f"TASK {task} files={len(pending)}")
     return 0
 
 
