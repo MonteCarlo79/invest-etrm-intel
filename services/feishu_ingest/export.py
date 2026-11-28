@@ -17,7 +17,7 @@ OUT = H / "downloads" / date.today().isoformat()
 # preferred formats per document kind, first visible match wins
 PREF = {
     "docx": ["Word", "PDF"], "wiki": ["Word", "Excel", "PDF"], "doc": ["Word", "PDF"],
-    "sheets": ["Excel", "CSV", "PDF"], "slides": ["PPTX", "PowerPoint", "PDF"],
+    "sheets": ["Excel", "CSV", "PDF"], "base": ["Excel", "CSV"], "slides": ["PPTX", "PowerPoint", "PDF"],
 }
 _ZW = re.compile(r"[​-‏⁠-⁤﻿‪-‮]")
 
@@ -83,7 +83,12 @@ def export_one(ctx, url: str, subdir: str = "") -> str:
         pg.wait_for_timeout(1500)
         if "accounts." in pg.url or "/login" in pg.url:
             return f"FAIL SESSION_EXPIRED {url.split('/')[2]}: redirected to login"
-        pg.wait_for_selector("[data-e2e=suite-more-btn]", timeout=60000)
+        try:
+            pg.wait_for_selector("[data-e2e=suite-more-btn]", timeout=60000)
+        except Exception:
+            if re.search(r"was deleted|已删除|No permission|无权限", pg.title() + " " + pg.inner_text("body")[:300]):
+                return f"FAIL GONE {url}: {pg.title()[:60]} (deleted original / no access)"
+            raise
         pg.wait_for_timeout(int(__import__("os").environ.get("FEISHU_SETTLE_MS", "3000")))
         title = _ZW.sub("", pg.title()).rsplit(" - ", 1)[0].strip()
         pg.locator("[data-e2e=suite-more-btn]").first.click()
@@ -96,6 +101,8 @@ def export_one(ctx, url: str, subdir: str = "") -> str:
                 item.first.click()
             return _save(dl.value, subdir)
         dl_item = pg.get_by_text("Download As", exact=True)
+        if not dl_item.count() and kind(url) == "base":  # Bitable: "Export >" instead of "Download As >"
+            dl_item = pg.get_by_text("Export", exact=True)
         if not dl_item.count():  # wiki pages tuck it under "More"
             pg.get_by_text("More", exact=True).last.hover()
             pg.wait_for_timeout(1200)
@@ -154,7 +161,7 @@ def main() -> int:
             for attempt in range(4):
                 _wait_online()
                 r = export_one(ctx, it["url"], it["path"])
-                if "SESSION_EXPIRED" in r:
+                if "SESSION_EXPIRED" in r or "FAIL GONE" in r:
                     break
                 if not any(e in r for e in ("ERR_INTERNET_DISCONNECTED", "ERR_NETWORK_CHANGED",
                                             "ERR_FAILED", "Timeout")):

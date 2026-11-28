@@ -65,7 +65,7 @@ def rows(pg, url):
 
 def main() -> None:
     root, depth = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 4
-    only = set(sys.argv[3].split(",")) if len(sys.argv) > 3 else None  # top-level folder names
+    only = set(filter(None, sys.argv[3].split(","))) or None if len(sys.argv) > 3 else None  # top-level names; "" = all
     dest = H / (sys.argv[4] if len(sys.argv) > 4 else "logs/folder_tree.json")
     out = []
     with sync_playwright() as p:

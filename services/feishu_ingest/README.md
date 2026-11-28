@@ -52,7 +52,7 @@ copy is deleted after success.
 
 1. Session check on both tenants (Envision + the Tradingthink cross-tenant share). Expired -> Mac
    notification, stop; re-run `login.py` / `login_tenant.py <tradingthink file url>`.
-2. Re-list 内部-各省专题研究, both 外部 folders and 官方-各省披露文件 (with modified times; 4–5 h for 官方).
+2. Re-list 内部-各省专题研究, both 外部 folders, 对内-项目测算情况 and 官方-各省披露文件 (with modified times; 4–5 h for 官方).
    A folder that comes back empty but had files last time = failed page load -> re-list once, else stop
    without changing state.
 3. Select URLs never seen before (`logs/known_urls.json`) plus documents modified after their last export.

@@ -28,7 +28,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 H = Path(os.environ.get("FEISHU_INGEST_HOME", Path.home() / "feishu-ingest"))
 PY = sys.executable
-SCOPE = ["内部-各省专题研究", "外部-外部交流调研-收集的报告-会议纪要", "外部-外部客户交流材料"]
+SCOPE = ["内部-各省专题研究", "外部-外部交流调研-收集的报告-会议纪要", "外部-外部客户交流材料", "对内-项目测算情况"]
 GUANFANG = "官方-各省披露文件"
 REPORT = re.compile(r"季度|季报|上半年|年度|年报")
 NATIVE = {"docx", "doc", "sheets", "slides", "wiki", "base"}
