@@ -935,3 +935,11 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - FIRST: read `~/feishu-ingest/logs/weekly_sync.log` after Sunday's run (first live 官方 walk with modified times); if the session expired, owner rescans QR (`login.py` / `login_tenant.py`).
 - Open owner decisions: 对内-项目测算情况 (32 project-estimate docs); re-list the reorganised 山西 policy folder (28 subset docs were deleted/moved mid-run).
 - Ops lessons: Mac on iPhone hotspot drops constantly — exports need Wi-Fi; ingest batches need the 2 vCPU/8 GB override; huge sheets are row-budget capped; KB per-file schema DDL deadlocks parallel batches (worker skips it).
+
+## Session Summary, 2026-11-28 (addendum: 对内 ingest + 山西 re-list)
+**Worked on:** owner-requested ingest of 对内-项目测算情况; re-list of the reorganised 山西 official folder.
+**Completed:**
+- 对内-项目测算情况 → shared KB: 30 new docs (533 chunks), 1 duplicate skipped, 1 minute not accessible to the account; Bitables exported via the "Export >" menu. Folder added to the weekly re-sync scope (cd0463f4).
+- 山西 re-list: policy folders unchanged (107 files); the 28 "deleted" docs are Shortcut rows whose originals were deleted — unrecoverable without the owner. Periodic folder shrank 990 → 47 (outside the ingested subset). Exporter now fails fast on deleted/no-access pages.
+**Decisions made:** 对内 project estimates are in scope for the shared KB and the weekly re-sync.
+**Next session:** FIRST read `~/feishu-ingest/logs/weekly_sync.log` after Sunday 2026-11-29's run (first full 官方 walk with modified times; now includes 对内). Optional: remove the empty `Untitled.docx` KB entry from 对内.
