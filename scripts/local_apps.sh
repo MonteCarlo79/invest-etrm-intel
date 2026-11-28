@@ -17,21 +17,8 @@ ENV_FILE="${BESS_ENV_FILE:-$HOME/Library/CloudStorage/OneDrive-Personal/ETRM/bes
 RUN="$R/run"; LOGS="$R/logs"
 mkdir -p "$RUN" "$LOGS"
 
-# name|entry point|port  (ports match apps/portal _DEV_PORTS and the Dockerfiles)
-APPS="portal|apps/portal/app.py|8500
-bess-map|apps/bess-map/app.py|8503
-spot-market|apps/spot-market/app.py|8505
-mengxi-dashboard|apps/mengxi-dashboard/app.py|8511
-asset-risk|apps/asset_risk/app.py|8512
-retail-risk|apps/retail_risk/app.py|8513
-market-maker|apps/market_maker/app.py|8530
-deal-structurer|apps/deal_structurer/app.py|8522
-gb-market|apps/gb-market/app.py|8508
-au-market|apps/au-market/app.py|8509
-ph-market|apps/ph-market/app.py|8510
-po-market|apps/po-market/app.py|8514
-options-cockpit|apps/options-cockpit/app.py|8507
-inner-mongolia|apps/bess-inner-mongolia/im/app.py|8504"
+# name|entry point|port — from the single app registry (shared/app_registry.py), also used by the portal
+APPS="$(cd "$REPO" && /usr/bin/python3 shared/app_registry.py)"
 CORE="portal spot-market bess-map mengxi-dashboard asset-risk"
 
 lookup() { echo "$APPS" | awk -F'|' -v n="$1" '$1==n{print $2"|"$3}'; }

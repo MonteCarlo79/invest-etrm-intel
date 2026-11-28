@@ -1,4 +1,6 @@
 import os
+import socket
+import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
@@ -24,7 +26,7 @@ st.set_page_config(page_title="BESS Intelligence Platform", layout="wide")
 # PROJECT IMPORTS
 # --------------------------------------------------
 
-from shared.agents.registry import get_visible_apps, get_visible_by_category
+from shared.app_registry import APPS, BY_KEY, SECTIONS, online_url
 from auth.rbac import get_user, get_groups, get_email
 from shared.service_control import get_all_status, set_service_mode, SERVICES
 
@@ -392,33 +394,111 @@ def _quick_ask(agent_key: str, question: str) -> str:
 # APP URL RESOLVER
 # --------------------------------------------------
 
-_DEV_PORTS = {
-    "spot-markets":     "8505",
-    "bess-map":         "8503",
-    "mengxi-dashboard": "8511",
-    "gb-market":        "8508",
-    "au-market":        "8509",
-    "ercot-market":     "8510",
-    "pjm-market":       "8511",
-    "caiso-market":     "8512",
-    "deal-structurer":  "8522",
-    "market-maker":     "8530",
-}
+LOCAL_MODE = os.getenv("AUTH_MODE", "alb_oidc").lower() == "dev"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ONLINE_BASE = "https://www.pjh-etrm.ai"
 
 
-def _app_url(path_slug: str) -> str:
-    """Resolve app URL — APP_URL_MAP overrides first, then dev-mode localhost, then ALB path."""
-    raw = os.getenv("APP_URL_MAP", "")
-    for item in raw.split(","):
-        item = item.strip()
-        if not item or "=" not in item:
-            continue
-        slug, url = item.split("=", 1)
-        if slug.strip() == path_slug:
-            return url.strip()
-    if os.getenv("AUTH_MODE", "alb_oidc").lower() == "dev" and path_slug in _DEV_PORTS:
-        return f"http://localhost:{_DEV_PORTS[path_slug]}"
-    return f"/{path_slug}/"
+def _app_url(app: dict) -> str | None:
+    """Local mode: the app's localhost port (or the online URL for apps that only run on AWS).
+    Online: the ALB path under this domain."""
+    if LOCAL_MODE and app.get("port"):
+        return f"http://localhost:{app['port']}"
+    url = online_url(app)
+    if LOCAL_MODE and url and url.startswith("/"):
+        return ONLINE_BASE + url
+    return url
+
+
+def _local_up(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _online_modes() -> dict:
+    """service key -> 'web' | 'scheduler' | 'stopped' | 'unknown' (ECS desired state)."""
+    try:
+        return {s["market"]: s["mode"] for s in get_all_status(ecs, cluster)}
+    except Exception:
+        return {}
+
+
+def _status(app: dict) -> str:
+    """'running' | 'stopped' | 'online-only' | 'unknown'."""
+    if LOCAL_MODE:
+        if app.get("port"):
+            return "running" if _local_up(app["port"]) else "stopped"
+        return "online-only"
+    svc = app.get("service")
+    if not svc:
+        return "unknown"
+    mode = _online_modes().get(svc, "unknown")
+    return {"web": "running", "scheduler": "stopped", "stopped": "stopped"}.get(mode, "unknown")
+
+
+def _start(app: dict) -> str:
+    if LOCAL_MODE:
+        subprocess.Popen(["bash", str(REPO_ROOT / "scripts/local_apps.sh"), "up", app["key"]],
+                         env={**os.environ, "NO_OPEN": "1"}, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return f"Starting {app['label']} locally… ready in ~20 seconds — refresh."
+    set_service_mode(app["service"], "web", ecs, cluster)
+    _online_modes.clear()
+    return f"Starting {app['label']}… ready in ~90 seconds — refresh."
+
+
+def _stop(app: dict) -> str:
+    if LOCAL_MODE:
+        subprocess.run(["bash", str(REPO_ROOT / "scripts/local_apps.sh"), "down", app["key"]],
+                       capture_output=True, timeout=30)
+        return f"Stopped {app['label']}."
+    svc = app["service"]
+    set_service_mode(svc, "scheduler" if SERVICES[svc]["has_scheduler"] else "stop", ecs, cluster)
+    _online_modes.clear()
+    return f"Stopping {app['label']}…"
+
+
+_BADGE = {"running": "🟢 Running", "stopped": "⚪ Stopped", "online-only": "🌐 Online only", "unknown": "🔵 Online"}
+
+
+def _app_actions(app: dict, kp: str) -> None:
+    """Status badge + Open / Start (/ Stop for Admin) for one app."""
+    state = _status(app)
+    url = _app_url(app)
+    can_control = CAN_MANAGE_USERS and (app.get("entry") if LOCAL_MODE else app.get("service"))
+    st.caption(_BADGE[state])
+    if state in ("running", "online-only", "unknown") and url and CAN_OPEN_APPS:
+        st.link_button("Open →", url, type="primary", use_container_width=True)
+    elif state == "stopped" and can_control:
+        if st.button("Start", key=f"start_{kp}", type="primary", use_container_width=True):
+            try:
+                st.toast(_start(app))
+            except Exception as e:
+                st.error(f"Start failed: {e}")
+    elif state == "stopped":
+        st.button("Stopped", key=f"stopped_{kp}", disabled=True, use_container_width=True)
+    if state == "running" and can_control:
+        if st.button("Stop", key=f"stop_{kp}", use_container_width=True):
+            try:
+                st.toast(_stop(app))
+                st.rerun()
+            except Exception as e:
+                st.error(f"Stop failed: {e}")
+
+
+def _render_tiles(section: str) -> None:
+    apps = [a for a in APPS if a["section"] == section and (CAN_MANAGE_USERS or not a.get("admin_only"))]
+    cols = st.columns(4)
+    for i, app in enumerate(apps):
+        with cols[i % 4]:
+            with st.container(border=True):
+                st.markdown(f"**{app['icon']} {app['label']}**")
+                st.caption(app["blurb"])
+                _app_actions(app, f"tile_{app['key']}")
 
 
 # --------------------------------------------------
@@ -431,7 +511,7 @@ def _render_agent_section(
     subtitle: str,
     description: str,
     capabilities: list[str],
-    app_slug: str | None,
+    app_key: str | None,
     agent_key: str,
     available: bool = True,
 ):
@@ -445,14 +525,8 @@ def _render_agent_section(
                 unsafe_allow_html=True,
             )
         with hcol2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if available and CAN_OPEN_APPS and app_slug:
-                st.link_button(
-                    "Open App →",
-                    _app_url(app_slug),
-                    use_container_width=True,
-                    type="primary",
-                )
+            if available and app_key:
+                _app_actions(BY_KEY[app_key], f"agent_{agent_key}")
             else:
                 st.button(
                     "Coming Soon",
@@ -515,8 +589,8 @@ with header_left:
 
 with header_right:
     st.markdown("<br>", unsafe_allow_html=True)
-    if os.getenv("AUTH_MODE", "alb_oidc").lower() == "dev":
-        st.caption("Dev Mode")
+    if LOCAL_MODE:
+        st.caption("Local mode")
     else:
         st.markdown(
             f'<a href="{logout_url}" target="_self">'
@@ -599,62 +673,6 @@ if CAN_MANAGE_USERS:
     st.divider()
 
 # --------------------------------------------------
-# APP SERVICE CONTROL  (Admin only)
-# --------------------------------------------------
-
-if CAN_MANAGE_USERS:
-    st.subheader("App Service Control")
-    st.caption(
-        "Start or stop Streamlit web UIs on AWS. "
-        "Schedulers and data pipelines always keep running independently."
-    )
-
-    _MODE_ICON = {"web": "🟢 Web", "scheduler": "🟡 Scheduler-only", "stopped": "🔴 Stopped", "unknown": "❓ Unknown"}
-
-    try:
-        _svc_statuses = get_all_status(ecs, cluster)
-    except Exception as _svc_err:
-        _svc_statuses = []
-        st.warning(f"Could not load service statuses: {_svc_err}")
-
-    if _svc_statuses:
-        _svc_cols = st.columns(4)
-        for _i, _s in enumerate(_svc_statuses):
-            with _svc_cols[_i % 4]:
-                with st.container(border=True):
-                    st.markdown(f"**{_s['label']}**")
-                    st.caption(_MODE_ICON.get(_s["mode"], _s["mode"]))
-
-                    if _s["mode"] == "web":
-                        st.link_button(
-                            "Open →", _s["web_url"],
-                            type="primary", use_container_width=True,
-                        )
-                        if st.button("Stop Web", key=f"svc_stop_{_s['market']}", use_container_width=True):
-                            try:
-                                _new_mode = "scheduler" if SERVICES[_s["market"]]["has_scheduler"] else "stop"
-                                set_service_mode(_s["market"], _new_mode, ecs, cluster)
-                                st.success(f"Stopping {_s['label']}…")
-                                st.rerun()
-                            except Exception as _e:
-                                st.error(f"Failed: {_e}")
-                    else:
-                        if st.button("Start Web", key=f"svc_start_{_s['market']}", type="primary", use_container_width=True):
-                            try:
-                                set_service_mode(_s["market"], "web", ecs, cluster)
-                                st.success(f"Starting {_s['label']}… ready in ~90 seconds.")
-                                st.rerun()
-                            except Exception as _e:
-                                st.error(f"Failed: {_e}")
-                        with st.expander("Local", expanded=False):
-                            st.code(
-                                f"docker-compose -f docker-compose.local.yml up {_s['market']}",
-                                language="bash",
-                            )
-
-    st.divider()
-
-# --------------------------------------------------
 # 4 AGENT SECTIONS
 # --------------------------------------------------
 
@@ -688,7 +706,7 @@ with col_strategist:
             "Knowledge base: market rules, policy docs, annual reports",
             "Conversation memory across sessions",
         ],
-        app_slug="spot-markets",
+        app_key="spot-market",
         agent_key="strategist",
         available=True,
     )
@@ -711,7 +729,7 @@ with col_quant:
             "Realised vs theoretical revenue comparison",
             "Conversation memory across sessions",
         ],
-        app_slug="bess-map",
+        app_key="bess-map",
         agent_key="quant",
         available=True,
     )
@@ -740,7 +758,7 @@ with col_trader:
             "Strategy comparison: multi-strategy simulation",
             "Auto-save memory: ops observations persist across sessions",
         ],
-        app_slug="mengxi-dashboard",
+        app_key="mengxi-dashboard",
         agent_key="trader",
         available=True,
     )
@@ -765,7 +783,7 @@ with col_deal:
             "Deal pricing: revenue floor, cap, collar, swap, tolling, fixed-price PPA",
             "Claude Strategist: 'What floor guarantees 8% equity IRR at P90?'",
         ],
-        app_slug="deal-structurer",
+        app_key="deal-structurer",
         agent_key="deal_structurer",
         available=True,
     )
@@ -791,133 +809,19 @@ with col_mm:
             "Curves: traded > spot-seasonal reference curves, manual CSV overrides",
             "Risk Agent: answers only from tool data, flags excluded books and provinces",
         ],
-        app_slug="market-maker",
+        app_key="market-maker",
         agent_key="market_maker",
         available=True,
     )
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-st.markdown("### International Markets")
-st.caption("Live BESS market intelligence across global electricity markets.")
-st.markdown("<br>", unsafe_allow_html=True)
-
-intl_row1 = st.columns(2)
-with intl_row1[0]:
-    _render_agent_section(
-        icon='<img src="https://flagcdn.com/w40/gb.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-        name="GB Analyst",
-        subtitle="Great Britain BESS Market Intelligence · GB Market",
-        description=(
-            "Live intelligence platform for the GB battery storage market. "
-            "Tracks daily asset performance across the full GB BESS fleet, covering "
-            "wholesale arbitrage, Balancing Mechanism, ancillary services (FFR, DC), "
-            "and reserve markets. Includes AI-generated market commentary, pricing "
-            "models, and automated daily reports delivered by email and WeCom."
-        ),
-        capabilities=[
-            "Daily BESS leaderboard: revenue by asset, owner, operator",
-            "EPEX DA prices: baseload, peak/off-peak, arbitrage spreads",
-            "Balancing Mechanism & system price / NIV analysis",
-            "Ancillary markets: FFR, DCL, DCH, reserve clearing prices",
-            "Pricing models: BESS options value, PF dispatch, OLS forecast",
-            "Automated daily PDF report via email & WeCom",
-        ],
-        app_slug="gb-market",
-        agent_key="gb_analyst",
-        available=True,
-    )
-with intl_row1[1]:
-    _render_agent_section(
-        icon='<img src="https://flagcdn.com/w40/au.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-        name="Australia (NEM) Market Intelligence",
-        subtitle="AEMO · NEM spot · FCAS · AI Strategist",
-        description=(
-            "Real-time NEM BESS intelligence: spot prices by region (QLD/NSW/VIC/SA), "
-            "FCAS regulation and contingency markets, BESS leaderboard, and Strategist agent "
-            "grounded on Modo Energy data."
-        ),
-        capabilities=[
-            "NEM spot price by region (QLD/NSW/VIC/SA)",
-            "FCAS regulation and contingency clearing prices",
-            "BESS daily and monthly revenue index",
-            "Asset leaderboard: revenue by owner/operator",
-            "AI Strategist: grounded on live DB data",
-            "Knowledge base: AEMO notices + Modo research",
-        ],
-        app_slug="au-market",
-        agent_key="au_analyst",
-        available=True,
-    )
-
-st.markdown("<br>", unsafe_allow_html=True)
-intl_row2 = st.columns(2)
-with intl_row2[0]:
-    _render_agent_section(
-        icon='<img src="https://flagcdn.com/w40/us-tx.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-        name="ERCOT (Texas) Market Intelligence",
-        subtitle="ERCOT · RT/DA LMP · Reg/RRS/ECRS · AI Strategist",
-        description=(
-            "Texas BESS intelligence: real-time and day-ahead LMPs, ancillary services "
-            "(Reg-Up/Down, RRS, ECRS), BESS revenue benchmarking, and Strategist agent."
-        ),
-        capabilities=[
-            "ERCOT RT and DA nodal LMP prices",
-            "Ancillary services: Reg-Up/Down, RRS, ECRS, Non-Spin",
-            "BESS daily and monthly revenue index",
-            "Asset leaderboard by owner/operator",
-            "AI Strategist: grounded on live DB data",
-            "Knowledge base: ERCOT market notices + Modo research",
-        ],
-        app_slug="ercot-market",
-        agent_key="ercot_analyst",
-        available=True,
-    )
-with intl_row2[1]:
-    _render_agent_section(
-        icon='<img src="https://flagcdn.com/w40/us.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-        name="PJM (US East) Market Intelligence",
-        subtitle="PJM · LMP · Reg/Sync Reserve · AI Strategist",
-        description=(
-            "PJM BESS intelligence: nodal LMPs, capacity market, regulation (RegD/RegA), "
-            "synchronised reserve, BESS revenue benchmarking, and Strategist agent."
-        ),
-        capabilities=[
-            "PJM nodal LMP prices by zone",
-            "Ancillary services: Regulation (RegD/RegA), Sync Reserve",
-            "Capacity market (RPM) context",
-            "BESS daily and monthly revenue index",
-            "AI Strategist: grounded on live DB data",
-            "Knowledge base: PJM market notices + Modo research",
-        ],
-        app_slug="pjm-market",
-        agent_key="pjm_analyst",
-        available=True,
-    )
-
-st.markdown("<br>", unsafe_allow_html=True)
-intl_row3 = st.columns(2)
-with intl_row3[0]:
-    _render_agent_section(
-        icon='<img src="https://flagcdn.com/w40/us-ca.png" style="height:0.9em;vertical-align:middle;border-radius:2px;margin-right:2px;">',
-        name="CAISO (California) Market Intelligence",
-        subtitle="CAISO · LMP · Reg/Spin · Duck Curve · AI Strategist",
-        description=(
-            "California BESS intelligence: CAISO LMPs, ancillary services (Regulation, "
-            "Spinning/Non-Spin), duck curve dynamics, Resource Adequacy, and Strategist agent."
-        ),
-        capabilities=[
-            "CAISO RT and DA LMP prices",
-            "Ancillary services: Regulation, Spinning/Non-Spin reserve",
-            "Duck curve and solar curtailment context",
-            "BESS daily and monthly revenue index",
-            "AI Strategist: grounded on live DB data",
-            "Knowledge base: CAISO market notices + Modo research",
-        ],
-        app_slug="caiso-market",
-        agent_key="caiso_analyst",
-        available=True,
-    )
+for _section, _title in SECTIONS:
+    if _section == "agents" or (_section == "personal" and not CAN_MANAGE_USERS):
+        continue
+    st.markdown(f"### {_title}")
+    _render_tiles(_section)
+    st.markdown("<br>", unsafe_allow_html=True)
 
 # --------------------------------------------------
 # FOOTER
