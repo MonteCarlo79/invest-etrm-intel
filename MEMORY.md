@@ -916,3 +916,22 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 **Next session:**
 - FIRST: compare the strategy rung for 11-27 (first day written under the operator-rule LP, wait for its prices ≈11-29) with nominated and grid-feasible PF — that is the real test of the owned-station change. Then look at why the 11-27 writer run took 6 min (log per-solve status/time).
 - Still open (unchanged): 阿拉善 nominations capture 34 % of grid-feasible PF, siziwangqi 67 % (Nov 1–22); strategies fragment into many small blocks on a near-flat curve (17/26 plants have no node shape) → feed the book's D+1 forecast into the writer; 20 plants flagged inactive in the writer registry despite recent clearing; bameng capped at the 河套 750 MW figure vs 1,000 MW rating; terraform `nodal_writer.tf` (`:latest` image) not applied by the user; WeCom files only arrive when the 储能场站日报群 chat is opened on the Mac.
+
+## Session Summary, 2026-11-24 → 2026-11-28 (AWS cost phases 1–2, local replica, Feishu → KB ingest + weekly re-sync)
+**Worked on:** AWS cost reduction (on-demand services, local-first dashboards); ingesting the shared Feishu market library into the shared knowledge base; keeping it current weekly.
+**Completed:**
+- Phase 1 cost: 6 services at zero with on-demand start/stop (`scripts/svc.sh`, Hermes 启动/关闭, nightly auto-stop 02:00 Beijing) — hermes v20261125/td:212; gb-market right-sized 0.5 vCPU/2 GB (td:34).
+- Phase 2: local Postgres 18 replica on the Mac (`scripts/replica.sh`, 05:30 launchd sync, ~17 GB windowed) + `scripts/local_apps.sh`; all 14 Streamlit apps verified locally (LOCAL_REPLICA pauses in-app schedulers). Owner decision: no cockpit — keep Streamlit, local + online.
+- KB extractor fix (DOCX tables; Feishu xlsx bad <dimension>) — spot-markets v62/td:163, hermes v20261126/td:213 (7a405829).
+- Feishu → shared KB (`services/feishu_ingest/`): 2,612 docs / ~179k chunks tagged `feishu:<path>` — 内部-各省专题研究, both 外部 folders, Home picks, and the 官方-各省披露文件 subset (policy files + 2025–26 periodic reports; 3,105 exported = 2,663 unique, 2,532 new, rest already in KB). BloombergNEF report kept (owner: licence clear), OCR'd from page images.
+- Weekly re-sync LIVE: launchd `ai.pjh-etrm.feishu-weekly` Sundays 01:30 (eb97b69b) — new + edited docs, edited docs replace their KB entry; tested on one changed tracker.
+**In progress:** nothing running. First full weekly run (with the 官方 walk) is Sunday 2026-11-29.
+**Decisions made:**
+- Platform AWS is sanctioned for Envision Internal + Confidential docs; ingest target = shared KB.
+- Never scrape a Feishu doc whose owner disabled download, or one without view access — route via the owner.
+- 官方 folder is an external share from the LingFeng vendor's tenant; owner chose to continue after the vendor-content question.
+- 官方 scope = policy/rules + quarterly/half-year/annual reports; ~21k monthly detail tables left out (belong in structured pipelines, not KB text).
+**Next session:**
+- FIRST: read `~/feishu-ingest/logs/weekly_sync.log` after Sunday's run (first live 官方 walk with modified times); if the session expired, owner rescans QR (`login.py` / `login_tenant.py`).
+- Open owner decisions: 对内-项目测算情况 (32 project-estimate docs); re-list the reorganised 山西 policy folder (28 subset docs were deleted/moved mid-run).
+- Ops lessons: Mac on iPhone hotspot drops constantly — exports need Wi-Fi; ingest batches need the 2 vCPU/8 GB override; huge sheets are row-budget capped; KB per-file schema DDL deadlocks parallel batches (worker skips it).
