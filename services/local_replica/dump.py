@@ -97,7 +97,16 @@ def main() -> int:
     for t in BIG:
         cmd += ["--exclude-table-data", t]
     _log(f"pg_dump: {len(stg)} scratch tables skipped, {len(BIG)} big tables schema-only")
-    subprocess.run(cmd, env=env, check=True)
+    # parallel pg_dump workers give up at once if another session holds or queues an exclusive lock
+    # (e.g. a KB ingest's ALTER TABLE ... IF NOT EXISTS) - retry after a pause instead of failing the night
+    for attempt in range(1, 5):
+        if subprocess.run(cmd, env=env).returncode == 0:
+            break
+        if attempt == 4:
+            raise RuntimeError("pg_dump failed 4 times")
+        _log(f"pg_dump attempt {attempt} failed (likely a lock); retrying in 3 min")
+        shutil.rmtree(f"{WORK}/dump", ignore_errors=True)
+        time.sleep(180)
     subprocess.run(["tar", "-cf", f"{WORK}/dump.tar", "-C", WORK, "dump"], check=True)
     shutil.rmtree(f"{WORK}/dump")
     _log(f"pg_dump done: {os.path.getsize(f'{WORK}/dump.tar') / 1e6:.0f} MB, {time.time() - t0:.0f}s")
