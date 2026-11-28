@@ -901,3 +901,18 @@ Wind 2000h · Solar 1100h · Thermal 5500h · Hydro 3500h · Nuclear 7500h · St
 - FIRST: 2026-11-26 16:00 CST writer log — expect `ZONES …`, `OPERATOR_RULES 9 owned accounts of 26 plants`, `RUN_DAY … plants 26`, run time near 2 min. Then ~11-28: strategy rung for 11-27 vs nominated.
 - Carry `run_daily_attribution.py` (identity check) in the next mengxi-dashboard image.
 - Open: 阿拉善 nominations capture 34 % of grid-feasible PF and siziwangqi 67 % (Nov 1–22) — worth a look; owned strategies still fragment into many small blocks on a near-flat forecast curve (17/26 plants have no node shape) → feed the book's D+1 forecast into the writer (roadmap P1); 20 plants flagged inactive in the writer registry despite recent clearing; bameng capped at the 河套 750 MW substation figure vs 1,000 MW rating; cleared feed has day holes; WeCom files only arrive when the 储能场站日报群 chat is opened on the Mac; λ reads cleared energy without the book's +15 min row→slot shift.
+
+## Session Summary, 2026-11-26 → 2026-11-27 (addendum: writer verification + identity-check deploy)
+**Worked on:** Verified the first live runs of the owned-station operator-rule writer, then shipped the attribution identity-check fix. Continues the 2026-11-23 → 11-25 Trader app repair summary above.
+**Completed:**
+- **Writer verified live.** 11-26 16:04 CST (first run on v70): `OPERATOR_RULES 9 owned accounts of 26 plants`, 26 plants written for 11-27, 90 s. 11-27 16:01 CST: same line, 26 plants for 11-28, but **6 min** (16:01:54 → 16:07:53), not 90 s. Both far inside the 17:00 cutoff; the spread is unexplained (likely several solves running into the 15 s cap).
+- **mengxi-dashboard v71 / td:86 deployed** (user "build and deploy", 11-27 16:45 CST): `run_daily_attribution.py` identity check now compares the five losses with `realisation_gap_vs_pf` (was `_vs_pf_grid`, off by exactly the TSO restriction cost). Built FROM the live v70 digest; live file sha verified = pre-fix git first. 60 full-ladder rows pass the corrected identity (40 would have failed the old one). `latest` = v71, so the writer and scheduled rules run it.
+- **First scheduled attribution run on v71** (11-27 17:55 CST): `CATCHUP {'batch': 8, 'rungs': 24, 'attribution': 64, 'days': 10}`, no `POST_WRITE_IDENTITY_FAIL` lines — the false warnings are gone.
+- All scheduled rules clean (0 FailedInvocations, 3 days). WeCom collector clean; a newer dispatch-plan workbook was cached 11-27 01:38.
+**In progress:**
+- Nothing running. Service td:86 / v71; the OneDrive working tree still cannot fast-forward (another session's uncommitted edits would be overwritten) — left as found.
+**Decisions made:**
+- Rolled forward by delta-building on the digest that is live at that moment, after checking `aws ecs describe-services` and `aws ecr describe-images` — the other session shares this service.
+**Next session:**
+- FIRST: compare the strategy rung for 11-27 (first day written under the operator-rule LP, wait for its prices ≈11-29) with nominated and grid-feasible PF — that is the real test of the owned-station change. Then look at why the 11-27 writer run took 6 min (log per-solve status/time).
+- Still open (unchanged): 阿拉善 nominations capture 34 % of grid-feasible PF, siziwangqi 67 % (Nov 1–22); strategies fragment into many small blocks on a near-flat curve (17/26 plants have no node shape) → feed the book's D+1 forecast into the writer; 20 plants flagged inactive in the writer registry despite recent clearing; bameng capped at the 河套 750 MW figure vs 1,000 MW rating; terraform `nodal_writer.tf` (`:latest` image) not applied by the user; WeCom files only arrive when the 储能场站日报群 chat is opened on the Mac.
